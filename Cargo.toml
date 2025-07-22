@@ -1,0 +1,20 @@
+[package]
+name = "nanonis_rust"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "nanonis_rust"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+byteorder = "1.5"
+thiserror = "1.0"
+rand = "0.8"
+log = "0.4"
+env_logger = "0.10"
+textplots = "0.8"
+csv = "1.3"
+serde = { version = "1.0", features = ["derive"] }
+ctrlc = "3.4"
