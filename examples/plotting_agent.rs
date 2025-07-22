@@ -67,9 +67,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             .replace(")", ""),
         timestamp
     );
-    let mut csv_writer = csv::Writer::from_path(&filename)?;
-    println!("Logging data to: {}", filename);
-    println!();
 
     // Data collection
     let mut data_points = Vec::new();
@@ -94,10 +91,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                     scaled_value,
                     unit: unit.to_string(),
                 };
-
-                // Save to CSV
-                csv_writer.serialize(&data_point)?;
-                csv_writer.flush()?;
 
                 // Store for plotting
                 data_points.push((timestamp, scaled_value));
