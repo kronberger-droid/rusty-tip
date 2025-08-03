@@ -1,4 +1,6 @@
 use crate::error::NanonisError;
+use crate::classifier::TipClassification;
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
 pub enum NanonisValue {
@@ -264,5 +266,36 @@ impl Position {
     pub fn new(x: f64, y: f64) -> Self {
         Self { x, y }
     }
+}
+
+/// Comprehensive tip state for advanced policy engines
+/// Expandable for transformer/ML models that need rich context
+#[derive(Debug, Clone)]
+pub struct TipState {
+    // Current signal readings
+    pub primary_signal: f32,           // The monitored signal (e.g., bias)
+    pub all_signals: Option<Vec<f32>>, // All available signals for context
+    pub signal_names: Option<Vec<String>>, // Signal identifications
+
+    // Spatial context
+    pub position: Option<(f64, f64)>, // Current XY position
+    pub z_position: Option<f64>,      // Z height
+
+    // Temporal context
+    pub timestamp: f64,                // When this state was captured
+    pub signal_history: VecDeque<f32>, // Historical signal values
+
+    // System state
+    pub approach_count: u32,         // Number of approaches performed
+    pub last_action: Option<String>, // Last action executed
+    pub system_parameters: Vec<f32>, // Configurable system params
+
+    // Classification result
+    pub classification: TipClassification, // How the classifier interpreted this state
+
+    // For future ML/transformer expansion:
+    // pub embedding: Option<Vec<f32>>,         // Learned state representation
+    // pub attention_weights: Option<Vec<f32>>, // Transformer attention scores
+    // pub confidence: f32,                     // Model confidence in decision
 }
 

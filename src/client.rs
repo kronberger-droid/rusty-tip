@@ -7,19 +7,19 @@ use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 /// Connection configuration for the Nanonis TCP client.
-/// 
+///
 /// Contains timeout settings for different phases of the TCP connection lifecycle.
 /// All timeouts have sensible defaults but can be customized for specific network conditions.
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```
 /// use std::time::Duration;
 /// use nanonis_rust::ConnectionConfig;
-/// 
+///
 /// // Use default timeouts
 /// let config = ConnectionConfig::default();
-/// 
+///
 /// // Customize timeouts for slow network
 /// let config = ConnectionConfig {
 ///     connect_timeout: Duration::from_secs(30),
@@ -48,29 +48,29 @@ impl Default for ConnectionConfig {
 }
 
 /// Builder for constructing [`NanonisClient`] instances with flexible configuration.
-/// 
+///
 /// The builder pattern allows you to configure various aspects of the client
 /// before establishing the connection. This is more ergonomic than having
 /// multiple constructor variants.
-/// 
+///
 /// # Examples
-/// 
+///
 /// Basic usage:
 /// ```
 /// use nanonis_rust::NanonisClient;
-/// 
+///
 /// let client = NanonisClient::builder()
 ///     .address("127.0.0.1:6501")
 ///     .debug(true)
 ///     .build()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-/// 
+///
 /// With custom timeouts:
-/// ```
+/// ```no_run
 /// use std::time::Duration;
 /// use nanonis_rust::NanonisClient;
-/// 
+///
 /// let client = NanonisClient::builder()
 ///     .address("192.168.1.100:6501")
 ///     .connect_timeout(Duration::from_secs(30))
@@ -88,14 +88,14 @@ pub struct NanonisClientBuilder {
 
 impl NanonisClientBuilder {
     /// Set the Nanonis server address.
-    /// 
+    ///
     /// # Arguments
     /// * `addr` - Server address in the format "host:port" (e.g., "127.0.0.1:6501")
-    /// 
+    ///
     /// # Examples
     /// ```
     /// use nanonis_rust::NanonisClient;
-    /// 
+    ///
     /// let builder = NanonisClient::builder()
     ///     .address("192.168.1.100:6501");
     /// ```
@@ -171,50 +171,50 @@ impl NanonisClientBuilder {
 }
 
 /// High-level client for communicating with Nanonis SPM systems via TCP.
-/// 
+///
 /// `NanonisClient` provides a type-safe, Rust-friendly interface to the Nanonis
 /// TCP protocol. It handles connection management, protocol serialization/deserialization,
 /// and provides convenient methods for common operations like reading signals,
 /// controlling bias voltage, and managing the scanning probe.
-/// 
+///
 /// # Connection Management
-/// 
+///
 /// The client maintains a persistent TCP connection to the Nanonis server.
 /// Connection timeouts and retry logic are handled automatically.
-/// 
+///
 /// # Protocol Support
-/// 
+///
 /// Supports the standard Nanonis TCP command set including:
 /// - Signal reading (`Signals.ValsGet`, `Signals.NamesGet`)
 /// - Bias control (`Bias.Set`, `Bias.Get`)
 /// - Position control (`FolMe.XYPosSet`, `FolMe.XYPosGet`)
 /// - Motor control (`Motor.*` commands)
 /// - Auto-approach (`AutoApproach.*` commands)
-/// 
+///
 /// # Examples
-/// 
+///
 /// Basic usage:
 /// ```no_run
 /// use nanonis_rust::{NanonisClient, BiasVoltage};
-/// 
+///
 /// let mut client = NanonisClient::new("127.0.0.1:6501")?;
-/// 
+///
 /// // Read signal names
 /// let signals = client.signal_names_get(false)?;
-/// 
+///
 /// // Set bias voltage
 /// client.set_bias(BiasVoltage(1.0))?;
-/// 
+///
 /// // Read signal values
 /// let values = client.signals_val_get(vec![0, 1, 2], true)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-/// 
+///
 /// With builder pattern:
 /// ```no_run
 /// use std::time::Duration;
 /// use nanonis_rust::NanonisClient;
-/// 
+///
 /// let mut client = NanonisClient::builder()
 ///     .address("192.168.1.100:6501")
 ///     .debug(true)
@@ -230,26 +230,26 @@ pub struct NanonisClient {
 
 impl NanonisClient {
     /// Create a new client with default configuration.
-    /// 
+    ///
     /// This is the most convenient way to create a client for basic usage.
     /// Uses default timeouts and disables debug logging.
-    /// 
+    ///
     /// # Arguments
     /// * `addr` - Server address in format "host:port" (e.g., "127.0.0.1:6501")
-    /// 
+    ///
     /// # Returns
     /// A connected `NanonisClient` ready for use.
-    /// 
+    ///
     /// # Errors
     /// Returns `NanonisError` if:
     /// - The address format is invalid
     /// - Connection to the server fails
     /// - Connection times out
-    /// 
+    ///
     /// # Examples
     /// ```no_run
     /// use nanonis_rust::NanonisClient;
-    /// 
+    ///
     /// let client = NanonisClient::new("127.0.0.1:6501")?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -258,18 +258,18 @@ impl NanonisClient {
     }
 
     /// Create a builder for flexible configuration.
-    /// 
+    ///
     /// Use this when you need to customize timeouts, enable debug logging,
     /// or other advanced configuration options.
-    /// 
+    ///
     /// # Returns
     /// A `NanonisClientBuilder` with default settings that can be customized.
-    /// 
+    ///
     /// # Examples
     /// ```no_run
     /// use std::time::Duration;
     /// use nanonis_rust::NanonisClient;
-    /// 
+    ///
     /// let client = NanonisClient::builder()
     ///     .address("192.168.1.100:6501")
     ///     .debug(true)
@@ -282,9 +282,9 @@ impl NanonisClient {
     }
 
     /// Create a new client with custom configuration (legacy method).
-    /// 
+    ///
     /// **Deprecated**: Use [`NanonisClient::builder()`] instead for more flexibility.
-    /// 
+    ///
     /// # Arguments
     /// * `addr` - Server address in format "host:port"
     /// * `config` - Connection configuration with custom timeouts
@@ -402,24 +402,24 @@ impl NanonisClient {
     // ==================== Type-safe method implementations ====================
 
     /// Set the bias voltage applied to the scanning probe tip.
-    /// 
+    ///
     /// This corresponds to the Nanonis `Bias.Set` command.
-    /// 
+    ///
     /// # Arguments
     /// * `voltage` - The bias voltage to set, wrapped in a type-safe [`BiasVoltage`]
-    /// 
+    ///
     /// # Errors
     /// Returns `NanonisError` if the command fails or communication times out.
-    /// 
+    ///
     /// # Examples
     /// ```no_run
     /// use nanonis_rust::{NanonisClient, BiasVoltage};
-    /// 
+    ///
     /// let mut client = NanonisClient::new("127.0.0.1:6501")?;
-    /// 
+    ///
     /// // Set bias to 1.5V
     /// client.set_bias(BiasVoltage(1.5))?;
-    /// 
+    ///
     /// // Set bias to -0.5V  
     /// client.set_bias(BiasVoltage(-0.5))?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -430,23 +430,23 @@ impl NanonisClient {
     }
 
     /// Get the current bias voltage applied to the scanning probe tip.
-    /// 
+    ///
     /// This corresponds to the Nanonis `Bias.Get` command.
-    /// 
+    ///
     /// # Returns
     /// The current bias voltage wrapped in a type-safe [`BiasVoltage`].
-    /// 
+    ///
     /// # Errors
     /// Returns `NanonisError` if:
     /// - The command fails or communication times out
     /// - The server returns invalid or missing data
-    /// 
+    ///
     /// # Examples
     /// ```no_run
     /// use nanonis_rust::NanonisClient;
-    /// 
+    ///
     /// let mut client = NanonisClient::new("127.0.0.1:6501")?;
-    /// 
+    ///
     /// let current_bias = client.get_bias()?;
     /// println!("Current bias voltage: {:.3}V", current_bias.0);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
