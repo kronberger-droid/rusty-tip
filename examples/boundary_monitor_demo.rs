@@ -7,7 +7,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Boundary Monitor Demo - Stability Tracking");
 
     // Connect and find bias signal
-    let mut client = NanonisClient::new("127.0.0.1:6501")?;
+    let client = NanonisClient::new("127.0.0.1:6501")?;
 
     // Create policy: 3 consecutive good decisions → stable
     let policy = RuleBasedPolicy::new(

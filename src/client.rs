@@ -1,32 +1,154 @@
+use crate::error::NanonisError;
 use crate::protocol::{Protocol, HEADER_SIZE, MAX_RETRY_COUNT};
-use crate::types::{BiasVoltage, ConnectionConfig, NanonisError, NanonisValue, Position};
+use crate::types::{BiasVoltage, NanonisValue, Position};
 use log::{debug, trace, warn};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::time::Duration;
 
-pub struct NanonisClient {
-    stream: TcpStream,
-    debug: bool,
-    config: ConnectionConfig,
+/// Connection configuration for the Nanonis TCP client.
+/// 
+/// Contains timeout settings for different phases of the TCP connection lifecycle.
+/// All timeouts have sensible defaults but can be customized for specific network conditions.
+/// 
+/// # Examples
+/// 
+/// ```
+/// use std::time::Duration;
+/// use nanonis_rust::ConnectionConfig;
+/// 
+/// // Use default timeouts
+/// let config = ConnectionConfig::default();
+/// 
+/// // Customize timeouts for slow network
+/// let config = ConnectionConfig {
+///     connect_timeout: Duration::from_secs(30),
+///     read_timeout: Duration::from_secs(60),
+///     write_timeout: Duration::from_secs(10),
+/// };
+/// ```
+#[derive(Debug, Clone)]
+pub struct ConnectionConfig {
+    /// Timeout for establishing the initial TCP connection
+    pub connect_timeout: Duration,
+    /// Timeout for reading data from the Nanonis server
+    pub read_timeout: Duration,
+    /// Timeout for writing data to the Nanonis server
+    pub write_timeout: Duration,
 }
 
-impl NanonisClient {
-    /// Create a new client with default configuration
-    pub fn new(addr: &str) -> Result<Self, NanonisError> {
-        Self::with_config(addr, ConnectionConfig::default())
+impl Default for ConnectionConfig {
+    fn default() -> Self {
+        Self {
+            connect_timeout: Duration::from_secs(5),
+            read_timeout: Duration::from_secs(10),
+            write_timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+/// Builder for constructing [`NanonisClient`] instances with flexible configuration.
+/// 
+/// The builder pattern allows you to configure various aspects of the client
+/// before establishing the connection. This is more ergonomic than having
+/// multiple constructor variants.
+/// 
+/// # Examples
+/// 
+/// Basic usage:
+/// ```
+/// use nanonis_rust::NanonisClient;
+/// 
+/// let client = NanonisClient::builder()
+///     .address("127.0.0.1:6501")
+///     .debug(true)
+///     .build()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+/// 
+/// With custom timeouts:
+/// ```
+/// use std::time::Duration;
+/// use nanonis_rust::NanonisClient;
+/// 
+/// let client = NanonisClient::builder()
+///     .address("192.168.1.100:6501")
+///     .connect_timeout(Duration::from_secs(30))
+///     .read_timeout(Duration::from_secs(60))
+///     .debug(false)
+///     .build()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Default)]
+pub struct NanonisClientBuilder {
+    address: Option<String>,
+    config: ConnectionConfig,
+    debug: bool,
+}
+
+impl NanonisClientBuilder {
+    /// Set the Nanonis server address.
+    /// 
+    /// # Arguments
+    /// * `addr` - Server address in the format "host:port" (e.g., "127.0.0.1:6501")
+    /// 
+    /// # Examples
+    /// ```
+    /// use nanonis_rust::NanonisClient;
+    /// 
+    /// let builder = NanonisClient::builder()
+    ///     .address("192.168.1.100:6501");
+    /// ```
+    pub fn address(mut self, addr: &str) -> Self {
+        self.address = Some(addr.to_string());
+        self
     }
 
-    /// Create a new client with custom configuration
-    pub fn with_config(addr: &str, config: ConnectionConfig) -> Result<Self, NanonisError> {
-        let socket_addr: SocketAddr = addr
+    /// Enable or disable debug logging
+    pub fn debug(mut self, debug: bool) -> Self {
+        self.debug = debug;
+        self
+    }
+
+    /// Set the full connection configuration
+    pub fn config(mut self, config: ConnectionConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Set connect timeout
+    pub fn connect_timeout(mut self, timeout: Duration) -> Self {
+        self.config.connect_timeout = timeout;
+        self
+    }
+
+    /// Set read timeout
+    pub fn read_timeout(mut self, timeout: Duration) -> Self {
+        self.config.read_timeout = timeout;
+        self
+    }
+
+    /// Set write timeout
+    pub fn write_timeout(mut self, timeout: Duration) -> Self {
+        self.config.write_timeout = timeout;
+        self
+    }
+
+    /// Build the NanonisClient
+    pub fn build(self) -> Result<NanonisClient, NanonisError> {
+        let address = self
+            .address
+            .ok_or_else(|| NanonisError::InvalidCommand("Address must be specified".to_string()))?;
+
+        let socket_addr: SocketAddr = address
             .parse()
-            .map_err(|_| NanonisError::InvalidAddress(addr.to_string()))?;
+            .map_err(|_| NanonisError::InvalidAddress(address.clone()))?;
 
-        debug!("Connecting to Nanonis at {addr}");
+        debug!("Connecting to Nanonis at {address}");
 
-        let stream =
-            TcpStream::connect_timeout(&socket_addr, config.connect_timeout).map_err(|e| {
-                warn!("Failed to connect to {addr}: {e}");
+        let stream = TcpStream::connect_timeout(&socket_addr, self.config.connect_timeout)
+            .map_err(|e| {
+                warn!("Failed to connect to {address}: {e}");
                 if e.kind() == std::io::ErrorKind::TimedOut {
                     NanonisError::Timeout
                 } else {
@@ -35,16 +157,139 @@ impl NanonisClient {
             })?;
 
         // Set socket timeouts
-        stream.set_read_timeout(Some(config.read_timeout))?;
-        stream.set_write_timeout(Some(config.write_timeout))?;
+        stream.set_read_timeout(Some(self.config.read_timeout))?;
+        stream.set_write_timeout(Some(self.config.write_timeout))?;
 
         debug!("Successfully connected to Nanonis");
 
-        Ok(Self {
+        Ok(NanonisClient {
             stream,
-            debug: false,
-            config,
+            debug: self.debug,
+            config: self.config,
         })
+    }
+}
+
+/// High-level client for communicating with Nanonis SPM systems via TCP.
+/// 
+/// `NanonisClient` provides a type-safe, Rust-friendly interface to the Nanonis
+/// TCP protocol. It handles connection management, protocol serialization/deserialization,
+/// and provides convenient methods for common operations like reading signals,
+/// controlling bias voltage, and managing the scanning probe.
+/// 
+/// # Connection Management
+/// 
+/// The client maintains a persistent TCP connection to the Nanonis server.
+/// Connection timeouts and retry logic are handled automatically.
+/// 
+/// # Protocol Support
+/// 
+/// Supports the standard Nanonis TCP command set including:
+/// - Signal reading (`Signals.ValsGet`, `Signals.NamesGet`)
+/// - Bias control (`Bias.Set`, `Bias.Get`)
+/// - Position control (`FolMe.XYPosSet`, `FolMe.XYPosGet`)
+/// - Motor control (`Motor.*` commands)
+/// - Auto-approach (`AutoApproach.*` commands)
+/// 
+/// # Examples
+/// 
+/// Basic usage:
+/// ```no_run
+/// use nanonis_rust::{NanonisClient, BiasVoltage};
+/// 
+/// let mut client = NanonisClient::new("127.0.0.1:6501")?;
+/// 
+/// // Read signal names
+/// let signals = client.signal_names_get(false)?;
+/// 
+/// // Set bias voltage
+/// client.set_bias(BiasVoltage(1.0))?;
+/// 
+/// // Read signal values
+/// let values = client.signals_val_get(vec![0, 1, 2], true)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+/// 
+/// With builder pattern:
+/// ```no_run
+/// use std::time::Duration;
+/// use nanonis_rust::NanonisClient;
+/// 
+/// let mut client = NanonisClient::builder()
+///     .address("192.168.1.100:6501")
+///     .debug(true)
+///     .connect_timeout(Duration::from_secs(30))
+///     .build()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub struct NanonisClient {
+    stream: TcpStream,
+    debug: bool,
+    config: ConnectionConfig,
+}
+
+impl NanonisClient {
+    /// Create a new client with default configuration.
+    /// 
+    /// This is the most convenient way to create a client for basic usage.
+    /// Uses default timeouts and disables debug logging.
+    /// 
+    /// # Arguments
+    /// * `addr` - Server address in format "host:port" (e.g., "127.0.0.1:6501")
+    /// 
+    /// # Returns
+    /// A connected `NanonisClient` ready for use.
+    /// 
+    /// # Errors
+    /// Returns `NanonisError` if:
+    /// - The address format is invalid
+    /// - Connection to the server fails
+    /// - Connection times out
+    /// 
+    /// # Examples
+    /// ```no_run
+    /// use nanonis_rust::NanonisClient;
+    /// 
+    /// let client = NanonisClient::new("127.0.0.1:6501")?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn new(addr: &str) -> Result<Self, NanonisError> {
+        Self::builder().address(addr).build()
+    }
+
+    /// Create a builder for flexible configuration.
+    /// 
+    /// Use this when you need to customize timeouts, enable debug logging,
+    /// or other advanced configuration options.
+    /// 
+    /// # Returns
+    /// A `NanonisClientBuilder` with default settings that can be customized.
+    /// 
+    /// # Examples
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use nanonis_rust::NanonisClient;
+    /// 
+    /// let client = NanonisClient::builder()
+    ///     .address("192.168.1.100:6501")
+    ///     .debug(true)
+    ///     .connect_timeout(Duration::from_secs(30))
+    ///     .build()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn builder() -> NanonisClientBuilder {
+        NanonisClientBuilder::default()
+    }
+
+    /// Create a new client with custom configuration (legacy method).
+    /// 
+    /// **Deprecated**: Use [`NanonisClient::builder()`] instead for more flexibility.
+    /// 
+    /// # Arguments
+    /// * `addr` - Server address in format "host:port"
+    /// * `config` - Connection configuration with custom timeouts
+    pub fn with_config(addr: &str, config: ConnectionConfig) -> Result<Self, NanonisError> {
+        Self::builder().address(addr).config(config).build()
     }
 
     /// Enable or disable debug logging
@@ -156,13 +401,56 @@ impl NanonisClient {
 
     // ==================== Type-safe method implementations ====================
 
-    /// Set bias voltage with type safety
+    /// Set the bias voltage applied to the scanning probe tip.
+    /// 
+    /// This corresponds to the Nanonis `Bias.Set` command.
+    /// 
+    /// # Arguments
+    /// * `voltage` - The bias voltage to set, wrapped in a type-safe [`BiasVoltage`]
+    /// 
+    /// # Errors
+    /// Returns `NanonisError` if the command fails or communication times out.
+    /// 
+    /// # Examples
+    /// ```no_run
+    /// use nanonis_rust::{NanonisClient, BiasVoltage};
+    /// 
+    /// let mut client = NanonisClient::new("127.0.0.1:6501")?;
+    /// 
+    /// // Set bias to 1.5V
+    /// client.set_bias(BiasVoltage(1.5))?;
+    /// 
+    /// // Set bias to -0.5V  
+    /// client.set_bias(BiasVoltage(-0.5))?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn set_bias(&mut self, voltage: BiasVoltage) -> Result<(), NanonisError> {
         self.quick_send("Bias.Set", &[NanonisValue::F32(voltage.0)], &["f"], &[])?;
         Ok(())
     }
 
-    /// Get bias voltage with type safety
+    /// Get the current bias voltage applied to the scanning probe tip.
+    /// 
+    /// This corresponds to the Nanonis `Bias.Get` command.
+    /// 
+    /// # Returns
+    /// The current bias voltage wrapped in a type-safe [`BiasVoltage`].
+    /// 
+    /// # Errors
+    /// Returns `NanonisError` if:
+    /// - The command fails or communication times out
+    /// - The server returns invalid or missing data
+    /// 
+    /// # Examples
+    /// ```no_run
+    /// use nanonis_rust::NanonisClient;
+    /// 
+    /// let mut client = NanonisClient::new("127.0.0.1:6501")?;
+    /// 
+    /// let current_bias = client.get_bias()?;
+    /// println!("Current bias voltage: {:.3}V", current_bias.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn get_bias(&mut self) -> Result<BiasVoltage, NanonisError> {
         let result = self.quick_send("Bias.Get", &[], &[], &["f"])?;
         match result.first() {
@@ -488,7 +776,11 @@ impl NanonisClient {
     /// Get the positions of the motor control module
     /// Group: 0=Group1, 1=Group2, 2=Group3, 3=Group4, 4=Group5, 5=Group6
     /// timeout_ms: timeout in milliseconds (recommended: 500ms)
-    pub fn motor_pos_get(&mut self, group: u32, timeout_ms: u32) -> Result<(f64, f64, f64), NanonisError> {
+    pub fn motor_pos_get(
+        &mut self,
+        group: u32,
+        timeout_ms: u32,
+    ) -> Result<(f64, f64, f64), NanonisError> {
         let result = self.quick_send(
             "Motor.PosGet",
             &[NanonisValue::U32(group), NanonisValue::U32(timeout_ms)],
@@ -502,7 +794,9 @@ impl NanonisClient {
             let z = result[2].as_f64()?;
             Ok((x, y, z))
         } else {
-            Err(NanonisError::Protocol("Invalid motor position response".to_string()))
+            Err(NanonisError::Protocol(
+                "Invalid motor position response".to_string(),
+            ))
         }
     }
 
@@ -535,7 +829,9 @@ impl NanonisClient {
             let step_z = result[2].as_i32()?;
             Ok((step_x, step_y, step_z))
         } else {
-            Err(NanonisError::Protocol("Invalid step counter response".to_string()))
+            Err(NanonisError::Protocol(
+                "Invalid step counter response".to_string(),
+            ))
         }
     }
 
@@ -555,14 +851,21 @@ impl NanonisClient {
             let amplitude = result[1].as_f32()?;
             Ok((frequency, amplitude))
         } else {
-            Err(NanonisError::Protocol("Invalid frequency/amplitude response".to_string()))
+            Err(NanonisError::Protocol(
+                "Invalid frequency/amplitude response".to_string(),
+            ))
         }
     }
 
     /// Set frequency and amplitude of the motor control module
     /// Available only for PD5, PMD4, and Attocube ANC150 devices
     /// axis: 0=All, 1=X, 2=Y, 3=Z
-    pub fn motor_freq_amp_set(&mut self, frequency_hz: f32, amplitude_v: f32, axis: u16) -> Result<(), NanonisError> {
+    pub fn motor_freq_amp_set(
+        &mut self,
+        frequency_hz: f32,
+        amplitude_v: f32,
+        axis: u16,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "Motor.FreqAmpSet",
             &[

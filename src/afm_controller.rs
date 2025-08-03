@@ -1,20 +1,20 @@
 use crate::client::NanonisClient;
-use crate::policy::{PolicyDecision, PolicyEngine, TipState, ActionType};
-use crate::types::{NanonisError, Position};
-use std::time::{Duration, Instant};
+use crate::error::NanonisError;
+use crate::policy::{ActionType, PolicyDecision, PolicyEngine, TipState};
+use crate::types::Position;
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 /// AFM Controller integrating Nanonis client with policy engine
 /// Expandable for ML/transformer-based policies
 pub struct AFMController {
     client: NanonisClient,
     policy: Box<dyn PolicyEngine>,
-    
+
     // State tracking for advanced policy engines
     approach_count: u32,
     position_history: VecDeque<Position>,
     action_history: VecDeque<String>,
-    
     // For future ML expansion:
     // state_buffer: VecDeque<TipState>,     // Rich state history for transformers
     // action_outcomes: Vec<(ActionType, f32)>, // Action-outcome pairs for learning
@@ -24,8 +24,8 @@ pub struct AFMController {
 impl AFMController {
     pub fn new(address: &str, policy: Box<dyn PolicyEngine>) -> Result<Self, NanonisError> {
         let client = NanonisClient::new(address)?;
-        Ok(Self { 
-            client, 
+        Ok(Self {
+            client,
             policy,
             approach_count: 0,
             position_history: VecDeque::with_capacity(100),
@@ -34,8 +34,8 @@ impl AFMController {
     }
 
     pub fn with_client(client: NanonisClient, policy: Box<dyn PolicyEngine>) -> Self {
-        Self { 
-            client, 
+        Self {
+            client,
             policy,
             approach_count: 0,
             position_history: VecDeque::with_capacity(100),
@@ -92,7 +92,7 @@ impl AFMController {
 
         match decision {
             PolicyDecision::Bad => {
-                println!("⚠ Signal {} = {:.6} - BAD", signal_index, signal_value);
+                println!("⚠ Signal {signal_index} = {signal_value:.6} - BAD");
 
                 // Execute bad signal actions
                 self.execute_bad_actions()?;
@@ -100,7 +100,7 @@ impl AFMController {
                 Ok(LoopAction::ContinueBadLoop) // Continue in bad recovery mode
             }
             PolicyDecision::Good => {
-                println!("✓ Signal {} = {:.6} - GOOD", signal_index, signal_value);
+                println!("✓ Signal {signal_index} = {signal_value:.6} - GOOD");
 
                 // Execute good signal actions
                 self.execute_good_actions()?;
@@ -122,7 +122,8 @@ impl AFMController {
         println!("Performing initial approach...");
         self.client.auto_approach_and_wait()?;
         self.approach_count += 1;
-        self.action_history.push_back("Initial Approach".to_string());
+        self.action_history
+            .push_back("Initial Approach".to_string());
 
         // Step 2: Pulse operation (simulate for now)
         println!("Executing pulse operation...");
@@ -200,15 +201,19 @@ impl AFMController {
     /// Create comprehensive tip state for advanced policy engines
     /// This would feed into transformer/ML models for complex decision making
     #[allow(dead_code)]
-    fn create_rich_tip_state(&mut self, signal_value: f32, signal_index: i32) -> Result<TipState, NanonisError> {
+    fn create_rich_tip_state(
+        &mut self,
+        signal_value: f32,
+        signal_index: i32,
+    ) -> Result<TipState, NanonisError> {
         // For future expansion - collect all available context
         let position = self.client.folme_xy_pos_get(true).ok();
         let all_signals = self.client.signals_val_get((0..=127).collect(), true).ok();
         let signal_names = self.client.signal_names_get(false).ok();
-        
+
         let mut signal_history = VecDeque::with_capacity(50);
         signal_history.push_back(signal_value);
-        
+
         Ok(TipState {
             primary_signal: signal_value,
             all_signals,
@@ -235,7 +240,7 @@ impl AFMController {
         // - Build training dataset
         // - Update model weights
         // - Implement reinforcement learning
-        
+
         // Example expansion:
         // self.training_data.push((tip_state.clone(), action, outcome));
         // if self.training_data.len() > self.batch_size {
@@ -260,7 +265,7 @@ impl AFMController {
         //     }
         //     _ => self.execute_atomic_action(action)?
         // }
-        
+
         // Return outcome score for learning
         Ok(0.0)
     }

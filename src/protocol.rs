@@ -1,6 +1,7 @@
-use crate::types::{NanonisError, NanonisValue};
+use crate::error::NanonisError;
+use crate::types::NanonisValue;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{Read, Write};
+use std::io::Read;
 
 // Protocol constants
 pub const COMMAND_SIZE: usize = 32;

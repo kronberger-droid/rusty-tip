@@ -1,25 +1,4 @@
-use std::time::Duration;
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum NanonisError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Connection timeout")]
-    Timeout,
-    #[error("Protocol error: {0}")]
-    Protocol(String),
-    #[error("Type error: {0}")]
-    Type(String),
-    #[error("Command mismatch: expected {expected}, got {actual}")]
-    CommandMismatch { expected: String, actual: String },
-    #[error("Invalid command: {0}")]
-    InvalidCommand(String),
-    #[error("Server error: {0}")]
-    ServerError(String),
-    #[error("Invalid address: {0}")]
-    InvalidAddress(String),
-}
+use crate::error::NanonisError;
 
 #[derive(Debug, Clone)]
 pub enum NanonisValue {
@@ -40,6 +19,167 @@ pub enum NanonisValue {
     Array2DF32(Vec<Vec<f32>>),
 }
 
+// Conversion traits for NanonisValue
+impl From<f32> for NanonisValue {
+    fn from(value: f32) -> Self {
+        NanonisValue::F32(value)
+    }
+}
+
+impl From<f64> for NanonisValue {
+    fn from(value: f64) -> Self {
+        NanonisValue::F64(value)
+    }
+}
+
+impl From<u16> for NanonisValue {
+    fn from(value: u16) -> Self {
+        NanonisValue::U16(value)
+    }
+}
+
+impl From<u32> for NanonisValue {
+    fn from(value: u32) -> Self {
+        NanonisValue::U32(value)
+    }
+}
+
+impl From<i16> for NanonisValue {
+    fn from(value: i16) -> Self {
+        NanonisValue::I16(value)
+    }
+}
+
+impl From<i32> for NanonisValue {
+    fn from(value: i32) -> Self {
+        NanonisValue::I32(value)
+    }
+}
+
+impl From<String> for NanonisValue {
+    fn from(value: String) -> Self {
+        NanonisValue::String(value)
+    }
+}
+
+impl From<Vec<f32>> for NanonisValue {
+    fn from(value: Vec<f32>) -> Self {
+        NanonisValue::ArrayF32(value)
+    }
+}
+
+impl From<Vec<String>> for NanonisValue {
+    fn from(value: Vec<String>) -> Self {
+        NanonisValue::ArrayString(value)
+    }
+}
+
+impl From<Vec<i32>> for NanonisValue {
+    fn from(value: Vec<i32>) -> Self {
+        NanonisValue::ArrayI32(value)
+    }
+}
+
+impl TryFrom<NanonisValue> for f32 {
+    type Error = NanonisError;
+    
+    fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
+        match value {
+            NanonisValue::F32(v) => Ok(v),
+            _ => Err(NanonisError::Type(format!("Expected f32, got {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<NanonisValue> for f64 {
+    type Error = NanonisError;
+    
+    fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
+        match value {
+            NanonisValue::F64(v) => Ok(v),
+            _ => Err(NanonisError::Type(format!("Expected f64, got {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<NanonisValue> for u16 {
+    type Error = NanonisError;
+    
+    fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
+        match value {
+            NanonisValue::U16(v) => Ok(v),
+            _ => Err(NanonisError::Type(format!("Expected u16, got {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<NanonisValue> for u32 {
+    type Error = NanonisError;
+    
+    fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
+        match value {
+            NanonisValue::U32(v) => Ok(v),
+            _ => Err(NanonisError::Type(format!("Expected u32, got {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<NanonisValue> for i16 {
+    type Error = NanonisError;
+    
+    fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
+        match value {
+            NanonisValue::I16(v) => Ok(v),
+            _ => Err(NanonisError::Type(format!("Expected i16, got {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<NanonisValue> for i32 {
+    type Error = NanonisError;
+    
+    fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
+        match value {
+            NanonisValue::I32(v) => Ok(v),
+            _ => Err(NanonisError::Type(format!("Expected i32, got {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<NanonisValue> for Vec<f32> {
+    type Error = NanonisError;
+    
+    fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
+        match value {
+            NanonisValue::ArrayF32(v) => Ok(v),
+            _ => Err(NanonisError::Type(format!("Expected Vec<f32>, got {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<NanonisValue> for Vec<String> {
+    type Error = NanonisError;
+    
+    fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
+        match value {
+            NanonisValue::ArrayString(v) => Ok(v),
+            _ => Err(NanonisError::Type(format!("Expected Vec<String>, got {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<NanonisValue> for Vec<i32> {
+    type Error = NanonisError;
+    
+    fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
+        match value {
+            NanonisValue::ArrayI32(v) => Ok(v),
+            _ => Err(NanonisError::Type(format!("Expected Vec<i32>, got {value:?}"))),
+        }
+    }
+}
+
+// Convenience methods (keeping these for backwards compatibility)
 impl NanonisValue {
     /// Extract f32 value with type checking
     pub fn as_f32(&self) -> Result<f32, NanonisError> {
@@ -73,19 +213,19 @@ impl NanonisValue {
         }
     }
 
-    /// Extract u16 value with type checking
+    /// Extract i16 value with type checking
     pub fn as_i16(&self) -> Result<i16, NanonisError> {
         match self {
             NanonisValue::I16(v) => Ok(*v),
-            _ => Err(NanonisError::Type(format!("Expected u16, got {self:?}"))),
+            _ => Err(NanonisError::Type(format!("Expected i16, got {self:?}"))),
         }
     }
 
-    /// Extract u32 value with type checking
+    /// Extract i32 value with type checking
     pub fn as_i32(&self) -> Result<i32, NanonisError> {
         match self {
             NanonisValue::I32(v) => Ok(*v),
-            _ => Err(NanonisError::Type(format!("Expected u32, got {self:?}"))),
+            _ => Err(NanonisError::Type(format!("Expected i32, got {self:?}"))),
         }
     }
 
@@ -126,20 +266,3 @@ impl Position {
     }
 }
 
-/// Connection configuration
-#[derive(Debug, Clone)]
-pub struct ConnectionConfig {
-    pub connect_timeout: Duration,
-    pub read_timeout: Duration,
-    pub write_timeout: Duration,
-}
-
-impl Default for ConnectionConfig {
-    fn default() -> Self {
-        Self {
-            connect_timeout: Duration::from_secs(5),
-            read_timeout: Duration::from_secs(10),
-            write_timeout: Duration::from_secs(5),
-        }
-    }
-}
