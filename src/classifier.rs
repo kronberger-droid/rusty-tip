@@ -1,10 +1,13 @@
+use crate::types::MachineState;
 use std::collections::VecDeque;
-use crate::types::TipState;
 
 /// Trait for classifying raw signal data into interpreted tip states
 pub trait StateClassifier: Send + Sync {
-    /// Convert raw signal readings into a comprehensive tip state
-    fn classify(&mut self, primary_signal: f32, all_signals: Option<&[f32]>) -> TipState;
+    /// Update machine state classification based on new signal reading
+    fn classify(&mut self, machine_state: &mut MachineState);
+
+    /// Clear the internal buffer to start fresh sampling
+    fn clear_buffer(&mut self);
 
     /// Get the signal index this classifier is monitoring
     fn get_primary_signal_index(&self) -> i32;
@@ -25,14 +28,15 @@ pub struct BoundaryClassifier {
     // State tracking
     consecutive_good_count: u32,
     stable_threshold: u32,
-    last_classification: Option<TipClassification>,
+    last_classification: Option<TipState>,
 }
 
 /// Classification result for tip state
-#[derive(Debug, Clone, PartialEq)]
-pub enum TipClassification {
-    Good,   // Signal within bounds
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum TipState {
+    #[default]
     Bad,    // Signal out of bounds
+    Good,   // Signal within bounds
     Stable, // Signal has been good and stable for required period
 }
 
@@ -79,7 +83,8 @@ impl BoundaryClassifier {
         value >= self.min_bound && value <= self.max_bound
     }
 
-    fn classify_signal(&mut self, signal_value: f32) -> TipClassification {
+
+    fn classify_signal(&mut self, signal_value: f32) -> TipState {
         // Add value to buffer
         if self.buffer.len() == self.buffer_size {
             self.buffer.pop_front();
@@ -89,22 +94,22 @@ impl BoundaryClassifier {
         // Check bounds using max value after dropping front values
         let classification = if let Some(max_value) = self.get_max_after_drop() {
             if self.is_within_bounds(max_value) {
-                TipClassification::Good
+                TipState::Good
             } else {
-                TipClassification::Bad
+                TipState::Bad
             }
         } else {
             // Not enough data yet - assume good
-            TipClassification::Good
+            TipState::Good
         };
 
         // Update stability tracking
         match classification {
-            TipClassification::Good => {
+            TipState::Good => {
                 // Check if we previously had a good classification
                 if matches!(
                     self.last_classification,
-                    Some(TipClassification::Good) | Some(TipClassification::Stable)
+                    Some(TipState::Good) | Some(TipState::Stable)
                 ) {
                     self.consecutive_good_count += 1;
                 } else {
@@ -114,48 +119,90 @@ impl BoundaryClassifier {
 
                 // Check if we've reached stability threshold
                 if self.consecutive_good_count >= self.stable_threshold {
-                    self.last_classification = Some(TipClassification::Stable);
-                    TipClassification::Stable
+                    self.last_classification = Some(TipState::Stable);
+                    TipState::Stable
                 } else {
-                    self.last_classification = Some(TipClassification::Good);
-                    TipClassification::Good
+                    self.last_classification = Some(TipState::Good);
+                    TipState::Good
                 }
             }
-            TipClassification::Bad => {
+            TipState::Bad => {
                 // Reset stability tracking on bad classification
                 self.consecutive_good_count = 0;
-                self.last_classification = Some(TipClassification::Bad);
-                TipClassification::Bad
+                self.last_classification = Some(TipState::Bad);
+                TipState::Bad
             }
-            TipClassification::Stable => unreachable!(), // We don't create Stable directly above
+            TipState::Stable => unreachable!(), // We don't create Stable directly above
         }
     }
 }
 
 impl StateClassifier for BoundaryClassifier {
-    fn classify(&mut self, primary_signal: f32, all_signals: Option<&[f32]>) -> TipState {
-        let classification = self.classify_signal(primary_signal);
-
-        // Create comprehensive tip state
-        let mut signal_history = VecDeque::with_capacity(50);
-        signal_history.extend(self.buffer.iter().copied());
-
-        TipState {
-            primary_signal,
-            all_signals: all_signals.map(|s| s.to_vec()),
-            signal_names: None, // Will be populated by controller if available
-            position: None,     // Will be populated by controller if available
-            z_position: None,   // Will be populated by controller if available
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs_f64(),
-            signal_history,
-            approach_count: 0, // Will be populated by controller
-            last_action: None, // Will be populated by controller
-            system_parameters: vec![],
-            classification,
+    fn classify(&mut self, machine_state: &mut MachineState) {
+        // If machine state has fresh samples in signal_history, use those to fill buffer
+        if !machine_state.signal_history.is_empty() {
+            self.buffer.clear();
+            for &sample in machine_state.signal_history.iter().take(self.buffer_size) {
+                self.buffer.push_back(sample);
+            }
+            println!("  Buffer filled with {} fresh samples: {:?}", 
+                    self.buffer.len(), 
+                    self.buffer.iter().collect::<Vec<_>>());
         }
+        
+        let classification = if let Some(max_value) = self.get_max_after_drop() {
+            if self.is_within_bounds(max_value) {
+                TipState::Good
+            } else {
+                TipState::Bad
+            }
+        } else {
+            TipState::Good
+        };
+
+        // Update stability tracking
+        let final_classification = match classification {
+            TipState::Good => {
+                // Check if we previously had a good classification  
+                if matches!(
+                    self.last_classification,
+                    Some(TipState::Good) | Some(TipState::Stable)
+                ) {
+                    self.consecutive_good_count += 1;
+                } else {
+                    self.consecutive_good_count = 1;
+                }
+
+                // Check if we've reached stability threshold
+                if self.consecutive_good_count >= self.stable_threshold {
+                    println!("  STABILITY ACHIEVED: {} consecutive good readings", self.consecutive_good_count);
+                    self.last_classification = Some(TipState::Stable);
+                    TipState::Stable
+                } else {
+                    println!("  Good count: {}/{}", self.consecutive_good_count, self.stable_threshold);
+                    self.last_classification = Some(TipState::Good);
+                    TipState::Good
+                }
+            }
+            TipState::Bad => {
+                // Reset consecutive count on bad signal
+                self.consecutive_good_count = 0;
+                self.last_classification = Some(TipState::Bad);
+                TipState::Bad
+            }
+            TipState::Stable => unreachable!(), // We don't create Stable directly above
+        };
+
+        // Update machine state with new classification
+        machine_state.timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        machine_state.classification = final_classification;
+    }
+
+    fn clear_buffer(&mut self) {
+        self.buffer.clear();
     }
 
     fn get_primary_signal_index(&self) -> i32 {
@@ -189,7 +236,7 @@ mod tests {
         );
 
         let tip_state = classifier.classify(1.0, None);
-        assert_eq!(tip_state.classification, TipClassification::Good);
+        assert_eq!(tip_state.classification, TipState::Good);
         assert_eq!(tip_state.primary_signal, 1.0);
     }
 
@@ -207,7 +254,7 @@ mod tests {
         classifier.classify(1.0, None); // First value (dropped)
         classifier.classify(1.5, None); // Second value (dropped)
         let tip_state = classifier.classify(3.0, None); // Above max
-        assert_eq!(tip_state.classification, TipClassification::Bad);
+        assert_eq!(tip_state.classification, TipState::Bad);
         assert_eq!(tip_state.primary_signal, 3.0);
     }
 
@@ -218,15 +265,15 @@ mod tests {
 
         // First good signal
         let tip_state1 = classifier.classify(1.0, None);
-        assert_eq!(tip_state1.classification, TipClassification::Good);
+        assert_eq!(tip_state1.classification, TipState::Good);
 
         // Second good signal
         let tip_state2 = classifier.classify(1.0, None);
-        assert_eq!(tip_state2.classification, TipClassification::Good);
+        assert_eq!(tip_state2.classification, TipState::Good);
 
         // Third good signal should trigger stable
         let tip_state3 = classifier.classify(1.0, None);
-        assert_eq!(tip_state3.classification, TipClassification::Stable);
+        assert_eq!(tip_state3.classification, TipState::Stable);
     }
 
     #[test]
@@ -240,7 +287,7 @@ mod tests {
         classifier.classify(1.5, None); // Second value (dropped)
         let tip_state = classifier.classify(3.0, None); // Third value (max after drop)
 
-        assert_eq!(tip_state.classification, TipClassification::Bad);
+        assert_eq!(tip_state.classification, TipState::Bad);
     }
 
     #[test]
@@ -254,6 +301,6 @@ mod tests {
         assert_eq!(tip_state.all_signals, Some(all_signals));
         assert!(tip_state.timestamp > 0.0);
         assert!(!tip_state.signal_history.is_empty());
-        assert_eq!(tip_state.classification, TipClassification::Good);
+        assert_eq!(tip_state.classification, TipState::Good);
     }
 }

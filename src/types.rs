@@ -1,5 +1,5 @@
 use crate::error::NanonisError;
-use crate::classifier::TipClassification;
+use crate::classifier::TipState;
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
@@ -268,10 +268,10 @@ impl Position {
     }
 }
 
-/// Comprehensive tip state for advanced policy engines
+/// Comprehensive machine state for advanced policy engines
 /// Expandable for transformer/ML models that need rich context
-#[derive(Debug, Clone)]
-pub struct TipState {
+#[derive(Debug, Clone, Default)]
+pub struct MachineState {
     // Current signal readings
     pub primary_signal: f32,           // The monitored signal (e.g., bias)
     pub all_signals: Option<Vec<f32>>, // All available signals for context
@@ -291,7 +291,7 @@ pub struct TipState {
     pub system_parameters: Vec<f32>, // Configurable system params
 
     // Classification result
-    pub classification: TipClassification, // How the classifier interpreted this state
+    pub classification: TipState, // How the classifier interpreted this state
 
     // For future ML/transformer expansion:
     // pub embedding: Option<Vec<f32>>,         // Learned state representation

@@ -1,8 +1,8 @@
+use crate::classifier::StateClassifier;
 use crate::client::NanonisClient;
 use crate::error::NanonisError;
-use crate::classifier::StateClassifier;
 use crate::policy::{ActionType, PolicyDecision, PolicyEngine};
-use crate::types::{Position, TipState};
+use crate::types::Position;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -25,9 +25,9 @@ pub struct Controller {
 
 impl Controller {
     pub fn new(
-        address: &str, 
-        classifier: Box<dyn StateClassifier>, 
-        policy: Box<dyn PolicyEngine>
+        address: &str,
+        classifier: Box<dyn StateClassifier>,
+        policy: Box<dyn PolicyEngine>,
     ) -> Result<Self, NanonisError> {
         let client = NanonisClient::new(address)?;
         Ok(Self {
@@ -41,9 +41,9 @@ impl Controller {
     }
 
     pub fn with_client(
-        client: NanonisClient, 
-        classifier: Box<dyn StateClassifier>, 
-        policy: Box<dyn PolicyEngine>
+        client: NanonisClient,
+        classifier: Box<dyn StateClassifier>,
+        policy: Box<dyn PolicyEngine>,
     ) -> Self {
         Self {
             client,
@@ -95,24 +95,41 @@ impl Controller {
         _sample_interval: Duration,
     ) -> Result<LoopAction, NanonisError> {
         let signal_index = self.classifier.get_primary_signal_index();
-        
-        // Read the signal value
-        let values = self.client.signals_val_get(vec![signal_index], true)?;
-        let primary_signal = values[0];
 
-        // Classify raw signal into tip state
-        let mut tip_state = self.classifier.classify(primary_signal, Some(&values));
+        // Collect multiple fresh samples for this monitoring cycle
+        let buffer_size = 10; // Reasonable buffer size for fresh sampling
+        let mut fresh_samples = Vec::with_capacity(buffer_size);
         
-        // Enrich tip state with controller context
-        self.enrich_tip_state(&mut tip_state)?;
+        for _ in 0..buffer_size {
+            let values = self.client.signals_val_get(vec![signal_index], true)?;
+            fresh_samples.push(values[0]);
+            
+            // Small delay between samples for stability
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // Create machine state and fill signal history with fresh samples
+        let mut machine_state = crate::types::MachineState::default();
+        machine_state.primary_signal = fresh_samples[fresh_samples.len()-1];
+        machine_state.all_signals = Some(fresh_samples.clone());
+        machine_state.signal_history.extend(fresh_samples.iter().copied());
+        
+        // Let classifier handle the fresh samples and classification
+        self.classifier.classify(&mut machine_state);
+
+        // Enrich machine state with controller context
+        self.enrich_machine_state(&mut machine_state)?;
 
         // Let policy decide based on classified state
-        let decision = self.policy.decide(&tip_state);
+        let decision = self.policy.decide(&machine_state);
 
         match decision {
             PolicyDecision::Bad => {
-                println!("⚠ Signal {signal_index} = {primary_signal:.6} - BAD ({})", 
-                    self.classifier.get_name());
+                println!(
+                    "Signal {signal_index} = {:.6} - BAD ({})",
+                    machine_state.primary_signal,
+                    self.classifier.get_name()
+                );
 
                 // Execute bad signal actions
                 self.execute_bad_actions()?;
@@ -120,8 +137,11 @@ impl Controller {
                 Ok(LoopAction::ContinueBadLoop) // Continue in bad recovery mode
             }
             PolicyDecision::Good => {
-                println!("✓ Signal {signal_index} = {primary_signal:.6} - GOOD ({})", 
-                    self.classifier.get_name());
+                println!(
+                    "Signal {signal_index} = {:.6} - GOOD ({})",
+                    machine_state.primary_signal,
+                    self.classifier.get_name()
+                );
 
                 // Execute good signal actions
                 self.execute_good_actions()?;
@@ -129,8 +149,11 @@ impl Controller {
                 Ok(LoopAction::ContinueStabilityLoop) // Continue monitoring for stability
             }
             PolicyDecision::Stable => {
-                println!("Signal {signal_index} = {primary_signal:.6} - STABLE ({})", 
-                    self.classifier.get_name());
+                println!(
+                    "Signal {signal_index} = {:.6} - STABLE ({})",
+                    machine_state.primary_signal,
+                    self.classifier.get_name()
+                );
                 Ok(LoopAction::Halt) // Halt the process
             }
         }
@@ -219,24 +242,24 @@ impl Controller {
     }
 
     // ==================== State Enhancement Methods ====================
-    
+
     /// Enrich tip state with additional context from the controller
-    fn enrich_tip_state(&mut self, tip_state: &mut TipState) -> Result<(), NanonisError> {
+    fn enrich_machine_state(&mut self, machine_state: &mut crate::types::MachineState) -> Result<(), NanonisError> {
         // Add position information if available
         if let Ok(position) = self.client.folme_xy_pos_get(true) {
-            tip_state.position = Some((position.x, position.y));
+            machine_state.position = Some((position.x, position.y));
         }
 
         // Add signal names if available
-        if tip_state.signal_names.is_none() {
+        if machine_state.signal_names.is_none() {
             if let Ok(names) = self.client.signal_names_get(false) {
-                tip_state.signal_names = Some(names);
+                machine_state.signal_names = Some(names);
             }
         }
 
         // Add controller state
-        tip_state.approach_count = self.approach_count;
-        tip_state.last_action = self.action_history.back().cloned();
+        machine_state.approach_count = self.approach_count;
+        machine_state.last_action = self.action_history.back().cloned();
 
         Ok(())
     }
@@ -247,7 +270,7 @@ impl Controller {
     /// Bind tip states to specific actions for learning
     /// This would train transformer/ML models to associate states with optimal actions
     #[allow(dead_code)]
-    fn bind_state_to_action(&mut self, _tip_state: &TipState, _action: ActionType) {
+    fn bind_state_to_action(&mut self, _machine_state: &crate::types::MachineState, _action: ActionType) {
         // For future ML expansion:
         // - Record state-action pairs
         // - Build training dataset
@@ -255,7 +278,7 @@ impl Controller {
         // - Implement reinforcement learning
 
         // Example expansion:
-        // self.training_data.push((tip_state.clone(), action, outcome));
+        // self.training_data.push((machine_state.clone(), action, outcome));
         // if self.training_data.len() > self.batch_size {
         //     self.policy.update_model(&self.training_data);
         //     self.training_data.clear();
@@ -331,37 +354,33 @@ enum LoopAction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::classifier::{BoundaryClassifier, TipClassification};
+    use crate::classifier::{BoundaryClassifier, TipState};
     use crate::policy::RuleBasedPolicy;
 
     // Mock classifier for testing
     struct MockClassifier {
         name: String,
         signal_index: i32,
-        classification: TipClassification,
+        classification: TipState,
     }
 
     impl MockClassifier {
-        fn new(name: String, signal_index: i32, classification: TipClassification) -> Self {
-            Self { name, signal_index, classification }
+        fn new(name: String, signal_index: i32, classification: TipState) -> Self {
+            Self {
+                name,
+                signal_index,
+                classification,
+            }
         }
     }
 
     impl StateClassifier for MockClassifier {
-        fn classify(&mut self, primary_signal: f32, _all_signals: Option<&[f32]>) -> TipState {
-            TipState {
-                primary_signal,
-                all_signals: None,
-                signal_names: None,
-                position: None,
-                z_position: None,
-                timestamp: 0.0,
-                signal_history: VecDeque::new(),
-                approach_count: 0,
-                last_action: None,
-                system_parameters: vec![],
-                classification: self.classification.clone(),
-            }
+        fn classify(&mut self, machine_state: &mut crate::types::MachineState) {
+            machine_state.classification = self.classification.clone();
+        }
+        
+        fn clear_buffer(&mut self) {
+            // Mock implementation - do nothing
         }
 
         fn get_primary_signal_index(&self) -> i32 {
@@ -400,7 +419,7 @@ mod tests {
         let classifier = Box::new(MockClassifier::new(
             "Test Classifier".to_string(),
             24,
-            TipClassification::Good,
+            TipState::Good,
         ));
         let policy = Box::new(MockPolicy::new(
             "Test Policy".to_string(),

@@ -12,7 +12,7 @@ pub use client::{ConnectionConfig, NanonisClient, NanonisClientBuilder};
 pub use error::NanonisError;
 pub use classifier::{
     // State classification
-    StateClassifier, BoundaryClassifier, TipClassification,
+    StateClassifier, BoundaryClassifier, TipState,
 };
 pub use policy::{
     // Policy decisions  
@@ -20,4 +20,4 @@ pub use policy::{
     // Expansion types for ML/transformer policies:
     ActionType, LearningPolicyEngine, ExplainablePolicyEngine
 };
-pub use types::{BiasVoltage, NanonisValue, Position, TipState};
+pub use types::{BiasVoltage, NanonisValue, Position, MachineState};

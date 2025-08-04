@@ -1,5 +1,5 @@
-use crate::classifier::TipClassification;
-use crate::types::TipState;
+use crate::classifier::TipState;
+use crate::types::MachineState;
 
 // ==================== Core Policy Engine ====================
 
@@ -22,7 +22,7 @@ pub enum ActionType {
 /// Takes interpreted tip states and makes policy decisions
 pub trait PolicyEngine: Send + Sync {
     /// Make a policy decision based on interpreted tip state
-    fn decide(&mut self, tip_state: &TipState) -> PolicyDecision;
+    fn decide(&mut self, machine_state: &MachineState) -> PolicyDecision;
     fn get_name(&self) -> &str;
 
     // Future expansion for advanced policy engines:
@@ -84,12 +84,12 @@ impl RuleBasedPolicy {
 }
 
 impl PolicyEngine for RuleBasedPolicy {
-    fn decide(&mut self, tip_state: &TipState) -> PolicyDecision {
+    fn decide(&mut self, machine_state: &MachineState) -> PolicyDecision {
         // Simple policy: directly map classification to decision
-        match tip_state.classification {
-            TipClassification::Good => PolicyDecision::Good,
-            TipClassification::Bad => PolicyDecision::Bad,
-            TipClassification::Stable => PolicyDecision::Stable,
+        match machine_state.classification {
+            TipState::Good => PolicyDecision::Good,
+            TipState::Bad => PolicyDecision::Bad,
+            TipState::Stable => PolicyDecision::Stable,
         }
     }
 
@@ -109,7 +109,7 @@ mod tests {
         use std::collections::VecDeque;
         
         // Create mock tip states with different classifications
-        let good_state = TipState {
+        let good_state = MachineState {
             primary_signal: 1.0,
             all_signals: None,
             signal_names: None,
@@ -120,16 +120,16 @@ mod tests {
             approach_count: 0,
             last_action: None,
             system_parameters: vec![],
-            classification: TipClassification::Good,
+            classification: TipState::Good,
         };
 
-        let bad_state = TipState {
-            classification: TipClassification::Bad,
+        let bad_state = MachineState {
+            classification: TipState::Bad,
             ..good_state.clone()
         };
 
-        let stable_state = TipState {
-            classification: TipClassification::Stable,
+        let stable_state = MachineState {
+            classification: TipState::Stable,
             ..good_state.clone()
         };
 
