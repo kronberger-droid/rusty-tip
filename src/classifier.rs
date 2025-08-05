@@ -83,58 +83,6 @@ impl BoundaryClassifier {
         value >= self.min_bound && value <= self.max_bound
     }
 
-
-    fn classify_signal(&mut self, signal_value: f32) -> TipState {
-        // Add value to buffer
-        if self.buffer.len() == self.buffer_size {
-            self.buffer.pop_front();
-        }
-        self.buffer.push_back(signal_value);
-
-        // Check bounds using max value after dropping front values
-        let classification = if let Some(max_value) = self.get_max_after_drop() {
-            if self.is_within_bounds(max_value) {
-                TipState::Good
-            } else {
-                TipState::Bad
-            }
-        } else {
-            // Not enough data yet - assume good
-            TipState::Good
-        };
-
-        // Update stability tracking
-        match classification {
-            TipState::Good => {
-                // Check if we previously had a good classification
-                if matches!(
-                    self.last_classification,
-                    Some(TipState::Good) | Some(TipState::Stable)
-                ) {
-                    self.consecutive_good_count += 1;
-                } else {
-                    // First good after bad, reset counter
-                    self.consecutive_good_count = 1;
-                }
-
-                // Check if we've reached stability threshold
-                if self.consecutive_good_count >= self.stable_threshold {
-                    self.last_classification = Some(TipState::Stable);
-                    TipState::Stable
-                } else {
-                    self.last_classification = Some(TipState::Good);
-                    TipState::Good
-                }
-            }
-            TipState::Bad => {
-                // Reset stability tracking on bad classification
-                self.consecutive_good_count = 0;
-                self.last_classification = Some(TipState::Bad);
-                TipState::Bad
-            }
-            TipState::Stable => unreachable!(), // We don't create Stable directly above
-        }
-    }
 }
 
 impl StateClassifier for BoundaryClassifier {
@@ -235,9 +183,13 @@ mod tests {
             2.0, // max
         );
 
-        let tip_state = classifier.classify(1.0, None);
-        assert_eq!(tip_state.classification, TipState::Good);
-        assert_eq!(tip_state.primary_signal, 1.0);
+        let mut machine_state = crate::types::MachineState {
+            primary_signal: 1.0,
+            ..Default::default()
+        };
+        classifier.classify(&mut machine_state);
+        assert_eq!(machine_state.classification, TipState::Good);
+        assert_eq!(machine_state.primary_signal, 1.0);
     }
 
     #[test]
@@ -250,12 +202,22 @@ mod tests {
         )
         .with_buffer_config(5, 2); // Need enough buffer
 
-        // Add values to fill buffer past drop_front
-        classifier.classify(1.0, None); // First value (dropped)
-        classifier.classify(1.5, None); // Second value (dropped)
-        let tip_state = classifier.classify(3.0, None); // Above max
-        assert_eq!(tip_state.classification, TipState::Bad);
-        assert_eq!(tip_state.primary_signal, 3.0);
+        use std::collections::VecDeque;
+        
+        // Create machine state with signal history containing values where max after drop is bad
+        let mut signal_history = VecDeque::new();
+        signal_history.push_back(1.0); // First value (dropped)
+        signal_history.push_back(1.5); // Second value (dropped)
+        signal_history.push_back(3.0); // Above max - this should trigger Bad
+        
+        let mut machine_state = crate::types::MachineState {
+            primary_signal: 3.0,
+            signal_history,
+            ..Default::default()
+        };
+        classifier.classify(&mut machine_state);
+        assert_eq!(machine_state.classification, TipState::Bad);
+        assert_eq!(machine_state.primary_signal, 3.0);
     }
 
     #[test]
@@ -264,16 +226,28 @@ mod tests {
             BoundaryClassifier::new("Test".to_string(), 24, 0.0, 2.0).with_stability_config(3); // 3 consecutive good for stable
 
         // First good signal
-        let tip_state1 = classifier.classify(1.0, None);
-        assert_eq!(tip_state1.classification, TipState::Good);
+        let mut machine_state1 = crate::types::MachineState {
+            primary_signal: 1.0,
+            ..Default::default()
+        };
+        classifier.classify(&mut machine_state1);
+        assert_eq!(machine_state1.classification, TipState::Good);
 
         // Second good signal
-        let tip_state2 = classifier.classify(1.0, None);
-        assert_eq!(tip_state2.classification, TipState::Good);
+        let mut machine_state2 = crate::types::MachineState {
+            primary_signal: 1.0,
+            ..Default::default()
+        };
+        classifier.classify(&mut machine_state2);
+        assert_eq!(machine_state2.classification, TipState::Good);
 
         // Third good signal should trigger stable
-        let tip_state3 = classifier.classify(1.0, None);
-        assert_eq!(tip_state3.classification, TipState::Stable);
+        let mut machine_state3 = crate::types::MachineState {
+            primary_signal: 1.0,
+            ..Default::default()
+        };
+        classifier.classify(&mut machine_state3);
+        assert_eq!(machine_state3.classification, TipState::Stable);
     }
 
     #[test]
@@ -281,13 +255,23 @@ mod tests {
         let mut classifier =
             BoundaryClassifier::new("Test".to_string(), 24, 0.0, 2.0).with_buffer_config(5, 2); // Buffer 5, drop first 2
 
+        use std::collections::VecDeque;
+        
         // Add values: 1.0, 1.5, 3.0 (3.0 is above max)
         // With drop_front=2, only 3.0 is considered -> Bad
-        classifier.classify(1.0, None); // First value (dropped)
-        classifier.classify(1.5, None); // Second value (dropped)
-        let tip_state = classifier.classify(3.0, None); // Third value (max after drop)
+        let mut signal_history = VecDeque::new();
+        signal_history.push_back(1.0); // First value (dropped)
+        signal_history.push_back(1.5); // Second value (dropped)
+        signal_history.push_back(3.0); // Third value (max after drop) - should be Bad
+        
+        let mut machine_state = crate::types::MachineState {
+            primary_signal: 3.0,
+            signal_history,
+            ..Default::default()
+        };
+        classifier.classify(&mut machine_state);
 
-        assert_eq!(tip_state.classification, TipState::Bad);
+        assert_eq!(machine_state.classification, TipState::Bad);
     }
 
     #[test]
@@ -295,12 +279,16 @@ mod tests {
         let mut classifier = BoundaryClassifier::new("Test".to_string(), 42, -1.0, 1.0);
 
         let all_signals = vec![0.1, 0.2, 0.3, 0.4];
-        let tip_state = classifier.classify(0.5, Some(&all_signals));
+        let mut machine_state = crate::types::MachineState {
+            primary_signal: 0.5,
+            all_signals: Some(all_signals.clone()),
+            ..Default::default()
+        };
+        classifier.classify(&mut machine_state);
 
-        assert_eq!(tip_state.primary_signal, 0.5);
-        assert_eq!(tip_state.all_signals, Some(all_signals));
-        assert!(tip_state.timestamp > 0.0);
-        assert!(!tip_state.signal_history.is_empty());
-        assert_eq!(tip_state.classification, TipState::Good);
+        assert_eq!(machine_state.primary_signal, 0.5);
+        assert_eq!(machine_state.all_signals, Some(all_signals));
+        assert!(machine_state.timestamp > 0.0);
+        assert_eq!(machine_state.classification, TipState::Good);
     }
 }

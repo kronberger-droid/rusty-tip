@@ -1,4 +1,4 @@
-use nanonis_rust::{Controller, NanonisClient, RuleBasedPolicy, BoundaryClassifier};
+use nanonis_rust::{BoundaryClassifier, Controller, NanonisClient, RuleBasedPolicy};
 use std::error::Error;
 use std::time::Duration;
 
@@ -11,8 +11,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Create boundary classifier for bias signal (index 24)
     let classifier = BoundaryClassifier::new(
-        "Bias Boundary Classifier".to_string(),
-        24,  // Signal index
+        String::from("Boundary Classifier"),
+        0,   // Signal index
         0.0, // min bound (V)
         2.0, // max bound (V)
     )
@@ -23,11 +23,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let policy = RuleBasedPolicy::new("Simple Rule Policy".to_string());
 
     // Run monitoring with separated architecture
-    let mut controller = Controller::with_client(
-        client, 
-        Box::new(classifier), 
-        Box::new(policy)
-    );
+    let mut controller = Controller::with_client(client, Box::new(classifier), Box::new(policy));
     controller.run_control_loop(2.0, Duration::from_secs(30))?;
 
     Ok(())

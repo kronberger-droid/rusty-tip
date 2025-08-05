@@ -99,21 +99,23 @@ impl Controller {
         // Collect multiple fresh samples for this monitoring cycle
         let buffer_size = 10; // Reasonable buffer size for fresh sampling
         let mut fresh_samples = Vec::with_capacity(buffer_size);
-        
+
         for _ in 0..buffer_size {
             let values = self.client.signals_val_get(vec![signal_index], true)?;
             fresh_samples.push(values[0]);
-            
+
             // Small delay between samples for stability
             std::thread::sleep(Duration::from_millis(10));
         }
 
         // Create machine state and fill signal history with fresh samples
         let mut machine_state = crate::types::MachineState::default();
-        machine_state.primary_signal = fresh_samples[fresh_samples.len()-1];
+        machine_state.primary_signal = fresh_samples[fresh_samples.len() - 1];
         machine_state.all_signals = Some(fresh_samples.clone());
-        machine_state.signal_history.extend(fresh_samples.iter().copied());
-        
+        machine_state
+            .signal_history
+            .extend(fresh_samples.iter().copied());
+
         // Let classifier handle the fresh samples and classification
         self.classifier.classify(&mut machine_state);
 
@@ -126,7 +128,7 @@ impl Controller {
         match decision {
             PolicyDecision::Bad => {
                 println!(
-                    "Signal {signal_index} = {:.6} - BAD ({})",
+                    "Signal {signal_index} = {} - BAD ({})",
                     machine_state.primary_signal,
                     self.classifier.get_name()
                 );
@@ -138,7 +140,7 @@ impl Controller {
             }
             PolicyDecision::Good => {
                 println!(
-                    "Signal {signal_index} = {:.6} - GOOD ({})",
+                    "Signal {signal_index} = {} - GOOD ({})",
                     machine_state.primary_signal,
                     self.classifier.get_name()
                 );
@@ -244,7 +246,10 @@ impl Controller {
     // ==================== State Enhancement Methods ====================
 
     /// Enrich tip state with additional context from the controller
-    fn enrich_machine_state(&mut self, machine_state: &mut crate::types::MachineState) -> Result<(), NanonisError> {
+    fn enrich_machine_state(
+        &mut self,
+        machine_state: &mut crate::types::MachineState,
+    ) -> Result<(), NanonisError> {
         // Add position information if available
         if let Ok(position) = self.client.folme_xy_pos_get(true) {
             machine_state.position = Some((position.x, position.y));
@@ -270,7 +275,11 @@ impl Controller {
     /// Bind tip states to specific actions for learning
     /// This would train transformer/ML models to associate states with optimal actions
     #[allow(dead_code)]
-    fn bind_state_to_action(&mut self, _machine_state: &crate::types::MachineState, _action: ActionType) {
+    fn bind_state_to_action(
+        &mut self,
+        _machine_state: &crate::types::MachineState,
+        _action: ActionType,
+    ) {
         // For future ML expansion:
         // - Record state-action pairs
         // - Build training dataset
@@ -378,7 +387,7 @@ mod tests {
         fn classify(&mut self, machine_state: &mut crate::types::MachineState) {
             machine_state.classification = self.classification.clone();
         }
-        
+
         fn clear_buffer(&mut self) {
             // Mock implementation - do nothing
         }
@@ -405,7 +414,7 @@ mod tests {
     }
 
     impl PolicyEngine for MockPolicy {
-        fn decide(&mut self, _tip_state: &TipState) -> PolicyDecision {
+        fn decide(&mut self, _machine_state: &crate::types::MachineState) -> PolicyDecision {
             self.decision.clone()
         }
 
