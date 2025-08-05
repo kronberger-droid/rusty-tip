@@ -4,20 +4,27 @@ pub mod controller;
 pub mod error;
 pub mod policy;
 pub mod protocol;
+pub mod signal_monitor;
 pub mod types;
 
 // Re-export main types for easy access
-pub use controller::{Controller, SystemStats};
-pub use client::{ConnectionConfig, NanonisClient, NanonisClientBuilder};
-pub use error::NanonisError;
 pub use classifier::{
+    BoundaryClassifier,
     // State classification
-    StateClassifier, BoundaryClassifier, TipState,
+    StateClassifier,
+    TipState,
 };
+pub use client::{ConnectionConfig, NanonisClient, NanonisClientBuilder};
+pub use controller::{Controller, SystemStats};
+pub use error::NanonisError;
 pub use policy::{
-    // Policy decisions  
-    PolicyDecision, PolicyEngine, RuleBasedPolicy,
     // Expansion types for ML/transformer policies:
-    ActionType, LearningPolicyEngine, ExplainablePolicyEngine
+    ActionType,
+    ExplainablePolicyEngine,
+    LearningPolicyEngine,
+    // Policy decisions
+    PolicyDecision,
+    PolicyEngine,
+    RuleBasedPolicy,
 };
-pub use types::{BiasVoltage, NanonisValue, Position, MachineState};
+pub use types::{BiasVoltage, MachineState, NanonisValue, Position};

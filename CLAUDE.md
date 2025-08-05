@@ -11,7 +11,8 @@ cargo build
 # Run examples
 cargo run --example boundary_monitor_demo
 cargo run --example pulse_test
-cargo run --example machine_tests
+cargo run --example machine_tests 
+cargo run --example logging_demo
 
 # Run tests
 cargo test
@@ -19,6 +20,34 @@ cargo test
 # Check for compilation errors without building
 cargo check
 ```
+
+## Logging Configuration
+
+The library uses the `log` crate with configurable logging levels. Set the `RUST_LOG` environment variable to control verbosity:
+
+```bash
+# Maximum verbosity - shows all internal operations
+RUST_LOG=trace cargo run --example logging_demo
+
+# Debug level - shows detailed operational info
+RUST_LOG=debug cargo run --example boundary_monitor_demo
+
+# Info level (default) - shows normal operation messages
+RUST_LOG=info cargo run --example boundary_monitor_demo
+
+# Warning level - shows only warnings and errors
+RUST_LOG=warn cargo run --example boundary_monitor_demo
+
+# Error level - shows only errors
+RUST_LOG=error cargo run --example boundary_monitor_demo
+```
+
+**Log Levels Used:**
+- **`trace`**: Very detailed internal state (buffer contents, signal values)
+- **`debug`**: Detailed operational info (good signals, stability tracking, pulse operations)
+- **`info`**: Normal operation messages (control loop start/stop, major actions, stable signals)
+- **`warn`**: Warnings (bad signals, recovery actions)
+- **`error`**: Errors (connection failures, protocol errors)
 
 ## Architecture Overview
 

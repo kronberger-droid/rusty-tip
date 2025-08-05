@@ -3,6 +3,7 @@ use crate::client::NanonisClient;
 use crate::error::NanonisError;
 use crate::policy::{ActionType, PolicyDecision, PolicyEngine};
 use crate::types::Position;
+use log::{debug, info};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -26,10 +27,11 @@ pub struct Controller {
 impl Controller {
     pub fn new(
         address: &str,
+        port: u16,
         classifier: Box<dyn StateClassifier>,
         policy: Box<dyn PolicyEngine>,
     ) -> Result<Self, NanonisError> {
-        let client = NanonisClient::new(address)?;
+        let client = NanonisClient::new(address, &port.to_string())?;
         Ok(Self {
             client,
             classifier,
@@ -65,8 +67,8 @@ impl Controller {
         let start = Instant::now();
         let signal_index = self.classifier.get_primary_signal_index();
 
-        println!("Starting policy-driven control loop for signal index {signal_index}");
-        println!("Sample rate: {sample_rate_hz:.1} Hz, Duration: {duration:?}",);
+        info!("Starting policy-driven control loop for signal index {signal_index}");
+        info!("Sample rate: {sample_rate_hz:.1} Hz, Duration: {duration:?}");
 
         while start.elapsed() < duration {
             match self.run_monitoring_loop(sample_interval)? {
@@ -79,13 +81,13 @@ impl Controller {
                     // Loop continues automatically
                 }
                 LoopAction::Halt => {
-                    println!("STABLE signal achieved - halting process");
+                    info!("STABLE signal achieved - halting process");
                     break;
                 }
             }
         }
 
-        println!("Control loop completed after {:?}", start.elapsed());
+        info!("Control loop completed after {:?}", start.elapsed());
         Ok(())
     }
 
@@ -129,8 +131,8 @@ impl Controller {
 
         match decision {
             PolicyDecision::Bad => {
-                println!(
-                    "Signal {signal_index} = {} - BAD ({})",
+                info!(
+                    "Signal {signal_index} = {:?} - BAD ({})",
                     machine_state.primary_signal,
                     self.classifier.get_name()
                 );
@@ -141,8 +143,8 @@ impl Controller {
                 Ok(LoopAction::ContinueBadLoop) // Continue in bad recovery mode
             }
             PolicyDecision::Good => {
-                println!(
-                    "Signal {signal_index} = {} - GOOD ({})",
+                info!(
+                    "Signal {signal_index} = {:?} - GOOD ({})",
                     machine_state.primary_signal,
                     self.classifier.get_name()
                 );
@@ -153,8 +155,8 @@ impl Controller {
                 Ok(LoopAction::ContinueStabilityLoop) // Continue monitoring for stability
             }
             PolicyDecision::Stable => {
-                println!(
-                    "Signal {signal_index} = {} - STABLE ({})",
+                info!(
+                    "Signal {signal_index} = {:?} - STABLE ({})",
                     machine_state.primary_signal,
                     self.classifier.get_name()
                 );
@@ -165,27 +167,27 @@ impl Controller {
 
     /// Execute actions when signal is bad: approach → pulse → withdraw → move → approach → check
     fn execute_bad_actions(&mut self) -> Result<(), NanonisError> {
-        println!(" Executing bad signal recovery sequence...");
+        info!("Executing bad signal recovery sequence...");
 
         // Step 1: Initial approach (if not already approached)
-        println!("Performing initial approach...");
+        info!("Performing initial approach...");
         self.client.auto_approach_and_wait()?;
         self.approach_count += 1;
         self.action_history
             .push_back("Initial Approach".to_string());
 
         // Step 2: Pulse operation (simulate for now)
-        println!("Executing pulse operation...");
+        info!("Executing pulse operation...");
         // TODO: Implement actual pulse operation when available
         std::thread::sleep(Duration::from_millis(200));
-        println!("   Pulse completed");
+        debug!("Pulse completed");
 
         // Step 3: Withdraw tip
-        println!("Withdrawing tip...");
+        info!("Withdrawing tip...");
         self.client.z_ctrl_withdraw(true, 5000)?; // 5 second timeout
 
         // Step 4: Move to new position
-        println!("Moving to new position...");
+        info!("Moving to new position...");
         let current_position = self.client.folme_xy_pos_get(true)?;
 
         // Move by small offset (3nm in both directions)
@@ -196,30 +198,30 @@ impl Controller {
             y: current_position.y + dy,
         };
 
-        println!(
-            "   Moving from ({:.3e}, {:.3e}) to ({:.3e}, {:.3e})",
+        debug!(
+            "Moving from ({:.3e}, {:.3e}) to ({:.3e}, {:.3e})",
             current_position.x, current_position.y, new_position.x, new_position.y
         );
         self.client.folme_xy_pos_set(new_position, true)?;
 
         // Step 5: Approach at new position
-        println!("Approaching at new position...");
+        info!("Approaching at new position...");
         self.client.auto_approach_and_wait()?;
         self.approach_count += 1;
         self.position_history.push_back(new_position);
         self.action_history.push_back("Re-approach".to_string());
 
         // Step 6: Check tip state (read signal to verify)
-        println!("Checking tip state...");
+        debug!("Checking tip state...");
         // This will be checked by the policy engine in the next loop iteration
 
-        println!("Bad signal recovery sequence completed");
+        info!("Bad signal recovery sequence completed");
         Ok(())
     }
 
     /// Execute actions when signal is good
     fn execute_good_actions(&mut self) -> Result<(), NanonisError> {
-        println!("Executing good signal actions...");
+        debug!("Executing good signal actions...");
 
         // TODO: Implement good signal actions:
         // - Optimize scan parameters
@@ -228,7 +230,7 @@ impl Controller {
 
         // For now, simulate with delay
         std::thread::sleep(Duration::from_millis(200));
-        println!("Good signal actions completed");
+        debug!("Good signal actions completed");
 
         Ok(())
     }
@@ -236,11 +238,11 @@ impl Controller {
     /// Placeholder for operational mode (scanning, measurements, etc.)
     #[allow(dead_code)]
     fn run_operational_mode(&mut self) -> Result<(), NanonisError> {
-        println!("Entering operational mode...");
+        info!("Entering operational mode...");
 
         // For now, just wait and return to monitoring
         std::thread::sleep(Duration::from_secs(1));
-        println!("Operational mode completed - returning to monitoring");
+        info!("Operational mode completed - returning to monitoring");
 
         Ok(())
     }
@@ -439,7 +441,7 @@ mod tests {
 
         // Test that the architecture compiles and types work together
         // Connection will fail without Nanonis running, which is expected
-        let result = Controller::new("127.0.0.1:6501", classifier, policy);
+        let result = Controller::new("127.0.0.1", 6501, classifier, policy);
         match result {
             Ok(_) => {
                 // Unexpected success - maybe Nanonis is actually running
@@ -464,7 +466,7 @@ mod tests {
         let policy = Box::new(RuleBasedPolicy::new("Rule Policy".to_string()));
 
         // Test that the architecture compiles and types work together
-        let result = Controller::new("127.0.0.1:6501", classifier, policy);
+        let result = Controller::new("127.0.0.1", 6501, classifier, policy);
         match result {
             Ok(_) => {
                 // Unexpected success - maybe Nanonis is actually running

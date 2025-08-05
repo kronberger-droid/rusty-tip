@@ -1,4 +1,6 @@
 use crate::types::MachineState;
+use log::{debug, trace};
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 /// Trait for classifying raw signal data into interpreted tip states
@@ -32,10 +34,10 @@ pub struct BoundaryClassifier {
 }
 
 /// Classification result for tip state
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub enum TipState {
     #[default]
-    Bad,    // Signal out of bounds
+    Bad, // Signal out of bounds
     Good,   // Signal within bounds
     Stable, // Signal has been good and stable for required period
 }
@@ -82,7 +84,6 @@ impl BoundaryClassifier {
     fn is_within_bounds(&self, value: f32) -> bool {
         value >= self.min_bound && value <= self.max_bound
     }
-
 }
 
 impl StateClassifier for BoundaryClassifier {
@@ -93,11 +94,13 @@ impl StateClassifier for BoundaryClassifier {
             for &sample in machine_state.signal_history.iter().take(self.buffer_size) {
                 self.buffer.push_back(sample);
             }
-            println!("  Buffer filled with {} fresh samples: {:?}", 
-                    self.buffer.len(), 
-                    self.buffer.iter().collect::<Vec<_>>());
+            trace!(
+                "Buffer filled with {} fresh samples: {:?}",
+                self.buffer.len(),
+                self.buffer.iter().collect::<Vec<_>>()
+            );
         }
-        
+
         let classification = if let Some(max_value) = self.get_max_after_drop() {
             if self.is_within_bounds(max_value) {
                 TipState::Good
@@ -111,7 +114,7 @@ impl StateClassifier for BoundaryClassifier {
         // Update stability tracking
         let final_classification = match classification {
             TipState::Good => {
-                // Check if we previously had a good classification  
+                // Check if we previously had a good classification
                 if matches!(
                     self.last_classification,
                     Some(TipState::Good) | Some(TipState::Stable)
@@ -123,11 +126,18 @@ impl StateClassifier for BoundaryClassifier {
 
                 // Check if we've reached stability threshold
                 if self.consecutive_good_count >= self.stable_threshold {
-                    println!("  STABILITY ACHIEVED: {} consecutive good readings", self.consecutive_good_count);
+                    debug!(
+                        "STABILITY ACHIEVED: {} consecutive good readings",
+                        self.consecutive_good_count
+                    );
                     self.last_classification = Some(TipState::Stable);
                     TipState::Stable
                 } else {
-                    println!("  Good count: {}/{}", self.consecutive_good_count, self.stable_threshold);
+                    trace!(
+                        "Good count: {}/{}",
+                        self.consecutive_good_count,
+                        self.stable_threshold
+                    );
                     self.last_classification = Some(TipState::Good);
                     TipState::Good
                 }
@@ -203,13 +213,13 @@ mod tests {
         .with_buffer_config(5, 2); // Need enough buffer
 
         use std::collections::VecDeque;
-        
+
         // Create machine state with signal history containing values where max after drop is bad
         let mut signal_history = VecDeque::new();
         signal_history.push_back(1.0); // First value (dropped)
         signal_history.push_back(1.5); // Second value (dropped)
         signal_history.push_back(3.0); // Above max - this should trigger Bad
-        
+
         let mut machine_state = crate::types::MachineState {
             primary_signal: 3.0,
             signal_history,
@@ -256,14 +266,14 @@ mod tests {
             BoundaryClassifier::new("Test".to_string(), 24, 0.0, 2.0).with_buffer_config(5, 2); // Buffer 5, drop first 2
 
         use std::collections::VecDeque;
-        
+
         // Add values: 1.0, 1.5, 3.0 (3.0 is above max)
         // With drop_front=2, only 3.0 is considered -> Bad
         let mut signal_history = VecDeque::new();
         signal_history.push_back(1.0); // First value (dropped)
         signal_history.push_back(1.5); // Second value (dropped)
         signal_history.push_back(3.0); // Third value (max after drop) - should be Bad
-        
+
         let mut machine_state = crate::types::MachineState {
             primary_signal: 3.0,
             signal_history,

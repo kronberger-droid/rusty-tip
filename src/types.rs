@@ -1,5 +1,7 @@
-use crate::error::NanonisError;
+use serde::{Deserialize, Serialize};
+
 use crate::classifier::TipState;
+use crate::error::NanonisError;
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
@@ -84,7 +86,7 @@ impl From<Vec<i32>> for NanonisValue {
 
 impl TryFrom<NanonisValue> for f32 {
     type Error = NanonisError;
-    
+
     fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
         match value {
             NanonisValue::F32(v) => Ok(v),
@@ -95,7 +97,7 @@ impl TryFrom<NanonisValue> for f32 {
 
 impl TryFrom<NanonisValue> for f64 {
     type Error = NanonisError;
-    
+
     fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
         match value {
             NanonisValue::F64(v) => Ok(v),
@@ -106,7 +108,7 @@ impl TryFrom<NanonisValue> for f64 {
 
 impl TryFrom<NanonisValue> for u16 {
     type Error = NanonisError;
-    
+
     fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
         match value {
             NanonisValue::U16(v) => Ok(v),
@@ -117,7 +119,7 @@ impl TryFrom<NanonisValue> for u16 {
 
 impl TryFrom<NanonisValue> for u32 {
     type Error = NanonisError;
-    
+
     fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
         match value {
             NanonisValue::U32(v) => Ok(v),
@@ -128,7 +130,7 @@ impl TryFrom<NanonisValue> for u32 {
 
 impl TryFrom<NanonisValue> for i16 {
     type Error = NanonisError;
-    
+
     fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
         match value {
             NanonisValue::I16(v) => Ok(v),
@@ -139,7 +141,7 @@ impl TryFrom<NanonisValue> for i16 {
 
 impl TryFrom<NanonisValue> for i32 {
     type Error = NanonisError;
-    
+
     fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
         match value {
             NanonisValue::I32(v) => Ok(v),
@@ -150,33 +152,39 @@ impl TryFrom<NanonisValue> for i32 {
 
 impl TryFrom<NanonisValue> for Vec<f32> {
     type Error = NanonisError;
-    
+
     fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
         match value {
             NanonisValue::ArrayF32(v) => Ok(v),
-            _ => Err(NanonisError::Type(format!("Expected Vec<f32>, got {value:?}"))),
+            _ => Err(NanonisError::Type(format!(
+                "Expected Vec<f32>, got {value:?}"
+            ))),
         }
     }
 }
 
 impl TryFrom<NanonisValue> for Vec<String> {
     type Error = NanonisError;
-    
+
     fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
         match value {
             NanonisValue::ArrayString(v) => Ok(v),
-            _ => Err(NanonisError::Type(format!("Expected Vec<String>, got {value:?}"))),
+            _ => Err(NanonisError::Type(format!(
+                "Expected Vec<String>, got {value:?}"
+            ))),
         }
     }
 }
 
 impl TryFrom<NanonisValue> for Vec<i32> {
     type Error = NanonisError;
-    
+
     fn try_from(value: NanonisValue) -> Result<Self, Self::Error> {
         match value {
             NanonisValue::ArrayI32(v) => Ok(v),
-            _ => Err(NanonisError::Type(format!("Expected Vec<i32>, got {value:?}"))),
+            _ => Err(NanonisError::Type(format!(
+                "Expected Vec<i32>, got {value:?}"
+            ))),
         }
     }
 }
@@ -270,7 +278,7 @@ impl Position {
 
 /// Comprehensive machine state for advanced policy engines
 /// Expandable for transformer/ML models that need rich context
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MachineState {
     // Current signal readings
     pub primary_signal: f32,           // The monitored signal (e.g., bias)
@@ -282,7 +290,8 @@ pub struct MachineState {
     pub z_position: Option<f64>,      // Z height
 
     // Temporal context
-    pub timestamp: f64,                // When this state was captured
+    pub timestamp: f64, // When this state was captured
+    #[serde(skip)]
     pub signal_history: VecDeque<f32>, // Historical signal values
 
     // System state
@@ -293,9 +302,8 @@ pub struct MachineState {
     // Classification result
     pub classification: TipState, // How the classifier interpreted this state
 
-    // For future ML/transformer expansion:
-    // pub embedding: Option<Vec<f32>>,         // Learned state representation
-    // pub attention_weights: Option<Vec<f32>>, // Transformer attention scores
-    // pub confidence: f32,                     // Model confidence in decision
+                                  // For future ML/transformer expansion:
+                                  // pub embedding: Option<Vec<f32>>,         // Learned state representation
+                                  // pub attention_weights: Option<Vec<f32>>, // Transformer attention scores
+                                  // pub confidence: f32,                     // Model confidence in decision
 }
-

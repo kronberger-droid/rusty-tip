@@ -82,25 +82,19 @@ impl Default for ConnectionConfig {
 #[derive(Default)]
 pub struct NanonisClientBuilder {
     address: Option<String>,
+    port: Option<String>,
     config: ConnectionConfig,
     debug: bool,
 }
 
 impl NanonisClientBuilder {
-    /// Set the Nanonis server address.
-    ///
-    /// # Arguments
-    /// * `addr` - Server address in the format "host:port" (e.g., "127.0.0.1:6501")
-    ///
-    /// # Examples
-    /// ```
-    /// use nanonis_rust::NanonisClient;
-    ///
-    /// let builder = NanonisClient::builder()
-    ///     .address("192.168.1.100:6501");
-    /// ```
     pub fn address(mut self, addr: &str) -> Self {
         self.address = Some(addr.to_string());
+        self
+    }
+
+    pub fn port(mut self, port: &str) -> Self {
+        self.port = Some(port.to_string());
         self
     }
 
@@ -140,7 +134,11 @@ impl NanonisClientBuilder {
             .address
             .ok_or_else(|| NanonisError::InvalidCommand("Address must be specified".to_string()))?;
 
-        let socket_addr: SocketAddr = address
+        let port = self
+            .port
+            .ok_or_else(|| NanonisError::InvalidCommand("Port must be specified".to_string()))?;
+
+        let socket_addr: SocketAddr = format!("{address}:{port}")
             .parse()
             .map_err(|_| NanonisError::InvalidAddress(address.clone()))?;
 
@@ -197,7 +195,7 @@ impl NanonisClientBuilder {
 /// ```no_run
 /// use nanonis_rust::{NanonisClient, BiasVoltage};
 ///
-/// let mut client = NanonisClient::new("127.0.0.1:6501")?;
+/// let mut client = NanonisClient::new("127.0.0.1", "6501")?;
 ///
 /// // Read signal names
 /// let signals = client.signal_names_get(false)?;
@@ -253,8 +251,8 @@ impl NanonisClient {
     /// let client = NanonisClient::new("127.0.0.1:6501")?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn new(addr: &str) -> Result<Self, NanonisError> {
-        Self::builder().address(addr).build()
+    pub fn new(addr: &str, port: &str) -> Result<Self, NanonisError> {
+        Self::builder().address(addr).port(port).build()
     }
 
     /// Create a builder for flexible configuration.
@@ -480,9 +478,9 @@ impl NanonisClient {
 
     /// Helper function for printing signal names
     fn print_signal_names(names: &[String]) {
-        println!("Available signal names ({} total):", names.len());
+        log::info!("Available signal names ({} total):", names.len());
         for (index, name) in names.iter().enumerate() {
-            println!("  {index}: {name}");
+            log::info!("  {index}: {name}");
         }
     }
 
@@ -620,7 +618,7 @@ impl NanonisClient {
 
     /// Auto-approach and wait until completion (convenience function)
     pub fn auto_approach_and_wait(&mut self) -> Result<(), NanonisError> {
-        println!("Starting auto-approach...");
+        log::info!("Starting auto-approach...");
 
         // Open auto-approach module
         self.auto_approach_open()?;
@@ -631,7 +629,7 @@ impl NanonisClient {
         // Start auto-approach
         self.auto_approach_on_off_set(true)?;
 
-        println!("Waiting for auto-approach to complete...");
+        log::info!("Waiting for auto-approach to complete...");
 
         // Wait until auto-approach completes
         loop {
@@ -642,7 +640,7 @@ impl NanonisClient {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
-        println!("Auto-approach finished");
+        log::info!("Auto-approach finished");
         Ok(())
     }
 
