@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     log::warn!("This is a warning message - shows potential issues");
     
     // Connect to Nanonis (will fail if no server running, showing error logging)
-    match NanonisClient::new("127.0.0.1:6501") {
+    match NanonisClient::new("127.0.0.1", "6501") {
         Ok(client) => {
             log::info!("Successfully connected to Nanonis server");
             

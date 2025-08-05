@@ -56,11 +56,12 @@ impl Default for ConnectionConfig {
 /// # Examples
 ///
 /// Basic usage:
-/// ```
+/// ```no_run
 /// use nanonis_rust::NanonisClient;
 ///
 /// let client = NanonisClient::builder()
-///     .address("127.0.0.1:6501")
+///     .address("127.0.0.1")
+///     .port("6501")
 ///     .debug(true)
 ///     .build()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -72,7 +73,8 @@ impl Default for ConnectionConfig {
 /// use nanonis_rust::NanonisClient;
 ///
 /// let client = NanonisClient::builder()
-///     .address("192.168.1.100:6501")
+///     .address("192.168.1.100")
+///     .port("6501")
 ///     .connect_timeout(Duration::from_secs(30))
 ///     .read_timeout(Duration::from_secs(60))
 ///     .debug(false)
@@ -248,7 +250,7 @@ impl NanonisClient {
     /// ```no_run
     /// use nanonis_rust::NanonisClient;
     ///
-    /// let client = NanonisClient::new("127.0.0.1:6501")?;
+    /// let client = NanonisClient::new("127.0.0.1", "6501")?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn new(addr: &str, port: &str) -> Result<Self, NanonisError> {
@@ -413,7 +415,7 @@ impl NanonisClient {
     /// ```no_run
     /// use nanonis_rust::{NanonisClient, BiasVoltage};
     ///
-    /// let mut client = NanonisClient::new("127.0.0.1:6501")?;
+    /// let mut client = NanonisClient::new("127.0.0.1", "6501")?;
     ///
     /// // Set bias to 1.5V
     /// client.set_bias(BiasVoltage(1.5))?;
@@ -443,7 +445,7 @@ impl NanonisClient {
     /// ```no_run
     /// use nanonis_rust::NanonisClient;
     ///
-    /// let mut client = NanonisClient::new("127.0.0.1:6501")?;
+    /// let mut client = NanonisClient::new("127.0.0.1", "6501")?;
     ///
     /// let current_bias = client.get_bias()?;
     /// println!("Current bias voltage: {:.3}V", current_bias.0);

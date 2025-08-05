@@ -108,7 +108,7 @@ impl DiskWriter for JsonDiskWriter {
 
         for (index, sample) in data.into_iter().enumerate() {
             if let Err(e) = self.write_single(sample).await {
-                error!("Failed to write sample {} in batch: {}", index, e);
+                error!("Failed to write sample {index} in batch: {e}");
                 return Err(e);
             }
         }

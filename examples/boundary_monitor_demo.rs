@@ -10,7 +10,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     log::info!("Boundary Monitor Demo - Separated Architecture");
 
     // Connect to Nanonis
-    let client = NanonisClient::new("127.0.0.1:6501")?;
+    let client = NanonisClient::new("127.0.0.1", "6501")?;
 
     // Create boundary classifier for bias signal (index 24)
     let classifier = BoundaryClassifier::new(
