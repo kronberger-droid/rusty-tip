@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with this Nanonis Rust library.
 
 ## Build and Development Commands
 
@@ -8,9 +8,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build the library
 cargo build
 
-# Run examples (replace with specific example name)
+# Run examples
+cargo run --example boundary_monitor_demo
 cargo run --example pulse_test
-cargo run --example simple_policy_demo
+cargo run --example machine_tests
 
 # Run tests
 cargo test
@@ -21,62 +22,156 @@ cargo check
 
 ## Architecture Overview
 
-This is a Rust library for interfacing with Nanonis SPM (Scanning Probe Microscopy) systems via TCP protocol. The architecture follows a layered approach:
+This is a Rust library for interfacing with Nanonis SPM (Scanning Probe Microscopy) systems via TCP protocol. The architecture has evolved to use a **separated, modular design** with clear data flow and responsibilities.
+
+### Key Architectural Changes
+
+The library now uses **`MachineState`** as the central data structure, replacing the previous `TipState`. This represents a significant architectural shift toward a more structured approach:
+
+- **Raw Signals** → **StateClassifier** → **Enriched MachineState** → **PolicyEngine** → **Actions**
+- State classification is now **in-place** on `MachineState` objects
+- Fresh signal sampling with configurable buffer sizes
+- Enhanced debugging and monitoring capabilities
 
 ### Core Components
 
-- **Protocol Layer** (`src/protocol.rs`): Low-level TCP protocol implementation for Nanonis communication
-  - Handles message headers, serialization/deserialization of `NanonisValue` types
-  - Supports various data types: integers, floats, arrays, strings with big-endian encoding
-  
-- **Client Layer** (`src/client.rs`): High-level API wrapper around the protocol
-  - `NanonisClient` provides type-safe methods like `signals_val_get()`, `set_bias()`, `signal_names_get()`
-  - Manages TCP connections, timeouts, and retry logic
-  
-- **Policy Engine** (`src/policy.rs`): Decision-making system for automated control
-  - `PolicyEngine` trait for implementing different control strategies
-  - `RuleBasedPolicy` for boundary-based signal monitoring with buffering
-  - Supports signal buffering with configurable drop-front and max-value analysis
+#### **Types Layer** (`src/types.rs`)
+- **`NanonisValue`**: Enum for all Nanonis protocol data types with comprehensive conversion traits
+- **`BiasVoltage`**, **`Position`**: Type-safe wrappers for common values
+- **`MachineState`**: **Central state representation** containing:
+  - Current signal readings (`primary_signal`, `all_signals`)
+  - Spatial context (`position`, `z_position`) 
+  - Temporal context (`timestamp`, `signal_history`)
+  - System state (`approach_count`, `last_action`, `system_parameters`)
+  - **Classification result** (`classification: TipState`)
+  - ML expansion fields (commented for future use)
 
-- **AFM Controller** (`src/afm_controller.rs`): High-level orchestration layer
-  - Integrates `NanonisClient` with `PolicyEngine` for automated monitoring
-  - Supports different loop modes and sample rates
+#### **Error Handling** (`src/error.rs`)
+- **`NanonisError`**: Comprehensive error types with detailed context
+- Covers IO, protocol, type, and command errors using `thiserror`
 
-### Key Data Types
+#### **Protocol Layer** (`src/protocol.rs`)
+- Low-level TCP protocol implementation for Nanonis communication
+- Big-endian serialization/deserialization of `NanonisValue` types
+- Message headers, validation, and protocol constants
+- Supports integers, floats, arrays, strings
 
-- `NanonisValue`: Enum representing all possible data types in Nanonis protocol
-- `NanonisError`: Comprehensive error handling for network, protocol, and type errors
-- `PolicyDecision`: Simple enum for Continue/OutOfBounds decisions
+#### **Client Layer** (`src/client.rs`)
+- **`NanonisClient`** with builder pattern for flexible configuration
+- **Comprehensive Nanonis command support**:
+  - **Signals**: `ValsGet`, `NamesGet`, `CalibrGet`, `RangeGet`
+  - **Control**: `Bias.Set/Get`, `FolMe.XYPosSet/Get`, `ZCtrl.Withdraw`
+  - **Automation**: `AutoApproach.*`, `Motor.*` commands
+- Connection management with configurable timeouts and retry logic
+- Type-safe method interfaces
+
+#### **State Classification** (`src/classifier.rs`)
+- **`StateClassifier`** trait: Converts raw signals into interpreted machine states
+- **`BoundaryClassifier`**: Advanced boundary-based classification with:
+  - **Fresh sampling integration**: Uses `signal_history` from `MachineState`
+  - **Drop-front buffering**: Configurable buffer size and drop count
+  - **Stability tracking**: Consecutive good readings for stable classification  
+  - **In-place classification**: Updates `MachineState.classification` directly
+- **`TipState`**: Simple enum (`Bad`, `Good`, `Stable`) with `Default` trait
+
+#### **Policy Engine** (`src/policy.rs`)
+- **`PolicyEngine`** trait: Makes decisions based on `MachineState`
+- **`RuleBasedPolicy`**: Simple mapping from classification to decision
+- **`PolicyDecision`**: Good/Bad/Stable decision types
+- **Extensible design** for future ML/transformer-based policies with learning traits
+
+#### **Controller** (`src/controller.rs`)
+- **High-level orchestration** integrating all components
+- **Fresh sampling strategy**: Collects multiple samples per monitoring cycle
+- **State-driven actions**: Complex action sequences based on policy decisions
+- **Rich context tracking**: Position history, action history, approach counts
+- **ML-ready architecture**: Placeholder methods for future expansion
+
+### Data Flow Architecture
+
+```
+1. Controller collects fresh samples → MachineState.signal_history
+2. StateClassifier.classify(machine_state) → Updates classification in-place  
+3. Controller enriches MachineState with position, signal names, etc.
+4. PolicyEngine.decide(machine_state) → PolicyDecision
+5. Controller executes actions based on decision
+```
 
 ### Nanonis Protocol Integration
 
-The library implements the Nanonis TCP protocol for commands like:
-- `Signals.ValGet` / `Signals.ValsGet` - Read signal values
+**Signal Operations:**
+- `Signals.ValsGet` - Read multiple signal values with wait-for-newest option
 - `Signals.NamesGet` - Get available signal names  
+- `Signals.CalibrGet` - Get signal calibration and offset
+- `Signals.RangeGet` - Get signal range limits
+
+**Control Operations:**
 - `Bias.Set` / `Bias.Get` - Control bias voltage
-- `FolMe.XYPosSet` - Set XY position
+- `FolMe.XYPosSet` / `FolMe.XYPosGet` - Position control with type-safe Position struct
+- `ZCtrl.Withdraw` - Tip withdrawal with timeout control
 
-### Policy Engine Pattern
+**Automation:**
+- `AutoApproach.Open` / `AutoApproach.OnOffSet` / `AutoApproach.OnOffGet` - Auto-approach control
+- `Motor.StartMove` / `Motor.StartClosedLoop` / `Motor.StopMove` - Coarse positioning
+- `Motor.PosGet` / `Motor.StepCounterGet` / `Motor.FreqAmpGet/Set` - Motor status and control
 
-The policy engine uses a simple pattern:
-1. Read signal values via `signals_val_get(vec![signal_index], true)`
-2. Buffer values and apply drop-front + max-value analysis
-3. Check boundaries and return `Continue` or `OutOfBounds`
-4. Controller can halt or continue based on policy decision
+### Current Usage Pattern
 
-### Example Usage Pattern
+The separated architecture is demonstrated in `boundary_monitor_demo.rs`:
 
-Most examples follow this structure:
 ```rust
-let mut client = NanonisClient::new("127.0.0.1:6501")?;
-let policy = RuleBasedPolicy::new("Monitor".to_string(), signal_index, min, max);
-let controller = AFMController::new("127.0.0.1:6501", Box::new(policy))?;
-controller.run_monitoring_loop(signal_index, loop_mode, sample_rate)?;
+// Create client
+let client = NanonisClient::new("127.0.0.1:6501")?;
+
+// Create classifier for signal interpretation
+let classifier = BoundaryClassifier::new(
+    "Bias Boundary Classifier".to_string(),
+    24,  // Signal index (bias voltage)
+    0.0, // min bound (V)
+    2.0, // max bound (V)
+)
+.with_buffer_config(10, 2)    // 10 samples, drop first 2
+.with_stability_config(3);    // 3 consecutive good for stable
+
+// Create policy for decision making
+let policy = RuleBasedPolicy::new("Simple Rule Policy".to_string());
+
+// Integrate with controller
+let mut controller = Controller::with_client(
+    client, 
+    Box::new(classifier), 
+    Box::new(policy)
+);
+
+// Run automated control loop
+controller.run_control_loop(2.0, Duration::from_secs(30))?;
 ```
 
 ## Development Notes
 
-- The protocol implementation expects big-endian byte order for all data types
-- Signal indices are typically 0-127, with common signals like bias voltage at index 24
-- Policy engines should be designed to work with single signal values for boundary checking
-- The `signals_val_get()` method always takes `Vec<i32>` for signal indices, even for single signals
+### Architecture Principles
+- **Separated concerns**: Raw signals → classification → policy → actions
+- **Type safety**: Extensive use of type-safe wrappers and conversion traits
+- **Fresh sampling**: Controller actively collects fresh samples for classification
+- **In-place updates**: `MachineState` is modified in-place by classifiers
+- **ML readiness**: Architecture designed for future transformer/ML policy engines
+
+### Technical Details
+- **Protocol**: Big-endian byte order for all data types
+- **Signal indices**: Typically 0-127, with bias voltage commonly at index 24
+- **Buffering**: Classifiers use configurable buffering with drop-front analysis
+- **Error handling**: Comprehensive error types with detailed context
+- **Testing**: Unit tests for all core components with mocking support
+
+### Key Behavioral Changes
+- `StateClassifier.classify()` now takes `&mut MachineState` instead of returning `TipState`
+- `PolicyEngine.decide()` now takes `&MachineState` instead of `&TipState`  
+- Controller performs fresh sampling (10 samples per cycle) instead of single reads
+- `MachineState` replaces `TipState` as the central data structure
+- Classification and enrichment happen in-place on the state object
+
+### Future Expansion Points
+- **Advanced Classifiers**: Statistical, multi-signal, frequency-domain analysis
+- **ML Policy Engines**: Neural networks, transformers, reinforcement learning
+- **Data Management**: Logging, real-time plotting, configuration management
+- **Robustness**: Enhanced error recovery, simulation modes, benchmarking
