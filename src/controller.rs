@@ -109,9 +109,11 @@ impl Controller {
         }
 
         // Create machine state and fill signal history with fresh samples
-        let mut machine_state = crate::types::MachineState::default();
-        machine_state.primary_signal = fresh_samples[fresh_samples.len() - 1];
-        machine_state.all_signals = Some(fresh_samples.clone());
+        let mut machine_state = crate::types::MachineState {
+            primary_signal: fresh_samples[fresh_samples.len() - 1],
+            all_signals: Some(fresh_samples.clone()),
+            ..Default::default()
+        };
         machine_state
             .signal_history
             .extend(fresh_samples.iter().copied());
@@ -152,7 +154,7 @@ impl Controller {
             }
             PolicyDecision::Stable => {
                 println!(
-                    "Signal {signal_index} = {:.6} - STABLE ({})",
+                    "Signal {signal_index} = {} - STABLE ({})",
                     machine_state.primary_signal,
                     self.classifier.get_name()
                 );
