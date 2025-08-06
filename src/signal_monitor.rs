@@ -154,6 +154,9 @@ pub struct AsyncSignalMonitor {
 
     // Task handle for cleanup
     monitor_handle: Option<tokio::task::JoinHandle<()>>,
+
+    // Optional disk writer for logging
+    disk_writer: Option<Box<dyn DiskWriter>>,
 }
 
 /// Handle for reveiving monitored signal data
@@ -195,7 +198,14 @@ impl AsyncSignalMonitor {
             data_sender: None,
             shutdown_sender: None,
             monitor_handle: None,
+            disk_writer: None,
         })
+    }
+
+    /// Set disk writer for logging samples to disk
+    pub fn with_disk_writer(mut self, writer: Box<dyn DiskWriter>) -> Self {
+        self.disk_writer = Some(writer);
+        self
     }
 
     /// Start monitoring signals in background task
@@ -218,6 +228,7 @@ impl AsyncSignalMonitor {
         let sample_interval = self.sample_rate;
         let is_running = self.is_running.clone();
         let data_sender_clone = data_sender.clone();
+        let disk_writer = self.disk_writer.take(); // Take ownership of disk writer
 
         let monitor_handle = tokio::spawn(async move {
             info!("Creating client connection in monitoring task: {client_address}:{client_port}");
@@ -229,10 +240,13 @@ impl AsyncSignalMonitor {
                         client,
                         data_sender_clone,
                         shutdown_receiver,
-                        signal_indices,
-                        sample_interval,
-                        buffer_size,
-                        is_running,
+                        MonitoringConfig {
+                            signal_indices,
+                            sample_interval,
+                            buffer_size,
+                            is_running,
+                            disk_writer,
+                        },
                     )
                     .await;
                 }
@@ -257,15 +271,79 @@ impl AsyncSignalMonitor {
     }
 }
 
-#[allow(unused)]
-async fn monitoring_task(
-    mut client: NanonisClient,
-    data_sender: mpsc::Sender<MachineState>,
-    mut shutdown_receiver: mpsc::Receiver<()>,
+struct MonitoringConfig {
     signal_indices: Vec<i32>,
     sample_interval: Duration,
     buffer_size: usize,
     is_running: Arc<AtomicBool>,
+    disk_writer: Option<Box<dyn DiskWriter>>,
+}
+
+async fn monitoring_task(
+    mut client: NanonisClient,
+    data_sender: mpsc::Sender<MachineState>,
+    mut shutdown_receiver: mpsc::Receiver<()>,
+    mut config: MonitoringConfig,
 ) {
-    // Implementation here
+    let mut sample_buffer = Vec::<MachineState>::with_capacity(config.buffer_size);
+    let mut interval = tokio::time::interval(config.sample_interval);
+
+    while config.is_running.load(Ordering::Relaxed) {
+        tokio::select! {
+            _ = shutdown_receiver.recv() => {
+                info!("Shutdown signal received");
+                break;
+            }
+            _ = interval.tick() => {
+                // Read signals from Nanonis
+                match client.signals_val_get(config.signal_indices.clone(), true) {
+                    Ok(values) => {
+                        // Create MachineState
+                        let machine_state = MachineState {
+                            primary_signal: values[0],
+                            all_signals: Some(values),
+                            timestamp: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs_f64(),
+                            ..Default::default()
+                        };
+
+                        // Add to buffer and write batch when full
+                        if let Some(ref mut writer) = config.disk_writer {
+                            sample_buffer.push(machine_state.clone());
+
+                            // Write batch when buffer is full
+                            if sample_buffer.len() >= config.buffer_size {
+                                trace!("Writing batch of {} samples to disk", sample_buffer.len());
+                                let _ = writer.write_batch(sample_buffer.clone()).await;
+                                sample_buffer.clear();
+                            }
+                        }
+
+                        // Send to channel (always send individual samples)
+                        let _ = data_sender.send(machine_state).await;
+                    }
+                    Err(e) => {
+                        error!("Failed to read signals: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    // Cleanup: write remaining samples in buffer
+    if let Some(ref mut writer) = config.disk_writer {
+        if !sample_buffer.is_empty() {
+            info!("Writing final batch of {} samples to disk", sample_buffer.len());
+            if let Err(e) = writer.write_batch(sample_buffer).await {
+                error!("Failed to write final batch: {e}");
+            }
+        }
+        if let Err(e) = writer.close().await {
+            error!("Failed to close disk writer: {e}");
+        }
+    }
+    config.is_running.store(false, Ordering::Relaxed);
+    info!("Monitoring task cleanup completed");
 }

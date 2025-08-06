@@ -28,3 +28,7 @@ pub use policy::{
     RuleBasedPolicy,
 };
 pub use types::{BiasVoltage, MachineState, NanonisValue, Position};
+pub use signal_monitor::{
+    AsyncSignalMonitor, JsonDiskWriter, DiskWriter, DiskWriterConfig, DiskWriterFormat,
+    SignalReceiver, MonitorStats,
+};
