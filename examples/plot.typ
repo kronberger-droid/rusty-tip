@@ -1,5 +1,11 @@
 #import "@preview/lilaq:0.4.0" as lq
 
+#set page(
+  paper: "a4",
+  flipped: true,
+  margin: 1cm,
+)
+
 #let read_jsonl(filename) = {
   let content = read(filename)
   let lines = content.split("\n")
@@ -9,11 +15,13 @@
 
 #let data = read_jsonl("./history/2025-08-06T13-17-01.jsonl")
 
-#let ys = data.map(sample => sample.primary_signal)
-#let xs = data.map(sample => sample.timestamp)
+#let values = data.map(sample => sample.primary_signal)
+#let time = data.map(sample => sample.timestamp)
+
+#let time = time.map(sample => sample - time.first())
 
 #lq.diagram(
-  width: 12cm,
-  height: 8cm,
-  lq.plot(xs, ys),
+  width: 26cm,
+  height: 18cm,
+  lq.plot(time, values),
 )

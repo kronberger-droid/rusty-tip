@@ -6,7 +6,7 @@ use std::time::Duration;
 fn main() -> Result<(), Box<dyn Error>> {
     // Initialize logging with configurable level
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    
+
     log::info!("Boundary Monitor Demo - Separated Architecture");
 
     // Connect to Nanonis
@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Create boundary classifier for bias signal (index 24)
     let classifier = BoundaryClassifier::new(
         String::from("Boundary Classifier"),
-        0,   // Signal index
+        24,  // Signal index
         0.0, // min bound (V)
         2.0, // max bound (V)
     )
