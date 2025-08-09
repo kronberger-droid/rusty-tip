@@ -13,9 +13,9 @@
   lines.filter(line => line.trim() != "").map(line => json(bytes(line)))
 }
 
-#let data = read_jsonl("./history/2025-08-06T13-17-01.jsonl")
+#let data = read_jsonl("./history/2025-08-09T18-24-17.jsonl")
 
-#let values = data.map(sample => sample.primary_signal)
+#let values = data.map(sample => sample.all_signals.at(3))
 #let time = data.map(sample => sample.timestamp)
 
 #let time = time.map(sample => sample - time.first())

@@ -142,7 +142,7 @@ pub struct AsyncSignalMonitor {
     monitor_port: u16,
 
     // Configuration
-    signal_indices: Vec<i32>,
+    signal_indices: Vec<usize>,
     sample_rate: Duration,
 
     // Control
@@ -184,7 +184,7 @@ impl AsyncSignalMonitor {
     pub fn new(
         nanonis_address: &str,
         monitor_port: u16,
-        signal_indices: Vec<i32>,
+        signal_indices: Vec<usize>,
         sample_rate_hz: f32,
     ) -> Result<Self, NanonisError> {
         info!("Created AsyncSignalMonitor for {nanonis_address}:{monitor_port} with {signal_indices:?} at {sample_rate_hz:.1}Hz");
@@ -272,7 +272,7 @@ impl AsyncSignalMonitor {
 }
 
 struct MonitoringConfig {
-    signal_indices: Vec<i32>,
+    signal_indices: Vec<usize>,
     sample_interval: Duration,
     buffer_size: usize,
     is_running: Arc<AtomicBool>,
@@ -296,7 +296,8 @@ async fn monitoring_task(
             }
             _ = interval.tick() => {
                 // Read signals from Nanonis
-                match client.signals_val_get(config.signal_indices.clone(), true) {
+                let signal_indices_i32: Vec<i32> = config.signal_indices.iter().map(|&i| i as i32).collect();
+                match client.signals_val_get(signal_indices_i32, true) {
                     Ok(values) => {
                         // Create MachineState
                         let machine_state = MachineState {
@@ -335,7 +336,10 @@ async fn monitoring_task(
     // Cleanup: write remaining samples in buffer
     if let Some(ref mut writer) = config.disk_writer {
         if !sample_buffer.is_empty() {
-            info!("Writing final batch of {} samples to disk", sample_buffer.len());
+            info!(
+                "Writing final batch of {} samples to disk",
+                sample_buffer.len()
+            );
             if let Err(e) = writer.write_batch(sample_buffer).await {
                 error!("Failed to write final batch: {e}");
             }
