@@ -3,14 +3,15 @@ use std::error::Error;
 use std::time::Duration;
 
 /// Boundary monitoring demo with separated classifier and policy
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     // Initialize logging with configurable level
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     log::info!("Boundary Monitor Demo - Separated Architecture");
 
     // Connect to Nanonis
-    let client = NanonisClient::new("127.0.0.1", "6501")?;
+    let client = NanonisClient::new("127.0.0.1", 6501)?;
 
     // Create boundary classifier for bias signal (index 24)
     let classifier = BoundaryClassifier::new(
@@ -27,7 +28,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Run monitoring with separated architecture
     let mut controller = Controller::with_client(client, Box::new(classifier), Box::new(policy));
-    controller.run_control_loop(2.0, Duration::from_secs(30))?;
+    controller.run_control_loop(2.0, Duration::from_secs(30)).await?;
 
     Ok(())
 }

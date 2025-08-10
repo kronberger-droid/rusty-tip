@@ -42,7 +42,31 @@ pub enum TipState {
     Stable, // Signal has been good and stable for required period
 }
 
+/// Builder for BoundaryClassifier with sensible defaults
+pub struct BoundaryClassifierBuilder {
+    name: String,
+    signal_index: Option<i32>,
+    min_bound: Option<f32>,
+    max_bound: Option<f32>,
+    buffer_size: usize,
+    drop_front: usize,
+    stable_threshold: u32,
+}
+
 impl BoundaryClassifier {
+    /// Create a new BoundaryClassifier builder with sensible defaults
+    pub fn builder() -> BoundaryClassifierBuilder {
+        BoundaryClassifierBuilder {
+            name: "Boundary Classifier".to_string(),
+            signal_index: None,
+            min_bound: None,
+            max_bound: None,
+            buffer_size: 10,
+            drop_front: 2,
+            stable_threshold: 3,
+        }
+    }
+
     pub fn new(name: String, signal_index: i32, min_bound: f32, max_bound: f32) -> Self {
         Self {
             name,
@@ -83,6 +107,79 @@ impl BoundaryClassifier {
 
     fn is_within_bounds(&self, value: f32) -> bool {
         value >= self.min_bound && value <= self.max_bound
+    }
+}
+
+impl BoundaryClassifierBuilder {
+    /// Set the name for the classifier
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    /// Set the signal index to monitor (required)
+    pub fn signal_index(mut self, index: i32) -> Self {
+        self.signal_index = Some(index);
+        self
+    }
+
+    /// Set the boundary bounds (required)
+    pub fn bounds(mut self, min_bound: f32, max_bound: f32) -> Self {
+        self.min_bound = Some(min_bound);
+        self.max_bound = Some(max_bound);
+        self
+    }
+
+    /// Set buffer configuration (optional, has defaults)
+    pub fn buffer_config(mut self, buffer_size: usize, drop_front: usize) -> Self {
+        self.buffer_size = buffer_size;
+        self.drop_front = drop_front;
+        self
+    }
+
+    /// Set stability threshold (optional, has default)
+    pub fn stability_threshold(mut self, threshold: u32) -> Self {
+        self.stable_threshold = threshold;
+        self
+    }
+
+    /// Build the BoundaryClassifier with validation
+    pub fn build(self) -> Result<BoundaryClassifier, String> {
+        let signal_index = self.signal_index
+            .ok_or("signal_index is required - use .signal_index()")?;
+        let min_bound = self.min_bound
+            .ok_or("min_bound is required - use .bounds(min, max)")?;
+        let max_bound = self.max_bound
+            .ok_or("max_bound is required - use .bounds(min, max)")?;
+
+        if min_bound >= max_bound {
+            return Err(format!("min_bound ({}) must be less than max_bound ({})", min_bound, max_bound));
+        }
+
+        if self.buffer_size == 0 {
+            return Err("buffer_size must be greater than 0".to_string());
+        }
+
+        if self.drop_front >= self.buffer_size {
+            return Err(format!("drop_front ({}) must be less than buffer_size ({})", self.drop_front, self.buffer_size));
+        }
+
+        if self.stable_threshold == 0 {
+            return Err("stable_threshold must be greater than 0".to_string());
+        }
+
+        Ok(BoundaryClassifier {
+            name: self.name,
+            signal_index,
+            min_bound,
+            max_bound,
+            buffer: VecDeque::new(),
+            buffer_size: self.buffer_size,
+            drop_front: self.drop_front,
+            consecutive_good_count: 0,
+            stable_threshold: self.stable_threshold,
+            last_classification: None,
+        })
     }
 }
 

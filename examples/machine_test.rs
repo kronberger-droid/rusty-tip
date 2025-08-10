@@ -5,7 +5,7 @@ use nanonis_rust::{BiasVoltage, NanonisClient};
 fn main() -> Result<(), Box<dyn Error>> {
     let mut client = NanonisClient::builder()
         .address("127.0.0.1")
-        .port("6501")
+        .port(6501)
         .debug(true)
         .build()?;
 
