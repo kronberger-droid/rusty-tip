@@ -153,7 +153,7 @@ impl BoundaryClassifierBuilder {
             .ok_or("max_bound is required - use .bounds(min, max)")?;
 
         if min_bound >= max_bound {
-            return Err(format!("min_bound ({}) must be less than max_bound ({})", min_bound, max_bound));
+            return Err(format!("min_bound ({min_bound}) must be less than max_bound ({max_bound})"));
         }
 
         if self.buffer_size == 0 {
