@@ -1,4 +1,4 @@
-use crate::{MachineState, NanonisClient, NanonisError};
+use crate::{MachineState, NanonisClient, NanonisError, SessionMetadata};
 use async_trait::async_trait;
 use log::{debug, error, info, trace};
 use std::path::PathBuf;
@@ -8,6 +8,7 @@ use std::sync::{
 };
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::sync::RwLock;
 use tokio::{sync::mpsc, time::Duration};
 
 #[derive(Debug, Clone)]
@@ -25,6 +26,7 @@ pub enum DiskWriterFormat {
 
 #[async_trait]
 pub trait DiskWriter: Send + Sync {
+    async fn write_metadata(&mut self, metadata: SessionMetadata) -> Result<(), std::io::Error>;
     async fn write_single(&mut self, data: MachineState) -> Result<(), std::io::Error>;
     async fn write_batch(&mut self, data: Vec<MachineState>) -> Result<(), std::io::Error>;
     async fn flush(&mut self) -> Result<(), std::io::Error>;
@@ -74,8 +76,30 @@ impl JsonDiskWriter {
 
 #[async_trait]
 impl DiskWriter for JsonDiskWriter {
+    async fn write_metadata(&mut self, metadata: SessionMetadata) -> Result<(), std::io::Error> {
+        // Create metadata file path (same dir, different extension)
+        let mut metadata_path = self.config.file_path.clone();
+        metadata_path.set_extension("metadata.json");
+
+        // Write metadata to separate file
+        let metadata_json = match &self.config.format {
+            DiskWriterFormat::Json { pretty: true } => serde_json::to_string_pretty(&metadata)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?,
+            DiskWriterFormat::Json { pretty: false } => serde_json::to_string(&metadata)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?,
+            _ => unreachable!("JsonDiskWriter with non-JSON format"),
+        };
+
+        tokio::fs::write(metadata_path, metadata_json).await?;
+        info!(
+            "Wrote session metadata: {} signals, {} active",
+            metadata.signal_names.len(),
+            metadata.active_indices.len()
+        );
+        Ok(())
+    }
     async fn write_single(&mut self, data: MachineState) -> Result<(), std::io::Error> {
-        // Serialize to JSON based on config
+        // Serialize to JSON based on config (only dynamic data)
         let json_string = match &self.config.format {
             DiskWriterFormat::Json { pretty: true } => serde_json::to_string_pretty(&data)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?,
@@ -90,7 +114,7 @@ impl DiskWriter for JsonDiskWriter {
         self.samples_written += 1;
 
         trace!(
-            "Wrote JSON sample #{} ({} bytes)",
+            "Wrote minimal JSON sample #{} ({} bytes)",
             self.samples_written,
             json_string.len()
         );
@@ -137,9 +161,9 @@ impl DiskWriter for JsonDiskWriter {
 }
 
 pub struct AsyncSignalMonitor {
-    // Client address: idealy on different port than controller client
+    // Client address: ideally on different port than controller client
     nanonis_address: String,
-    monitor_port: u16,
+    nanonis_port: u16,
 
     // Configuration
     signal_indices: Vec<usize>,
@@ -147,6 +171,9 @@ pub struct AsyncSignalMonitor {
 
     // Control
     is_running: Arc<AtomicBool>,
+
+    // Shared state
+    shared_state: Option<Arc<RwLock<MachineState>>>,
 
     // Communication channels
     data_sender: Option<mpsc::Sender<MachineState>>,
@@ -183,18 +210,19 @@ pub struct MonitorStats {
 impl AsyncSignalMonitor {
     pub fn new(
         nanonis_address: &str,
-        monitor_port: u16,
+        nanonis_port: u16,
         signal_indices: Vec<usize>,
         sample_rate_hz: f32,
     ) -> Result<Self, NanonisError> {
-        info!("Created AsyncSignalMonitor for {nanonis_address}:{monitor_port} with {signal_indices:?} at {sample_rate_hz:.1}Hz");
+        info!("Created AsyncSignalMonitor for {nanonis_address}:{nanonis_port} with {signal_indices:?} at {sample_rate_hz:.1}Hz");
 
         Ok(Self {
             nanonis_address: nanonis_address.to_string(),
-            monitor_port,
+            nanonis_port,
             signal_indices,
             sample_rate: Duration::from_millis((1000.0 / sample_rate_hz) as u64),
             is_running: Arc::new(AtomicBool::new(false)),
+            shared_state: None,
             data_sender: None,
             shutdown_sender: None,
             monitor_handle: None,
@@ -205,6 +233,12 @@ impl AsyncSignalMonitor {
     /// Set disk writer for logging samples to disk
     pub fn with_disk_writer(mut self, writer: Box<dyn DiskWriter>) -> Self {
         self.disk_writer = Some(writer);
+        self
+    }
+
+    /// Set shared state for coordinated updates
+    pub fn with_shared_state(mut self, shared_state: Arc<RwLock<MachineState>>) -> Self {
+        self.shared_state = Some(shared_state);
         self
     }
 
@@ -223,11 +257,12 @@ impl AsyncSignalMonitor {
 
         // Clone data for the task
         let client_address = self.nanonis_address.clone();
-        let client_port = self.monitor_port;
+        let client_port = self.nanonis_port;
         let signal_indices = self.signal_indices.clone();
         let sample_interval = self.sample_rate;
         let is_running = self.is_running.clone();
         let data_sender_clone = data_sender.clone();
+        let shared_state = self.shared_state.clone();
         let disk_writer = self.disk_writer.take(); // Take ownership of disk writer
 
         let monitor_handle = tokio::spawn(async move {
@@ -245,6 +280,7 @@ impl AsyncSignalMonitor {
                             sample_interval,
                             buffer_size,
                             is_running,
+                            shared_state,
                             disk_writer,
                         },
                     )
@@ -276,6 +312,7 @@ struct MonitoringConfig {
     sample_interval: Duration,
     buffer_size: usize,
     is_running: Arc<AtomicBool>,
+    shared_state: Option<Arc<RwLock<MachineState>>>,
     disk_writer: Option<Box<dyn DiskWriter>>,
 }
 
@@ -288,6 +325,33 @@ async fn monitoring_task(
     let mut sample_buffer = Vec::<MachineState>::with_capacity(config.buffer_size);
     let mut interval = tokio::time::interval(config.sample_interval);
 
+    // Create and write session metadata once at startup
+    if let Some(ref mut writer) = config.disk_writer {
+        match client.signal_names_get(false) {
+            Ok(signal_names) => {
+                let session_start = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs_f64();
+
+                let metadata = SessionMetadata {
+                    session_id: chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string(),
+                    signal_names,
+                    active_indices: config.signal_indices.clone(),
+                    primary_signal_index: config.signal_indices.first().copied().unwrap_or(0),
+                    session_start,
+                };
+
+                if let Err(e) = writer.write_metadata(metadata).await {
+                    error!("Failed to write session metadata: {e}");
+                }
+            }
+            Err(e) => {
+                error!("Failed to fetch signal names: {e}");
+            }
+        }
+    }
+
     while config.is_running.load(Ordering::Relaxed) {
         tokio::select! {
             _ = shutdown_receiver.recv() => {
@@ -299,15 +363,30 @@ async fn monitoring_task(
                 let signal_indices_i32: Vec<i32> = config.signal_indices.iter().map(|&i| i as i32).collect();
                 match client.signals_val_get(signal_indices_i32, true) {
                     Ok(values) => {
-                        // Create MachineState
-                        let machine_state = MachineState {
-                            primary_signal: values[0],
-                            all_signals: Some(values),
-                            timestamp: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs_f64(),
-                            ..Default::default()
+                        let current_time = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs_f64();
+
+                        let machine_state = if let Some(ref shared_state) = config.shared_state {
+                            // Update shared state with new signal data
+                            {
+                                let mut state = shared_state.write().await;
+                                state.primary_signal = values[0];
+                                state.all_signals = Some(values.clone());
+                                state.timestamp = current_time;
+                            }
+
+                            // Get complete enriched state for writing/sending
+                            shared_state.read().await.clone()
+                        } else {
+                            // Fallback: create basic MachineState (for backwards compatibility)
+                            MachineState {
+                                primary_signal: values[0],
+                                all_signals: Some(values),
+                                timestamp: current_time,
+                                ..Default::default()
+                            }
                         };
 
                         // Add to buffer and write batch when full

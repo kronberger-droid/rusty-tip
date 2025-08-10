@@ -276,6 +276,16 @@ impl Position {
     }
 }
 
+/// Session metadata - static information written once per monitoring session
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionMetadata {
+    pub session_id: String,
+    pub signal_names: Vec<String>,      // All signal names
+    pub active_indices: Vec<usize>,     // Which signals are being monitored
+    pub primary_signal_index: usize,    // Index of the primary signal
+    pub session_start: f64,             // Session start timestamp
+}
+
 /// Comprehensive machine state for advanced policy engines
 /// Expandable for transformer/ML models that need rich context
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -283,7 +293,7 @@ pub struct MachineState {
     // Current signal readings
     pub primary_signal: f32,           // The monitored signal (e.g., bias)
     pub all_signals: Option<Vec<f32>>, // All available signals for context
-    pub signal_names: Option<Vec<String>>, // Signal identifications
+    // Note: signal names/indices moved to SessionMetadata
 
     // Spatial context
     pub position: Option<(f64, f64)>, // Current XY position
