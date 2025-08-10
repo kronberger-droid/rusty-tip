@@ -19,4 +19,4 @@ pub use signal_monitor::{
     AsyncSignalMonitor, DiskWriter, DiskWriterConfig, DiskWriterFormat, JsonDiskWriter,
     MonitorStats, SignalReceiver,
 };
-pub use types::{BiasVoltage, MachineState, NanonisValue, Position};
+pub use types::{BiasVoltage, MachineState, NanonisValue, Position, SessionMetadata};

@@ -259,12 +259,7 @@ impl Controller {
             machine_state.position = Some((position.x, position.y));
         }
 
-        // Add signal names if available
-        if machine_state.signal_names.is_none() {
-            if let Ok(names) = self.client.signal_names_get(false) {
-                machine_state.signal_names = Some(names);
-            }
-        }
+        // Note: signal names now handled via SessionMetadata, not MachineState
 
         // Add controller state
         machine_state.approach_count = self.approach_count;
