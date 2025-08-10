@@ -317,10 +317,10 @@ impl Controller {
             
             let data_age = current_time - state.timestamp;
             if data_age <= max_age_seconds {
-                debug!("Reading fresh data from shared state (age: {:.2}s)", data_age);
+                debug!("Reading fresh data from shared state (age: {data_age:.2}s)");
                 Some(state.clone())
             } else {
-                debug!("Shared state data too stale (age: {:.2}s > max: {:.2}s)", data_age, max_age_seconds);
+                debug!("Shared state data too stale (age: {data_age:.2}s > max: {max_age_seconds:.2}s)");
                 None
             }
         } else {
@@ -697,7 +697,7 @@ impl ControllerBuilder {
             let address = self.address.unwrap_or_else(|| "127.0.0.1".to_string());
             let port = self.port.unwrap_or(6501);
             NanonisClient::new(&address, port)
-                .map_err(|e| format!("Failed to create NanonisClient: {}", e))?
+                .map_err(|e| format!("Failed to create NanonisClient: {e}"))?
         };
 
         // Validate required components
