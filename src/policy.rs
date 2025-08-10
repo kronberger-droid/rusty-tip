@@ -112,7 +112,6 @@ mod tests {
         let good_state = MachineState {
             primary_signal: 1.0,
             all_signals: None,
-            signal_names: None,
             position: None,
             z_position: None,
             timestamp: 0.0,

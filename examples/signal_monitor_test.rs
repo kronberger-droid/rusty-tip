@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create signal monitor with batched disk writing
     let mut client = NanonisClient::builder()
         .address("127.0.0.1")
-        .port("6501")
+        .port(6501)
         .debug(true)
         .build()?;
 

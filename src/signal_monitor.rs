@@ -207,7 +207,29 @@ pub struct MonitorStats {
     pub is_running: bool,
 }
 
+/// Builder for AsyncSignalMonitor with sensible defaults
+pub struct AsyncSignalMonitorBuilder {
+    nanonis_address: String,
+    nanonis_port: u16,
+    signal_indices: Option<Vec<usize>>,
+    sample_rate_hz: f32,
+    shared_state: Option<Arc<RwLock<MachineState>>>,
+    disk_writer: Option<Box<dyn DiskWriter>>,
+}
+
 impl AsyncSignalMonitor {
+    /// Create a new AsyncSignalMonitor builder with sensible defaults
+    pub fn builder() -> AsyncSignalMonitorBuilder {
+        AsyncSignalMonitorBuilder {
+            nanonis_address: "127.0.0.1".to_string(),
+            nanonis_port: 6501,
+            signal_indices: None,
+            sample_rate_hz: 50.0,
+            shared_state: None,
+            disk_writer: None,
+        }
+    }
+
     pub fn new(
         nanonis_address: &str,
         nanonis_port: u16,
@@ -268,7 +290,7 @@ impl AsyncSignalMonitor {
         let monitor_handle = tokio::spawn(async move {
             info!("Creating client connection in monitoring task: {client_address}:{client_port}");
 
-            match NanonisClient::new(&client_address, &client_port.to_string()) {
+            match NanonisClient::new(&client_address, client_port) {
                 Ok(client) => {
                     info!("Client connected, starting monitoring loop");
                     monitoring_task(
@@ -429,4 +451,80 @@ async fn monitoring_task(
     }
     config.is_running.store(false, Ordering::Relaxed);
     info!("Monitoring task cleanup completed");
+}
+
+impl AsyncSignalMonitorBuilder {
+    /// Set the Nanonis server address
+    pub fn address(mut self, address: impl Into<String>) -> Self {
+        self.nanonis_address = address.into();
+        self
+    }
+
+    /// Set the Nanonis server port
+    pub fn port(mut self, port: u16) -> Self {
+        self.nanonis_port = port;
+        self
+    }
+
+    /// Set the signal indices to monitor (required)
+    pub fn signals(mut self, signal_indices: Vec<usize>) -> Self {
+        self.signal_indices = Some(signal_indices);
+        self
+    }
+
+    /// Set the sample rate in Hz
+    pub fn sample_rate(mut self, sample_rate_hz: f32) -> Self {
+        self.sample_rate_hz = sample_rate_hz;
+        self
+    }
+
+    /// Set shared state for coordinated updates (optional)
+    pub fn with_shared_state(mut self, shared_state: Arc<RwLock<MachineState>>) -> Self {
+        self.shared_state = Some(shared_state);
+        self
+    }
+
+    /// Set disk writer for logging (optional)
+    pub fn with_disk_writer(mut self, writer: Box<dyn DiskWriter>) -> Self {
+        self.disk_writer = Some(writer);
+        self
+    }
+
+    /// Build the AsyncSignalMonitor with validation
+    pub fn build(self) -> Result<AsyncSignalMonitor, String> {
+        let signal_indices = self.signal_indices
+            .ok_or("signal_indices is required - use .signals(vec![...])")?;
+
+        if signal_indices.is_empty() {
+            return Err("signal_indices cannot be empty".to_string());
+        }
+
+        if self.sample_rate_hz <= 0.0 {
+            return Err("sample_rate_hz must be greater than 0".to_string());
+        }
+
+        if self.sample_rate_hz > 1000.0 {
+            return Err("sample_rate_hz should not exceed 1000 Hz for stability".to_string());
+        }
+
+        let monitor = AsyncSignalMonitor {
+            nanonis_address: self.nanonis_address,
+            nanonis_port: self.nanonis_port,
+            signal_indices,
+            sample_rate: Duration::from_millis((1000.0 / self.sample_rate_hz) as u64),
+            is_running: Arc::new(AtomicBool::new(false)),
+            shared_state: self.shared_state,
+            data_sender: None,
+            shutdown_sender: None,
+            monitor_handle: None,
+            disk_writer: self.disk_writer,
+        };
+
+        info!(
+            "Built AsyncSignalMonitor for {}:{} with {:?} at {:.1}Hz",
+            monitor.nanonis_address, monitor.nanonis_port, monitor.signal_indices, self.sample_rate_hz
+        );
+
+        Ok(monitor)
+    }
 }
