@@ -140,11 +140,11 @@ impl Controller {
 
         // Try to read from shared state first (Option A integration)
         let mut machine_state = if let Some(shared_state) = self.read_from_shared_state(signal_index, 0.5).await {
-            info!("🔗 Using shared state data (Option A mode)");
+            info!("Using shared state data (Option A mode)");
             shared_state
         } else {
             // Fallback to direct client calls (legacy mode)
-            info!("📡 Using direct client calls (legacy mode)");
+            info!("Using direct client calls (legacy mode)");
             
             // Collect multiple fresh samples for this monitoring cycle
             let buffer_size = 10; // Reasonable buffer size for fresh sampling
@@ -628,12 +628,12 @@ mod tests {
                 
                 let state = result.unwrap();
                 assert_eq!(state.primary_signal, 1.5);
-                println!("✅ Shared state integration test passed");
+                println!("Shared state integration test passed");
             }
             Err(_) => {
                 // Expected when no Nanonis running - focus on architecture test
-                println!("⚠️ Client connection failed (expected without Nanonis hardware)");
-                println!("✅ Shared state architecture test still valid");
+                println!("Client connection failed (expected without Nanonis hardware)");
+                println!("Shared state architecture test still valid");
             }
         }
     }
