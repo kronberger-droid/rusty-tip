@@ -18,6 +18,54 @@ pub struct DiskWriterConfig {
     pub buffer_size: usize,
 }
 
+pub struct DiskWriterConfigBuilder {
+    file_path: Option<PathBuf>,
+    format: DiskWriterFormat,
+    buffer_size: usize,
+}
+
+impl DiskWriterConfig {
+    /// Create a new DiskWriterConfig builder with sensible defaults
+    pub fn builder() -> DiskWriterConfigBuilder {
+        DiskWriterConfigBuilder {
+            file_path: None,
+            format: DiskWriterFormat::Json { pretty: false },
+            buffer_size: 8192, // 8KB default buffer
+        }
+    }
+}
+
+impl DiskWriterConfigBuilder {
+    /// Set the file path for the disk writer (required)
+    pub fn file_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.file_path = Some(path.into());
+        self
+    }
+
+    /// Set the format for the disk writer (optional, defaults to JSON non-pretty)
+    pub fn format(mut self, format: DiskWriterFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    /// Set the buffer size (optional, defaults to 8KB)
+    pub fn buffer_size(mut self, size: usize) -> Self {
+        self.buffer_size = size;
+        self
+    }
+
+    /// Build the DiskWriterConfig with validation
+    pub fn build(self) -> Result<DiskWriterConfig, String> {
+        let file_path = self.file_path.ok_or("file_path is required")?;
+
+        Ok(DiskWriterConfig {
+            file_path,
+            format: self.format,
+            buffer_size: self.buffer_size,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum DiskWriterFormat {
     Json { pretty: bool },
@@ -39,7 +87,14 @@ pub struct JsonDiskWriter {
     samples_written: u64,
 }
 
+pub struct JsonDiskWriterBuilder {
+    file_path: Option<PathBuf>,
+    pretty: bool,
+    buffer_size: usize,
+}
+
 impl JsonDiskWriter {
+    /// Create a JsonDiskWriter from a DiskWriterConfig
     pub async fn new(config: DiskWriterConfig) -> Result<Self, std::io::Error> {
         // Validate that JSON format is defined
         if !matches!(config.format, DiskWriterFormat::Json { .. }) {
@@ -71,6 +126,50 @@ impl JsonDiskWriter {
             config,
             samples_written: 0,
         })
+    }
+
+    /// Create a JsonDiskWriter builder with sensible defaults
+    pub fn builder() -> JsonDiskWriterBuilder {
+        JsonDiskWriterBuilder {
+            file_path: None,
+            pretty: false,
+            buffer_size: 8192, // 8KB default buffer
+        }
+    }
+}
+
+impl JsonDiskWriterBuilder {
+    /// Set the file path for the JSON writer (required)
+    pub fn file_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.file_path = Some(path.into());
+        self
+    }
+
+    /// Set whether to use pretty formatting (optional, defaults to false)
+    pub fn pretty(mut self, pretty: bool) -> Self {
+        self.pretty = pretty;
+        self
+    }
+
+    /// Set the buffer size (optional, defaults to 8KB)
+    pub fn buffer_size(mut self, size: usize) -> Self {
+        self.buffer_size = size;
+        self
+    }
+
+    /// Build the JsonDiskWriter with validation
+    pub async fn build(self) -> Result<JsonDiskWriter, std::io::Error> {
+        let file_path = self.file_path.ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "file_path is required")
+        })?;
+
+        let config = DiskWriterConfig {
+            file_path,
+            format: DiskWriterFormat::Json { pretty: self.pretty },
+            buffer_size: self.buffer_size,
+        };
+
+        JsonDiskWriter::new(config).await
     }
 }
 
@@ -374,13 +473,14 @@ async fn monitoring_task(
         }
     }
 
-    while config.is_running.load(Ordering::Relaxed) {
+    loop {
         tokio::select! {
             _ = shutdown_receiver.recv() => {
                 info!("Shutdown signal received");
+                config.is_running.store(false, std::sync::atomic::Ordering::Relaxed);
                 break;
             }
-            _ = interval.tick() => {
+            _ = interval.tick(), if config.is_running.load(Ordering::Relaxed) => {
                 // Read signals from Nanonis
                 let signal_indices_i32: Vec<i32> = config.signal_indices.iter().map(|&i| i as i32).collect();
                 match client.signals_val_get(signal_indices_i32, true) {
@@ -428,6 +528,13 @@ async fn monitoring_task(
                     }
                     Err(e) => {
                         error!("Failed to read signals: {e}");
+                        // If we get connection errors like "Broken pipe", stop the loop
+                        // as continuing will just spam errors
+                        if e.to_string().contains("Broken pipe") || e.to_string().contains("failed to fill whole buffer") {
+                            error!("Connection lost, stopping signal monitoring");
+                            config.is_running.store(false, std::sync::atomic::Ordering::Relaxed);
+                            break;
+                        }
                     }
                 }
             }

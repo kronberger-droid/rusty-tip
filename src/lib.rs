@@ -13,10 +13,10 @@ pub use controller::{Controller, SystemStats};
 pub use error::NanonisError;
 pub use policy::{
     ActionType, ExplainablePolicyEngine, LearningPolicyEngine, PolicyDecision, PolicyEngine,
-    RuleBasedPolicy,
+    RuleBasedPolicy, RuleBasedPolicyBuilder,
 };
 pub use signal_monitor::{
-    AsyncSignalMonitor, DiskWriter, DiskWriterConfig, DiskWriterFormat, JsonDiskWriter,
-    MonitorStats, SignalReceiver,
+    AsyncSignalMonitor, DiskWriter, DiskWriterConfig, DiskWriterConfigBuilder, DiskWriterFormat, 
+    JsonDiskWriter, JsonDiskWriterBuilder, MonitorStats, SignalReceiver,
 };
 pub use types::{BiasVoltage, MachineState, NanonisValue, Position, SessionMetadata};

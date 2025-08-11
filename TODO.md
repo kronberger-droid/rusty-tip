@@ -1,0 +1,2 @@
+- Check how value is read before classifying
+- 

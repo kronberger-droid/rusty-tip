@@ -77,9 +77,35 @@ pub struct RuleBasedPolicy {
     name: String,
 }
 
+#[derive(Default)]
+pub struct RuleBasedPolicyBuilder {
+    name: Option<String>,
+}
+
 impl RuleBasedPolicy {
+    /// Create a new RuleBasedPolicy with the given name
     pub fn new(name: String) -> Self {
         Self { name }
+    }
+
+    /// Create a new RuleBasedPolicy builder with sensible defaults
+    pub fn builder() -> RuleBasedPolicyBuilder {
+        RuleBasedPolicyBuilder::default()
+    }
+}
+
+impl RuleBasedPolicyBuilder {
+    /// Set the name for this policy (required)
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Build the RuleBasedPolicy with validation
+    pub fn build(self) -> Result<RuleBasedPolicy, String> {
+        let name = self.name.ok_or("name is required")?;
+
+        Ok(RuleBasedPolicy { name })
     }
 }
 
