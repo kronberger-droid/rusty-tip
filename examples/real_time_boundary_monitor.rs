@@ -107,9 +107,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Start controller with shared state coordination
-    let mut controller = controller;
+    // Start controller with shared state coordination using symmetric architecture
     log::info!("Starting Controller with shared state integration...");
+    
+    // Start controller in background thread (symmetric to SignalMonitor)
+    let control_receiver = controller.start_control_loop(2.0)?; // 2Hz control decisions
+    log::info!("Controller started in background thread");
 
     // Create shutdown signal
     let shutdown_flag = Arc::new(AtomicBool::new(false));
@@ -125,30 +128,23 @@ fn main() -> Result<(), Box<dyn Error>> {
         log::info!("User requested stop - shutting down...");
     });
 
-    // Run controller with periodic checks for shutdown
+    // Monitor system status until shutdown requested
     log::info!("Running monitoring system indefinitely...");
     log::info!("System will continue monitoring even after achieving STABLE state");
+    log::info!("Both SignalMonitor and Controller running in background threads");
 
-    let mut iteration = 0;
     while !shutdown_flag.load(Ordering::Relaxed) {
-        iteration += 1;
-
-        // Run a short control loop (1 second)
-        match controller.run_control_loop(2.0, std::time::Duration::from_secs(1)) {
-            Ok(()) => {
-                // Continue to next iteration
-            }
-            Err(e) => {
-                log::error!("Controller error: {e}");
-                if iteration == 1 {
-                    log::info!("This is normal when running without Nanonis hardware");
-                }
-                // Continue running even with errors to show monitoring behavior
-            }
+        // Check if both threads are still running
+        let signal_running = signal_receiver.is_running.load(Ordering::Relaxed);
+        let control_running = control_receiver.is_running.load(Ordering::Relaxed);
+        
+        if !signal_running || !control_running {
+            log::warn!("One of the background threads stopped (Signal: {signal_running}, Control: {control_running})");
+            break;
         }
 
         // Small delay to prevent busy loop
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(std::time::Duration::from_millis(500));
     }
 
     // Wait for input thread to complete
@@ -166,13 +162,31 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Cleanup: stop signal monitor
+    // Cleanup: stop both background threads using symmetric shutdown
+    log::info!("Shutting down background threads...");
+    
+    // Stop signal monitor
     if let Err(e) = signal_receiver.shutdown_sender.send(()) {
-        log::warn!("Failed to send shutdown signal: {e}");
+        log::warn!("Failed to send signal monitor shutdown signal: {e}");
+    }
+    
+    // Stop controller (symmetric to signal monitor)
+    if let Err(e) = control_receiver.shutdown_sender.send(()) {
+        log::warn!("Failed to send controller shutdown signal: {e}");
     }
 
+    // Wait for both threads to complete gracefully
+    log::info!("Waiting for background threads to complete...");
+    
+    if let Err(e) = control_receiver.thread_handle.join() {
+        log::error!("Error joining controller thread: {e:?}");
+    } else {
+        log::info!("Controller thread completed successfully");
+    }
+    
     // Give signal monitor time to shut down gracefully
     std::thread::sleep(std::time::Duration::from_millis(500));
+    log::info!("Symmetric shutdown completed");
 
     Ok(())
 }

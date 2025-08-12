@@ -3,9 +3,12 @@ use crate::client::NanonisClient;
 use crate::error::NanonisError;
 use crate::policy::{ActionType, PolicyDecision, PolicyEngine};
 use crate::types::{MachineState, Position};
-use log::{debug, info};
+use log::{debug, error, info};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// Controller integrating Nanonis client with state classifier and policy engine
@@ -31,6 +34,18 @@ pub struct Controller {
     // state_buffer: VecDeque<TipState>,     // Rich state history for transformers
     // action_outcomes: Vec<(ActionType, f32)>, // Action-outcome pairs for learning
     // model_confidence: f32,                // Current model confidence
+}
+
+/// Handle for receiving control loop status and shutdown management
+pub struct ControlReceiver {
+    /// Can be used to request shutdown of the control loop
+    pub shutdown_sender: mpsc::Sender<()>,
+    
+    /// Reference to check if control loop is still running
+    pub is_running: Arc<AtomicBool>,
+    
+    /// Thread handle for joining on shutdown
+    pub thread_handle: thread::JoinHandle<()>,
 }
 
 /// Builder for Controller with flexible configuration
@@ -137,6 +152,73 @@ impl Controller {
 
         debug!("Control loop completed after {:?}", start.elapsed());
         Ok(())
+    }
+
+    /// Start control loop in background thread with clean shutdown capabilities
+    /// This provides symmetric architecture matching SignalMonitor
+    pub fn start_control_loop(
+        mut self,
+        sample_rate_hz: f32,
+    ) -> Result<ControlReceiver, NanonisError> {
+        // Create shutdown channel
+        let (shutdown_sender, shutdown_receiver) = mpsc::channel();
+        let is_running = Arc::new(AtomicBool::new(true));
+        let is_running_clone = is_running.clone();
+
+        // Spawn background thread for control loop
+        let thread_handle = thread::spawn(move || {
+            info!("Starting background control loop at {:.1}Hz", sample_rate_hz);
+            let sample_interval = Duration::from_millis((1000.0 / sample_rate_hz) as u64);
+            
+            loop {
+                // Check for shutdown signal (non-blocking)
+                if shutdown_receiver.try_recv().is_ok() {
+                    info!("Control loop shutdown signal received");
+                    is_running_clone.store(false, Ordering::Relaxed);
+                    break;
+                }
+
+                if is_running_clone.load(Ordering::Relaxed) {
+                    // Run one monitoring loop iteration
+                    match self.run_monitoring_loop(sample_interval) {
+                        Ok(LoopAction::ContinueBadLoop) => {
+                            // Continue with bad signal recovery
+                        }
+                        Ok(LoopAction::ContinueStabilityLoop) => {
+                            // Continue with stability monitoring
+                        }
+                        Ok(LoopAction::Halt) => {
+                            debug!("Control loop requested halt - stopping");
+                            break;
+                        }
+                        Err(e) => {
+                            debug!("Control loop error: {e}");
+                            // Continue running unless it's a connection error
+                            if e.to_string().contains("Broken pipe") || 
+                               e.to_string().contains("failed to fill whole buffer") {
+                                error!("Connection lost, stopping control loop");
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Sleep for sample interval
+                thread::sleep(sample_interval);
+            }
+
+            is_running_clone.store(false, Ordering::Relaxed);
+            info!("Background control loop completed");
+        });
+
+        is_running.store(true, Ordering::Relaxed);
+        info!("Control loop started in background thread");
+
+        Ok(ControlReceiver {
+            shutdown_sender,
+            is_running,
+            thread_handle,
+        })
     }
 
     /// Single monitoring loop iteration with actions based on state  
