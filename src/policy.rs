@@ -136,8 +136,8 @@ mod tests {
         
         // Create mock tip states with different classifications
         let good_state = MachineState {
-            primary_signal: 1.0,
             all_signals: None,
+            signal_indices: None,
             position: None,
             z_position: None,
             timestamp: 0.0,

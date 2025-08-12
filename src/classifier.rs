@@ -8,6 +8,11 @@ pub trait StateClassifier: Send + Sync {
     /// Update machine state classification based on new signal reading
     fn classify(&mut self, machine_state: &mut MachineState);
 
+    /// Pre-fill the classifier's buffer by collecting multiple samples
+    /// This should be called before starting regular classification to avoid
+    /// making decisions on insufficient data
+    fn initialize_buffer(&mut self, machine_state: &MachineState, target_samples: usize);
+
     /// Clear the internal buffer to start fresh sampling
     fn clear_buffer(&mut self);
 
@@ -18,19 +23,20 @@ pub trait StateClassifier: Send + Sync {
     fn get_name(&self) -> &str;
 }
 
-/// Boundary-based state classifier using buffering and drop-front analysis
+/// Boundary-based state classifier using drop-front analysis on signal_history
 pub struct BoundaryClassifier {
     name: String,
     signal_index: i32,
     min_bound: f32,
     max_bound: f32,
-    buffer: VecDeque<f32>,
-    buffer_size: usize,
     drop_front: usize,
+    buffer_size: usize,
     // State tracking
     consecutive_good_count: u32,
     stable_threshold: u32,
     last_classification: Option<TipState>,
+    // Classifier maintains its own signal history
+    own_signal_history: VecDeque<f32>,
 }
 
 /// Classification result for tip state
@@ -73,18 +79,20 @@ impl BoundaryClassifier {
             signal_index,
             min_bound,
             max_bound,
-            buffer: VecDeque::new(),
-            buffer_size: 10,
             drop_front: 2,
+            buffer_size: 10, // Default buffer size
             consecutive_good_count: 0,
             stable_threshold: 3,
             last_classification: None,
+            own_signal_history: VecDeque::with_capacity(10),
         }
     }
 
     pub fn with_buffer_config(mut self, buffer_size: usize, drop_front: usize) -> Self {
+        // Now classifier manages its own buffer size
         self.buffer_size = buffer_size;
         self.drop_front = drop_front;
+        self.own_signal_history = VecDeque::with_capacity(buffer_size);
         self
     }
 
@@ -94,11 +102,11 @@ impl BoundaryClassifier {
     }
 
     fn get_max_after_drop(&self) -> Option<f32> {
-        if self.buffer.len() <= self.drop_front {
+        if self.own_signal_history.len() <= self.drop_front {
             return None;
         }
 
-        self.buffer
+        self.own_signal_history
             .iter()
             .skip(self.drop_front)
             .copied()
@@ -107,6 +115,21 @@ impl BoundaryClassifier {
 
     fn is_within_bounds(&self, value: f32) -> bool {
         value >= self.min_bound && value <= self.max_bound
+    }
+    
+    /// Extract primary signal value from all_signals using signal_indices mapping
+    fn extract_primary_signal_value(&self, machine_state: &MachineState) -> Option<f32> {
+        if let (Some(all_signals), Some(signal_indices)) = 
+            (&machine_state.all_signals, &machine_state.signal_indices) {
+            
+            // Find position of our signal_index in the signal_indices array
+            if let Some(position) = signal_indices.iter().position(|&idx| idx == self.signal_index) {
+                if position < all_signals.len() {
+                    return Some(all_signals[position]);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -156,12 +179,10 @@ impl BoundaryClassifierBuilder {
             return Err(format!("min_bound ({min_bound}) must be less than max_bound ({max_bound})"));
         }
 
-        if self.buffer_size == 0 {
-            return Err("buffer_size must be greater than 0".to_string());
-        }
-
-        if self.drop_front >= self.buffer_size {
-            return Err(format!("drop_front ({}) must be less than buffer_size ({})", self.drop_front, self.buffer_size));
+        // Buffer size validation removed - it's now managed by SignalMonitor
+        // Just validate that drop_front is reasonable
+        if self.drop_front > 50 {
+            return Err(format!("drop_front ({}) seems unreasonably large", self.drop_front));
         }
 
         if self.stable_threshold == 0 {
@@ -173,30 +194,51 @@ impl BoundaryClassifierBuilder {
             signal_index,
             min_bound,
             max_bound,
-            buffer: VecDeque::new(),
-            buffer_size: self.buffer_size,
             drop_front: self.drop_front,
+            buffer_size: self.buffer_size,
             consecutive_good_count: 0,
             stable_threshold: self.stable_threshold,
             last_classification: None,
+            own_signal_history: VecDeque::with_capacity(self.buffer_size),
         })
     }
 }
 
 impl StateClassifier for BoundaryClassifier {
     fn classify(&mut self, machine_state: &mut MachineState) {
-        // If machine state has fresh samples in signal_history, use those to fill buffer
+        // Use the fresh samples provided by the controller in signal_history
+        self.own_signal_history.clear();
+        
         if !machine_state.signal_history.is_empty() {
-            self.buffer.clear();
-            for &sample in machine_state.signal_history.iter().take(self.buffer_size) {
-                self.buffer.push_back(sample);
+            // Controller has pre-filled signal_history with fresh samples
+            self.own_signal_history.extend(machine_state.signal_history.iter().copied());
+            debug!("Using {} pre-collected fresh samples from controller", self.own_signal_history.len());
+        } else {
+            // Fallback: extract current primary signal value and fill buffer
+            if let Some(primary_value) = self.extract_primary_signal_value(machine_state) {
+                trace!("Primary signal {} extracted from all_signals: {}", self.signal_index, primary_value);
+                
+                // Fill buffer with current signal value as fallback
+                debug!("Fallback: filling classifier buffer with current value ({})", primary_value);
+                for _ in 0..self.buffer_size {
+                    self.own_signal_history.push_back(primary_value);
+                }
+            } else {
+                debug!("Could not extract primary signal, returning Bad");
+                machine_state.classification = TipState::Bad;
+                machine_state.timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs_f64();
+                return;
             }
-            trace!(
-                "Buffer filled with {} fresh samples: {:?}",
-                self.buffer.len(),
-                self.buffer.iter().collect::<Vec<_>>()
-            );
         }
+        
+        trace!(
+            "Analyzing classifier's own signal_history with {} samples, drop_front: {}",
+            self.own_signal_history.len(),
+            self.drop_front
+        );
 
         let classification = if let Some(max_value) = self.get_max_after_drop() {
             if self.is_within_bounds(max_value) {
@@ -205,7 +247,8 @@ impl StateClassifier for BoundaryClassifier {
                 TipState::Bad
             }
         } else {
-            TipState::Good
+            // Not enough samples yet for reliable classification
+            TipState::Bad
         };
 
         // Update stability tracking
@@ -256,8 +299,33 @@ impl StateClassifier for BoundaryClassifier {
         machine_state.classification = final_classification;
     }
 
+    fn initialize_buffer(&mut self, machine_state: &MachineState, target_samples: usize) {
+        // Pre-fill buffer by duplicating the current primary signal value
+        // This provides immediate classification capability while maintaining
+        // the same signal characteristics
+        if let Some(primary_value) = self.extract_primary_signal_value(machine_state) {
+            let needed_samples = target_samples.saturating_sub(self.own_signal_history.len());
+            
+            for _ in 0..needed_samples {
+                self.own_signal_history.push_back(primary_value);
+                if self.own_signal_history.len() > self.buffer_size {
+                    self.own_signal_history.pop_front();
+                }
+            }
+            
+            debug!(
+                "Initialized classifier buffer with {} samples (value: {})",
+                self.own_signal_history.len(),
+                primary_value
+            );
+        }
+    }
+
     fn clear_buffer(&mut self) {
-        self.buffer.clear();
+        // Clear the classifier's own signal history buffer
+        self.own_signal_history.clear();
+        self.consecutive_good_count = 0;
+        self.last_classification = None;
     }
 
     fn get_primary_signal_index(&self) -> i32 {
@@ -290,13 +358,22 @@ mod tests {
             2.0, // max
         );
 
-        let mut machine_state = crate::types::MachineState {
-            primary_signal: 1.0,
-            ..Default::default()
-        };
-        classifier.classify(&mut machine_state);
-        assert_eq!(machine_state.classification, TipState::Good);
-        assert_eq!(machine_state.primary_signal, 1.0);
+        // Simulate multiple signal readings to build classifier's internal history
+        // The classifier needs enough samples for drop-front analysis
+        for i in 0..5 {
+            let mut machine_state = crate::types::MachineState {
+                all_signals: Some(vec![1.0 + i as f32 * 0.1, 1.5, 1.2]), // Simulated signals, signal 24 varies slightly
+                signal_indices: Some(vec![24, 25, 26]), // Signal index 24 is at position 0
+                ..Default::default()
+            };
+            
+            classifier.classify(&mut machine_state);
+            
+            // On the last iteration, we should have reached stable state (3 consecutive good = stable)
+            if i == 4 {
+                assert_eq!(machine_state.classification, TipState::Stable);
+            }
+        }
     }
 
     #[test]
@@ -318,13 +395,11 @@ mod tests {
         signal_history.push_back(3.0); // Above max - this should trigger Bad
 
         let mut machine_state = crate::types::MachineState {
-            primary_signal: 3.0,
             signal_history,
             ..Default::default()
         };
         classifier.classify(&mut machine_state);
         assert_eq!(machine_state.classification, TipState::Bad);
-        assert_eq!(machine_state.primary_signal, 3.0);
     }
 
     #[test]
@@ -333,24 +408,39 @@ mod tests {
             BoundaryClassifier::new("Test".to_string(), 24, 0.0, 2.0).with_stability_config(3); // 3 consecutive good for stable
 
         // First good signal
+        let mut signal_history1 = VecDeque::new();
+        signal_history1.push_back(1.0); // Good signal within bounds [0.0, 2.0]
+        signal_history1.push_back(1.2);
+        signal_history1.push_back(0.8);
+        
         let mut machine_state1 = crate::types::MachineState {
-            primary_signal: 1.0,
+            signal_history: signal_history1,
             ..Default::default()
         };
         classifier.classify(&mut machine_state1);
         assert_eq!(machine_state1.classification, TipState::Good);
 
         // Second good signal
+        let mut signal_history2 = VecDeque::new();
+        signal_history2.push_back(1.1);
+        signal_history2.push_back(1.3);
+        signal_history2.push_back(0.9);
+        
         let mut machine_state2 = crate::types::MachineState {
-            primary_signal: 1.0,
+            signal_history: signal_history2,
             ..Default::default()
         };
         classifier.classify(&mut machine_state2);
         assert_eq!(machine_state2.classification, TipState::Good);
 
         // Third good signal should trigger stable
+        let mut signal_history3 = VecDeque::new();
+        signal_history3.push_back(1.2);
+        signal_history3.push_back(1.4);
+        signal_history3.push_back(1.0);
+        
         let mut machine_state3 = crate::types::MachineState {
-            primary_signal: 1.0,
+            signal_history: signal_history3,
             ..Default::default()
         };
         classifier.classify(&mut machine_state3);
@@ -372,7 +462,6 @@ mod tests {
         signal_history.push_back(3.0); // Third value (max after drop) - should be Bad
 
         let mut machine_state = crate::types::MachineState {
-            primary_signal: 3.0,
             signal_history,
             ..Default::default()
         };
@@ -386,14 +475,17 @@ mod tests {
         let mut classifier = BoundaryClassifier::new("Test".to_string(), 42, -1.0, 1.0);
 
         let all_signals = vec![0.1, 0.2, 0.3, 0.4];
+        let mut signal_history = VecDeque::new();
+        signal_history.push_back(0.5); // Good signal within bounds [-1.0, 1.0]
+        signal_history.push_back(0.3);
+        signal_history.push_back(0.7);
+        
         let mut machine_state = crate::types::MachineState {
-            primary_signal: 0.5,
             all_signals: Some(all_signals.clone()),
+            signal_history,
             ..Default::default()
         };
         classifier.classify(&mut machine_state);
-
-        assert_eq!(machine_state.primary_signal, 0.5);
         assert_eq!(machine_state.all_signals, Some(all_signals));
         assert!(machine_state.timestamp > 0.0);
         assert_eq!(machine_state.classification, TipState::Good);

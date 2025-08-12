@@ -79,7 +79,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Sample data (written per sample) - MINIMAL!
     let sample = MachineState {
-        primary_signal: 1.23e-12,
         all_signals: Some(vec![1.23e-12, 1.5, -1.07e-9]), // Only 3 active values!
         timestamp: 1754765292.045,
         classification: nanonis_rust::TipState::Good,
