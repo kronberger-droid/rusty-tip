@@ -3,9 +3,9 @@ use nanonis_rust::{
     SyncSignalMonitor,
 };
 use std::error::Error;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Integrated real-time boundary monitoring with shared state architecture
 ///
@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build()?;
     log::info!("Built RuleBasedPolicy with builder pattern");
 
-    // 3. Create SyncSignalMonitor using builder pattern with shared state  
+    // 3. Create SyncSignalMonitor using builder pattern with shared state
     let mut signal_monitor = SyncSignalMonitor::builder()
         .address("127.0.0.1")
         .port(6501)
@@ -61,7 +61,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .with_shared_state(shared_state.clone())
         .with_disk_writer(Box::new(disk_writer))
         .build()?;
-    
+
     // Set primary signal index based on classifier knowledge (clean separation of concerns)
     signal_monitor.set_primary_signal_for_metadata(24); // Bias voltage signal
     log::info!("Built SyncSignalMonitor with shared state integration");
@@ -76,6 +76,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .control_interval(2.0) // 2Hz control decisions
         .max_approaches(5)
         .build()?;
+
     log::info!("Built Controller with shared state integration");
 
     // 5. Start the integrated system
@@ -99,18 +100,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             log::info!("Initial shared state timestamp: {}", state.timestamp);
             log::info!("Initial classification: {:?}", state.classification);
             log::info!("Signal history length: {}", state.signal_history.len());
-            log::info!("All signals: {:?}", state.all_signals.as_ref().map(|s| s.len()).unwrap_or(0));
+            log::info!(
+                "All signals: {:?}",
+                state.all_signals.as_ref().map(|s| s.len()).unwrap_or(0)
+            );
         }
     }
 
     // Start controller with shared state coordination
     let mut controller = controller;
     log::info!("Starting Controller with shared state integration...");
-    
+
     // Create shutdown signal
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let shutdown_flag_thread = shutdown_flag.clone();
-    
+
     // Start user input thread
     let input_handle = std::thread::spawn(move || {
         print!("Press Enter to stop the monitoring system...");
@@ -120,15 +124,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         shutdown_flag_thread.store(true, Ordering::Relaxed);
         log::info!("User requested stop - shutting down...");
     });
-    
+
     // Run controller with periodic checks for shutdown
     log::info!("Running monitoring system indefinitely...");
     log::info!("System will continue monitoring even after achieving STABLE state");
-    
+
     let mut iteration = 0;
     while !shutdown_flag.load(Ordering::Relaxed) {
         iteration += 1;
-        
+
         // Run a short control loop (1 second)
         match controller.run_control_loop(2.0, std::time::Duration::from_secs(1)) {
             Ok(()) => {
@@ -142,11 +146,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Continue running even with errors to show monitoring behavior
             }
         }
-        
+
         // Small delay to prevent busy loop
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    
+
     // Wait for input thread to complete
     input_handle.join().unwrap();
 
