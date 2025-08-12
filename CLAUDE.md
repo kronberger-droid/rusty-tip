@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with the `nanonis_rust` library.
+This file provides guidance to Claude Code (claude.ai/code) when working with the `rusty-tip` library.
 
 ## Build and Development Commands
 
