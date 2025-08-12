@@ -5,7 +5,7 @@ A Rust library for interfacing with Nanonis SPM (Scanning Probe Microscopy) syst
 ## Quick Start
 
 ```rust
-use nanonis_rust::{NanonisClient, BoundaryClassifier, RuleBasedPolicy, Controller};
+use rusty_tip::{NanonisClient, BoundaryClassifier, RuleBasedPolicy, Controller};
 use std::time::Duration;
 
 // Create client and connect to Nanonis
