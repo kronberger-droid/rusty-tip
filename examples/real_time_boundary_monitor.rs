@@ -3,7 +3,6 @@ use nanonis_rust::{
     SyncSignalMonitor,
 };
 use std::error::Error;
-use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -25,7 +24,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     log::info!("Created shared MachineState");
 
     // Setup disk writer for complete logging using builder pattern
-    let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+    let timestamp = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
     let filename = format!("examples/history/integrated_{timestamp}.jsonl");
 
     let disk_writer = JsonDiskWriter::builder()
@@ -109,35 +108,32 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Start controller with shared state coordination using symmetric architecture
     log::info!("Starting Controller with shared state integration...");
-    
+
     // Start controller in background thread (symmetric to SignalMonitor)
     let control_receiver = controller.start_control_loop(2.0)?; // 2Hz control decisions
     log::info!("Controller started in background thread");
 
     // Create shutdown signal
     let shutdown_flag = Arc::new(AtomicBool::new(false));
-    let shutdown_flag_thread = shutdown_flag.clone();
+    let shutdown_flag_ctrlc = shutdown_flag.clone();
 
-    // Start user input thread
-    let input_handle = std::thread::spawn(move || {
-        print!("Press Enter to stop the monitoring system...");
-        io::stdout().flush().unwrap();
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        shutdown_flag_thread.store(true, Ordering::Relaxed);
-        log::info!("User requested stop - shutting down...");
-    });
+    // Setup Ctrl+C handler for graceful shutdown
+    ctrlc::set_handler(move || {
+        log::info!("Ctrl+C pressed - initiating graceful shutdown...");
+        shutdown_flag_ctrlc.store(true, Ordering::Relaxed);
+    })?;
 
     // Monitor system status until shutdown requested
     log::info!("Running monitoring system indefinitely...");
     log::info!("System will continue monitoring even after achieving STABLE state");
     log::info!("Both SignalMonitor and Controller running in background threads");
+    log::info!("Press Ctrl+C to stop the monitoring system gracefully...");
 
     while !shutdown_flag.load(Ordering::Relaxed) {
         // Check if both threads are still running
         let signal_running = signal_receiver.is_running.load(Ordering::Relaxed);
         let control_running = control_receiver.is_running.load(Ordering::Relaxed);
-        
+
         if !signal_running || !control_running {
             log::warn!("One of the background threads stopped (Signal: {signal_running}, Control: {control_running})");
             break;
@@ -146,9 +142,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         // Small delay to prevent busy loop
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
-
-    // Wait for input thread to complete
-    input_handle.join().unwrap();
 
     // Show final shared state
     {
@@ -164,12 +157,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Cleanup: stop both background threads using symmetric shutdown
     log::info!("Shutting down background threads...");
-    
+
     // Stop signal monitor
     if let Err(e) = signal_receiver.shutdown_sender.send(()) {
         log::warn!("Failed to send signal monitor shutdown signal: {e}");
     }
-    
+
     // Stop controller (symmetric to signal monitor)
     if let Err(e) = control_receiver.shutdown_sender.send(()) {
         log::warn!("Failed to send controller shutdown signal: {e}");
@@ -177,13 +170,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Wait for both threads to complete gracefully
     log::info!("Waiting for background threads to complete...");
-    
+
     if let Err(e) = control_receiver.thread_handle.join() {
         log::error!("Error joining controller thread: {e:?}");
     } else {
         log::info!("Controller thread completed successfully");
     }
-    
+
     // Give signal monitor time to shut down gracefully
     std::thread::sleep(std::time::Duration::from_millis(500));
     log::info!("Symmetric shutdown completed");

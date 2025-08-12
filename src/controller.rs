@@ -5,9 +5,9 @@ use crate::policy::{ActionType, PolicyDecision, PolicyEngine};
 use crate::types::{MachineState, Position};
 use log::{debug, error, info};
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -25,25 +25,25 @@ pub struct Controller {
     approach_count: u32,
     position_history: VecDeque<Position>,
     action_history: VecDeque<String>,
-    
+
     // State change tracking to reduce log noise
     last_logged_classification: Option<crate::classifier::TipState>,
     stable_count: u32, // Count how long we've been stable
-    
-    // For future ML expansion:
-    // state_buffer: VecDeque<TipState>,     // Rich state history for transformers
-    // action_outcomes: Vec<(ActionType, f32)>, // Action-outcome pairs for learning
-    // model_confidence: f32,                // Current model confidence
+
+                       // For future ML expansion:
+                       // state_buffer: VecDeque<TipState>,     // Rich state history for transformers
+                       // action_outcomes: Vec<(ActionType, f32)>, // Action-outcome pairs for learning
+                       // model_confidence: f32,                // Current model confidence
 }
 
 /// Handle for receiving control loop status and shutdown management
 pub struct ControlReceiver {
     /// Can be used to request shutdown of the control loop
     pub shutdown_sender: mpsc::Sender<()>,
-    
+
     /// Reference to check if control loop is still running
     pub is_running: Arc<AtomicBool>,
-    
+
     /// Thread handle for joining on shutdown
     pub thread_handle: thread::JoinHandle<()>,
 }
@@ -54,14 +54,14 @@ pub struct ControllerBuilder {
     client: Option<NanonisClient>,
     address: Option<String>,
     port: Option<u16>,
-    
+
     // Required components
     classifier: Option<Box<dyn StateClassifier>>,
     policy: Option<Box<dyn PolicyEngine>>,
-    
+
     // Optional shared state
     shared_state: Option<Arc<Mutex<MachineState>>>,
-    
+
     // Control configuration
     control_interval_hz: f32,
     max_approaches: u32,
@@ -167,9 +167,9 @@ impl Controller {
 
         // Spawn background thread for control loop
         let thread_handle = thread::spawn(move || {
-            info!("Starting background control loop at {:.1}Hz", sample_rate_hz);
+            info!("Starting background control loop at {sample_rate_hz:.1}Hz");
             let sample_interval = Duration::from_millis((1000.0 / sample_rate_hz) as u64);
-            
+
             loop {
                 // Check for shutdown signal (non-blocking)
                 if shutdown_receiver.try_recv().is_ok() {
@@ -194,8 +194,9 @@ impl Controller {
                         Err(e) => {
                             debug!("Control loop error: {e}");
                             // Continue running unless it's a connection error
-                            if e.to_string().contains("Broken pipe") || 
-                               e.to_string().contains("failed to fill whole buffer") {
+                            if e.to_string().contains("Broken pipe")
+                                || e.to_string().contains("failed to fill whole buffer")
+                            {
                                 error!("Connection lost, stopping control loop");
                                 break;
                             }
@@ -229,45 +230,54 @@ impl Controller {
         let signal_index = self.classifier.get_primary_signal_index();
 
         // Try to read from shared state first (Option A integration)
-        let mut machine_state = if let Some(_) = &self.shared_state {
+        let mut machine_state = if self.shared_state.is_some() {
             debug!("Collecting fresh samples from shared state for classifier buffer");
-            
+
             // Collect multiple fresh samples with small delays to get fresh data
             let buffer_size = 10; // Match classifier buffer size
             let mut fresh_samples = Vec::new();
-            
+
             for i in 0..buffer_size {
                 if let Some(sample) = self.read_from_shared_state(signal_index, 0.5) {
                     // Extract the primary signal value from this sample
-                    if let (Some(all_signals), Some(signal_indices)) = (&sample.all_signals, &sample.signal_indices) {
-                        if let Some(position) = signal_indices.iter().position(|&idx| idx == signal_index) {
+                    if let (Some(all_signals), Some(signal_indices)) =
+                        (&sample.all_signals, &sample.signal_indices)
+                    {
+                        if let Some(position) =
+                            signal_indices.iter().position(|&idx| idx == signal_index)
+                        {
                             if position < all_signals.len() {
                                 fresh_samples.push(all_signals[position]);
                             }
                         }
                     }
                 }
-                
+
                 // Small delay to get fresh samples (except for last iteration)
                 if i < buffer_size - 1 {
                     std::thread::sleep(Duration::from_millis(20)); // 50Hz spacing
                 }
             }
-            
+
             // Get the most recent sample as base, but with fresh_samples in signal_history
             if let Some(mut latest_sample) = self.read_from_shared_state(signal_index, 0.5) {
                 // Replace signal_history with our fresh samples
                 latest_sample.signal_history.clear();
                 latest_sample.signal_history.extend(fresh_samples);
-                debug!("Collected {} fresh samples for classifier", latest_sample.signal_history.len());
+                debug!(
+                    "Collected {} fresh samples for classifier",
+                    latest_sample.signal_history.len()
+                );
                 latest_sample
             } else {
-                return Err(NanonisError::InvalidCommand("Could not read from shared state".to_string()));
+                return Err(NanonisError::InvalidCommand(
+                    "Could not read from shared state".to_string(),
+                ));
             }
         } else {
             // Fallback to direct client calls (legacy mode)
-            info!("Using direct client calls (legacy mode)");
-            
+            debug!("Using direct client calls (legacy mode)");
+
             // Collect multiple fresh samples for this monitoring cycle
             let buffer_size = 10; // Reasonable buffer size for fresh sampling
             let mut fresh_samples = Vec::with_capacity(buffer_size);
@@ -288,7 +298,7 @@ impl Controller {
             machine_state
                 .signal_history
                 .extend(fresh_samples.iter().copied());
-            
+
             machine_state
         };
 
@@ -313,7 +323,7 @@ impl Controller {
 
         // Only log when state changes to reduce noise
         let should_log = match &self.last_logged_classification {
-            None => true, // First time, always log
+            None => true,                                              // First time, always log
             Some(last_state) => *last_state != current_classification, // Log only on change
         };
 
@@ -322,20 +332,20 @@ impl Controller {
             let primary_value = self.extract_primary_signal_for_logging(&machine_state);
             let state_name = match current_classification {
                 crate::classifier::TipState::Bad => "BAD",
-                crate::classifier::TipState::Good => "GOOD", 
+                crate::classifier::TipState::Good => "GOOD",
                 crate::classifier::TipState::Stable => "STABLE",
             };
-            
+
             info!(
                 "Signal {signal_index} = {:?} - {} ({})",
                 primary_value,
                 state_name,
                 self.classifier.get_name()
             );
-            
+
             // Update last logged state
             self.last_logged_classification = Some(current_classification.clone());
-            
+
             // Reset stable count on any state change
             self.stable_count = 0;
         }
@@ -343,9 +353,9 @@ impl Controller {
         // Handle stable state count for periodic updates
         if current_classification == crate::classifier::TipState::Stable {
             self.stable_count += 1;
-            
+
             // Log every 10th stable iteration to show system is still running
-            if self.stable_count % 10 == 0 {
+            if self.stable_count.is_multiple_of(10) {
                 debug!(
                     "System stable for {} iterations ({})",
                     self.stable_count,
@@ -456,14 +466,14 @@ impl Controller {
     }
 
     // ==================== Signal Extraction Helpers ====================
-    
+
     /// Extract primary signal value for logging (uses signal mapping)
     fn extract_primary_signal_for_logging(&self, machine_state: &MachineState) -> String {
         let signal_index = self.classifier.get_primary_signal_index();
-        
-        if let (Some(all_signals), Some(signal_indices)) = 
-            (&machine_state.all_signals, &machine_state.signal_indices) {
-            
+
+        if let (Some(all_signals), Some(signal_indices)) =
+            (&machine_state.all_signals, &machine_state.signal_indices)
+        {
             // Find position of signal_index in the signal_indices array
             if let Some(position) = signal_indices.iter().position(|&idx| idx == signal_index) {
                 if position < all_signals.len() {
@@ -471,10 +481,10 @@ impl Controller {
                 }
             }
         }
-        
+
         // Fallback: use latest value from signal_history
         if let Some(&latest) = machine_state.signal_history.back() {
-            format!("{:.3e}", latest)
+            format!("{latest:.3e}")
         } else {
             "N/A".to_string()
         }
@@ -484,7 +494,11 @@ impl Controller {
 
     /// Read signal data from shared state instead of direct client calls
     /// Returns None if no shared state or data is too stale
-    fn read_from_shared_state(&self, _signal_index: i32, max_age_seconds: f64) -> Option<MachineState> {
+    fn read_from_shared_state(
+        &self,
+        _signal_index: i32,
+        max_age_seconds: f64,
+    ) -> Option<MachineState> {
         if let Some(ref shared_state) = self.shared_state {
             if let Ok(state) = shared_state.lock() {
                 // Check if data is fresh enough
@@ -492,7 +506,7 @@ impl Controller {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs_f64();
-                
+
                 let data_age = current_time - state.timestamp;
                 if data_age <= max_age_seconds {
                     debug!("Reading fresh data from shared state (age: {data_age:.2}s)");
@@ -518,12 +532,12 @@ impl Controller {
                 state.approach_count = machine_state.approach_count;
                 state.last_action = machine_state.last_action.clone();
                 state.classification = machine_state.classification.clone();
-                
+
                 // Update position if available
                 if let Some(position) = machine_state.position {
                     state.position = Some(position);
                 }
-                
+
                 debug!("Updated shared state with controller context");
             } else {
                 debug!("Failed to acquire shared state lock for update");
@@ -671,7 +685,11 @@ mod tests {
             machine_state.classification = self.classification.clone();
         }
 
-        fn initialize_buffer(&mut self, _machine_state: &crate::types::MachineState, _target_samples: usize) {
+        fn initialize_buffer(
+            &mut self,
+            _machine_state: &crate::types::MachineState,
+            _target_samples: usize,
+        ) {
             // Mock implementation - do nothing
         }
 
@@ -812,7 +830,7 @@ mod tests {
                 // Test reading from shared state
                 let result = controller.read_from_shared_state(24, 1.0);
                 assert!(result.is_some());
-                
+
                 let state = result.unwrap();
                 // Test that signal mapping works - signal 24 should extract from all_signals
                 assert_eq!(state.all_signals.as_ref().unwrap()[0], 1.5);
@@ -889,10 +907,10 @@ impl ControllerBuilder {
         };
 
         // Validate required components
-        let classifier = self.classifier
+        let classifier = self
+            .classifier
             .ok_or("classifier is required - use .classifier()")?;
-        let policy = self.policy
-            .ok_or("policy is required - use .policy()")?;
+        let policy = self.policy.ok_or("policy is required - use .policy()")?;
 
         // Validate configuration
         if self.control_interval_hz <= 0.0 {
@@ -923,7 +941,11 @@ impl ControllerBuilder {
             "Built Controller with {}Hz control loop, {} max approaches{}",
             self.control_interval_hz,
             self.max_approaches,
-            if controller.shared_state.is_some() { " (with shared state)" } else { "" }
+            if controller.shared_state.is_some() {
+                " (with shared state)"
+            } else {
+                ""
+            }
         );
 
         Ok(controller)
