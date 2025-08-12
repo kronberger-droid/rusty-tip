@@ -224,7 +224,7 @@ impl DiskWriter for JsonDiskWriter {
             return Ok(());
         }
 
-        info!("Writing batch of {} samples to disk", batch_size);
+        info!("Writing batch of {batch_size} samples to disk");
 
         for (index, sample) in data.into_iter().enumerate() {
             if let Err(e) = self.write_single(sample) {
@@ -234,7 +234,7 @@ impl DiskWriter for JsonDiskWriter {
         }
 
         self.flush()?;
-        info!("Successfully wrote batch of {} samples", batch_size);
+        info!("Successfully wrote batch of {batch_size} samples");
 
         Ok(())
     }

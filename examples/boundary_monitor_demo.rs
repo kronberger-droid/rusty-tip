@@ -3,8 +3,7 @@ use std::error::Error;
 use std::time::Duration;
 
 /// Boundary monitoring demo with separated classifier and policy
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     // Initialize logging with configurable level
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 

@@ -219,7 +219,7 @@ impl StateClassifier for BoundaryClassifier {
                 trace!("Primary signal {} extracted from all_signals: {}", self.signal_index, primary_value);
                 
                 // Fill buffer with current signal value as fallback
-                debug!("Fallback: filling classifier buffer with current value ({})", primary_value);
+                debug!("Fallback: filling classifier buffer with current value ({primary_value})");
                 for _ in 0..self.buffer_size {
                     self.own_signal_history.push_back(primary_value);
                 }
