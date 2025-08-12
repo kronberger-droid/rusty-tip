@@ -16,7 +16,7 @@ pub use policy::{
     RuleBasedPolicy, RuleBasedPolicyBuilder,
 };
 pub use signal_monitor::{
-    AsyncSignalMonitor, DiskWriter, DiskWriterConfig, DiskWriterConfigBuilder, DiskWriterFormat, 
+    SyncSignalMonitor, DiskWriter, DiskWriterConfig, DiskWriterConfigBuilder, DiskWriterFormat, 
     JsonDiskWriter, JsonDiskWriterBuilder, MonitorStats, SignalReceiver,
 };
 pub use types::{BiasVoltage, MachineState, NanonisValue, Position, SessionMetadata};

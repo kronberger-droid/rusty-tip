@@ -5,8 +5,7 @@ use crate::policy::{ActionType, PolicyDecision, PolicyEngine};
 use crate::types::{MachineState, Position};
 use log::{debug, info};
 use std::collections::VecDeque;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Controller integrating Nanonis client with state classifier and policy engine
@@ -17,12 +16,17 @@ pub struct Controller {
     policy: Box<dyn PolicyEngine>,
 
     // Optional shared state for real-time integration
-    shared_state: Option<Arc<RwLock<MachineState>>>,
+    shared_state: Option<Arc<Mutex<MachineState>>>,
 
     // State tracking for advanced policy engines
     approach_count: u32,
     position_history: VecDeque<Position>,
     action_history: VecDeque<String>,
+    
+    // State change tracking to reduce log noise
+    last_logged_classification: Option<crate::classifier::TipState>,
+    stable_count: u32, // Count how long we've been stable
+    
     // For future ML expansion:
     // state_buffer: VecDeque<TipState>,     // Rich state history for transformers
     // action_outcomes: Vec<(ActionType, f32)>, // Action-outcome pairs for learning
@@ -41,7 +45,7 @@ pub struct ControllerBuilder {
     policy: Option<Box<dyn PolicyEngine>>,
     
     // Optional shared state
-    shared_state: Option<Arc<RwLock<MachineState>>>,
+    shared_state: Option<Arc<Mutex<MachineState>>>,
     
     // Control configuration
     control_interval_hz: f32,
@@ -78,6 +82,8 @@ impl Controller {
             approach_count: 0,
             position_history: VecDeque::with_capacity(100),
             action_history: VecDeque::with_capacity(100),
+            last_logged_classification: None,
+            stable_count: 0,
         })
     }
 
@@ -94,11 +100,13 @@ impl Controller {
             approach_count: 0,
             position_history: VecDeque::with_capacity(100),
             action_history: VecDeque::with_capacity(100),
+            last_logged_classification: None,
+            stable_count: 0,
         }
     }
 
     /// Main control loop - policy-driven monitoring with state-based actions
-    pub async fn run_control_loop(
+    pub fn run_control_loop(
         &mut self,
         sample_rate_hz: f32,
         duration: Duration,
@@ -107,11 +115,11 @@ impl Controller {
         let start = Instant::now();
         let signal_index = self.classifier.get_primary_signal_index();
 
-        info!("Starting policy-driven control loop for signal index {signal_index}");
-        info!("Sample rate: {sample_rate_hz:.1} Hz, Duration: {duration:?}");
+        debug!("Starting policy-driven control loop for signal index {signal_index}");
+        debug!("Sample rate: {sample_rate_hz:.1} Hz, Duration: {duration:?}");
 
         while start.elapsed() < duration {
-            match self.run_monitoring_loop(sample_interval).await? {
+            match self.run_monitoring_loop(sample_interval)? {
                 LoopAction::ContinueBadLoop => {
                     // Signal was bad, actions executed, continue recovery monitoring
                     // Loop continues automatically
@@ -127,21 +135,53 @@ impl Controller {
             }
         }
 
-        info!("Control loop completed after {:?}", start.elapsed());
+        debug!("Control loop completed after {:?}", start.elapsed());
         Ok(())
     }
 
     /// Single monitoring loop iteration with actions based on state  
-    async fn run_monitoring_loop(
+    fn run_monitoring_loop(
         &mut self,
         _sample_interval: Duration,
     ) -> Result<LoopAction, NanonisError> {
         let signal_index = self.classifier.get_primary_signal_index();
 
         // Try to read from shared state first (Option A integration)
-        let mut machine_state = if let Some(shared_state) = self.read_from_shared_state(signal_index, 0.5).await {
-            info!("Using shared state data (Option A mode)");
-            shared_state
+        let mut machine_state = if let Some(_) = &self.shared_state {
+            debug!("Collecting fresh samples from shared state for classifier buffer");
+            
+            // Collect multiple fresh samples with small delays to get fresh data
+            let buffer_size = 10; // Match classifier buffer size
+            let mut fresh_samples = Vec::new();
+            
+            for i in 0..buffer_size {
+                if let Some(sample) = self.read_from_shared_state(signal_index, 0.5) {
+                    // Extract the primary signal value from this sample
+                    if let (Some(all_signals), Some(signal_indices)) = (&sample.all_signals, &sample.signal_indices) {
+                        if let Some(position) = signal_indices.iter().position(|&idx| idx == signal_index) {
+                            if position < all_signals.len() {
+                                fresh_samples.push(all_signals[position]);
+                            }
+                        }
+                    }
+                }
+                
+                // Small delay to get fresh samples (except for last iteration)
+                if i < buffer_size - 1 {
+                    std::thread::sleep(Duration::from_millis(20)); // 50Hz spacing
+                }
+            }
+            
+            // Get the most recent sample as base, but with fresh_samples in signal_history
+            if let Some(mut latest_sample) = self.read_from_shared_state(signal_index, 0.5) {
+                // Replace signal_history with our fresh samples
+                latest_sample.signal_history.clear();
+                latest_sample.signal_history.extend(fresh_samples);
+                debug!("Collected {} fresh samples for classifier", latest_sample.signal_history.len());
+                latest_sample
+            } else {
+                return Err(NanonisError::InvalidCommand("Could not read from shared state".to_string()));
+            }
         } else {
             // Fallback to direct client calls (legacy mode)
             info!("Using direct client calls (legacy mode)");
@@ -155,12 +195,11 @@ impl Controller {
                 fresh_samples.push(values[0]);
 
                 // Small delay between samples for stability
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                std::thread::sleep(Duration::from_millis(10));
             }
 
             // Create machine state and fill signal history with fresh samples
             let mut machine_state = crate::types::MachineState {
-                primary_signal: fresh_samples[fresh_samples.len() - 1],
                 all_signals: Some(fresh_samples.clone()),
                 ..Default::default()
             };
@@ -181,46 +220,79 @@ impl Controller {
         let decision = self.policy.decide(&machine_state);
 
         // Update shared state with controller context if using shared state mode
-        self.update_shared_state_context(&machine_state).await;
+        self.update_shared_state_context(&machine_state);
+
+        // Convert decision to classification for state tracking
+        let current_classification = match decision {
+            PolicyDecision::Bad => crate::classifier::TipState::Bad,
+            PolicyDecision::Good => crate::classifier::TipState::Good,
+            PolicyDecision::Stable => crate::classifier::TipState::Stable,
+        };
+
+        // Only log when state changes to reduce noise
+        let should_log = match &self.last_logged_classification {
+            None => true, // First time, always log
+            Some(last_state) => *last_state != current_classification, // Log only on change
+        };
+
+        if should_log {
+            // Extract primary signal value for logging using the classifier's helper
+            let primary_value = self.extract_primary_signal_for_logging(&machine_state);
+            let state_name = match current_classification {
+                crate::classifier::TipState::Bad => "BAD",
+                crate::classifier::TipState::Good => "GOOD", 
+                crate::classifier::TipState::Stable => "STABLE",
+            };
+            
+            info!(
+                "Signal {signal_index} = {:?} - {} ({})",
+                primary_value,
+                state_name,
+                self.classifier.get_name()
+            );
+            
+            // Update last logged state
+            self.last_logged_classification = Some(current_classification.clone());
+            
+            // Reset stable count on any state change
+            self.stable_count = 0;
+        }
+
+        // Handle stable state count for periodic updates
+        if current_classification == crate::classifier::TipState::Stable {
+            self.stable_count += 1;
+            
+            // Log every 10th stable iteration to show system is still running
+            if self.stable_count % 10 == 0 {
+                debug!(
+                    "System stable for {} iterations ({})",
+                    self.stable_count,
+                    self.classifier.get_name()
+                );
+            }
+        }
 
         match decision {
             PolicyDecision::Bad => {
-                info!(
-                    "Signal {signal_index} = {:?} - BAD ({})",
-                    machine_state.primary_signal,
-                    self.classifier.get_name()
-                );
-
                 // Execute bad signal actions
-                self.execute_bad_actions().await?;
-
+                self.execute_bad_actions()?;
                 Ok(LoopAction::ContinueBadLoop) // Continue in bad recovery mode
             }
             PolicyDecision::Good => {
-                info!(
-                    "Signal {signal_index} = {:?} - GOOD ({})",
-                    machine_state.primary_signal,
-                    self.classifier.get_name()
-                );
-
                 // Execute good signal actions
-                self.execute_good_actions().await?;
-
+                self.execute_good_actions()?;
                 Ok(LoopAction::ContinueStabilityLoop) // Continue monitoring for stability
             }
             PolicyDecision::Stable => {
-                info!(
-                    "Signal {signal_index} = {:?} - STABLE ({})",
-                    machine_state.primary_signal,
-                    self.classifier.get_name()
-                );
-                Ok(LoopAction::Halt) // Halt the process
+                // No specific actions for stable state (system is working correctly)
+                // Continue monitoring instead of halting to show continuous operation
+                Ok(LoopAction::ContinueStabilityLoop) // Keep monitoring even after achieving stability
             }
         }
     }
 
     /// Execute actions when signal is bad: approach → pulse → withdraw → move → approach → check
-    async fn execute_bad_actions(&mut self) -> Result<(), NanonisError> {
+    fn execute_bad_actions(&mut self) -> Result<(), NanonisError> {
         info!("Executing bad signal recovery sequence...");
 
         // Step 1: Initial approach (if not already approached)
@@ -233,7 +305,7 @@ impl Controller {
         // Step 2: Pulse operation (simulate for now)
         info!("Executing pulse operation...");
         // TODO: Implement actual pulse operation when available
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        std::thread::sleep(Duration::from_millis(200));
         debug!("Pulse completed");
 
         // Step 3: Withdraw tip
@@ -274,7 +346,7 @@ impl Controller {
     }
 
     /// Execute actions when signal is good
-    async fn execute_good_actions(&mut self) -> Result<(), NanonisError> {
+    fn execute_good_actions(&mut self) -> Result<(), NanonisError> {
         debug!("Executing good signal actions...");
 
         // TODO: Implement good signal actions:
@@ -283,7 +355,7 @@ impl Controller {
         // - Prepare for measurements
 
         // For now, simulate with delay
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        std::thread::sleep(Duration::from_millis(200));
         debug!("Good signal actions completed");
 
         Ok(())
@@ -301,26 +373,54 @@ impl Controller {
         Ok(())
     }
 
+    // ==================== Signal Extraction Helpers ====================
+    
+    /// Extract primary signal value for logging (uses signal mapping)
+    fn extract_primary_signal_for_logging(&self, machine_state: &MachineState) -> String {
+        let signal_index = self.classifier.get_primary_signal_index();
+        
+        if let (Some(all_signals), Some(signal_indices)) = 
+            (&machine_state.all_signals, &machine_state.signal_indices) {
+            
+            // Find position of signal_index in the signal_indices array
+            if let Some(position) = signal_indices.iter().position(|&idx| idx == signal_index) {
+                if position < all_signals.len() {
+                    return format!("{:.3e}", all_signals[position]);
+                }
+            }
+        }
+        
+        // Fallback: use latest value from signal_history
+        if let Some(&latest) = machine_state.signal_history.back() {
+            format!("{:.3e}", latest)
+        } else {
+            "N/A".to_string()
+        }
+    }
+
     // ==================== Shared State Methods ====================
 
     /// Read signal data from shared state instead of direct client calls
     /// Returns None if no shared state or data is too stale
-    async fn read_from_shared_state(&self, _signal_index: i32, max_age_seconds: f64) -> Option<MachineState> {
+    fn read_from_shared_state(&self, _signal_index: i32, max_age_seconds: f64) -> Option<MachineState> {
         if let Some(ref shared_state) = self.shared_state {
-            let state = shared_state.read().await;
-            
-            // Check if data is fresh enough
-            let current_time = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs_f64();
-            
-            let data_age = current_time - state.timestamp;
-            if data_age <= max_age_seconds {
-                debug!("Reading fresh data from shared state (age: {data_age:.2}s)");
-                Some(state.clone())
+            if let Ok(state) = shared_state.lock() {
+                // Check if data is fresh enough
+                let current_time = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs_f64();
+                
+                let data_age = current_time - state.timestamp;
+                if data_age <= max_age_seconds {
+                    debug!("Reading fresh data from shared state (age: {data_age:.2}s)");
+                    Some(state.clone())
+                } else {
+                    debug!("Shared state data too stale (age: {data_age:.2}s > max: {max_age_seconds:.2}s)");
+                    None
+                }
             } else {
-                debug!("Shared state data too stale (age: {data_age:.2}s > max: {max_age_seconds:.2}s)");
+                debug!("Failed to acquire shared state lock");
                 None
             }
         } else {
@@ -329,21 +429,23 @@ impl Controller {
     }
 
     /// Update shared state with controller context (position, actions, etc.)
-    async fn update_shared_state_context(&mut self, machine_state: &MachineState) {
+    fn update_shared_state_context(&mut self, machine_state: &MachineState) {
         if let Some(ref shared_state) = self.shared_state {
-            let mut state = shared_state.write().await;
-            
-            // Update controller-specific context
-            state.approach_count = machine_state.approach_count;
-            state.last_action = machine_state.last_action.clone();
-            state.classification = machine_state.classification.clone();
-            
-            // Update position if available
-            if let Some(position) = machine_state.position {
-                state.position = Some(position);
+            if let Ok(mut state) = shared_state.lock() {
+                // Update controller-specific context
+                state.approach_count = machine_state.approach_count;
+                state.last_action = machine_state.last_action.clone();
+                state.classification = machine_state.classification.clone();
+                
+                // Update position if available
+                if let Some(position) = machine_state.position {
+                    state.position = Some(position);
+                }
+                
+                debug!("Updated shared state with controller context");
+            } else {
+                debug!("Failed to acquire shared state lock for update");
             }
-            
-            debug!("Updated shared state with controller context");
         }
     }
 
@@ -464,7 +566,6 @@ mod tests {
     use super::*;
     use crate::classifier::{BoundaryClassifier, TipState};
     use crate::policy::RuleBasedPolicy;
-    use tokio::sync::RwLock;
 
     // Mock classifier for testing
     struct MockClassifier {
@@ -486,6 +587,10 @@ mod tests {
     impl StateClassifier for MockClassifier {
         fn classify(&mut self, machine_state: &mut crate::types::MachineState) {
             machine_state.classification = self.classification.clone();
+        }
+
+        fn initialize_buffer(&mut self, _machine_state: &crate::types::MachineState, _target_samples: usize) {
+            // Mock implementation - do nothing
         }
 
         fn clear_buffer(&mut self) {
@@ -588,12 +693,12 @@ mod tests {
         assert_eq!(stats.actions_executed, 10);
     }
 
-    #[tokio::test]
-    async fn test_shared_state_integration() {
+    #[test]
+    fn test_shared_state_integration() {
         // Create shared state
-        let shared_state = Arc::new(RwLock::new(MachineState {
-            primary_signal: 1.5,
+        let shared_state = Arc::new(Mutex::new(MachineState {
             all_signals: Some(vec![1.5, 0.8, 0.2]),
+            signal_indices: Some(vec![0, 1, 2]), // Test mapping
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -623,11 +728,12 @@ mod tests {
         match controller {
             Ok(controller) => {
                 // Test reading from shared state
-                let result = controller.read_from_shared_state(24, 1.0).await;
+                let result = controller.read_from_shared_state(24, 1.0);
                 assert!(result.is_some());
                 
                 let state = result.unwrap();
-                assert_eq!(state.primary_signal, 1.5);
+                // Test that signal mapping works - signal 24 should extract from all_signals
+                assert_eq!(state.all_signals.as_ref().unwrap()[0], 1.5);
                 println!("Shared state integration test passed");
             }
             Err(_) => {
@@ -671,7 +777,7 @@ impl ControllerBuilder {
     }
 
     /// Set shared state for real-time integration (optional)
-    pub fn with_shared_state(mut self, shared_state: Arc<RwLock<MachineState>>) -> Self {
+    pub fn with_shared_state(mut self, shared_state: Arc<Mutex<MachineState>>) -> Self {
         self.shared_state = Some(shared_state);
         self
     }
@@ -727,6 +833,8 @@ impl ControllerBuilder {
             approach_count: 0,
             position_history: VecDeque::with_capacity(100),
             action_history: VecDeque::with_capacity(100),
+            last_logged_classification: None,
+            stable_count: 0,
         };
 
         info!(

@@ -291,9 +291,11 @@ pub struct SessionMetadata {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MachineState {
     // Current signal readings
-    pub primary_signal: f32,           // The monitored signal (e.g., bias)
     pub all_signals: Option<Vec<f32>>, // All available signals for context
-    // Note: signal names/indices moved to SessionMetadata
+    
+    // Runtime signal coordination (not saved to JSON - info is in SessionMetadata)
+    #[serde(skip)]
+    pub signal_indices: Option<Vec<i32>>, // Which signal indices all_signals contains [0,1,2,3,24,30,31]
 
     // Spatial context
     pub position: Option<(f64, f64)>, // Current XY position

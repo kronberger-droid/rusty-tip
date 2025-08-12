@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Run monitoring with separated architecture
     let mut controller = Controller::with_client(client, Box::new(classifier), Box::new(policy));
-    controller.run_control_loop(2.0, Duration::from_secs(30)).await?;
+    controller.run_control_loop(2.0, Duration::from_secs(30))?;
 
     Ok(())
 }
