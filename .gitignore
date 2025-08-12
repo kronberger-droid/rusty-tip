@@ -1,4 +1,4 @@
 *.csv
 target/
-examples/history/
-obsidian/
+examples/history
+*/.obsidian/workspace.json

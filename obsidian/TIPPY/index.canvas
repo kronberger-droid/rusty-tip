@@ -1,0 +1,7 @@
+{
+	"nodes":[
+		{"id":"2767a53eb56f38f7","type":"file","file":"Classifier.md","x":-400,"y":-20,"width":400,"height":400},
+		{"id":"16e41a5d0d66e770","type":"file","file":"Controller.md","x":-400,"y":-560,"width":820,"height":200}
+	],
+	"edges":[]
+}
