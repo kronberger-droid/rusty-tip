@@ -1,14 +1,6 @@
-# nanonis_rust
+# rusty-tip
 
 A Rust library for interfacing with Nanonis SPM (Scanning Probe Microscopy) systems via TCP protocol.
-
-## Features
-
-- **Type-safe Nanonis protocol implementation** with comprehensive command support
-- **Modular architecture** with separated concerns: signal classification, policy decisions, and control actions
-- **Real-time monitoring** with configurable signal buffering and stability tracking
-- **Automated control loops** for tip approach, withdrawal, and position management
-- **Extensive logging** with configurable verbosity levels
 
 ## Quick Start
 
