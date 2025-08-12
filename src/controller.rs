@@ -293,7 +293,7 @@ impl Controller {
 
     /// Execute actions when signal is bad: approach → pulse → withdraw → move → approach → check
     fn execute_bad_actions(&mut self) -> Result<(), NanonisError> {
-        info!("Executing bad signal recovery sequence...");
+        info!("Executing bad signal recovery sequence");
 
         // Step 1: Initial approach (if not already approached)
         info!("Performing initial approach...");
