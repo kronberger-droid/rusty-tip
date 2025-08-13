@@ -1,3 +1,5 @@
 - Implement the Bias Sweep for stability loop
 - Check implementation of classifier buffer using signal monitor
 - Create System Diagram of the project using obsidian.
+- Test Osciloscope
+- 
