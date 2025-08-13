@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with this Nanonis Rust library.
+This file provides guidance to Claude Code (claude.ai/code) when working with the `rusty-tip` library.
 
 ## Build and Development Commands
 
@@ -10,12 +10,18 @@ cargo build
 
 # Run examples
 cargo run --example boundary_monitor_demo
-cargo run --example pulse_test
-cargo run --example machine_tests 
-cargo run --example logging_demo
+cargo run --example real_time_boundary_monitor
+cargo run --example machine_test
+cargo run --example get_signals
+cargo run --example signal_monitor_test
 
 # Run tests
 cargo test
+
+# Run specific test modules
+cargo test classifier
+cargo test controller
+cargo test policy
 
 # Check for compilation errors without building
 cargo check
@@ -27,7 +33,7 @@ The library uses the `log` crate with configurable logging levels. Set the `RUST
 
 ```bash
 # Maximum verbosity - shows all internal operations
-RUST_LOG=trace cargo run --example logging_demo
+RUST_LOG=trace cargo run --example boundary_monitor_demo
 
 # Debug level - shows detailed operational info
 RUST_LOG=debug cargo run --example boundary_monitor_demo
