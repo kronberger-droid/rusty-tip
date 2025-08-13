@@ -1,4 +1,4 @@
-use nanonis_rust::{
+use rusty_tip::{
     BoundaryClassifier, Controller, JsonDiskWriter, MachineState, RuleBasedPolicy,
     SyncSignalMonitor,
 };

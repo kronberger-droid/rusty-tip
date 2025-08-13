@@ -1,4 +1,4 @@
-use nanonis_rust::{BoundaryClassifier, Controller, NanonisClient, RuleBasedPolicy};
+use rusty_tip::{BoundaryClassifier, Controller, NanonisClient, RuleBasedPolicy};
 use std::error::Error;
 use std::time::Duration;
 
