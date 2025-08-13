@@ -1,10 +1,10 @@
 [package]
-name = "nanonis_rust"
+name = "rusty-tip"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "nanonis_rust"
+name = "rusty_tip"
 path = "src/lib.rs"
 
 [dependencies]
