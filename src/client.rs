@@ -15,7 +15,7 @@ use std::time::Duration;
 ///
 /// ```
 /// use std::time::Duration;
-/// use nanonis_rust::ConnectionConfig;
+/// use rusty_tip::ConnectionConfig;
 ///
 /// // Use default timeouts
 /// let config = ConnectionConfig::default();
@@ -57,7 +57,7 @@ impl Default for ConnectionConfig {
 ///
 /// Basic usage:
 /// ```no_run
-/// use nanonis_rust::NanonisClient;
+/// use rusty_tip::NanonisClient;
 ///
 /// let client = NanonisClient::builder()
 ///     .address("127.0.0.1")
@@ -70,7 +70,7 @@ impl Default for ConnectionConfig {
 /// With custom timeouts:
 /// ```no_run
 /// use std::time::Duration;
-/// use nanonis_rust::NanonisClient;
+/// use rusty_tip::NanonisClient;
 ///
 /// let client = NanonisClient::builder()
 ///     .address("192.168.1.100")
@@ -195,7 +195,7 @@ impl NanonisClientBuilder {
 ///
 /// Basic usage:
 /// ```no_run
-/// use nanonis_rust::{NanonisClient, BiasVoltage};
+/// use rusty_tip::{NanonisClient, BiasVoltage};
 ///
 /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
 ///
@@ -213,7 +213,7 @@ impl NanonisClientBuilder {
 /// With builder pattern:
 /// ```no_run
 /// use std::time::Duration;
-/// use nanonis_rust::NanonisClient;
+/// use rusty_tip::NanonisClient;
 ///
 /// let mut client = NanonisClient::builder()
 ///     .address("192.168.1.100")
@@ -249,7 +249,7 @@ impl NanonisClient {
     ///
     /// # Examples
     /// ```no_run
-    /// use nanonis_rust::NanonisClient;
+    /// use rusty_tip::NanonisClient;
     ///
     /// let client = NanonisClient::new("127.0.0.1", 6501)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -269,7 +269,7 @@ impl NanonisClient {
     /// # Examples
     /// ```no_run
     /// use std::time::Duration;
-    /// use nanonis_rust::NanonisClient;
+    /// use rusty_tip::NanonisClient;
     ///
     /// let client = NanonisClient::builder()
     ///     .address("192.168.1.100")
@@ -415,7 +415,7 @@ impl NanonisClient {
     ///
     /// # Examples
     /// ```no_run
-    /// use nanonis_rust::{NanonisClient, BiasVoltage};
+    /// use rusty_tip::{NanonisClient, BiasVoltage};
     ///
     /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
     ///
@@ -445,7 +445,7 @@ impl NanonisClient {
     ///
     /// # Examples
     /// ```no_run
-    /// use nanonis_rust::NanonisClient;
+    /// use rusty_tip::NanonisClient;
     ///
     /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
     ///
@@ -879,5 +879,857 @@ impl NanonisClient {
             &[],
         )?;
         Ok(())
+    }
+
+    // ==================== OsciHR (Oscilloscope High Resolution) Functions ====================
+
+    /// Set the measured signal index of the selected channel from the Oscilloscope High Resolution
+    pub fn osci_hr_ch_set(
+        &mut self,
+        osci_index: i32,
+        signal_index: i32,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.ChSet",
+            &[
+                NanonisValue::I32(osci_index),
+                NanonisValue::I32(signal_index),
+            ],
+            &["i", "i"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the measured signal index of the selected channel from the Oscilloscope High Resolution
+    pub fn osci_hr_ch_get(&mut self, osci_index: i32) -> Result<i32, NanonisError> {
+        let result = self.quick_send(
+            "OsciHR.ChGet",
+            &[NanonisValue::I32(osci_index)],
+            &["i"],
+            &["i"],
+        )?;
+        match result.first() {
+            Some(value) => Ok(value.as_i32()?),
+            None => Err(NanonisError::Protocol(
+                "No signal index returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the oversampling index of the Oscilloscope High Resolution
+    pub fn osci_hr_oversampl_set(&mut self, oversampling_index: i32) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.OversamplSet",
+            &[NanonisValue::I32(oversampling_index)],
+            &["i"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the oversampling index of the Oscilloscope High Resolution
+    pub fn osci_hr_oversampl_get(&mut self) -> Result<i32, NanonisError> {
+        let result = self.quick_send("OsciHR.OversamplGet", &[], &[], &["i"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_i32()?),
+            None => Err(NanonisError::Protocol(
+                "No oversampling index returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the calibration mode of the selected channel from the Oscilloscope High Resolution
+    /// calibration_mode: 0 = Raw values, 1 = Calibrated values
+    pub fn osci_hr_calibr_mode_set(
+        &mut self,
+        osci_index: i32,
+        calibration_mode: u16,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.CalibrModeSet",
+            &[
+                NanonisValue::I32(osci_index),
+                NanonisValue::U16(calibration_mode),
+            ],
+            &["i", "H"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the calibration mode of the selected channel from the Oscilloscope High Resolution
+    /// Returns: 0 = Raw values, 1 = Calibrated values
+    pub fn osci_hr_calibr_mode_get(&mut self, osci_index: i32) -> Result<u16, NanonisError> {
+        let result = self.quick_send(
+            "OsciHR.CalibrModeGet",
+            &[NanonisValue::I32(osci_index)],
+            &["i"],
+            &["H"],
+        )?;
+        match result.first() {
+            Some(value) => Ok(value.as_u16()?),
+            None => Err(NanonisError::Protocol(
+                "No calibration mode returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the number of samples to acquire in the Oscilloscope High Resolution
+    pub fn osci_hr_samples_set(&mut self, number_of_samples: i32) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.SamplesSet",
+            &[NanonisValue::I32(number_of_samples)],
+            &["i"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the number of samples to acquire in the Oscilloscope High Resolution
+    pub fn osci_hr_samples_get(&mut self) -> Result<i32, NanonisError> {
+        let result = self.quick_send("OsciHR.SamplesGet", &[], &[], &["i"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_i32()?),
+            None => Err(NanonisError::Protocol(
+                "No sample count returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the Pre-Trigger Samples or Seconds in the Oscilloscope High Resolution
+    pub fn osci_hr_pre_trig_set(
+        &mut self,
+        pre_trigger_samples: u32,
+        pre_trigger_s: f64,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.PreTrigSet",
+            &[
+                NanonisValue::U32(pre_trigger_samples),
+                NanonisValue::F64(pre_trigger_s),
+            ],
+            &["I", "d"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the Pre-Trigger Samples in the Oscilloscope High Resolution
+    pub fn osci_hr_pre_trig_get(&mut self) -> Result<i32, NanonisError> {
+        let result = self.quick_send("OsciHR.PreTrigGet", &[], &[], &["i"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_i32()?),
+            None => Err(NanonisError::Protocol(
+                "No pre-trigger samples returned".to_string(),
+            )),
+        }
+    }
+
+    /// Start the Oscilloscope High Resolution module
+    pub fn osci_hr_run(&mut self) -> Result<(), NanonisError> {
+        self.quick_send("OsciHR.Run", &[], &[], &[])?;
+        Ok(())
+    }
+
+    /// Get the graph data of the selected channel from the Oscilloscope High Resolution
+    /// data_to_get: 0 = Current returns the currently displayed data, 1 = Next trigger waits for the next trigger
+    /// Returns: (timestamp, time_delta, data_values, timeout_occurred)
+    pub fn osci_hr_osci_data_get(
+        &mut self,
+        osci_index: i32,
+        data_to_get: u16,
+        timeout_s: f64,
+    ) -> Result<(String, f64, Vec<f32>, bool), NanonisError> {
+        let result = self.quick_send(
+            "OsciHR.OsciDataGet",
+            &[
+                NanonisValue::I32(osci_index),
+                NanonisValue::U16(data_to_get),
+                NanonisValue::F64(timeout_s),
+            ],
+            &["i", "H", "d"],
+            &["i", "*-c", "d", "i", "*f", "I"],
+        )?;
+
+        if result.len() >= 6 {
+            let timestamp = result[1].as_string()?.to_string();
+            let time_delta = result[2].as_f64()?;
+            let data_values = result[4].as_f32_array()?.to_vec();
+            let timeout_occurred = result[5].as_u32()? == 1;
+            Ok((timestamp, time_delta, data_values, timeout_occurred))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid oscilloscope data response".to_string(),
+            ))
+        }
+    }
+
+    /// Set the trigger mode in the Oscilloscope High Resolution
+    /// trigger_mode: 0 = Immediate, 1 = Level, 2 = Digital
+    pub fn osci_hr_trig_mode_set(&mut self, trigger_mode: u16) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.TrigModeSet",
+            &[NanonisValue::U16(trigger_mode)],
+            &["H"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the trigger mode in the Oscilloscope High Resolution
+    /// Returns: 0 = Immediate, 1 = Level, 2 = Digital
+    pub fn osci_hr_trig_mode_get(&mut self) -> Result<u16, NanonisError> {
+        let result = self.quick_send("OsciHR.TrigModeGet", &[], &[], &["H"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_u16()?),
+            None => Err(NanonisError::Protocol(
+                "No trigger mode returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the Level Trigger Channel index in the Oscilloscope High Resolution
+    pub fn osci_hr_trig_lev_ch_set(
+        &mut self,
+        level_trigger_channel_index: i32,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.TrigLevChSet",
+            &[NanonisValue::I32(level_trigger_channel_index)],
+            &["i"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the Level Trigger Channel index in the Oscilloscope High Resolution
+    pub fn osci_hr_trig_lev_ch_get(&mut self) -> Result<i32, NanonisError> {
+        let result = self.quick_send("OsciHR.TrigLevChGet", &[], &[], &["i"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_i32()?),
+            None => Err(NanonisError::Protocol(
+                "No level trigger channel returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the Level Trigger value in the Oscilloscope High Resolution
+    pub fn osci_hr_trig_lev_val_set(
+        &mut self,
+        level_trigger_value: f64,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.TrigLevValSet",
+            &[NanonisValue::F64(level_trigger_value)],
+            &["d"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the Level Trigger value in the Oscilloscope High Resolution
+    pub fn osci_hr_trig_lev_val_get(&mut self) -> Result<f64, NanonisError> {
+        let result = self.quick_send("OsciHR.TrigLevValGet", &[], &[], &["d"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_f64()?),
+            None => Err(NanonisError::Protocol(
+                "No level trigger value returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the Level Trigger Hysteresis in the Oscilloscope High Resolution
+    pub fn osci_hr_trig_lev_hyst_set(
+        &mut self,
+        level_trigger_hysteresis: f64,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.TrigLevHystSet",
+            &[NanonisValue::F64(level_trigger_hysteresis)],
+            &["d"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the Level Trigger Hysteresis in the Oscilloscope High Resolution
+    pub fn osci_hr_trig_lev_hyst_get(&mut self) -> Result<f64, NanonisError> {
+        let result = self.quick_send("OsciHR.TrigLevHystGet", &[], &[], &["d"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_f64()?),
+            None => Err(NanonisError::Protocol(
+                "No level trigger hysteresis returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the Level Trigger Slope in the Oscilloscope High Resolution
+    /// level_trigger_slope: 0 = Rising, 1 = Falling
+    pub fn osci_hr_trig_lev_slope_set(
+        &mut self,
+        level_trigger_slope: u16,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.TrigLevSlopeSet",
+            &[NanonisValue::U16(level_trigger_slope)],
+            &["H"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the Level Trigger Slope in the Oscilloscope High Resolution
+    /// Returns: 0 = Rising, 1 = Falling
+    pub fn osci_hr_trig_lev_slope_get(&mut self) -> Result<u16, NanonisError> {
+        let result = self.quick_send("OsciHR.TrigLevSlopeGet", &[], &[], &["H"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_u16()?),
+            None => Err(NanonisError::Protocol(
+                "No level trigger slope returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the Digital Trigger Channel in the Oscilloscope High Resolution
+    /// channel_index: 0-35 (LS-DIO: 0-31, HS-DIO: 32-35)
+    pub fn osci_hr_trig_dig_ch_set(
+        &mut self,
+        digital_trigger_channel_index: i32,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.TrigDigChSet",
+            &[NanonisValue::I32(digital_trigger_channel_index)],
+            &["i"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the Digital Trigger Channel in the Oscilloscope High Resolution
+    /// Returns channel index: 0-35 (LS-DIO: 0-31, HS-DIO: 32-35)
+    pub fn osci_hr_trig_dig_ch_get(&mut self) -> Result<i32, NanonisError> {
+        let result = self.quick_send("OsciHR.TrigDigChGet", &[], &[], &["i"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_i32()?),
+            None => Err(NanonisError::Protocol(
+                "No digital trigger channel returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the Trigger Arming Mode in the Oscilloscope High Resolution
+    /// trigger_arming_mode: 0 = Single shot, 1 = Continuous
+    pub fn osci_hr_trig_arm_mode_set(
+        &mut self,
+        trigger_arming_mode: u16,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.TrigArmModeSet",
+            &[NanonisValue::U16(trigger_arming_mode)],
+            &["H"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the Trigger Arming Mode in the Oscilloscope High Resolution
+    /// Returns: 0 = Single shot, 1 = Continuous
+    pub fn osci_hr_trig_arm_mode_get(&mut self) -> Result<u16, NanonisError> {
+        let result = self.quick_send("OsciHR.TrigArmModeGet", &[], &[], &["H"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_u16()?),
+            None => Err(NanonisError::Protocol(
+                "No trigger arming mode returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the Digital Trigger Slope in the Oscilloscope High Resolution
+    /// digital_trigger_slope: 0 = Rising, 1 = Falling
+    pub fn osci_hr_trig_dig_slope_set(
+        &mut self,
+        digital_trigger_slope: u16,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.TrigDigSlopeSet",
+            &[NanonisValue::U16(digital_trigger_slope)],
+            &["H"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the Digital Trigger Slope in the Oscilloscope High Resolution
+    /// Returns: 0 = Rising, 1 = Falling
+    pub fn osci_hr_trig_dig_slope_get(&mut self) -> Result<u16, NanonisError> {
+        let result = self.quick_send("OsciHR.TrigDigSlopeGet", &[], &[], &["H"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_u16()?),
+            None => Err(NanonisError::Protocol(
+                "No digital trigger slope returned".to_string(),
+            )),
+        }
+    }
+
+    /// Rearm the trigger in the Oscilloscope High Resolution module
+    pub fn osci_hr_trig_rearm(&mut self) -> Result<(), NanonisError> {
+        self.quick_send("OsciHR.TrigRearm", &[], &[], &[])?;
+        Ok(())
+    }
+
+    /// Show or hide the PSD section of the Oscilloscope High Resolution
+    /// show_psd_section: 0 = Hide, 1 = Show
+    pub fn osci_hr_psd_show(&mut self, show_psd_section: u32) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.PSDShow",
+            &[NanonisValue::U32(show_psd_section)],
+            &["I"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Set the PSD Weighting in the Oscilloscope High Resolution
+    /// psd_weighting: 0 = Linear, 1 = Exponential
+    pub fn osci_hr_psd_weight_set(&mut self, psd_weighting: u16) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.PSDWeightSet",
+            &[NanonisValue::U16(psd_weighting)],
+            &["H"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the PSD Weighting in the Oscilloscope High Resolution
+    /// Returns: 0 = Linear, 1 = Exponential
+    pub fn osci_hr_psd_weight_get(&mut self) -> Result<u16, NanonisError> {
+        let result = self.quick_send("OsciHR.PSDWeightGet", &[], &[], &["H"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_u16()?),
+            None => Err(NanonisError::Protocol(
+                "No PSD weighting returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the PSD Window Type in the Oscilloscope High Resolution
+    /// psd_window_type: 0 = None, 1 = Hanning, 2 = Hamming, etc.
+    pub fn osci_hr_psd_window_set(&mut self, psd_window_type: u16) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.PSDWindowSet",
+            &[NanonisValue::U16(psd_window_type)],
+            &["H"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the PSD Window Type in the Oscilloscope High Resolution
+    /// Returns: 0 = None, 1 = Hanning, 2 = Hamming, etc.
+    pub fn osci_hr_psd_window_get(&mut self) -> Result<u16, NanonisError> {
+        let result = self.quick_send("OsciHR.PSDWindowGet", &[], &[], &["H"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_u16()?),
+            None => Err(NanonisError::Protocol(
+                "No PSD window type returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the PSD Averaging Type in the Oscilloscope High Resolution
+    /// psd_averaging_type: 0 = None, 1 = Vector, 2 = RMS, 3 = Peak hold
+    pub fn osci_hr_psd_avrg_type_set(
+        &mut self,
+        psd_averaging_type: u16,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.PSDAvrgTypeSet",
+            &[NanonisValue::U16(psd_averaging_type)],
+            &["H"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the PSD Averaging Type in the Oscilloscope High Resolution
+    /// Returns: 0 = None, 1 = Vector, 2 = RMS, 3 = Peak hold
+    pub fn osci_hr_psd_avrg_type_get(&mut self) -> Result<u16, NanonisError> {
+        let result = self.quick_send("OsciHR.PSDAvrgTypeGet", &[], &[], &["H"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_u16()?),
+            None => Err(NanonisError::Protocol(
+                "No PSD averaging type returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the PSD Averaging Count used by the RMS and Vector averaging types
+    pub fn osci_hr_psd_avrg_count_set(
+        &mut self,
+        psd_averaging_count: i32,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "OsciHR.PSDAvrgCountSet",
+            &[NanonisValue::I32(psd_averaging_count)],
+            &["i"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the PSD Averaging Count used by the RMS and Vector averaging types
+    pub fn osci_hr_psd_avrg_count_get(&mut self) -> Result<i32, NanonisError> {
+        let result = self.quick_send("OsciHR.PSDAvrgCountGet", &[], &[], &["i"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_i32()?),
+            None => Err(NanonisError::Protocol(
+                "No PSD averaging count returned".to_string(),
+            )),
+        }
+    }
+
+    /// Restart the PSD averaging process in the Oscilloscope High Resolution module
+    pub fn osci_hr_psd_avrg_restart(&mut self) -> Result<(), NanonisError> {
+        self.quick_send("OsciHR.PSDAvrgRestart", &[], &[], &[])?;
+        Ok(())
+    }
+
+    /// Get the Power Spectral Density data from the Oscilloscope High Resolution
+    /// data_to_get: 0 = Current returns the currently displayed data, 1 = Next trigger waits for the next trigger
+    /// Returns: (f0, df, psd_data, timeout_occurred)
+    pub fn osci_hr_psd_data_get(
+        &mut self,
+        data_to_get: u16,
+        timeout_s: f64,
+    ) -> Result<(f64, f64, Vec<f64>, bool), NanonisError> {
+        let result = self.quick_send(
+            "OsciHR.PSDDataGet",
+            &[NanonisValue::U16(data_to_get), NanonisValue::F64(timeout_s)],
+            &["H", "d"],
+            &["d", "d", "i", "*d", "I"],
+        )?;
+
+        if result.len() >= 5 {
+            let f0 = result[0].as_f64()?;
+            let df = result[1].as_f64()?;
+            let psd_data = result[3].as_f64_array()?.to_vec();
+            let timeout_occurred = result[4].as_u32()? == 1;
+            Ok((f0, df, psd_data, timeout_occurred))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid PSD data response".to_string(),
+            ))
+        }
+    }
+
+    // ==================== Osci1T (Oscilloscope 1-Channel) Functions ====================
+
+    /// Set the channel to display in the Oscilloscope 1-Channel
+    /// channel_index: 0-23, corresponds to signals assigned to the 24 slots in the Signals Manager
+    pub fn osci1t_ch_set(&mut self, channel_index: i32) -> Result<(), NanonisError> {
+        self.quick_send(
+            "Osci1T.ChSet",
+            &[NanonisValue::I32(channel_index)],
+            &["i"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the channel displayed in the Oscilloscope 1-Channel
+    /// Returns: channel index (0-23)
+    pub fn osci1t_ch_get(&mut self) -> Result<i32, NanonisError> {
+        let result = self.quick_send("Osci1T.ChGet", &[], &[], &["i"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_i32()?),
+            None => Err(NanonisError::Protocol(
+                "No channel index returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the timebase in the Oscilloscope 1-Channel
+    /// Use osci1t_timebase_get() first to obtain available timebases, then use the index
+    pub fn osci1t_timebase_set(&mut self, timebase_index: i32) -> Result<(), NanonisError> {
+        self.quick_send(
+            "Osci1T.TimebaseSet",
+            &[NanonisValue::I32(timebase_index)],
+            &["i"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the timebase in the Oscilloscope 1-Channel
+    /// Returns: (timebase_index, timebases_array)
+    pub fn osci1t_timebase_get(&mut self) -> Result<(i32, Vec<f32>), NanonisError> {
+        let result = self.quick_send("Osci1T.TimebaseGet", &[], &[], &["i", "i", "*f"])?;
+        if result.len() >= 3 {
+            let timebase_index = result[0].as_i32()?;
+            let timebases = result[2].as_f32_array()?.to_vec();
+            Ok((timebase_index, timebases))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid timebase response".to_string(),
+            ))
+        }
+    }
+
+    /// Set the trigger configuration in the Oscilloscope 1-Channel
+    /// trigger_mode: 0 = Immediate, 1 = Level, 2 = Auto
+    /// trigger_slope: 0 = Falling, 1 = Rising
+    pub fn osci1t_trig_set(
+        &mut self,
+        trigger_mode: u16,
+        trigger_slope: u16,
+        trigger_level: f32,
+        trigger_hysteresis: f32,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "Osci1T.TrigSet",
+            &[
+                NanonisValue::U16(trigger_mode),
+                NanonisValue::U16(trigger_slope),
+                NanonisValue::F32(trigger_level),
+                NanonisValue::F32(trigger_hysteresis),
+            ],
+            &["H", "H", "f", "f"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the trigger configuration in the Oscilloscope 1-Channel
+    /// Returns: (trigger_mode, trigger_slope, trigger_level, trigger_hysteresis)
+    pub fn osci1t_trig_get(&mut self) -> Result<(u16, u16, f64, f64), NanonisError> {
+        let result = self.quick_send("Osci1T.TrigGet", &[], &[], &["H", "H", "d", "d"])?;
+        if result.len() >= 4 {
+            let trigger_mode = result[0].as_u16()?;
+            let trigger_slope = result[1].as_u16()?;
+            let trigger_level = result[2].as_f64()?;
+            let trigger_hysteresis = result[3].as_f64()?;
+            Ok((
+                trigger_mode,
+                trigger_slope,
+                trigger_level,
+                trigger_hysteresis,
+            ))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid trigger configuration response".to_string(),
+            ))
+        }
+    }
+
+    /// Start the Oscilloscope 1-Channel
+    pub fn osci1t_run(&mut self) -> Result<(), NanonisError> {
+        self.quick_send("Osci1T.Run", &[], &[], &[])?;
+        Ok(())
+    }
+
+    /// Get the graph data from the Oscilloscope 1-Channel
+    /// data_to_get: 0 = Current, 1 = Next trigger, 2 = Wait 2 triggers
+    /// Returns: (t0, dt, data_values)
+    pub fn osci1t_data_get(
+        &mut self,
+        data_to_get: u16,
+    ) -> Result<(f64, f64, i32, Vec<f64>), NanonisError> {
+        let result = self.quick_send(
+            "Osci1T.DataGet",
+            &[NanonisValue::U16(data_to_get)],
+            &["H"],
+            &["d", "d", "i", "*d"],
+        )?;
+
+        if result.len() >= 4 {
+            let t0 = result[0].as_f64()?;
+            let dt = result[1].as_f64()?;
+            let size = result[2].as_i32()?;
+            let data = result[3].as_f64_array()?.to_vec();
+            Ok((t0, dt, size, data))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid oscilloscope 1T data response".to_string(),
+            ))
+        }
+    }
+
+    // ==================== Osci2T (Oscilloscope 2-Channels) Functions ====================
+
+    /// Set the channels to display in the Oscilloscope 2-Channels
+    /// channel_a_index: 0-23, channel A signal index  
+    /// channel_b_index: 0-23, channel B signal index
+    pub fn osci2t_ch_set(
+        &mut self,
+        channel_a_index: i32,
+        channel_b_index: i32,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "Osci2T.ChSet",
+            &[
+                NanonisValue::I32(channel_a_index),
+                NanonisValue::I32(channel_b_index),
+            ],
+            &["i", "i"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the channels displayed in the Oscilloscope 2-Channels
+    /// Returns: (channel_a_index, channel_b_index)
+    pub fn osci2t_ch_get(&mut self) -> Result<(i32, i32), NanonisError> {
+        let result = self.quick_send("Osci2T.ChGet", &[], &[], &["i", "i"])?;
+        if result.len() >= 2 {
+            let channel_a = result[0].as_i32()?;
+            let channel_b = result[1].as_i32()?;
+            Ok((channel_a, channel_b))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid channel response".to_string(),
+            ))
+        }
+    }
+
+    /// Set the timebase in the Oscilloscope 2-Channels
+    /// Use osci2t_timebase_get() first to obtain available timebases, then use the index
+    pub fn osci2t_timebase_set(&mut self, timebase_index: u16) -> Result<(), NanonisError> {
+        self.quick_send(
+            "Osci2T.TimebaseSet",
+            &[NanonisValue::U16(timebase_index)],
+            &["H"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the timebase in the Oscilloscope 2-Channels
+    /// Returns: (timebase_index, timebases_array)
+    pub fn osci2t_timebase_get(&mut self) -> Result<(u16, Vec<f32>), NanonisError> {
+        let result = self.quick_send("Osci2T.TimebaseGet", &[], &[], &["H", "i", "*f"])?;
+        if result.len() >= 3 {
+            let timebase_index = result[0].as_u16()?;
+            let timebases = result[2].as_f32_array()?.to_vec();
+            Ok((timebase_index, timebases))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid timebase response".to_string(),
+            ))
+        }
+    }
+
+    /// Set the oversampling in the Oscilloscope 2-Channels
+    /// oversampling_index: 0=50 samples, 1=20, 2=10, 3=5, 4=2, 5=1 sample (no averaging)
+    pub fn osci2t_oversampl_set(&mut self, oversampling_index: u16) -> Result<(), NanonisError> {
+        self.quick_send(
+            "Osci2T.OversamplSet",
+            &[NanonisValue::U16(oversampling_index)],
+            &["H"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the oversampling in the Oscilloscope 2-Channels
+    /// Returns: oversampling index (0=50 samples, 1=20, 2=10, 3=5, 4=2, 5=1 sample)
+    pub fn osci2t_oversampl_get(&mut self) -> Result<u16, NanonisError> {
+        let result = self.quick_send("Osci2T.OversamplGet", &[], &[], &["H"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_u16()?),
+            None => Err(NanonisError::Protocol(
+                "No oversampling index returned".to_string(),
+            )),
+        }
+    }
+
+    /// Set the trigger configuration in the Oscilloscope 2-Channels
+    /// trigger_mode: 0 = Immediate, 1 = Level, 2 = Auto
+    /// trig_channel: trigger channel
+    /// trigger_slope: 0 = Falling, 1 = Rising
+    pub fn osci2t_trig_set(
+        &mut self,
+        trigger_mode: u16,
+        trig_channel: u16,
+        trigger_slope: u16,
+        trigger_level: f64,
+        trigger_hysteresis: f64,
+        trig_position: f64,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "Osci2T.TrigSet",
+            &[
+                NanonisValue::U16(trigger_mode),
+                NanonisValue::U16(trig_channel),
+                NanonisValue::U16(trigger_slope),
+                NanonisValue::F64(trigger_level),
+                NanonisValue::F64(trigger_hysteresis),
+                NanonisValue::F64(trig_position),
+            ],
+            &["H", "H", "H", "d", "d", "d"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the trigger configuration in the Oscilloscope 2-Channels
+    /// Returns: (trigger_mode, trig_channel, trigger_slope, trigger_level, trigger_hysteresis, trig_position)
+    pub fn osci2t_trig_get(&mut self) -> Result<(u16, u16, u16, f64, f64, f64), NanonisError> {
+        let result =
+            self.quick_send("Osci2T.TrigGet", &[], &[], &["H", "H", "H", "d", "d", "d"])?;
+        if result.len() >= 6 {
+            let trigger_mode = result[0].as_u16()?;
+            let trig_channel = result[1].as_u16()?;
+            let trigger_slope = result[2].as_u16()?;
+            let trigger_level = result[3].as_f64()?;
+            let trigger_hysteresis = result[4].as_f64()?;
+            let trig_position = result[5].as_f64()?;
+            Ok((
+                trigger_mode,
+                trig_channel,
+                trigger_slope,
+                trigger_level,
+                trigger_hysteresis,
+                trig_position,
+            ))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid trigger configuration response".to_string(),
+            ))
+        }
+    }
+
+    /// Start the Oscilloscope 2-Channels
+    pub fn osci2t_run(&mut self) -> Result<(), NanonisError> {
+        self.quick_send("Osci2T.Run", &[], &[], &[])?;
+        Ok(())
+    }
+
+    /// Get the graph data from the Oscilloscope 2-Channels
+    /// data_to_get: 0 = Current, 1 = Next trigger, 2 = Wait 2 triggers
+    /// Returns: (t0, dt, channel_a_data, channel_b_data)
+    pub fn osci2t_data_get(
+        &mut self,
+        data_to_get: u16,
+    ) -> Result<(f64, f64, Vec<f64>, Vec<f64>), NanonisError> {
+        let result = self.quick_send(
+            "Osci2T.DataGet",
+            &[NanonisValue::U16(data_to_get)],
+            &["H"],
+            &["d", "d", "i", "*d", "i", "*d"],
+        )?;
+
+        if result.len() >= 6 {
+            let t0 = result[0].as_f64()?;
+            let dt = result[1].as_f64()?;
+            let channel_a_data = result[3].as_f64_array()?.to_vec();
+            let channel_b_data = result[5].as_f64_array()?.to_vec();
+            Ok((t0, dt, channel_a_data, channel_b_data))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid oscilloscope 2T data response".to_string(),
+            ))
+        }
     }
 }
