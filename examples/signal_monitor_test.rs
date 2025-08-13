@@ -1,4 +1,4 @@
-use nanonis_rust::{JsonDiskWriter, MachineState, SyncSignalMonitor};
+use rusty_tip::{JsonDiskWriter, MachineState, SyncSignalMonitor};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 

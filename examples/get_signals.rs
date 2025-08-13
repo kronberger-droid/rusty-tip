@@ -1,4 +1,4 @@
-use nanonis_rust::NanonisClient;
+use rusty_tip::NanonisClient;
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {

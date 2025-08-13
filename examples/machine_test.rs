@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use nanonis_rust::{BiasVoltage, NanonisClient};
+use rusty_tip::{BiasVoltage, NanonisClient};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut client = NanonisClient::builder()
