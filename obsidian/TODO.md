@@ -3,3 +3,8 @@
 - Create System Diagram of the project using obsidian.
 - Test Osciloscope
 - 
+## Data Logger
+### Saving freq
+- Sample rate 2kHz -> logs every ~15s
+- Sample rate 400Hz -> logs every ~60s
+- 
