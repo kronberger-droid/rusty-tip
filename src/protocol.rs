@@ -150,6 +150,32 @@ impl Protocol {
                     NanonisValue::ArrayF64(arr)
                 }
 
+                t if t.contains("*i") => {
+                    let len = if t.starts_with("+") {
+                        cursor.read_u32::<BigEndian>()? as usize
+                    } else if let Some(prev_val) = result.last() {
+                        match prev_val {
+                            NanonisValue::U32(len) => *len as usize,
+                            NanonisValue::I32(len) => *len as usize,
+                            _ => {
+                                return Err(NanonisError::Protocol(
+                                    "Array length not found".to_string(),
+                                ))
+                            }
+                        }
+                    } else {
+                        return Err(NanonisError::Protocol(
+                            "Array length not specified".to_string(),
+                        ));
+                    };
+
+                    let mut arr = Vec::with_capacity(len);
+                    for _ in 0..len {
+                        arr.push(cursor.read_i32::<BigEndian>()?);
+                    }
+                    NanonisValue::ArrayI32(arr)
+                }
+
                 // Handle string arrays with prepended length
                 "+*c" => {
                     // First read total byte size (we don't use this, but it's in the protocol)

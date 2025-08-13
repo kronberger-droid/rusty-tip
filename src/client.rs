@@ -1396,6 +1396,398 @@ impl NanonisClient {
         Ok(())
     }
 
+    // ==================== Scan Functions ====================
+
+    /// Start, stop, pause or resume a scan
+    /// scan_action: 0=Start, 1=Stop, 2=Pause, 3=Resume, 4=Freeze, 5=Unfreeze, 6=Go to Center
+    /// scan_direction: 1=Up, 0=Down
+    pub fn scan_action(
+        &mut self,
+        scan_action: u16,
+        scan_direction: u32,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "Scan.Action",
+            &[
+                NanonisValue::U16(scan_action),
+                NanonisValue::U32(scan_direction),
+            ],
+            &["H", "I"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get scan status (running or not)
+    /// Returns: true if scan is running, false if not running
+    pub fn scan_status_get(&mut self) -> Result<bool, NanonisError> {
+        let result = self.quick_send("Scan.StatusGet", &[], &[], &["I"])?;
+        match result.first() {
+            Some(value) => Ok(value.as_u32()? == 1),
+            None => Err(NanonisError::Protocol(
+                "No scan status returned".to_string(),
+            )),
+        }
+    }
+
+    /// Wait for the End-of-Scan
+    /// timeout_ms: timeout in milliseconds, use -1 for indefinite wait
+    /// Returns: (timeout_occurred, file_path)
+    pub fn scan_wait_end_of_scan(
+        &mut self,
+        timeout_ms: i32,
+    ) -> Result<(bool, String), NanonisError> {
+        let result = self.quick_send(
+            "Scan.WaitEndOfScan",
+            &[NanonisValue::I32(timeout_ms)],
+            &["i"],
+            &["I", "I", "*-c"],
+        )?;
+
+        if result.len() >= 3 {
+            let timeout_occurred = result[0].as_u32()? == 1;
+            let file_path = result[2].as_string()?.to_string();
+            Ok((timeout_occurred, file_path))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid scan wait response".to_string(),
+            ))
+        }
+    }
+
+    /// Configure the scan frame parameters
+    pub fn scan_frame_set(
+        &mut self,
+        center_x_m: f32,
+        center_y_m: f32,
+        width_m: f32,
+        height_m: f32,
+        angle_deg: f32,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "Scan.FrameSet",
+            &[
+                NanonisValue::F32(center_x_m),
+                NanonisValue::F32(center_y_m),
+                NanonisValue::F32(width_m),
+                NanonisValue::F32(height_m),
+                NanonisValue::F32(angle_deg),
+            ],
+            &["f", "f", "f", "f", "f"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the scan frame parameters
+    /// Returns: (center_x_m, center_y_m, width_m, height_m, angle_deg)
+    pub fn scan_frame_get(&mut self) -> Result<(f32, f32, f32, f32, f32), NanonisError> {
+        let result = self.quick_send("Scan.FrameGet", &[], &[], &["f", "f", "f", "f", "f"])?;
+        if result.len() >= 5 {
+            let center_x = result[0].as_f32()?;
+            let center_y = result[1].as_f32()?;
+            let width = result[2].as_f32()?;
+            let height = result[3].as_f32()?;
+            let angle = result[4].as_f32()?;
+            Ok((center_x, center_y, width, height, angle))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid scan frame response".to_string(),
+            ))
+        }
+    }
+
+    /// Configure the scan buffer parameters
+    /// channel_indexes: array of channel indexes (0-23) for recorded channels
+    /// pixels: number of pixels per line
+    /// lines: number of scan lines
+    pub fn scan_buffer_set(
+        &mut self,
+        channel_indexes: Vec<i32>,
+        pixels: i32,
+        lines: i32,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "Scan.BufferSet",
+            &[
+                NanonisValue::ArrayI32(channel_indexes),
+                NanonisValue::I32(pixels),
+                NanonisValue::I32(lines),
+            ],
+            &["+*i", "i", "i"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get the scan buffer parameters
+    /// Returns: (channel_indexes, pixels, lines)
+    pub fn scan_buffer_get(&mut self) -> Result<(Vec<i32>, i32, i32), NanonisError> {
+        let result = self.quick_send("Scan.BufferGet", &[], &[], &["i", "*i", "i", "i"])?;
+        if result.len() >= 4 {
+            let channel_indexes = result[1].as_i32_array()?.to_vec();
+            let pixels = result[2].as_i32()?;
+            let lines = result[3].as_i32()?;
+            Ok((channel_indexes, pixels, lines))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid scan buffer response".to_string(),
+            ))
+        }
+    }
+
+    /// Configure scan properties
+    /// continuous_scan: 0=no change, 1=On, 2=Off
+    /// bouncy_scan: 0=no change, 1=On, 2=Off  
+    /// autosave: 0=no change, 1=All, 2=Next, 3=Off
+    /// autopaste: 0=no change, 1=All, 2=Next, 3=Off
+    pub fn scan_props_set(
+        &mut self,
+        continuous_scan: u32,
+        bouncy_scan: u32,
+        autosave: u32,
+        series_name: &str,
+        comment: &str,
+        modules_names: Vec<String>,
+        autopaste: u32,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "Scan.PropsSet",
+            &[
+                NanonisValue::U32(continuous_scan),
+                NanonisValue::U32(bouncy_scan),
+                NanonisValue::U32(autosave),
+                NanonisValue::String(series_name.to_string()),
+                NanonisValue::String(comment.to_string()),
+                NanonisValue::ArrayString(modules_names),
+                NanonisValue::U32(autopaste),
+            ],
+            &["I", "I", "I", "+*c", "+*c", "+*c", "I"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get scan properties - simplified version for core properties
+    /// Returns: (continuous_scan, bouncy_scan, autosave, series_name, comment, autopaste)
+    /// Note: Full implementation with 2D parameters array would be more complex
+    pub fn scan_props_get(
+        &mut self,
+    ) -> Result<(u32, u32, u32, String, String, u32), NanonisError> {
+        let result = self.quick_send(
+            "Scan.PropsGet",
+            &[],
+            &[],
+            &["I", "I", "I", "i", "*-c", "i", "*-c", "i", "i", "*+c", "i", "*+i", "i", "i", "*+c", "I"],
+        )?;
+
+        if result.len() >= 16 {
+            let continuous_scan = result[0].as_u32()?;
+            let bouncy_scan = result[1].as_u32()?;
+            let autosave = result[2].as_u32()?;
+            let series_name = result[4].as_string()?.to_string();
+            let comment = result[6].as_string()?.to_string();
+            let autopaste = result[15].as_u32()?;
+
+            Ok((continuous_scan, bouncy_scan, autosave, series_name, comment, autopaste))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid scan properties response".to_string(),
+            ))
+        }
+    }
+
+    /// Configure scan speed parameters
+    pub fn scan_speed_set(
+        &mut self,
+        forward_linear_speed_m_s: f32,
+        backward_linear_speed_m_s: f32,
+        forward_time_per_line_s: f32,
+        backward_time_per_line_s: f32,
+        keep_parameter_constant: u16,
+        speed_ratio: f32,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "Scan.SpeedSet",
+            &[
+                NanonisValue::F32(forward_linear_speed_m_s),
+                NanonisValue::F32(backward_linear_speed_m_s),
+                NanonisValue::F32(forward_time_per_line_s),
+                NanonisValue::F32(backward_time_per_line_s),
+                NanonisValue::U16(keep_parameter_constant),
+                NanonisValue::F32(speed_ratio),
+            ],
+            &["f", "f", "f", "f", "H", "f"],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Get scan speed parameters
+    /// Returns: (forward_linear_speed_m_s, backward_linear_speed_m_s, forward_time_per_line_s, 
+    ///          backward_time_per_line_s, keep_parameter_constant, speed_ratio)
+    pub fn scan_speed_get(&mut self) -> Result<(f32, f32, f32, f32, u16, f32), NanonisError> {
+        let result = self.quick_send("Scan.SpeedGet", &[], &[], &["f", "f", "f", "f", "H", "f"])?;
+        if result.len() >= 6 {
+            let forward_speed = result[0].as_f32()?;
+            let backward_speed = result[1].as_f32()?;
+            let forward_time = result[2].as_f32()?;
+            let backward_time = result[3].as_f32()?;
+            let keep_param = result[4].as_u16()?;
+            let speed_ratio = result[5].as_f32()?;
+            Ok((
+                forward_speed,
+                backward_speed,
+                forward_time,
+                backward_time,
+                keep_param,
+                speed_ratio,
+            ))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid scan speed response".to_string(),
+            ))
+        }
+    }
+
+    /// Get scan frame data for the selected channel
+    /// channel_index: index of the channel to get data from
+    /// data_direction: 1=forward, 0=backward
+    /// Returns: (channel_name, rows, columns, scan_direction_up)
+    /// Note: 2D scan data array handling would require more complex parsing
+    pub fn scan_frame_data_grab(
+        &mut self,
+        channel_index: u32,
+        data_direction: u32,
+    ) -> Result<(String, i32, i32, bool), NanonisError> {
+        let result = self.quick_send(
+            "Scan.FrameDataGrab",
+            &[
+                NanonisValue::U32(channel_index),
+                NanonisValue::U32(data_direction),
+            ],
+            &["I", "I"],
+            &["i", "*-c", "i", "i", "2f", "I"],
+        )?;
+
+        if result.len() >= 6 {
+            let channel_name = result[1].as_string()?.to_string();
+            let rows = result[2].as_i32()?;
+            let columns = result[3].as_i32()?;
+            let scan_direction_up = result[5].as_u32()? == 1;
+
+            Ok((channel_name, rows, columns, scan_direction_up))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid scan frame data response".to_string(),
+            ))
+        }
+    }
+
+    /// Get current scan X,Y position
+    /// wait_newest_data: if true, waits for fresh data
+    /// Returns: (x_m, y_m)
+    pub fn scan_xy_pos_get(&mut self, wait_newest_data: bool) -> Result<(f32, f32), NanonisError> {
+        let wait_flag = if wait_newest_data { 1u32 } else { 0u32 };
+        let result = self.quick_send(
+            "Scan.XYPosGet",
+            &[NanonisValue::U32(wait_flag)],
+            &["I"],
+            &["f", "f"],
+        )?;
+
+        if result.len() >= 2 {
+            let x = result[0].as_f32()?;
+            let y = result[1].as_f32()?;
+            Ok((x, y))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid scan XY position response".to_string(),
+            ))
+        }
+    }
+
+    /// Save current scan data to file
+    /// wait_until_saved: if true, waits for save completion
+    /// timeout_ms: timeout in milliseconds, -1 for indefinite
+    /// Returns: true if timeout occurred
+    pub fn scan_save(
+        &mut self,
+        wait_until_saved: bool,
+        timeout_ms: i32,
+    ) -> Result<bool, NanonisError> {
+        let wait_flag = if wait_until_saved { 1u32 } else { 0u32 };
+        let result = self.quick_send(
+            "Scan.Save",
+            &[NanonisValue::U32(wait_flag), NanonisValue::I32(timeout_ms)],
+            &["I", "i"],
+            &["I"],
+        )?;
+
+        match result.first() {
+            Some(value) => Ok(value.as_u32()? == 1),
+            None => Err(NanonisError::Protocol(
+                "No scan save status returned".to_string(),
+            )),
+        }
+    }
+
+    /// Paste current scan data to background
+    /// wait_until_pasted: if true, waits for paste completion
+    /// timeout_ms: timeout in milliseconds, -1 for indefinite
+    /// Returns: true if timeout occurred
+    pub fn scan_background_paste(
+        &mut self,
+        wait_until_pasted: bool,
+        timeout_ms: i32,
+    ) -> Result<bool, NanonisError> {
+        let wait_flag = if wait_until_pasted { 1u32 } else { 0u32 };
+        let result = self.quick_send(
+            "Scan.BackgroundPaste",
+            &[NanonisValue::U32(wait_flag), NanonisValue::I32(timeout_ms)],
+            &["I", "i"],
+            &["I"],
+        )?;
+
+        match result.first() {
+            Some(value) => Ok(value.as_u32()? == 1),
+            None => Err(NanonisError::Protocol(
+                "No scan paste status returned".to_string(),
+            )),
+        }
+    }
+
+    /// Delete background data
+    /// wait_until_deleted: if true, waits for deletion completion
+    /// timeout_ms: timeout in milliseconds, -1 for indefinite
+    /// which_background: 0=latest background, 1=all backgrounds
+    /// Returns: true if timeout occurred
+    pub fn scan_background_delete(
+        &mut self,
+        wait_until_deleted: bool,
+        timeout_ms: i32,
+        which_background: u32,
+    ) -> Result<bool, NanonisError> {
+        let wait_flag = if wait_until_deleted { 1u32 } else { 0u32 };
+        let result = self.quick_send(
+            "Scan.BackgroundDelete",
+            &[
+                NanonisValue::U32(wait_flag),
+                NanonisValue::I32(timeout_ms),
+                NanonisValue::U32(which_background),
+            ],
+            &["I", "i", "I"],
+            &["I"],
+        )?;
+
+        match result.first() {
+            Some(value) => Ok(value.as_u32()? == 1),
+            None => Err(NanonisError::Protocol(
+                "No scan delete status returned".to_string(),
+            )),
+        }
+    }
+
     /// Get the Power Spectral Density data from the Oscilloscope High Resolution
     /// data_to_get: 0 = Current returns the currently displayed data, 1 = Next trigger waits for the next trigger
     /// Returns: (f0, df, psd_data, timeout_occurred)
