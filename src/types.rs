@@ -258,6 +258,26 @@ impl NanonisValue {
             ))),
         }
     }
+
+    /// Extract f64 array with type checking
+    pub fn as_f64_array(&self) -> Result<&[f64], NanonisError> {
+        match self {
+            NanonisValue::ArrayF64(arr) => Ok(arr),
+            _ => Err(NanonisError::Type(format!(
+                "Expected f64 array, got {self:?}"
+            ))),
+        }
+    }
+
+    /// Extract string value with type checking
+    pub fn as_string(&self) -> Result<&str, NanonisError> {
+        match self {
+            NanonisValue::String(s) => Ok(s),
+            _ => Err(NanonisError::Type(format!(
+                "Expected string, got {self:?}"
+            ))),
+        }
+    }
 }
 
 /// Type-safe wrappers for common Nanonis values
