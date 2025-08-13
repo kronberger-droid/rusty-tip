@@ -269,6 +269,16 @@ impl NanonisValue {
         }
     }
 
+    /// Extract i32 array with type checking
+    pub fn as_i32_array(&self) -> Result<&[i32], NanonisError> {
+        match self {
+            NanonisValue::ArrayI32(arr) => Ok(arr),
+            _ => Err(NanonisError::Type(format!(
+                "Expected i32 array, got {self:?}"
+            ))),
+        }
+    }
+
     /// Extract string value with type checking
     pub fn as_string(&self) -> Result<&str, NanonisError> {
         match self {
