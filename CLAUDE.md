@@ -14,6 +14,8 @@ cargo run --example real_time_boundary_monitor
 cargo run --example machine_test
 cargo run --example get_signals
 cargo run --example signal_monitor_test
+cargo run --example signal_timing_benchmark
+cargo run --example signal_timing_oscilloscope
 
 # Run tests
 cargo test
