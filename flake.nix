@@ -1,5 +1,5 @@
 {
-  description = "Nanonis Rust library development shell";
+  description = "Rust development shell";
 
   inputs = {
     nixpkgs.url      = "github:NixOS/nixpkgs/nixos-unstable";
@@ -22,7 +22,7 @@
         rustAnalyzer    = fenix.packages.${system}.latest.rust-analyzer;
       in {
         devShells.dev = pkgs.mkShell {
-          name = "nanonis rust dev shell (bash)";
+          name = "rust dev shell (with setup)";
 
           buildInputs = with pkgs; lib.flatten [
             # rust tools
@@ -31,7 +31,7 @@
             cargo-expand
             rusty-man
 
-            # build and runtime dependencies
+            # Add additional dependencies here as needed
           ];
 
           shellHook = ''
@@ -46,7 +46,7 @@
         };
         
         devShells.default = pkgs.mkShell {
-          name = "basic rust dev shell";
+          name = "rust dev shell";
 
           buildInputs = with pkgs; lib.flatten [
             # rust tools
@@ -55,7 +55,7 @@
             cargo-expand
             rusty-man
 
-            # build and runtime dependencies
+            # Add additional dependencies here as needed
           ];
 
           shellHook = ''
@@ -67,7 +67,23 @@
             export RUSTUP_HOME="$HOME/.rustup"
             mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
 
-            exec nu --login
+            # Dev setup - creates split terminal layout
+            swaymsg layout splith
+            
+            swaymsg layout stacking
+            
+            swaymsg exec "kitty --working-directory=$(pwd) -e bash -c 'nix develop .#dev --command bash -c \"clear && nu --login\"'"
+            sleep 0.5
+            
+            swaymsg focus parent
+            
+            swaymsg exec "kitty --working-directory=$(pwd) -e bash -c 'nix develop .#dev --command bash -c \"clear && claude\"'"
+            sleep 0.5
+
+            swaymsg layout stacking
+            
+            swaymsg focus left
+            nix develop .#dev --command hx
           '';
         };
       }
