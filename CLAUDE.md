@@ -16,6 +16,9 @@ cargo run --example get_signals
 cargo run --example signal_monitor_test
 cargo run --example signal_timing_benchmark
 cargo run --example signal_timing_oscilloscope
+cargo run --example two_osci_instances_test
+cargo run --example oscilloscope_comparison
+cargo run --example two_osci2t_instances_test
 
 # Run tests
 cargo test

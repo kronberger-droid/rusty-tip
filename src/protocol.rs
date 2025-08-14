@@ -195,6 +195,27 @@ impl Protocol {
                     NanonisValue::ArrayString(strings)
                 }
 
+                // Handle dynamic strings (*-c) where length comes from previous variable
+                "*-c" => {
+                    // Get string length from previous variable (should be an integer)
+                    let string_length = match result.last() {
+                        Some(NanonisValue::I32(len)) => *len as usize,
+                        Some(NanonisValue::U32(len)) => *len as usize,
+                        _ => {
+                            return Err(NanonisError::Protocol(
+                                "String length not found for *-c type".to_string(),
+                            ))
+                        }
+                    };
+
+                    // Read string bytes
+                    let mut string_bytes = vec![0u8; string_length];
+                    cursor.read_exact(&mut string_bytes)?;
+                    let string = String::from_utf8_lossy(&string_bytes).to_string();
+
+                    NanonisValue::String(string)
+                }
+
                 _ => {
                     return Err(NanonisError::Type(format!(
                         "Unsupported response type: {response_type}"
