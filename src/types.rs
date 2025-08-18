@@ -288,6 +288,16 @@ impl NanonisValue {
             ))),
         }
     }
+
+    /// Extract 2D f32 array with type checking
+    pub fn as_f32_2d_array(&self) -> Result<&Vec<Vec<f32>>, NanonisError> {
+        match self {
+            NanonisValue::Array2DF32(arr) => Ok(arr),
+            _ => Err(NanonisError::Type(format!(
+                "Expected 2D f32 array, got {self:?}"
+            ))),
+        }
+    }
 }
 
 /// Type-safe wrappers for common Nanonis values
