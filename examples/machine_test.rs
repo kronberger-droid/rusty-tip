@@ -17,7 +17,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("{bias}");
 
-    let scan_buff_conf = client.scan_buffer_get()?;
+    let buffer_conf = client.scan_buffer_get();
+
+    println!("{buffer_conf:?}");
+
+    // let scan_frame = client.scan_frame_data_grab()?;
 
     println!("{scan_buff_conf:?}");
 
