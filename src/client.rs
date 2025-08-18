@@ -1653,13 +1653,12 @@ impl NanonisClient {
     /// Get scan frame data for the selected channel
     /// channel_index: index of the channel to get data from
     /// data_direction: 1=forward, 0=backward
-    /// Returns: (channel_name, rows, columns, scan_direction_up)
-    /// Note: 2D scan data array handling would require more complex parsing
+    /// Returns: (channel_name, rows, columns, scan_data, scan_direction_up)
     pub fn scan_frame_data_grab(
         &mut self,
         channel_index: u32,
         data_direction: u32,
-    ) -> Result<(String, i32, i32, bool), NanonisError> {
+    ) -> Result<(String, i32, i32, Vec<Vec<f32>>, bool), NanonisError> {
         let result = self.quick_send(
             "Scan.FrameDataGrab",
             &[
@@ -1674,9 +1673,18 @@ impl NanonisClient {
             let channel_name = result[1].as_string()?.to_string();
             let rows = result[2].as_i32()?;
             let columns = result[3].as_i32()?;
+            
+            // Extract the 2D scan data from result[4]
+            let scan_data = if let Ok(data_2d) = result[4].as_f32_2d_array() {
+                data_2d.clone()
+            } else {
+                // If 2D array parsing fails, create empty array with correct dimensions
+                vec![vec![0.0; columns as usize]; rows as usize]
+            };
+            
             let scan_direction_up = result[5].as_u32()? == 1;
 
-            Ok((channel_name, rows, columns, scan_direction_up))
+            Ok((channel_name, rows, columns, scan_data, scan_direction_up))
         } else {
             Err(NanonisError::Protocol(
                 "Invalid scan frame data response".to_string(),

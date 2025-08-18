@@ -216,6 +216,42 @@ impl Protocol {
                     NanonisValue::String(string)
                 }
 
+                "2f" => {
+                    // 2D float array - dimensions should be in the two preceding i32 values
+                    if result.len() < 2 {
+                        return Err(NanonisError::Protocol(
+                            "2D array dimensions not found".to_string(),
+                        ));
+                    }
+                    
+                    let rows = match result[result.len() - 2] {
+                        NanonisValue::I32(r) => r as usize,
+                        _ => return Err(NanonisError::Protocol(
+                            "Invalid row count for 2D array".to_string(),
+                        )),
+                    };
+                    
+                    let cols = match result[result.len() - 1] {
+                        NanonisValue::I32(c) => c as usize,
+                        _ => return Err(NanonisError::Protocol(
+                            "Invalid column count for 2D array".to_string(),
+                        )),
+                    };
+                    
+                    // Read the flat array data
+                    let mut data_2d = Vec::with_capacity(rows);
+                    
+                    for _ in 0..rows {
+                        let mut row_data = Vec::with_capacity(cols);
+                        for _ in 0..cols {
+                            row_data.push(cursor.read_f32::<BigEndian>()?);
+                        }
+                        data_2d.push(row_data);
+                    }
+                    
+                    NanonisValue::Array2DF32(data_2d)
+                }
+
                 _ => {
                     return Err(NanonisError::Type(format!(
                         "Unsupported response type: {response_type}"
