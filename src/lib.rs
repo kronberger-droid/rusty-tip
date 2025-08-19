@@ -19,4 +19,9 @@ pub use signal_monitor::{
     SyncSignalMonitor, DiskWriter, DiskWriterConfig, DiskWriterConfigBuilder, DiskWriterFormat, 
     JsonDiskWriter, JsonDiskWriterBuilder, MonitorStats, SignalReceiver,
 };
-pub use types::{BiasVoltage, MachineState, NanonisValue, Position, SessionMetadata};
+pub use types::{
+    Amplitude, BiasVoltage, ChannelIndex, Frequency, MachineState, MotorAxis, MotorDirection,
+    MotorGroup, MovementMode, NanonisValue, OscilloscopeIndex, Position, Position3D,
+    SampleCount, ScanAction, ScanDirection, ScanFrame, SessionMetadata, SignalIndex, StepCount,
+    TimeoutMs, TriggerLevel, TriggerMode, TriggerSlope,
+};

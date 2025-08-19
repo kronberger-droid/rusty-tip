@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::classifier::TipState;
 use crate::error::NanonisError;
 use std::collections::VecDeque;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub enum NanonisValue {
@@ -313,6 +314,546 @@ pub struct Position {
 impl Position {
     pub fn new(x: f64, y: f64) -> Self {
         Self { x, y }
+    }
+}
+
+/// Signal and Channel Types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignalIndex(pub i32);
+
+impl SignalIndex {
+    pub fn new(index: i32) -> Result<Self, crate::error::NanonisError> {
+        if (0..=127).contains(&index) {
+            Ok(SignalIndex(index))
+        } else {
+            Err(crate::error::NanonisError::InvalidCommand(
+                format!("Signal index must be 0-127, got {}", index)
+            ))
+        }
+    }
+}
+
+impl From<SignalIndex> for i32 {
+    fn from(signal: SignalIndex) -> Self {
+        signal.0
+    }
+}
+
+impl From<i32> for SignalIndex {
+    fn from(index: i32) -> Self {
+        SignalIndex(index)
+    }
+}
+
+impl From<usize> for SignalIndex {
+    fn from(index: usize) -> Self {
+        SignalIndex(index as i32)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChannelIndex(pub i32);
+
+impl ChannelIndex {
+    pub fn new(index: i32) -> Result<Self, crate::error::NanonisError> {
+        if (0..=23).contains(&index) {
+            Ok(ChannelIndex(index))
+        } else {
+            Err(crate::error::NanonisError::InvalidCommand(
+                format!("Channel index must be 0-23, got {}", index)
+            ))
+        }
+    }
+}
+
+impl From<ChannelIndex> for i32 {
+    fn from(channel: ChannelIndex) -> Self {
+        channel.0
+    }
+}
+
+impl From<i32> for ChannelIndex {
+    fn from(index: i32) -> Self {
+        ChannelIndex(index)
+    }
+}
+
+impl From<usize> for ChannelIndex {
+    fn from(index: usize) -> Self {
+        ChannelIndex(index as i32)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OscilloscopeIndex(pub i32);
+
+impl From<OscilloscopeIndex> for i32 {
+    fn from(osci: OscilloscopeIndex) -> Self {
+        osci.0
+    }
+}
+
+impl From<i32> for OscilloscopeIndex {
+    fn from(index: i32) -> Self {
+        OscilloscopeIndex(index)
+    }
+}
+
+impl From<usize> for OscilloscopeIndex {
+    fn from(index: usize) -> Self {
+        OscilloscopeIndex(index as i32)
+    }
+}
+
+/// Motor Control Types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotorDirection {
+    XPlus = 0,
+    XMinus = 1,
+    YPlus = 2,
+    YMinus = 3,
+    ZPlus = 4,
+    ZMinus = 5,
+}
+
+impl From<MotorDirection> for u32 {
+    fn from(direction: MotorDirection) -> Self {
+        direction as u32
+    }
+}
+
+impl TryFrom<u32> for MotorDirection {
+    type Error = crate::error::NanonisError;
+    
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(MotorDirection::XPlus),
+            1 => Ok(MotorDirection::XMinus),
+            2 => Ok(MotorDirection::YPlus),
+            3 => Ok(MotorDirection::YMinus),
+            4 => Ok(MotorDirection::ZPlus),
+            5 => Ok(MotorDirection::ZMinus),
+            _ => Err(crate::error::NanonisError::InvalidCommand(
+                format!("Invalid motor direction: {}", value)
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotorGroup {
+    Group1 = 0,
+    Group2 = 1,
+    Group3 = 2,
+    Group4 = 3,
+    Group5 = 4,
+    Group6 = 5,
+}
+
+impl From<MotorGroup> for u32 {
+    fn from(group: MotorGroup) -> Self {
+        group as u32
+    }
+}
+
+impl TryFrom<u32> for MotorGroup {
+    type Error = crate::error::NanonisError;
+    
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(MotorGroup::Group1),
+            1 => Ok(MotorGroup::Group2),
+            2 => Ok(MotorGroup::Group3),
+            3 => Ok(MotorGroup::Group4),
+            4 => Ok(MotorGroup::Group5),
+            5 => Ok(MotorGroup::Group6),
+            _ => Err(crate::error::NanonisError::InvalidCommand(
+                format!("Invalid motor group: {}", value)
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct StepCount(pub u16);
+
+impl From<StepCount> for u16 {
+    fn from(steps: StepCount) -> Self {
+        steps.0
+    }
+}
+
+impl From<u16> for StepCount {
+    fn from(steps: u16) -> Self {
+        StepCount(steps)
+    }
+}
+
+impl From<u32> for StepCount {
+    fn from(steps: u32) -> Self {
+        StepCount(steps as u16)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Frequency(pub f32);
+
+impl Frequency {
+    pub fn hz(value: f32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Frequency> for f32 {
+    fn from(freq: Frequency) -> Self {
+        freq.0
+    }
+}
+
+impl From<f32> for Frequency {
+    fn from(freq: f32) -> Self {
+        Frequency(freq)
+    }
+}
+
+impl From<f64> for Frequency {
+    fn from(freq: f64) -> Self {
+        Frequency(freq as f32)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Amplitude(pub f32);
+
+impl Amplitude {
+    pub fn volts(value: f32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Amplitude> for f32 {
+    fn from(amp: Amplitude) -> Self {
+        amp.0
+    }
+}
+
+impl From<f32> for Amplitude {
+    fn from(amp: f32) -> Self {
+        Amplitude(amp)
+    }
+}
+
+impl From<f64> for Amplitude {
+    fn from(amp: f64) -> Self {
+        Amplitude(amp as f32)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotorAxis {
+    All = 0,
+    X = 1,
+    Y = 2,
+    Z = 3,
+}
+
+impl From<MotorAxis> for u16 {
+    fn from(axis: MotorAxis) -> Self {
+        axis as u16
+    }
+}
+
+// From implementations for common integer types for convenience
+impl From<u16> for MotorAxis {
+    fn from(value: u16) -> Self {
+        match value {
+            0 => MotorAxis::All,
+            1 => MotorAxis::X,
+            2 => MotorAxis::Y,
+            3 => MotorAxis::Z,
+            _ => MotorAxis::All, // Default fallback
+        }
+    }
+}
+
+impl From<i32> for MotorAxis {
+    fn from(value: i32) -> Self {
+        MotorAxis::from(value as u16)
+    }
+}
+
+/// Position Extensions
+#[derive(Debug, Clone, Copy)]
+pub struct Position3D {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+impl Position3D {
+    pub fn new(x: f64, y: f64, z: f64) -> Self {
+        Self { x, y, z }
+    }
+    
+    pub fn meters(x: f64, y: f64, z: f64) -> Self {
+        Self::new(x, y, z)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MovementMode {
+    Relative = 0,
+    Absolute = 1,
+}
+
+impl From<MovementMode> for u32 {
+    fn from(mode: MovementMode) -> Self {
+        mode as u32
+    }
+}
+
+impl TryFrom<u32> for MovementMode {
+    type Error = crate::error::NanonisError;
+    
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(MovementMode::Relative),
+            1 => Ok(MovementMode::Absolute),
+            _ => Err(crate::error::NanonisError::InvalidCommand(
+                format!("Invalid movement mode: {}", value)
+            )),
+        }
+    }
+}
+
+/// Trigger and Timing Types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriggerMode {
+    Immediate = 0,
+    Level = 1,
+    Digital = 2,
+}
+
+impl From<TriggerMode> for u16 {
+    fn from(mode: TriggerMode) -> Self {
+        mode as u16
+    }
+}
+
+// From implementations for common integer types for convenience
+impl From<u16> for TriggerMode {
+    fn from(value: u16) -> Self {
+        match value {
+            0 => TriggerMode::Immediate,
+            1 => TriggerMode::Level,
+            2 => TriggerMode::Digital,
+            _ => TriggerMode::Immediate, // Default fallback
+        }
+    }
+}
+
+impl From<i32> for TriggerMode {
+    fn from(value: i32) -> Self {
+        TriggerMode::from(value as u16)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriggerSlope {
+    Falling = 0,
+    Rising = 1,
+}
+
+impl From<TriggerSlope> for u16 {
+    fn from(slope: TriggerSlope) -> Self {
+        slope as u16
+    }
+}
+
+impl TryFrom<u16> for TriggerSlope {
+    type Error = crate::error::NanonisError;
+    
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(TriggerSlope::Falling),
+            1 => Ok(TriggerSlope::Rising),
+            _ => Err(crate::error::NanonisError::InvalidCommand(
+                format!("Invalid trigger slope: {}", value)
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TriggerLevel(pub f64);
+
+impl From<TriggerLevel> for f64 {
+    fn from(level: TriggerLevel) -> Self {
+        level.0
+    }
+}
+
+impl From<f64> for TriggerLevel {
+    fn from(level: f64) -> Self {
+        TriggerLevel(level)
+    }
+}
+
+impl From<f32> for TriggerLevel {
+    fn from(level: f32) -> Self {
+        TriggerLevel(level as f64)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SampleCount(pub i32);
+
+impl SampleCount {
+    pub fn new(count: i32) -> Self {
+        Self(count)
+    }
+}
+
+impl From<SampleCount> for i32 {
+    fn from(samples: SampleCount) -> Self {
+        samples.0
+    }
+}
+
+impl From<i32> for SampleCount {
+    fn from(count: i32) -> Self {
+        SampleCount(count)
+    }
+}
+
+impl From<u32> for SampleCount {
+    fn from(count: u32) -> Self {
+        SampleCount(count as i32)
+    }
+}
+
+impl From<usize> for SampleCount {
+    fn from(count: usize) -> Self {
+        SampleCount(count as i32)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TimeoutMs(pub i32);
+
+impl TimeoutMs {
+    pub fn milliseconds(ms: i32) -> Self {
+        Self(ms)
+    }
+    
+    pub fn indefinite() -> Self {
+        Self(-1)
+    }
+}
+
+impl From<TimeoutMs> for i32 {
+    fn from(timeout: TimeoutMs) -> Self {
+        timeout.0
+    }
+}
+
+impl From<i32> for TimeoutMs {
+    fn from(timeout: i32) -> Self {
+        TimeoutMs(timeout)
+    }
+}
+
+impl From<u32> for TimeoutMs {
+    fn from(timeout: u32) -> Self {
+        TimeoutMs(timeout as i32)
+    }
+}
+
+impl From<Duration> for TimeoutMs {
+    fn from(duration: Duration) -> Self {
+        TimeoutMs(duration.as_millis() as i32)
+    }
+}
+
+/// Scan Types
+#[derive(Debug, Clone, Copy)]
+pub struct ScanFrame {
+    pub center: Position,
+    pub width_m: f32,
+    pub height_m: f32,
+    pub angle_deg: f32,
+}
+
+impl ScanFrame {
+    pub fn new(center: Position, width_m: f32, height_m: f32, angle_deg: f32) -> Self {
+        Self {
+            center,
+            width_m,
+            height_m,
+            angle_deg,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanAction {
+    Start = 0,
+    Stop = 1,
+    Pause = 2,
+    Resume = 3,
+    Freeze = 4,
+    Unfreeze = 5,
+    GoToCenter = 6,
+}
+
+impl From<ScanAction> for u16 {
+    fn from(action: ScanAction) -> Self {
+        action as u16
+    }
+}
+
+impl TryFrom<u16> for ScanAction {
+    type Error = crate::error::NanonisError;
+    
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(ScanAction::Start),
+            1 => Ok(ScanAction::Stop),
+            2 => Ok(ScanAction::Pause),
+            3 => Ok(ScanAction::Resume),
+            4 => Ok(ScanAction::Freeze),
+            5 => Ok(ScanAction::Unfreeze),
+            6 => Ok(ScanAction::GoToCenter),
+            _ => Err(crate::error::NanonisError::InvalidCommand(
+                format!("Invalid scan action: {}", value)
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanDirection {
+    Down = 0,
+    Up = 1,
+}
+
+impl From<ScanDirection> for u32 {
+    fn from(direction: ScanDirection) -> Self {
+        direction as u32
+    }
+}
+
+impl TryFrom<u32> for ScanDirection {
+    type Error = crate::error::NanonisError;
+    
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(ScanDirection::Down),
+            1 => Ok(ScanDirection::Up),
+            _ => Err(crate::error::NanonisError::InvalidCommand(
+                format!("Invalid scan direction: {}", value)
+            )),
+        }
     }
 }
 

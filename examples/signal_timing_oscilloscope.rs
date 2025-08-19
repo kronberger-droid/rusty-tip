@@ -1,4 +1,4 @@
-use rusty_tip::NanonisClient;
+use rusty_tip::{NanonisClient, OscilloscopeIndex, SignalIndex, SampleCount, TriggerMode};
 use std::error::Error;
 use std::time::{Duration, Instant};
 
@@ -86,14 +86,14 @@ fn test_osci_hr_timing(client: &mut NanonisClient) -> Result<(), Box<dyn Error>>
     let osci_index = 0;
     let signal_index = 24; // Bias voltage
     
-    client.osci_hr_ch_set(osci_index, signal_index)?;
+    client.osci_hr_ch_set(OscilloscopeIndex(osci_index), SignalIndex(signal_index))?;
     
     // Set number of samples
     let samples = 1000;
-    client.osci_hr_samples_set(samples)?;
+    client.osci_hr_samples_set(SampleCount::new(samples))?;
     
     // Configure for immediate trigger mode
-    client.osci_hr_trig_mode_set(0)?; // 0 = Immediate
+    client.osci_hr_trig_mode_set(TriggerMode::Immediate)?;
     client.osci_hr_trig_arm_mode_set(1)?; // 1 = Continuous
     
     // Set oversampling for better precision
