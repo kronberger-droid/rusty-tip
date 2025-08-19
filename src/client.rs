@@ -1,6 +1,11 @@
 use crate::error::NanonisError;
 use crate::protocol::{Protocol, HEADER_SIZE, MAX_RETRY_COUNT};
-use crate::types::{BiasVoltage, NanonisValue, Position};
+use crate::types::{
+    Amplitude, BiasVoltage, Frequency, MotorAxis, MotorDirection, MotorGroup,
+    MovementMode, NanonisValue, OscilloscopeIndex, Position, Position3D, SampleCount,
+    ScanAction, ScanDirection, ScanFrame, SignalIndex, StepCount, TimeoutMs, TriggerLevel,
+    TriggerMode,
+};
 use log::{debug, trace, warn};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -489,10 +494,10 @@ impl NanonisClient {
     }
 
     /// Get calibration and offset of a signal by index
-    pub fn signals_calibr_get(&mut self, signal_index: i32) -> Result<(f32, f32), NanonisError> {
+    pub fn signals_calibr_get(&mut self, signal_index: SignalIndex) -> Result<(f32, f32), NanonisError> {
         let result = self.quick_send(
             "Signals.CalibrGet",
-            &[NanonisValue::I32(signal_index)],
+            &[NanonisValue::I32(signal_index.into())],
             &["i"],
             &["f", "f"],
         )?;
@@ -506,10 +511,10 @@ impl NanonisClient {
     }
 
     /// Get range limits of a signal by index
-    pub fn signals_range_get(&mut self, signal_index: i32) -> Result<(f32, f32), NanonisError> {
+    pub fn signals_range_get(&mut self, signal_index: SignalIndex) -> Result<(f32, f32), NanonisError> {
         let result = self.quick_send(
             "Signals.RangeGet",
-            &[NanonisValue::I32(signal_index)],
+            &[NanonisValue::I32(signal_index.into())],
             &["i"],
             &["f", "f"],
         )?;
@@ -554,13 +559,13 @@ impl NanonisClient {
     }
 
     /// Find signal index by name (case-insensitive)
-    pub fn find_signal_index(&mut self, signal_name: &str) -> Result<Option<usize>, NanonisError> {
+    pub fn find_signal_index(&mut self, signal_name: &str) -> Result<Option<SignalIndex>, NanonisError> {
         let signals = self.signal_names_get(false)?;
         let signal_name_lower = signal_name.to_lowercase();
 
         for (index, name) in signals.iter().enumerate() {
             if name.to_lowercase().contains(&signal_name_lower) {
-                return Ok(Some(index));
+                return Ok(Some(SignalIndex(index as i32)));
             }
         }
         Ok(None)
@@ -574,7 +579,7 @@ impl NanonisClient {
     ) -> Result<f32, NanonisError> {
         match self.find_signal_index(signal_name)? {
             Some(index) => {
-                let values = self.signals_val_get(vec![index as i32], wait_for_newest)?;
+                let values = self.signals_val_get(vec![index.into()], wait_for_newest)?;
                 values
                     .first()
                     .copied()
@@ -716,22 +721,20 @@ impl NanonisClient {
     // ==================== Motor Functions ====================
 
     /// Move the coarse positioning device (motor, piezo actuator)
-    /// Direction: 0=X+, 1=X-, 2=Y+, 3=Y-, 4=Z+, 5=Z-
-    /// Group: 0=Group1, 1=Group2, 2=Group3, 3=Group4, 4=Group5, 5=Group6
     pub fn motor_start_move(
         &mut self,
-        direction: u32,
-        number_of_steps: u16,
-        group: u32,
+        direction: impl Into<MotorDirection>,
+        number_of_steps: impl Into<StepCount>,
+        group: impl Into<MotorGroup>,
         wait_until_finished: bool,
     ) -> Result<(), NanonisError> {
         let wait_flag = if wait_until_finished { 1u32 } else { 0u32 };
         self.quick_send(
             "Motor.StartMove",
             &[
-                NanonisValue::U32(direction),
-                NanonisValue::U16(number_of_steps),
-                NanonisValue::U32(group),
+                NanonisValue::U32(direction.into().into()),
+                NanonisValue::U16(number_of_steps.into().into()),
+                NanonisValue::U32(group.into().into()),
                 NanonisValue::U32(wait_flag),
             ],
             &["I", "H", "I", "I"],
@@ -741,27 +744,23 @@ impl NanonisClient {
     }
 
     /// Move the coarse positioning device in closed loop
-    /// absolute_relative: 0=relative, 1=absolute movement
-    /// Group: 0=Group1, 1=Group2, 2=Group3, 3=Group4, 4=Group5, 5=Group6
     pub fn motor_start_closed_loop(
         &mut self,
-        absolute_relative: u32,
-        target_x_m: f64,
-        target_y_m: f64,
-        target_z_m: f64,
+        movement_mode: MovementMode,
+        target_position: Position3D,
         wait_until_finished: bool,
-        group: u32,
+        group: MotorGroup,
     ) -> Result<(), NanonisError> {
         let wait_flag = if wait_until_finished { 1u32 } else { 0u32 };
         self.quick_send(
             "Motor.StartClosedLoop",
             &[
-                NanonisValue::U32(absolute_relative),
-                NanonisValue::F64(target_x_m),
-                NanonisValue::F64(target_y_m),
-                NanonisValue::F64(target_z_m),
+                NanonisValue::U32(movement_mode.into()),
+                NanonisValue::F64(target_position.x),
+                NanonisValue::F64(target_position.y),
+                NanonisValue::F64(target_position.z),
                 NanonisValue::U32(wait_flag),
-                NanonisValue::U32(group),
+                NanonisValue::U32(group.into()),
             ],
             &["I", "d", "d", "d", "I", "I"],
             &[],
@@ -776,16 +775,14 @@ impl NanonisClient {
     }
 
     /// Get the positions of the motor control module
-    /// Group: 0=Group1, 1=Group2, 2=Group3, 3=Group4, 4=Group5, 5=Group6
-    /// timeout_ms: timeout in milliseconds (recommended: 500ms)
     pub fn motor_pos_get(
         &mut self,
-        group: u32,
-        timeout_ms: u32,
-    ) -> Result<(f64, f64, f64), NanonisError> {
+        group: MotorGroup,
+        timeout: TimeoutMs,
+    ) -> Result<Position3D, NanonisError> {
         let result = self.quick_send(
             "Motor.PosGet",
-            &[NanonisValue::U32(group), NanonisValue::U32(timeout_ms)],
+            &[NanonisValue::U32(group.into()), NanonisValue::U32(timeout.0 as u32)],
             &["I", "I"],
             &["d", "d", "d"],
         )?;
@@ -794,7 +791,7 @@ impl NanonisClient {
             let x = result[0].as_f64()?;
             let y = result[1].as_f64()?;
             let z = result[2].as_f64()?;
-            Ok((x, y, z))
+            Ok(Position3D::new(x, y, z))
         } else {
             Err(NanonisError::Protocol(
                 "Invalid motor position response".to_string(),
@@ -839,18 +836,17 @@ impl NanonisClient {
 
     /// Get frequency and amplitude of the motor control module
     /// Available only for PD5, PMD4, and Attocube ANC150 devices
-    /// axis: 0=Default, 1=X, 2=Y, 3=Z
-    pub fn motor_freq_amp_get(&mut self, axis: u16) -> Result<(f32, f32), NanonisError> {
+    pub fn motor_freq_amp_get(&mut self, axis: MotorAxis) -> Result<(Frequency, Amplitude), NanonisError> {
         let result = self.quick_send(
             "Motor.FreqAmpGet",
-            &[NanonisValue::U16(axis)],
+            &[NanonisValue::U16(axis.into())],
             &["H"],
             &["f", "f"],
         )?;
 
         if result.len() >= 2 {
-            let frequency = result[0].as_f32()?;
-            let amplitude = result[1].as_f32()?;
+            let frequency = Frequency::hz(result[0].as_f32()?);
+            let amplitude = Amplitude::volts(result[1].as_f32()?);
             Ok((frequency, amplitude))
         } else {
             Err(NanonisError::Protocol(
@@ -861,19 +857,18 @@ impl NanonisClient {
 
     /// Set frequency and amplitude of the motor control module
     /// Available only for PD5, PMD4, and Attocube ANC150 devices
-    /// axis: 0=All, 1=X, 2=Y, 3=Z
     pub fn motor_freq_amp_set(
         &mut self,
-        frequency_hz: f32,
-        amplitude_v: f32,
-        axis: u16,
+        frequency: impl Into<Frequency>,
+        amplitude: impl Into<Amplitude>,
+        axis: impl Into<MotorAxis>,
     ) -> Result<(), NanonisError> {
         self.quick_send(
             "Motor.FreqAmpSet",
             &[
-                NanonisValue::F32(frequency_hz),
-                NanonisValue::F32(amplitude_v),
-                NanonisValue::U16(axis),
+                NanonisValue::F32(frequency.into().into()),
+                NanonisValue::F32(amplitude.into().into()),
+                NanonisValue::U16(axis.into().into()),
             ],
             &["f", "f", "H"],
             &[],
@@ -886,14 +881,14 @@ impl NanonisClient {
     /// Set the measured signal index of the selected channel from the Oscilloscope High Resolution
     pub fn osci_hr_ch_set(
         &mut self,
-        osci_index: i32,
-        signal_index: i32,
+        osci_index: impl Into<OscilloscopeIndex>,
+        signal_index: impl Into<SignalIndex>,
     ) -> Result<(), NanonisError> {
         self.quick_send(
             "OsciHR.ChSet",
             &[
-                NanonisValue::I32(osci_index),
-                NanonisValue::I32(signal_index),
+                NanonisValue::I32(osci_index.into().into()),
+                NanonisValue::I32(signal_index.into().into()),
             ],
             &["i", "i"],
             &[],
@@ -902,15 +897,15 @@ impl NanonisClient {
     }
 
     /// Get the measured signal index of the selected channel from the Oscilloscope High Resolution
-    pub fn osci_hr_ch_get(&mut self, osci_index: i32) -> Result<i32, NanonisError> {
+    pub fn osci_hr_ch_get(&mut self, osci_index: impl Into<OscilloscopeIndex>) -> Result<SignalIndex, NanonisError> {
         let result = self.quick_send(
             "OsciHR.ChGet",
-            &[NanonisValue::I32(osci_index)],
+            &[NanonisValue::I32(osci_index.into().into())],
             &["i"],
             &["i"],
         )?;
         match result.first() {
-            Some(value) => Ok(value.as_i32()?),
+            Some(value) => Ok(SignalIndex(value.as_i32()?)),
             None => Err(NanonisError::Protocol(
                 "No signal index returned".to_string(),
             )),
@@ -976,10 +971,10 @@ impl NanonisClient {
     }
 
     /// Set the number of samples to acquire in the Oscilloscope High Resolution
-    pub fn osci_hr_samples_set(&mut self, number_of_samples: i32) -> Result<(), NanonisError> {
+    pub fn osci_hr_samples_set(&mut self, number_of_samples: impl Into<SampleCount>) -> Result<(), NanonisError> {
         self.quick_send(
             "OsciHR.SamplesSet",
-            &[NanonisValue::I32(number_of_samples)],
+            &[NanonisValue::I32(number_of_samples.into().into())],
             &["i"],
             &[],
         )?;
@@ -987,10 +982,10 @@ impl NanonisClient {
     }
 
     /// Get the number of samples to acquire in the Oscilloscope High Resolution
-    pub fn osci_hr_samples_get(&mut self) -> Result<i32, NanonisError> {
+    pub fn osci_hr_samples_get(&mut self) -> Result<SampleCount, NanonisError> {
         let result = self.quick_send("OsciHR.SamplesGet", &[], &[], &["i"])?;
         match result.first() {
-            Some(value) => Ok(value.as_i32()?),
+            Some(value) => Ok(SampleCount::new(value.as_i32()?)),
             None => Err(NanonisError::Protocol(
                 "No sample count returned".to_string(),
             )),
@@ -1066,11 +1061,10 @@ impl NanonisClient {
     }
 
     /// Set the trigger mode in the Oscilloscope High Resolution
-    /// trigger_mode: 0 = Immediate, 1 = Level, 2 = Digital
-    pub fn osci_hr_trig_mode_set(&mut self, trigger_mode: u16) -> Result<(), NanonisError> {
+    pub fn osci_hr_trig_mode_set(&mut self, trigger_mode: impl Into<TriggerMode>) -> Result<(), NanonisError> {
         self.quick_send(
             "OsciHR.TrigModeSet",
-            &[NanonisValue::U16(trigger_mode)],
+            &[NanonisValue::U16(trigger_mode.into().into())],
             &["H"],
             &[],
         )?;
@@ -1078,11 +1072,20 @@ impl NanonisClient {
     }
 
     /// Get the trigger mode in the Oscilloscope High Resolution
-    /// Returns: 0 = Immediate, 1 = Level, 2 = Digital
-    pub fn osci_hr_trig_mode_get(&mut self) -> Result<u16, NanonisError> {
+    pub fn osci_hr_trig_mode_get(&mut self) -> Result<TriggerMode, NanonisError> {
         let result = self.quick_send("OsciHR.TrigModeGet", &[], &[], &["H"])?;
         match result.first() {
-            Some(value) => Ok(value.as_u16()?),
+            Some(value) => {
+                let mode_val = value.as_u16()?;
+                match mode_val {
+                    0 => Ok(TriggerMode::Immediate),
+                    1 => Ok(TriggerMode::Level),
+                    2 => Ok(TriggerMode::Digital),
+                    _ => Err(NanonisError::Protocol(
+                        format!("Unknown trigger mode: {}", mode_val)
+                    )),
+                }
+            },
             None => Err(NanonisError::Protocol(
                 "No trigger mode returned".to_string(),
             )),
@@ -1117,11 +1120,11 @@ impl NanonisClient {
     /// Set the Level Trigger value in the Oscilloscope High Resolution
     pub fn osci_hr_trig_lev_val_set(
         &mut self,
-        level_trigger_value: f64,
+        level_trigger_value: impl Into<TriggerLevel>,
     ) -> Result<(), NanonisError> {
         self.quick_send(
             "OsciHR.TrigLevValSet",
-            &[NanonisValue::F64(level_trigger_value)],
+            &[NanonisValue::F64(level_trigger_value.into().into())],
             &["d"],
             &[],
         )?;
@@ -1129,10 +1132,10 @@ impl NanonisClient {
     }
 
     /// Get the Level Trigger value in the Oscilloscope High Resolution
-    pub fn osci_hr_trig_lev_val_get(&mut self) -> Result<f64, NanonisError> {
+    pub fn osci_hr_trig_lev_val_get(&mut self) -> Result<TriggerLevel, NanonisError> {
         let result = self.quick_send("OsciHR.TrigLevValGet", &[], &[], &["d"])?;
         match result.first() {
-            Some(value) => Ok(value.as_f64()?),
+            Some(value) => Ok(TriggerLevel(value.as_f64()?)),
             None => Err(NanonisError::Protocol(
                 "No level trigger value returned".to_string(),
             )),
@@ -1399,18 +1402,16 @@ impl NanonisClient {
     // ==================== Scan Functions ====================
 
     /// Start, stop, pause or resume a scan
-    /// scan_action: 0=Start, 1=Stop, 2=Pause, 3=Resume, 4=Freeze, 5=Unfreeze, 6=Go to Center
-    /// scan_direction: 1=Up, 0=Down
     pub fn scan_action(
         &mut self,
-        scan_action: u16,
-        scan_direction: u32,
+        scan_action: ScanAction,
+        scan_direction: ScanDirection,
     ) -> Result<(), NanonisError> {
         self.quick_send(
             "Scan.Action",
             &[
-                NanonisValue::U16(scan_action),
-                NanonisValue::U32(scan_direction),
+                NanonisValue::U16(scan_action.into()),
+                NanonisValue::U32(scan_direction.into()),
             ],
             &["H", "I"],
             &[],
@@ -1431,15 +1432,14 @@ impl NanonisClient {
     }
 
     /// Wait for the End-of-Scan
-    /// timeout_ms: timeout in milliseconds, use -1 for indefinite wait
     /// Returns: (timeout_occurred, file_path)
     pub fn scan_wait_end_of_scan(
         &mut self,
-        timeout_ms: i32,
+        timeout: TimeoutMs,
     ) -> Result<(bool, String), NanonisError> {
         let result = self.quick_send(
             "Scan.WaitEndOfScan",
-            &[NanonisValue::I32(timeout_ms)],
+            &[NanonisValue::I32(timeout.into())],
             &["i"],
             &["I", "I", "*-c"],
         )?;
@@ -1458,20 +1458,16 @@ impl NanonisClient {
     /// Configure the scan frame parameters
     pub fn scan_frame_set(
         &mut self,
-        center_x_m: f32,
-        center_y_m: f32,
-        width_m: f32,
-        height_m: f32,
-        angle_deg: f32,
+        frame: ScanFrame,
     ) -> Result<(), NanonisError> {
         self.quick_send(
             "Scan.FrameSet",
             &[
-                NanonisValue::F32(center_x_m),
-                NanonisValue::F32(center_y_m),
-                NanonisValue::F32(width_m),
-                NanonisValue::F32(height_m),
-                NanonisValue::F32(angle_deg),
+                NanonisValue::F32(frame.center.x as f32),
+                NanonisValue::F32(frame.center.y as f32),
+                NanonisValue::F32(frame.width_m),
+                NanonisValue::F32(frame.height_m),
+                NanonisValue::F32(frame.angle_deg),
             ],
             &["f", "f", "f", "f", "f"],
             &[],
@@ -1480,16 +1476,21 @@ impl NanonisClient {
     }
 
     /// Get the scan frame parameters
-    /// Returns: (center_x_m, center_y_m, width_m, height_m, angle_deg)
-    pub fn scan_frame_get(&mut self) -> Result<(f32, f32, f32, f32, f32), NanonisError> {
+    pub fn scan_frame_get(&mut self) -> Result<ScanFrame, NanonisError> {
         let result = self.quick_send("Scan.FrameGet", &[], &[], &["f", "f", "f", "f", "f"])?;
         if result.len() >= 5 {
-            let center_x = result[0].as_f32()?;
-            let center_y = result[1].as_f32()?;
+            let center_x = result[0].as_f32()? as f64;
+            let center_y = result[1].as_f32()? as f64;
             let width = result[2].as_f32()?;
             let height = result[3].as_f32()?;
             let angle = result[4].as_f32()?;
-            Ok((center_x, center_y, width, height, angle))
+            
+            Ok(ScanFrame::new(
+                Position::new(center_x, center_y),
+                width,
+                height,
+                angle,
+            ))
         } else {
             Err(NanonisError::Protocol(
                 "Invalid scan frame response".to_string(),

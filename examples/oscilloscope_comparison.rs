@@ -1,4 +1,4 @@
-use rusty_tip::NanonisClient;
+use rusty_tip::{NanonisClient, OscilloscopeIndex, SignalIndex, SampleCount, TriggerMode, TriggerLevel};
 use std::error::Error;
 use std::time::Duration;
 
@@ -127,18 +127,18 @@ fn test_osci_hr(client: &mut NanonisClient, signal_index: i32) -> Result<(), Box
                  config_name, samples, oversampl, trig_mode, arm_mode);
         
         // Configure OsciHR
-        client.osci_hr_ch_set(osci_index, signal_index)?;
-        client.osci_hr_samples_set(samples)?;
+        client.osci_hr_ch_set(OscilloscopeIndex(osci_index), SignalIndex(signal_index))?;
+        client.osci_hr_samples_set(SampleCount::new(samples))?;
         client.osci_hr_oversampl_set(oversampl)?;
-        client.osci_hr_trig_mode_set(trig_mode)?;
+        client.osci_hr_trig_mode_set(match trig_mode { 0 => TriggerMode::Immediate, 1 => TriggerMode::Level, _ => TriggerMode::Digital })?;
         client.osci_hr_trig_arm_mode_set(arm_mode)?;
-        client.osci_hr_calibr_mode_set(osci_index, 1)?; // Calibrated values
+        client.osci_hr_calibr_mode_set(OscilloscopeIndex(osci_index).into(), 1)?; // Calibrated values
         client.osci_hr_pre_trig_set(0, 0.0)?; // No pre-trigger
         
         // If level trigger, set trigger parameters
         if trig_mode == 1 {
             client.osci_hr_trig_lev_ch_set(signal_index)?; // Trigger on same signal
-            client.osci_hr_trig_lev_val_set(0.0)?; // Trigger level 0V
+            client.osci_hr_trig_lev_val_set(TriggerLevel(0.0))?; // Trigger level 0V
             client.osci_hr_trig_lev_hyst_set(0.1)?; // Hysteresis 0.1V
             client.osci_hr_trig_lev_slope_set(0)?; // Rising edge
         }
