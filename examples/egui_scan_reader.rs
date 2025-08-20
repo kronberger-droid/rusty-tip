@@ -1,10 +1,9 @@
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
 
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotPoints};
-use rusty_tip::{NanonisClient, NanonisError};
+use egui_plot::{Line, Plot, PlotPoints, PlotPoint};
+use rusty_tip::NanonisClient;
 
 struct ScanReaderApp {
     client: Arc<Mutex<Option<NanonisClient>>>,
@@ -38,7 +37,7 @@ impl Default for ScanReaderApp {
 
 impl ScanReaderApp {
     fn connect(&mut self) {
-        match NanonisClient::new(&self.address) {
+        match NanonisClient::new("127.0.0.1", 6501) {
             Ok(client) => {
                 *self.client.lock().unwrap() = Some(client);
                 self.connected = true;
@@ -83,7 +82,7 @@ impl ScanReaderApp {
                     }
                 }
             }
-        }
+        };
     }
 
     fn get_heatmap_data(&self) -> Vec<[f64; 3]> {
@@ -176,39 +175,78 @@ impl eframe::App for ScanReaderApp {
 
             ui.separator();
 
-            // Simple 2D visualization using a plot
-            ui.heading("Scan Data Visualization");
+            // Heatmap visualization
+            ui.heading("Scan Data Heatmap");
             
-            let plot = Plot::new("scan_plot")
-                .view_aspect(1.0)
-                .auto_bounds_x()
-                .auto_bounds_y()
-                .show_axes([true, true]);
-
-            plot.show(ui, |plot_ui| {
-                // Show scan data as scattered points with color based on value
-                let heatmap_points = self.get_heatmap_data();
+            if !self.scan_data.is_empty() {
+                let rows = self.scan_data.len();
+                let cols = self.scan_data[0].len();
                 
-                if !heatmap_points.is_empty() {
-                    // Find min/max values for color scaling
-                    let (min_val, max_val) = heatmap_points.iter()
-                        .map(|point| point[2])
-                        .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), val| {
-                            (min.min(val), max.max(val))
-                        });
-                    
-                    // Create colored points
-                    let points: PlotPoints = heatmap_points.iter()
-                        .map(|point| [point[0], point[1]])
-                        .collect();
-                    
-                    let line = Line::new(points)
-                        .color(egui::Color32::from_rgb(100, 150, 255))
-                        .name("Scan Data");
-                    
-                    plot_ui.line(line);
+                // Find min/max values for color scaling
+                let mut min_val = f32::INFINITY;
+                let mut max_val = f32::NEG_INFINITY;
+                
+                for row in &self.scan_data {
+                    for &value in row {
+                        min_val = min_val.min(value);
+                        max_val = max_val.max(value);
+                    }
                 }
-            });
+                
+                let value_range = max_val - min_val;
+                
+                // Create image data
+                let mut image_data = Vec::new();
+                for row in &self.scan_data {
+                    for &value in row {
+                        // Normalize value to 0-1 range
+                        let normalized = if value_range > 0.0 {
+                            (value - min_val) / value_range
+                        } else {
+                            0.5
+                        };
+                        
+                        // Create color based on value (blue to red gradient)
+                        let color = if normalized < 0.5 {
+                            // Blue to cyan
+                            let t = normalized * 2.0;
+                            [0, (t * 255.0) as u8, 255]
+                        } else {
+                            // Cyan to red
+                            let t = (normalized - 0.5) * 2.0;
+                            [(t * 255.0) as u8, 255 - (t * 255.0) as u8, 255 - (t * 255.0) as u8]
+                        };
+                        
+                        image_data.extend_from_slice(&color);
+                    }
+                }
+                
+                // Create texture from image data
+                let color_image = egui::ColorImage::from_rgb([cols, rows], &image_data);
+                let texture_handle = ui.ctx().load_texture("heatmap", color_image, egui::TextureOptions::NEAREST);
+                
+                // Display the heatmap image
+                let available_size = ui.available_size();
+                let aspect_ratio = cols as f32 / rows as f32;
+                let image_size = if available_size.x / aspect_ratio < available_size.y {
+                    egui::Vec2::new(available_size.x * 0.8, available_size.x * 0.8 / aspect_ratio)
+                } else {
+                    egui::Vec2::new(available_size.y * 0.8 * aspect_ratio, available_size.y * 0.8)
+                };
+                
+                ui.add(egui::Image::from_texture(&texture_handle).fit_to_exact_size(image_size));
+                
+                // Show color scale info
+                ui.horizontal(|ui| {
+                    ui.label(format!("Min: {:.6}", min_val));
+                    ui.separator();
+                    ui.label(format!("Max: {:.6}", max_val));
+                    ui.separator();
+                    ui.label("🔵 Low → 🔴 High");
+                });
+            } else {
+                ui.label("No scan data available for heatmap visualization.");
+            }
 
             // Show a line profile for the middle row
             if !self.scan_data.is_empty() {
@@ -221,8 +259,7 @@ impl eframe::App for ScanReaderApp {
                 if !profile_data.is_empty() {
                     let plot = Plot::new("line_profile")
                         .height(200.0)
-                        .auto_bounds_x()
-                        .auto_bounds_y();
+                        .auto_bounds([true, true]);
                     
                     plot.show(ui, |plot_ui| {
                         let line = Line::new(PlotPoints::new(profile_data))
@@ -241,9 +278,7 @@ fn main() -> eframe::Result<()> {
     env_logger::init();
     
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1200.0, 800.0])
-            .with_title("Nanonis Scan Data Reader"),
+        viewport: eframe::egui::ViewportBuilder::default().with_inner_size([800.0, 600.0]),
         ..Default::default()
     };
     
