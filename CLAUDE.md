@@ -21,8 +21,8 @@ cargo run --example oscilloscope_comparison
 cargo run --example two_osci2t_instances_test
 cargo run --example simple_dual_client_test
 cargo run --example osci_continuity_analysis  # Comprehensive analysis of oscilloscope data continuity
-cargo run --example signal_plotter          # Simple signal plotting using plotters crate
 cargo run --example scan_heatmap_plotter    # Creates heatmap visualization from scan data
+cargo run --example egui_scan_reader        # Interactive GUI for reading and visualizing scan data
 
 # Run tests
 cargo test
