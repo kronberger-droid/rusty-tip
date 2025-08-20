@@ -11,6 +11,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// Type alias for custom bad action functions
+/// Parameters: (client, machine_state, signal_delta) -> Result
+type BadActionFn = Box<dyn Fn(&mut NanonisClient, &MachineState, Option<f32>) -> Result<(), NanonisError> + Send + Sync>;
+
+/// Type alias for custom good action functions  
+/// Parameters: (client, machine_state, signal_delta) -> Result
+type GoodActionFn = Box<dyn Fn(&mut NanonisClient, &MachineState, Option<f32>) -> Result<(), NanonisError> + Send + Sync>;
+
 /// Controller integrating Nanonis client with state classifier and policy engine
 /// Follows separated architecture: raw signals → state classification → policy decisions
 pub struct Controller {
@@ -21,8 +29,17 @@ pub struct Controller {
     // Optional shared state for real-time integration
     shared_state: Option<Arc<Mutex<MachineState>>>,
 
+    // Control behavior
+    halt_on_stable: bool,
+
+    // Pluggable action functions
+    bad_action: Option<BadActionFn>,
+    good_action: Option<GoodActionFn>,
+
+    // Signal change tracking
+    last_signal_value: Option<f32>,
+
     // State tracking for advanced policy engines
-    approach_count: u32,
     position_history: VecDeque<Position>,
     action_history: VecDeque<String>,
 
@@ -64,7 +81,11 @@ pub struct ControllerBuilder {
 
     // Control configuration
     control_interval_hz: f32,
-    max_approaches: u32,
+    halt_on_stable: bool,
+
+    // Pluggable action functions
+    bad_action: Option<BadActionFn>,
+    good_action: Option<GoodActionFn>,
 }
 
 impl Controller {
@@ -78,7 +99,9 @@ impl Controller {
             policy: None,
             shared_state: None,
             control_interval_hz: 2.0,
-            max_approaches: 5,
+            halt_on_stable: true,
+            bad_action: None,
+            good_action: None,
         }
     }
 
@@ -94,7 +117,10 @@ impl Controller {
             classifier,
             policy,
             shared_state: None,
-            approach_count: 0,
+            halt_on_stable: true,
+            bad_action: None,
+            good_action: None,
+            last_signal_value: None,
             position_history: VecDeque::with_capacity(100),
             action_history: VecDeque::with_capacity(100),
             last_logged_classification: None,
@@ -112,7 +138,10 @@ impl Controller {
             classifier,
             policy,
             shared_state: None,
-            approach_count: 0,
+            halt_on_stable: true,
+            bad_action: None,
+            good_action: None,
+            last_signal_value: None,
             position_history: VecDeque::with_capacity(100),
             action_history: VecDeque::with_capacity(100),
             last_logged_classification: None,
@@ -144,8 +173,13 @@ impl Controller {
                     // Loop continues automatically
                 }
                 LoopAction::Halt => {
-                    info!("STABLE signal achieved - halting process");
-                    break;
+                    if self.halt_on_stable {
+                        info!("STABLE signal achieved - halting process");
+                        break;
+                    } else {
+                        info!("STABLE signal achieved - continuing monitoring");
+                        // Continue the loop without breaking
+                    }
                 }
             }
         }
@@ -188,8 +222,13 @@ impl Controller {
                             // Continue with stability monitoring
                         }
                         Ok(LoopAction::Halt) => {
-                            debug!("Control loop requested halt - stopping");
-                            break;
+                            if self.halt_on_stable {
+                                debug!("Control loop requested halt - stopping");
+                                break;
+                            } else {
+                                debug!("Stable achieved but continuing monitoring");
+                                // Continue the loop
+                            }
                         }
                         Err(e) => {
                             debug!("Control loop error: {e}");
@@ -364,21 +403,40 @@ impl Controller {
             }
         }
 
+        // Calculate signal delta for change detection
+        let current_signal_value = self.extract_primary_signal_value(&machine_state);
+        let signal_delta = match (current_signal_value, self.last_signal_value) {
+            (Some(current), Some(last)) => Some(current - last),
+            _ => None,
+        };
+
+        // Update last signal value for next cycle
+        if let Some(current) = current_signal_value {
+            self.last_signal_value = Some(current);
+        }
+
         match decision {
             PolicyDecision::Bad => {
-                // Execute bad signal actions
-                self.execute_bad_actions()?;
+                // Execute bad signal actions (pluggable or default)
+                if let Some(ref custom_action) = self.bad_action {
+                    custom_action(&mut self.client, &machine_state, signal_delta)?;
+                } else {
+                    self.execute_bad_actions()?;
+                }
                 Ok(LoopAction::ContinueBadLoop) // Continue in bad recovery mode
             }
             PolicyDecision::Good => {
-                // Execute good signal actions
-                self.execute_good_actions()?;
+                // Execute good signal actions (pluggable or default)
+                if let Some(ref custom_action) = self.good_action {
+                    custom_action(&mut self.client, &machine_state, signal_delta)?;
+                } else {
+                    self.execute_good_actions()?;
+                }
                 Ok(LoopAction::ContinueStabilityLoop) // Continue monitoring for stability
             }
             PolicyDecision::Stable => {
-                // No specific actions for stable state (system is working correctly)
-                // Continue monitoring instead of halting to show continuous operation
-                Ok(LoopAction::ContinueStabilityLoop) // Keep monitoring even after achieving stability
+                // Always go to halt state when stable is achieved
+                Ok(LoopAction::Halt)
             }
         }
     }
@@ -390,7 +448,6 @@ impl Controller {
         // Step 1: Initial approach (if not already approached)
         info!("Performing initial approach...");
         self.client.auto_approach_and_wait()?;
-        self.approach_count += 1;
         self.action_history
             .push_back("Initial Approach".to_string());
 
@@ -425,7 +482,6 @@ impl Controller {
         // Step 5: Approach at new position
         info!("Approaching at new position...");
         self.client.auto_approach_and_wait()?;
-        self.approach_count += 1;
         self.position_history.push_back(new_position);
         self.action_history.push_back("Re-approach".to_string());
 
@@ -466,6 +522,25 @@ impl Controller {
     }
 
     // ==================== Signal Extraction Helpers ====================
+
+    /// Extract primary signal value as f32 for delta calculations
+    fn extract_primary_signal_value(&self, machine_state: &MachineState) -> Option<f32> {
+        let signal_index = self.classifier.get_primary_signal_index();
+
+        if let (Some(all_signals), Some(signal_indices)) =
+            (&machine_state.all_signals, &machine_state.signal_indices)
+        {
+            // Find position of signal_index in the signal_indices array
+            if let Some(position) = signal_indices.iter().position(|&idx| idx == signal_index) {
+                if position < all_signals.len() {
+                    return Some(all_signals[position]);
+                }
+            }
+        }
+
+        // Fallback: use latest value from signal_history
+        machine_state.signal_history.back().copied()
+    }
 
     /// Extract primary signal value for logging (uses signal mapping)
     fn extract_primary_signal_for_logging(&self, machine_state: &MachineState) -> String {
@@ -529,7 +604,6 @@ impl Controller {
         if let Some(ref shared_state) = self.shared_state {
             if let Ok(mut state) = shared_state.lock() {
                 // Update controller-specific context
-                state.approach_count = machine_state.approach_count;
                 state.last_action = machine_state.last_action.clone();
                 state.classification = machine_state.classification.clone();
 
@@ -560,7 +634,6 @@ impl Controller {
         // Note: signal names now handled via SessionMetadata, not MachineState
 
         // Add controller state
-        machine_state.approach_count = self.approach_count;
         machine_state.last_action = self.action_history.back().cloned();
 
         Ok(())
@@ -626,7 +699,6 @@ impl Controller {
     #[allow(dead_code)]
     pub fn get_system_stats(&self) -> SystemStats {
         SystemStats {
-            total_approaches: self.approach_count,
             positions_visited: self.position_history.len(),
             actions_executed: self.action_history.len(),
             // For future ML expansion:
@@ -640,7 +712,6 @@ impl Controller {
 /// System statistics for monitoring controller and policy performance
 #[derive(Debug)]
 pub struct SystemStats {
-    pub total_approaches: u32,
     pub positions_visited: usize,
     pub actions_executed: usize,
     // Future ML metrics:
@@ -783,12 +854,10 @@ mod tests {
     #[test]
     fn test_system_stats_initialization() {
         let stats = SystemStats {
-            total_approaches: 5,
             positions_visited: 3,
             actions_executed: 10,
         };
 
-        assert_eq!(stats.total_approaches, 5);
         assert_eq!(stats.positions_visited, 3);
         assert_eq!(stats.actions_executed, 10);
     }
@@ -888,9 +957,27 @@ impl ControllerBuilder {
         self
     }
 
-    /// Set maximum number of approach attempts
-    pub fn max_approaches(mut self, max_approaches: u32) -> Self {
-        self.max_approaches = max_approaches;
+    /// Set whether to halt when stable state is achieved
+    pub fn halt_on_stable(mut self, halt: bool) -> Self {
+        self.halt_on_stable = halt;
+        self
+    }
+
+    /// Set custom bad action function
+    pub fn on_bad<F>(mut self, action: F) -> Self 
+    where 
+        F: Fn(&mut NanonisClient, &MachineState, Option<f32>) -> Result<(), NanonisError> + Send + Sync + 'static
+    {
+        self.bad_action = Some(Box::new(action));
+        self
+    }
+
+    /// Set custom good action function
+    pub fn on_good<F>(mut self, action: F) -> Self 
+    where 
+        F: Fn(&mut NanonisClient, &MachineState, Option<f32>) -> Result<(), NanonisError> + Send + Sync + 'static
+    {
+        self.good_action = Some(Box::new(action));
         self
     }
 
@@ -921,16 +1008,16 @@ impl ControllerBuilder {
             return Err("control_interval_hz should not exceed 100 Hz for stability".to_string());
         }
 
-        if self.max_approaches == 0 {
-            return Err("max_approaches must be greater than 0".to_string());
-        }
 
         let controller = Controller {
             client,
             classifier,
             policy,
             shared_state: self.shared_state,
-            approach_count: 0,
+            halt_on_stable: self.halt_on_stable,
+            bad_action: self.bad_action,
+            good_action: self.good_action,
+            last_signal_value: None,
             position_history: VecDeque::with_capacity(100),
             action_history: VecDeque::with_capacity(100),
             last_logged_classification: None,
@@ -938,9 +1025,8 @@ impl ControllerBuilder {
         };
 
         info!(
-            "Built Controller with {}Hz control loop, {} max approaches{}",
+            "Built Controller with {}Hz control loop{}",
             self.control_interval_hz,
-            self.max_approaches,
             if controller.shared_state.is_some() {
                 " (with shared state)"
             } else {
