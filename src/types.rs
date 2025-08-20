@@ -888,7 +888,6 @@ pub struct MachineState {
     pub signal_history: VecDeque<f32>, // Historical signal values
 
     // System state
-    pub approach_count: u32,         // Number of approaches performed
     pub last_action: Option<String>, // Last action executed
     pub system_parameters: Vec<f32>, // Configurable system params
 
