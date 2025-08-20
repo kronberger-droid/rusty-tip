@@ -73,7 +73,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .policy(Box::new(policy))
         .with_shared_state(shared_state.clone())
         .control_interval(2.0) // 2Hz control decisions
-        .max_approaches(5)
+        .halt_on_stable(false)
         .build()?;
 
     log::info!("Built Controller with shared state integration");
@@ -148,7 +148,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Ok(state) = shared_state.lock() {
             log::info!("Final shared state timestamp: {}", state.timestamp);
             log::info!("Final classification: {:?}", state.classification);
-            log::info!("Approach count: {}", state.approach_count);
+            log::info!(
+                "Action history length: {}",
+                state.last_action.as_ref().map_or(0, |_| 1)
+            );
             if let Some(last_action) = &state.last_action {
                 log::info!("Last action: {last_action}");
             }
