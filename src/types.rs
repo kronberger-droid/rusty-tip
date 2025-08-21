@@ -886,6 +886,8 @@ pub struct MachineState {
     pub timestamp: f64, // When this state was captured
     #[serde(skip)]
     pub signal_history: VecDeque<f32>, // Historical signal values
+    #[serde(skip)]
+    pub decision_value_history: VecDeque<f32>, // History of processed values that led to each decision
 
     // System state
     pub last_action: Option<String>, // Last action executed

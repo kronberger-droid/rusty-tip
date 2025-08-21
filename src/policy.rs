@@ -142,6 +142,7 @@ mod tests {
             z_position: None,
             timestamp: 0.0,
             signal_history: VecDeque::new(),
+            decision_value_history: VecDeque::new(),
             last_action: None,
             system_parameters: vec![],
             classification: TipState::Good,

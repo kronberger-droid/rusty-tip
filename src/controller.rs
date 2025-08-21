@@ -12,12 +12,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 /// Type alias for custom bad action functions
-/// Parameters: (client, machine_state, signal_delta) -> Result
-type BadActionFn = Box<dyn Fn(&mut NanonisClient, &MachineState, Option<f32>) -> Result<(), NanonisError> + Send + Sync>;
+/// Parameters: (client, machine_state) -> Result
+type BadActionFn = Box<dyn Fn(&mut NanonisClient, &MachineState) -> Result<(), NanonisError> + Send + Sync>;
 
 /// Type alias for custom good action functions  
-/// Parameters: (client, machine_state, signal_delta) -> Result
-type GoodActionFn = Box<dyn Fn(&mut NanonisClient, &MachineState, Option<f32>) -> Result<(), NanonisError> + Send + Sync>;
+/// Parameters: (client, machine_state) -> Result
+type GoodActionFn = Box<dyn Fn(&mut NanonisClient, &MachineState) -> Result<(), NanonisError> + Send + Sync>;
 
 /// Controller integrating Nanonis client with state classifier and policy engine
 /// Follows separated architecture: raw signals → state classification → policy decisions
@@ -36,8 +36,6 @@ pub struct Controller {
     bad_action: Option<BadActionFn>,
     good_action: Option<GoodActionFn>,
 
-    // Signal change tracking
-    last_signal_value: Option<f32>,
 
     // State tracking for advanced policy engines
     position_history: VecDeque<Position>,
@@ -120,7 +118,6 @@ impl Controller {
             halt_on_stable: true,
             bad_action: None,
             good_action: None,
-            last_signal_value: None,
             position_history: VecDeque::with_capacity(100),
             action_history: VecDeque::with_capacity(100),
             last_logged_classification: None,
@@ -141,7 +138,6 @@ impl Controller {
             halt_on_stable: true,
             bad_action: None,
             good_action: None,
-            last_signal_value: None,
             position_history: VecDeque::with_capacity(100),
             action_history: VecDeque::with_capacity(100),
             last_logged_classification: None,
@@ -403,23 +399,11 @@ impl Controller {
             }
         }
 
-        // Calculate signal delta for change detection
-        let current_signal_value = self.extract_primary_signal_value(&machine_state);
-        let signal_delta = match (current_signal_value, self.last_signal_value) {
-            (Some(current), Some(last)) => Some(current - last),
-            _ => None,
-        };
-
-        // Update last signal value for next cycle
-        if let Some(current) = current_signal_value {
-            self.last_signal_value = Some(current);
-        }
-
         match decision {
             PolicyDecision::Bad => {
                 // Execute bad signal actions (pluggable or default)
                 if let Some(ref custom_action) = self.bad_action {
-                    custom_action(&mut self.client, &machine_state, signal_delta)?;
+                    custom_action(&mut self.client, &machine_state)?;
                 } else {
                     self.execute_bad_actions()?;
                 }
@@ -428,7 +412,7 @@ impl Controller {
             PolicyDecision::Good => {
                 // Execute good signal actions (pluggable or default)
                 if let Some(ref custom_action) = self.good_action {
-                    custom_action(&mut self.client, &machine_state, signal_delta)?;
+                    custom_action(&mut self.client, &machine_state)?;
                 } else {
                     self.execute_good_actions()?;
                 }
@@ -523,24 +507,6 @@ impl Controller {
 
     // ==================== Signal Extraction Helpers ====================
 
-    /// Extract primary signal value as f32 for delta calculations
-    fn extract_primary_signal_value(&self, machine_state: &MachineState) -> Option<f32> {
-        let signal_index = self.classifier.get_primary_signal_index();
-
-        if let (Some(all_signals), Some(signal_indices)) =
-            (&machine_state.all_signals, &machine_state.signal_indices)
-        {
-            // Find position of signal_index in the signal_indices array
-            if let Some(position) = signal_indices.iter().position(|&idx| idx == signal_index) {
-                if position < all_signals.len() {
-                    return Some(all_signals[position]);
-                }
-            }
-        }
-
-        // Fallback: use latest value from signal_history
-        machine_state.signal_history.back().copied()
-    }
 
     /// Extract primary signal value for logging (uses signal mapping)
     fn extract_primary_signal_for_logging(&self, machine_state: &MachineState) -> String {
@@ -966,7 +932,7 @@ impl ControllerBuilder {
     /// Set custom bad action function
     pub fn on_bad<F>(mut self, action: F) -> Self 
     where 
-        F: Fn(&mut NanonisClient, &MachineState, Option<f32>) -> Result<(), NanonisError> + Send + Sync + 'static
+        F: Fn(&mut NanonisClient, &MachineState) -> Result<(), NanonisError> + Send + Sync + 'static
     {
         self.bad_action = Some(Box::new(action));
         self
@@ -975,7 +941,7 @@ impl ControllerBuilder {
     /// Set custom good action function
     pub fn on_good<F>(mut self, action: F) -> Self 
     where 
-        F: Fn(&mut NanonisClient, &MachineState, Option<f32>) -> Result<(), NanonisError> + Send + Sync + 'static
+        F: Fn(&mut NanonisClient, &MachineState) -> Result<(), NanonisError> + Send + Sync + 'static
     {
         self.good_action = Some(Box::new(action));
         self
@@ -1017,7 +983,6 @@ impl ControllerBuilder {
             halt_on_stable: self.halt_on_stable,
             bad_action: self.bad_action,
             good_action: self.good_action,
-            last_signal_value: None,
             position_history: VecDeque::with_capacity(100),
             action_history: VecDeque::with_capacity(100),
             last_logged_classification: None,

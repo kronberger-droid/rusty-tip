@@ -73,6 +73,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         .policy(Box::new(policy))
         .with_shared_state(shared_state.clone())
         .control_interval(2.0) // 2Hz control decisions
+        .on_bad(|_client, machine_state| {
+            log::info!("Custom bad action triggered:");
+            log::info!("  Signal history length: {}", machine_state.signal_history.len());
+            log::info!("  Decision value history length: {}", machine_state.decision_value_history.len());
+            
+            // Demonstrate decision value change detection
+            if machine_state.decision_value_history.len() >= 2 {
+                let current_decision_value = *machine_state.decision_value_history.back().unwrap();
+                let previous_decision_value = machine_state.decision_value_history[machine_state.decision_value_history.len()-2];
+                let decision_change = current_decision_value - previous_decision_value;
+                
+                log::info!("  Decision values: {:.3} -> {:.3} (change: {:.3})", 
+                          previous_decision_value, current_decision_value, decision_change);
+            }
+            Ok(())
+        })
         .halt_on_stable(false)
         .build()?;
 
