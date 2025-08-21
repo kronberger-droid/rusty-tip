@@ -519,15 +519,30 @@ fn monitoring_task_sync(
                                 // It just maintains a rolling buffer of the most recent signal readings
                                 // The classifier will use its own knowledge to extract what it needs
                                 
-                                // Keep signal_history as a simple rolling buffer of recent values
-                                // For now, we can use the first signal as a simple stream, but really
-                                // the classifier should extract its own signal from all_signals using signal_indices
+                                // Keep signal_history as a rolling buffer of the primary signal values
+                                // Extract the primary signal from all_signals using signal mapping
                                 if !values.is_empty() {
-                                    state.signal_history.push_back(values[0]); // Just as a placeholder stream
+                                    let primary_signal_value = if let Some(primary_index) = config.metadata_primary_signal_index {
+                                        // Find position of primary signal index in signal_indices
+                                        if let Some(position) = config.signal_indices.iter().position(|&idx| idx == primary_index as usize) {
+                                            if position < values.len() {
+                                                values[position]
+                                            } else {
+                                                values[0] // Fallback to first signal
+                                            }
+                                        } else {
+                                            values[0] // Fallback if primary signal not found in collected signals
+                                        }
+                                    } else {
+                                        values[0] // Fallback if no primary signal set
+                                    };
+                                    
+                                    state.signal_history.push_back(primary_signal_value);
                                     if state.signal_history.len() > config.signal_buffer_size {
                                         state.signal_history.pop_front();
                                     }
-                                    trace!("Updated signal_history with signal stream (placeholder: {})", values[0]);
+                                    trace!("Updated signal_history with primary signal (index {}, value: {})", 
+                                           config.metadata_primary_signal_index.unwrap_or(-1), primary_signal_value);
                                 }
                             }
                         }

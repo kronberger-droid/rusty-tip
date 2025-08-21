@@ -241,6 +241,13 @@ impl StateClassifier for BoundaryClassifier {
         );
 
         let classification = if let Some(max_value) = self.get_max_after_drop() {
+            // Store the decision value in history
+            machine_state.decision_value_history.push_back(max_value);
+            // Keep decision history buffer at reasonable size (match signal_history size)
+            if machine_state.decision_value_history.len() > self.buffer_size {
+                machine_state.decision_value_history.pop_front();
+            }
+            
             if self.is_within_bounds(max_value) {
                 TipState::Good
             } else {
