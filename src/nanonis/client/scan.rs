@@ -1,6 +1,7 @@
 use super::NanonisClient;
 use crate::error::NanonisError;
-use crate::types::{NanonisValue, Position, ScanAction, ScanDirection, ScanFrame, TimeoutMs};
+use crate::types::{NanonisValue, Position, ScanAction, ScanDirection, ScanFrame};
+use std::time::Duration;
 
 impl NanonisClient {
     /// Start, stop, pause or resume a scan
@@ -469,7 +470,8 @@ impl NanonisClient {
     ///
     /// # Examples
     /// ```no_run
-    /// use rusty_tip::{NanonisClient, TimeoutMs, ScanAction, ScanDirection};
+    /// use rusty_tip::{NanonisClient, ScanAction, ScanDirection};
+    /// use std::time::Duration;
     ///
     /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
     ///
@@ -477,7 +479,7 @@ impl NanonisClient {
     /// client.scan_action(ScanAction::Start, ScanDirection::Up)?;
     ///
     /// // Wait for scan to complete (up to 5 minutes)
-    /// let (timed_out, file_path) = client.scan_wait_end_of_scan(TimeoutMs(300000))?;
+    /// let (timed_out, file_path) = client.scan_wait_end_of_scan(Duration::from_secs(300))?;
     ///
     /// if timed_out {
     ///     println!("Scan timed out after 5 minutes");
@@ -491,11 +493,11 @@ impl NanonisClient {
     /// ```
     pub fn scan_wait_end_of_scan(
         &mut self,
-        timeout: TimeoutMs,
+        timeout: Duration,
     ) -> Result<(bool, String), NanonisError> {
         let result = self.quick_send(
             "Scan.WaitEndOfScan",
-            vec![NanonisValue::I32(timeout.into())],
+            vec![NanonisValue::I32(timeout.as_millis() as i32)],
             vec!["i"],
             vec!["I", "I", "*-c"],
         )?;
