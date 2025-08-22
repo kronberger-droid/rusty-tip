@@ -94,15 +94,8 @@
         # Default shell with sway integration and window management
         devShells.default = pkgs.mkShell {
           name = "rust dev shell (with sway setup)";
-          buildInputs = rustDeps;
+          buildInputs = allDeps;
           shellHook = baseShellHook + swayDevSetup;
-        };
-
-        # Minimal shell with just Rust toolchain (no GUI dependencies)
-        devShells.minimal = pkgs.mkShell {
-          name = "rust minimal shell";
-          buildInputs = rustDeps;
-          shellHook = baseShellHook;
         };
       }
     );
