@@ -284,9 +284,7 @@ impl NanonisValue {
     pub fn as_string(&self) -> Result<&str, NanonisError> {
         match self {
             NanonisValue::String(s) => Ok(s),
-            _ => Err(NanonisError::Type(format!(
-                "Expected string, got {self:?}"
-            ))),
+            _ => Err(NanonisError::Type(format!("Expected string, got {self:?}"))),
         }
     }
 
@@ -302,9 +300,6 @@ impl NanonisValue {
 }
 
 /// Type-safe wrappers for common Nanonis values
-#[derive(Debug, Clone, Copy)]
-pub struct BiasVoltage(pub f32);
-
 #[derive(Debug, Clone, Copy)]
 pub struct Position {
     pub x: f64,
@@ -326,9 +321,10 @@ impl SignalIndex {
         if (0..=127).contains(&index) {
             Ok(SignalIndex(index))
         } else {
-            Err(crate::error::NanonisError::InvalidCommand(
-                format!("Signal index must be 0-127, got {}", index)
-            ))
+            Err(crate::error::NanonisError::InvalidCommand(format!(
+                "Signal index must be 0-127, got {}",
+                index
+            )))
         }
     }
 }
@@ -359,9 +355,10 @@ impl ChannelIndex {
         if (0..=23).contains(&index) {
             Ok(ChannelIndex(index))
         } else {
-            Err(crate::error::NanonisError::InvalidCommand(
-                format!("Channel index must be 0-23, got {}", index)
-            ))
+            Err(crate::error::NanonisError::InvalidCommand(format!(
+                "Channel index must be 0-23, got {}",
+                index
+            )))
         }
     }
 }
@@ -424,7 +421,7 @@ impl From<MotorDirection> for u32 {
 
 impl TryFrom<u32> for MotorDirection {
     type Error = crate::error::NanonisError;
-    
+
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(MotorDirection::XPlus),
@@ -433,9 +430,10 @@ impl TryFrom<u32> for MotorDirection {
             3 => Ok(MotorDirection::YMinus),
             4 => Ok(MotorDirection::ZPlus),
             5 => Ok(MotorDirection::ZMinus),
-            _ => Err(crate::error::NanonisError::InvalidCommand(
-                format!("Invalid motor direction: {}", value)
-            )),
+            _ => Err(crate::error::NanonisError::InvalidCommand(format!(
+                "Invalid motor direction: {}",
+                value
+            ))),
         }
     }
 }
@@ -458,7 +456,7 @@ impl From<MotorGroup> for u32 {
 
 impl TryFrom<u32> for MotorGroup {
     type Error = crate::error::NanonisError;
-    
+
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(MotorGroup::Group1),
@@ -467,9 +465,10 @@ impl TryFrom<u32> for MotorGroup {
             3 => Ok(MotorGroup::Group4),
             4 => Ok(MotorGroup::Group5),
             5 => Ok(MotorGroup::Group6),
-            _ => Err(crate::error::NanonisError::InvalidCommand(
-                format!("Invalid motor group: {}", value)
-            )),
+            _ => Err(crate::error::NanonisError::InvalidCommand(format!(
+                "Invalid motor group: {}",
+                value
+            ))),
         }
     }
 }
@@ -594,7 +593,7 @@ impl Position3D {
     pub fn new(x: f64, y: f64, z: f64) -> Self {
         Self { x, y, z }
     }
-    
+
     pub fn meters(x: f64, y: f64, z: f64) -> Self {
         Self::new(x, y, z)
     }
@@ -614,14 +613,15 @@ impl From<MovementMode> for u32 {
 
 impl TryFrom<u32> for MovementMode {
     type Error = crate::error::NanonisError;
-    
+
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(MovementMode::Relative),
             1 => Ok(MovementMode::Absolute),
-            _ => Err(crate::error::NanonisError::InvalidCommand(
-                format!("Invalid movement mode: {}", value)
-            )),
+            _ => Err(crate::error::NanonisError::InvalidCommand(format!(
+                "Invalid movement mode: {}",
+                value
+            ))),
         }
     }
 }
@@ -672,14 +672,15 @@ impl From<TriggerSlope> for u16 {
 
 impl TryFrom<u16> for TriggerSlope {
     type Error = crate::error::NanonisError;
-    
+
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(TriggerSlope::Falling),
             1 => Ok(TriggerSlope::Rising),
-            _ => Err(crate::error::NanonisError::InvalidCommand(
-                format!("Invalid trigger slope: {}", value)
-            )),
+            _ => Err(crate::error::NanonisError::InvalidCommand(format!(
+                "Invalid trigger slope: {}",
+                value
+            ))),
         }
     }
 }
@@ -745,7 +746,7 @@ impl TimeoutMs {
     pub fn milliseconds(ms: i32) -> Self {
         Self(ms)
     }
-    
+
     pub fn indefinite() -> Self {
         Self(-1)
     }
@@ -814,7 +815,7 @@ impl From<ScanAction> for u16 {
 
 impl TryFrom<u16> for ScanAction {
     type Error = crate::error::NanonisError;
-    
+
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(ScanAction::Start),
@@ -824,9 +825,10 @@ impl TryFrom<u16> for ScanAction {
             4 => Ok(ScanAction::Freeze),
             5 => Ok(ScanAction::Unfreeze),
             6 => Ok(ScanAction::GoToCenter),
-            _ => Err(crate::error::NanonisError::InvalidCommand(
-                format!("Invalid scan action: {}", value)
-            )),
+            _ => Err(crate::error::NanonisError::InvalidCommand(format!(
+                "Invalid scan action: {}",
+                value
+            ))),
         }
     }
 }
@@ -845,14 +847,15 @@ impl From<ScanDirection> for u32 {
 
 impl TryFrom<u32> for ScanDirection {
     type Error = crate::error::NanonisError;
-    
+
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(ScanDirection::Down),
             1 => Ok(ScanDirection::Up),
-            _ => Err(crate::error::NanonisError::InvalidCommand(
-                format!("Invalid scan direction: {}", value)
-            )),
+            _ => Err(crate::error::NanonisError::InvalidCommand(format!(
+                "Invalid scan direction: {}",
+                value
+            ))),
         }
     }
 }
@@ -861,10 +864,10 @@ impl TryFrom<u32> for ScanDirection {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMetadata {
     pub session_id: String,
-    pub signal_names: Vec<String>,      // All signal names
-    pub active_indices: Vec<usize>,     // Which signals are being monitored
-    pub primary_signal_index: usize,    // Index of the primary signal
-    pub session_start: f64,             // Session start timestamp
+    pub signal_names: Vec<String>,   // All signal names
+    pub active_indices: Vec<usize>,  // Which signals are being monitored
+    pub primary_signal_index: usize, // Index of the primary signal
+    pub session_start: f64,          // Session start timestamp
 }
 
 /// Comprehensive machine state for advanced policy engines
@@ -873,7 +876,7 @@ pub struct SessionMetadata {
 pub struct MachineState {
     // Current signal readings
     pub all_signals: Option<Vec<f32>>, // All available signals for context
-    
+
     // Runtime signal coordination (not saved to JSON - info is in SessionMetadata)
     #[serde(skip)]
     pub signal_indices: Option<Vec<i32>>, // Which signal indices all_signals contains [0,1,2,3,24,30,31]
