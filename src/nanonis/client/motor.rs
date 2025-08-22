@@ -1,5 +1,6 @@
 use crate::error::NanonisError;
-use crate::types::{Amplitude, Frequency, MotorAxis, MotorDirection, MotorGroup, MovementMode, NanonisValue, Position3D, StepCount, TimeoutMs};
+use crate::types::{Amplitude, Frequency, MotorAxis, MotorDirection, MotorGroup, MovementMode, NanonisValue, Position3D, StepCount};
+use std::time::Duration;
 use super::NanonisClient;
 
 impl NanonisClient {
@@ -61,11 +62,11 @@ impl NanonisClient {
     pub fn motor_pos_get(
         &mut self,
         group: MotorGroup,
-        timeout: TimeoutMs,
+        timeout: Duration,
     ) -> Result<Position3D, NanonisError> {
         let result = self.quick_send(
             "Motor.PosGet",
-            vec![NanonisValue::U32(group.into()), NanonisValue::U32(timeout.0 as u32)],
+            vec![NanonisValue::U32(group.into()), NanonisValue::U32(timeout.as_millis() as u32)],
             vec!["I", "I"],
             vec!["d", "d", "d"],
         )?;

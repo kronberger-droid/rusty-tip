@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use crate::classifier::TipState;
 use crate::error::NanonisError;
 use std::collections::VecDeque;
-use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub enum NanonisValue {
@@ -736,43 +735,6 @@ impl From<u32> for SampleCount {
 impl From<usize> for SampleCount {
     fn from(count: usize) -> Self {
         SampleCount(count as i32)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct TimeoutMs(pub i32);
-
-impl TimeoutMs {
-    pub fn milliseconds(ms: i32) -> Self {
-        Self(ms)
-    }
-
-    pub fn indefinite() -> Self {
-        Self(-1)
-    }
-}
-
-impl From<TimeoutMs> for i32 {
-    fn from(timeout: TimeoutMs) -> Self {
-        timeout.0
-    }
-}
-
-impl From<i32> for TimeoutMs {
-    fn from(timeout: i32) -> Self {
-        TimeoutMs(timeout)
-    }
-}
-
-impl From<u32> for TimeoutMs {
-    fn from(timeout: u32) -> Self {
-        TimeoutMs(timeout as i32)
-    }
-}
-
-impl From<Duration> for TimeoutMs {
-    fn from(duration: Duration) -> Self {
-        TimeoutMs(duration.as_millis() as i32)
     }
 }
 

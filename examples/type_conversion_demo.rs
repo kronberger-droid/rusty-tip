@@ -2,8 +2,8 @@ use std::error::Error;
 use std::time::Duration;
 
 use rusty_tip::{
-    Amplitude, Frequency, MotorAxis, MotorDirection, MotorGroup, NanonisClient, OscilloscopeIndex,
-    SampleCount, SignalIndex, StepCount, TimeoutMs, TriggerLevel, TriggerMode,
+    Amplitude, Frequency, MotorAxis, NanonisClient, OscilloscopeIndex,
+    SampleCount, SignalIndex, TriggerMode,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -63,14 +63,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("5. Timeout and duration conversions:");
 
     let timeout_duration = Duration::from_secs(5);
-    let timeout_ms = TimeoutMs::from(timeout_duration);
 
-    // Both raw milliseconds and Duration work
-    let _result1 = client.scan_wait_end_of_scan(5000.into())?; // raw ms
-    let _result2 = client.scan_wait_end_of_scan(timeout_ms)?; // from Duration
+    // Duration works directly
+    let _result1 = client.scan_wait_end_of_scan(Duration::from_millis(5000))?; // Duration from ms
+    let _result2 = client.scan_wait_end_of_scan(timeout_duration)?; // Duration from variable
 
-    println!("   ✓ scan_wait_end_of_scan(5000) - raw milliseconds!");
-    println!("   ✓ scan_wait_end_of_scan(Duration) - from std::time::Duration!");
+    println!("   ✓ scan_wait_end_of_scan(Duration::from_millis(5000)) - Duration from milliseconds!");
+    println!("   ✓ scan_wait_end_of_scan(Duration) - from std::time::Duration variable!");
 
     // 6. Mixed usage demonstration
     println!("6. Mixed usage in a realistic scenario:");
@@ -104,7 +103,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("\nSummary:");
     println!("========");
     println!("• Raw integers/floats automatically convert to wrapper types");
-    println!("• Duration converts to TimeoutMs automatically");
+    println!("• Duration is used directly for timeout parameters");
     println!("• Enums provide TryFrom for validated conversions");
     println!("• Type safety prevents invalid values at compile time");
     println!("• Maximum ease of use while maintaining safety!");

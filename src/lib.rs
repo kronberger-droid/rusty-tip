@@ -21,6 +21,6 @@ pub use signal_monitor::{
 pub use types::{
     Amplitude, ChannelIndex, Frequency, MachineState, MotorAxis, MotorDirection, MotorGroup,
     MovementMode, NanonisValue, OscilloscopeIndex, Position, Position3D, SampleCount, ScanAction,
-    ScanDirection, ScanFrame, SessionMetadata, SignalIndex, StepCount, TimeoutMs, TriggerLevel,
+    ScanDirection, ScanFrame, SessionMetadata, SignalIndex, StepCount, TriggerLevel,
     TriggerMode, TriggerSlope,
 };
