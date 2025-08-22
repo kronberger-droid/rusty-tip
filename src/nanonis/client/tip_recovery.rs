@@ -1,6 +1,6 @@
+use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
-use super::NanonisClient;
 
 impl NanonisClient {
     /// Set the buffer size of the Tip Move Recorder.
@@ -60,7 +60,7 @@ impl NanonisClient {
     /// ```
     pub fn tip_rec_buffer_size_get(&mut self) -> Result<i32, NanonisError> {
         let result = self.quick_send("TipRec.BufferSizeGet", vec![], vec![], vec!["i"])?;
-        
+
         match result.first() {
             Some(value) => Ok(value.as_i32()?),
             None => Err(NanonisError::Protocol(
@@ -102,7 +102,7 @@ impl NanonisClient {
     /// # Returns
     /// A tuple containing:
     /// - `Vec<i32>` - Channel indexes (0-23 for Signals Manager slots)
-    /// - `Vec<Vec<f32>>` - 2D data array [rows][columns] with recorded measurements
+    /// - `Vec<Vec<f32>>` - 2D data array \[rows\]\[columns\] with recorded measurements
     ///
     /// # Errors
     /// Returns `NanonisError` if communication fails or no data available.
@@ -115,10 +115,10 @@ impl NanonisClient {
     ///
     /// // Get recorded tip movement data
     /// let (channel_indexes, data) = client.tip_rec_data_get()?;
-    /// 
-    /// println!("Recorded {} channels with {} data points", 
+    ///
+    /// println!("Recorded {} channels with {} data points",
     ///          channel_indexes.len(), data.len());
-    /// 
+    ///
     /// // Analyze data for each channel
     /// for (i, &channel_idx) in channel_indexes.iter().enumerate() {
     ///     if i < data[0].len() {
@@ -128,13 +128,18 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn tip_rec_data_get(&mut self) -> Result<(Vec<i32>, Vec<Vec<f32>>), NanonisError> {
-        let result = self.quick_send("TipRec.DataGet", vec![], vec![], vec!["i", "*i", "i", "i", "2f"])?;
-        
+        let result = self.quick_send(
+            "TipRec.DataGet",
+            vec![],
+            vec![],
+            vec!["i", "*i", "i", "i", "2f"],
+        )?;
+
         if result.len() >= 5 {
             let channel_indexes = result[1].as_i32_array()?.to_vec();
             let rows = result[2].as_i32()? as usize;
             let cols = result[3].as_i32()? as usize;
-            
+
             // Parse 2D data array
             let flat_data = result[4].as_f32_array()?;
             let mut data_2d = Vec::with_capacity(rows);
@@ -143,7 +148,7 @@ impl NanonisClient {
                 let end_idx = start_idx + cols;
                 data_2d.push(flat_data[start_idx..end_idx].to_vec());
             }
-            
+
             Ok((channel_indexes, data_2d))
         } else {
             Err(NanonisError::Protocol(
@@ -177,9 +182,13 @@ impl NanonisClient {
     /// client.tip_rec_data_save(false, "tip_movement_log")?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn tip_rec_data_save(&mut self, clear_buffer: bool, basename: &str) -> Result<(), NanonisError> {
+    pub fn tip_rec_data_save(
+        &mut self,
+        clear_buffer: bool,
+        basename: &str,
+    ) -> Result<(), NanonisError> {
         let clear_flag = if clear_buffer { 1u32 } else { 0u32 };
-        
+
         self.quick_send(
             "TipRec.DataSave",
             vec![
@@ -219,15 +228,16 @@ impl NanonisClient {
     /// client.tip_shaper_start(false, 0)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn tip_shaper_start(&mut self, wait_until_finished: bool, timeout_ms: i32) -> Result<(), NanonisError> {
+    pub fn tip_shaper_start(
+        &mut self,
+        wait_until_finished: bool,
+        timeout_ms: i32,
+    ) -> Result<(), NanonisError> {
         let wait_flag = if wait_until_finished { 1u32 } else { 0u32 };
-        
+
         self.quick_send(
             "TipShaper.Start",
-            vec![
-                NanonisValue::U32(wait_flag),
-                NanonisValue::I32(timeout_ms),
-            ],
+            vec![NanonisValue::U32(wait_flag), NanonisValue::I32(timeout_ms)],
             vec!["I", "i"],
             vec![],
         )?;
@@ -341,36 +351,38 @@ impl NanonisClient {
     ///
     /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
     ///
-    /// let (switch_delay, change_bias, bias_v, tip_lift, lift_time1, 
-    ///      bias_lift, settling, lift_height, lift_time2, end_wait, restore) = 
+    /// let (switch_delay, change_bias, bias_v, tip_lift, lift_time1,
+    ///      bias_lift, settling, lift_height, lift_time2, end_wait, restore) =
     ///      client.tip_shaper_props_get()?;
-    /// 
+    ///
     /// println!("Tip lift: {:.1} nm, Bias: {:.1} V", tip_lift * 1e9, bias_v);
-    /// println!("Total procedure time: ~{:.1} s", 
+    /// println!("Total procedure time: ~{:.1} s",
     ///          switch_delay + lift_time1 + settling + lift_time2 + end_wait);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn tip_shaper_props_get(&mut self) -> Result<(f32, u32, f32, f32, f32, f32, f32, f32, f32, f32, u32), NanonisError> {
+    pub fn tip_shaper_props_get(
+        &mut self,
+    ) -> Result<(f32, u32, f32, f32, f32, f32, f32, f32, f32, f32, u32), NanonisError> {
         let result = self.quick_send(
-            "TipShaper.PropsGet", 
-            vec![], 
-            vec![], 
-            vec!["f", "I", "f", "f", "f", "f", "f", "f", "f", "f", "I"]
+            "TipShaper.PropsGet",
+            vec![],
+            vec![],
+            vec!["f", "I", "f", "f", "f", "f", "f", "f", "f", "f", "I"],
         )?;
-        
+
         if result.len() >= 11 {
             Ok((
-                result[0].as_f32()?,   // switch_off_delay
-                result[1].as_u32()?,   // change_bias
-                result[2].as_f32()?,   // bias_v
-                result[3].as_f32()?,   // tip_lift_m
-                result[4].as_f32()?,   // lift_time_1_s
-                result[5].as_f32()?,   // bias_lift_v
-                result[6].as_f32()?,   // bias_settling_time_s
-                result[7].as_f32()?,   // lift_height_m
-                result[8].as_f32()?,   // lift_time_2_s
-                result[9].as_f32()?,   // end_wait_time_s
-                result[10].as_u32()?,  // restore_feedback
+                result[0].as_f32()?,  // switch_off_delay
+                result[1].as_u32()?,  // change_bias
+                result[2].as_f32()?,  // bias_v
+                result[3].as_f32()?,  // tip_lift_m
+                result[4].as_f32()?,  // lift_time_1_s
+                result[5].as_f32()?,  // bias_lift_v
+                result[6].as_f32()?,  // bias_settling_time_s
+                result[7].as_f32()?,  // lift_height_m
+                result[8].as_f32()?,  // lift_time_2_s
+                result[9].as_f32()?,  // end_wait_time_s
+                result[10].as_u32()?, // restore_feedback
             ))
         } else {
             Err(NanonisError::Protocol(

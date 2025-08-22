@@ -8,6 +8,7 @@ use std::time::Duration;
 
 pub mod auto_approach;
 pub mod bias;
+pub mod bias_sweep;
 pub mod current;
 pub mod folme;
 pub mod motor;
