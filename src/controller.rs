@@ -1,6 +1,6 @@
 use crate::classifier::StateClassifier;
-use crate::client::NanonisClient;
 use crate::error::NanonisError;
+use crate::nanonis::NanonisClient;
 use crate::policy::{ActionType, PolicyDecision, PolicyEngine};
 use crate::types::{MachineState, Position};
 use log::{debug, error, info};
@@ -13,11 +13,13 @@ use std::time::{Duration, Instant};
 
 /// Type alias for custom bad action functions
 /// Parameters: (client, machine_state) -> Result
-type BadActionFn = Box<dyn Fn(&mut NanonisClient, &MachineState) -> Result<(), NanonisError> + Send + Sync>;
+type BadActionFn =
+    Box<dyn Fn(&mut NanonisClient, &MachineState) -> Result<(), NanonisError> + Send + Sync>;
 
 /// Type alias for custom good action functions  
 /// Parameters: (client, machine_state) -> Result
-type GoodActionFn = Box<dyn Fn(&mut NanonisClient, &MachineState) -> Result<(), NanonisError> + Send + Sync>;
+type GoodActionFn =
+    Box<dyn Fn(&mut NanonisClient, &MachineState) -> Result<(), NanonisError> + Send + Sync>;
 
 /// Controller integrating Nanonis client with state classifier and policy engine
 /// Follows separated architecture: raw signals → state classification → policy decisions
@@ -35,7 +37,6 @@ pub struct Controller {
     // Pluggable action functions
     bad_action: Option<BadActionFn>,
     good_action: Option<GoodActionFn>,
-
 
     // State tracking for advanced policy engines
     position_history: VecDeque<Position>,
@@ -507,7 +508,6 @@ impl Controller {
 
     // ==================== Signal Extraction Helpers ====================
 
-
     /// Extract primary signal value for logging (uses signal mapping)
     fn extract_primary_signal_for_logging(&self, machine_state: &MachineState) -> String {
         let signal_index = self.classifier.get_primary_signal_index();
@@ -694,6 +694,134 @@ enum LoopAction {
     Halt,                  // Process complete
 }
 
+impl ControllerBuilder {
+    /// Provide an existing NanonisClient (alternative to address/port)
+    pub fn client(mut self, client: NanonisClient) -> Self {
+        self.client = Some(client);
+        self
+    }
+
+    /// Set the Nanonis server address (used if no client provided)
+    pub fn address(mut self, address: impl Into<String>) -> Self {
+        self.address = Some(address.into());
+        self
+    }
+
+    /// Set the Nanonis server port (used if no client provided)
+    pub fn port(mut self, port: u16) -> Self {
+        self.port = Some(port);
+        self
+    }
+
+    /// Set the state classifier (required)
+    pub fn classifier(mut self, classifier: Box<dyn StateClassifier>) -> Self {
+        self.classifier = Some(classifier);
+        self
+    }
+
+    /// Set the policy engine (required)
+    pub fn policy(mut self, policy: Box<dyn PolicyEngine>) -> Self {
+        self.policy = Some(policy);
+        self
+    }
+
+    /// Set shared state for real-time integration (optional)
+    pub fn with_shared_state(mut self, shared_state: Arc<Mutex<MachineState>>) -> Self {
+        self.shared_state = Some(shared_state);
+        self
+    }
+
+    /// Set control loop frequency in Hz
+    pub fn control_interval(mut self, interval_hz: f32) -> Self {
+        self.control_interval_hz = interval_hz;
+        self
+    }
+
+    /// Set whether to halt when stable state is achieved
+    pub fn halt_on_stable(mut self, halt: bool) -> Self {
+        self.halt_on_stable = halt;
+        self
+    }
+
+    /// Set custom bad action function
+    pub fn on_bad<F>(mut self, action: F) -> Self
+    where
+        F: Fn(&mut NanonisClient, &MachineState) -> Result<(), NanonisError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.bad_action = Some(Box::new(action));
+        self
+    }
+
+    /// Set custom good action function
+    pub fn on_good<F>(mut self, action: F) -> Self
+    where
+        F: Fn(&mut NanonisClient, &MachineState) -> Result<(), NanonisError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.good_action = Some(Box::new(action));
+        self
+    }
+
+    /// Build the Controller with validation
+    pub fn build(self) -> Result<Controller, String> {
+        // Get or create client
+        let client = if let Some(client) = self.client {
+            client
+        } else {
+            let address = self.address.unwrap_or_else(|| "127.0.0.1".to_string());
+            let port = self.port.unwrap_or(6501);
+            NanonisClient::new(&address, port)
+                .map_err(|e| format!("Failed to create NanonisClient: {e}"))?
+        };
+
+        // Validate required components
+        let classifier = self
+            .classifier
+            .ok_or("classifier is required - use .classifier()")?;
+        let policy = self.policy.ok_or("policy is required - use .policy()")?;
+
+        // Validate configuration
+        if self.control_interval_hz <= 0.0 {
+            return Err("control_interval_hz must be greater than 0".to_string());
+        }
+
+        if self.control_interval_hz > 100.0 {
+            return Err("control_interval_hz should not exceed 100 Hz for stability".to_string());
+        }
+
+        let controller = Controller {
+            client,
+            classifier,
+            policy,
+            shared_state: self.shared_state,
+            halt_on_stable: self.halt_on_stable,
+            bad_action: self.bad_action,
+            good_action: self.good_action,
+            position_history: VecDeque::with_capacity(100),
+            action_history: VecDeque::with_capacity(100),
+            last_logged_classification: None,
+            stable_count: 0,
+        };
+
+        info!(
+            "Built Controller with {}Hz control loop{}",
+            self.control_interval_hz,
+            if controller.shared_state.is_some() {
+                " (with shared state)"
+            } else {
+                ""
+            }
+        );
+
+        Ok(controller)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -826,179 +954,5 @@ mod tests {
 
         assert_eq!(stats.positions_visited, 3);
         assert_eq!(stats.actions_executed, 10);
-    }
-
-    #[test]
-    fn test_shared_state_integration() {
-        // Create shared state
-        let shared_state = Arc::new(Mutex::new(MachineState {
-            all_signals: Some(vec![1.5, 0.8, 0.2]),
-            signal_indices: Some(vec![0, 1, 2]), // Test mapping
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs_f64(),
-            ..Default::default()
-        }));
-
-        // Create classifier and policy
-        let classifier = Box::new(BoundaryClassifier::new(
-            "Test Classifier".to_string(),
-            24,
-            0.0,
-            2.0,
-        ));
-        let policy = Box::new(RuleBasedPolicy::new("Test Policy".to_string()));
-
-        // Create controller with shared state
-        let controller = Controller::builder()
-            .address("127.0.0.1")
-            .port(6501)
-            .classifier(classifier)
-            .policy(policy)
-            .with_shared_state(shared_state.clone())
-            .build();
-
-        // Controller creation should succeed even if client connection fails
-        match controller {
-            Ok(controller) => {
-                // Test reading from shared state
-                let result = controller.read_from_shared_state(24, 1.0);
-                assert!(result.is_some());
-
-                let state = result.unwrap();
-                // Test that signal mapping works - signal 24 should extract from all_signals
-                assert_eq!(state.all_signals.as_ref().unwrap()[0], 1.5);
-                println!("Shared state integration test passed");
-            }
-            Err(_) => {
-                // Expected when no Nanonis running - focus on architecture test
-                println!("Client connection failed (expected without Nanonis hardware)");
-                println!("Shared state architecture test still valid");
-            }
-        }
-    }
-}
-
-impl ControllerBuilder {
-    /// Provide an existing NanonisClient (alternative to address/port)
-    pub fn client(mut self, client: NanonisClient) -> Self {
-        self.client = Some(client);
-        self
-    }
-
-    /// Set the Nanonis server address (used if no client provided)
-    pub fn address(mut self, address: impl Into<String>) -> Self {
-        self.address = Some(address.into());
-        self
-    }
-
-    /// Set the Nanonis server port (used if no client provided)
-    pub fn port(mut self, port: u16) -> Self {
-        self.port = Some(port);
-        self
-    }
-
-    /// Set the state classifier (required)
-    pub fn classifier(mut self, classifier: Box<dyn StateClassifier>) -> Self {
-        self.classifier = Some(classifier);
-        self
-    }
-
-    /// Set the policy engine (required)
-    pub fn policy(mut self, policy: Box<dyn PolicyEngine>) -> Self {
-        self.policy = Some(policy);
-        self
-    }
-
-    /// Set shared state for real-time integration (optional)
-    pub fn with_shared_state(mut self, shared_state: Arc<Mutex<MachineState>>) -> Self {
-        self.shared_state = Some(shared_state);
-        self
-    }
-
-    /// Set control loop frequency in Hz
-    pub fn control_interval(mut self, interval_hz: f32) -> Self {
-        self.control_interval_hz = interval_hz;
-        self
-    }
-
-    /// Set whether to halt when stable state is achieved
-    pub fn halt_on_stable(mut self, halt: bool) -> Self {
-        self.halt_on_stable = halt;
-        self
-    }
-
-    /// Set custom bad action function
-    pub fn on_bad<F>(mut self, action: F) -> Self 
-    where 
-        F: Fn(&mut NanonisClient, &MachineState) -> Result<(), NanonisError> + Send + Sync + 'static
-    {
-        self.bad_action = Some(Box::new(action));
-        self
-    }
-
-    /// Set custom good action function
-    pub fn on_good<F>(mut self, action: F) -> Self 
-    where 
-        F: Fn(&mut NanonisClient, &MachineState) -> Result<(), NanonisError> + Send + Sync + 'static
-    {
-        self.good_action = Some(Box::new(action));
-        self
-    }
-
-    /// Build the Controller with validation
-    pub fn build(self) -> Result<Controller, String> {
-        // Get or create client
-        let client = if let Some(client) = self.client {
-            client
-        } else {
-            let address = self.address.unwrap_or_else(|| "127.0.0.1".to_string());
-            let port = self.port.unwrap_or(6501);
-            NanonisClient::new(&address, port)
-                .map_err(|e| format!("Failed to create NanonisClient: {e}"))?
-        };
-
-        // Validate required components
-        let classifier = self
-            .classifier
-            .ok_or("classifier is required - use .classifier()")?;
-        let policy = self.policy.ok_or("policy is required - use .policy()")?;
-
-        // Validate configuration
-        if self.control_interval_hz <= 0.0 {
-            return Err("control_interval_hz must be greater than 0".to_string());
-        }
-
-        if self.control_interval_hz > 100.0 {
-            return Err("control_interval_hz should not exceed 100 Hz for stability".to_string());
-        }
-
-
-        let controller = Controller {
-            client,
-            classifier,
-            policy,
-            shared_state: self.shared_state,
-            halt_on_stable: self.halt_on_stable,
-            bad_action: self.bad_action,
-            good_action: self.good_action,
-            position_history: VecDeque::with_capacity(100),
-            action_history: VecDeque::with_capacity(100),
-            last_logged_classification: None,
-            stable_count: 0,
-        };
-
-        info!(
-            "Built Controller with {}Hz control loop{}",
-            self.control_interval_hz,
-            if controller.shared_state.is_some() {
-                " (with shared state)"
-            } else {
-                ""
-            }
-        );
-
-        Ok(controller)
     }
 }

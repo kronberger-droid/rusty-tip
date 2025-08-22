@@ -61,8 +61,6 @@
           export LD_LIBRARY_PATH="${libPath}:''${LD_LIBRARY_PATH:-}"
           
           mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
-          
-          echo "Environment configured for egui development"
         '';
 
         # Sway window manager setup for development layout
@@ -105,23 +103,6 @@
           name = "rust minimal shell";
           buildInputs = rustDeps;
           shellHook = baseShellHook;
-        };
-
-        # Comprehensive egui shell with full graphics support
-        devShells.egui = pkgs.mkShell {
-          name = "egui-comprehensive-shell";
-          buildInputs = allDeps;
-          shellHook = baseShellHook + ''
-            echo "Comprehensive egui development environment"
-            echo "Libraries loaded: wayland, x11, mesa, gl, egl"
-            
-            # Additional egui-specific debugging
-            # export RUST_LOG=debug
-            # export WINIT_UNIX_BACKEND=x11  # Uncomment to force X11
-            
-            # Launch nushell as login shell
-            exec nu --login
-          '';
         };
       }
     );
