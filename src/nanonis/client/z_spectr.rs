@@ -1,6 +1,6 @@
+use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
-use super::NanonisClient;
 
 impl NanonisClient {
     /// Open the Z Spectroscopy module.
@@ -39,7 +39,7 @@ impl NanonisClient {
     /// # Returns
     /// If `get_data` is true, returns a tuple containing:
     /// - `Vec<String>` - Channel names
-    /// - `Vec<Vec<f32>>` - 2D measurement data [rows][columns] 
+    /// - `Vec<Vec<f32>>` - 2D measurement data \[rows\]\[columns\]
     /// - `Vec<f32>` - Fixed parameters and settings
     ///
     /// # Errors
@@ -54,7 +54,7 @@ impl NanonisClient {
     /// // Start measurement and get data
     /// let (channels, data, params) = client.z_spectr_start(true, "approach_001")?;
     /// println!("Recorded {} channels with {} points", channels.len(), data.len());
-    /// 
+    ///
     /// // Just start measurement without getting data
     /// let (_, _, _) = client.z_spectr_start(false, "")?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -65,7 +65,7 @@ impl NanonisClient {
         save_base_name: &str,
     ) -> Result<(Vec<String>, Vec<Vec<f32>>, Vec<f32>), NanonisError> {
         let get_data_flag = if get_data { 1u32 } else { 0u32 };
-        
+
         let result = self.quick_send(
             "ZSpectr.Start",
             vec![
@@ -80,7 +80,7 @@ impl NanonisClient {
             let channel_names = result[2].as_string_array()?.to_vec();
             let rows = result[3].as_i32()? as usize;
             let cols = result[4].as_i32()? as usize;
-            
+
             // Parse 2D data array
             let flat_data = result[5].as_f32_array()?;
             let mut data_2d = Vec::with_capacity(rows);
@@ -89,7 +89,7 @@ impl NanonisClient {
                 let end_idx = start_idx + cols;
                 data_2d.push(flat_data[start_idx..end_idx].to_vec());
             }
-            
+
             let parameters = result[7].as_f32_array()?.to_vec();
             Ok((channel_names, data_2d, parameters))
         } else {
@@ -151,7 +151,7 @@ impl NanonisClient {
     /// ```
     pub fn z_spectr_status_get(&mut self) -> Result<bool, NanonisError> {
         let result = self.quick_send("ZSpectr.StatusGet", vec![], vec![], vec!["I"])?;
-        
+
         match result.first() {
             Some(value) => Ok(value.as_u32()? == 1),
             None => Err(NanonisError::Protocol(
@@ -220,8 +220,13 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn z_spectr_chs_get(&mut self) -> Result<(Vec<i32>, Vec<String>), NanonisError> {
-        let result = self.quick_send("ZSpectr.ChsGet", vec![], vec![], vec!["i", "*i", "i", "i", "*+c"])?;
-        
+        let result = self.quick_send(
+            "ZSpectr.ChsGet",
+            vec![],
+            vec![],
+            vec!["i", "*i", "i", "i", "*+c"],
+        )?;
+
         if result.len() >= 5 {
             let channel_indexes = result[1].as_i32_array()?.to_vec();
             let channel_names = result[4].as_string_array()?.to_vec();
@@ -258,7 +263,11 @@ impl NanonisClient {
     /// client.z_spectr_range_set(10e-9, 20e-9)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn z_spectr_range_set(&mut self, z_offset_m: f32, z_sweep_distance_m: f32) -> Result<(), NanonisError> {
+    pub fn z_spectr_range_set(
+        &mut self,
+        z_offset_m: f32,
+        z_sweep_distance_m: f32,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "ZSpectr.RangeSet",
             vec![
@@ -295,7 +304,7 @@ impl NanonisClient {
     /// ```
     pub fn z_spectr_range_get(&mut self) -> Result<(f32, f32), NanonisError> {
         let result = self.quick_send("ZSpectr.RangeGet", vec![], vec![], vec!["f", "f"])?;
-        
+
         if result.len() >= 2 {
             Ok((result[0].as_f32()?, result[1].as_f32()?))
         } else {
@@ -381,14 +390,19 @@ impl NanonisClient {
     ///
     /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
     ///
-    /// let (z_avg, init_settle, slew_rate, settle, integrate, end_settle) = 
+    /// let (z_avg, init_settle, slew_rate, settle, integrate, end_settle) =
     ///     client.z_spectr_timing_get()?;
     /// println!("Integration time: {:.3} s, settling: {:.3} s", integrate, settle);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn z_spectr_timing_get(&mut self) -> Result<(f32, f32, f32, f32, f32, f32), NanonisError> {
-        let result = self.quick_send("ZSpectr.TimingGet", vec![], vec![], vec!["f", "f", "f", "f", "f", "f"])?;
-        
+        let result = self.quick_send(
+            "ZSpectr.TimingGet",
+            vec![],
+            vec![],
+            vec!["f", "f", "f", "f", "f", "f"],
+        )?;
+
         if result.len() >= 6 {
             Ok((
                 result[0].as_f32()?,
@@ -440,7 +454,7 @@ impl NanonisClient {
         comparison: u16,
     ) -> Result<(), NanonisError> {
         let enable_flag = if enable { 1u16 } else { 0u16 };
-        
+
         self.quick_send(
             "ZSpectr.RetractSet",
             vec![
@@ -483,8 +497,13 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn z_spectr_retract_get(&mut self) -> Result<(bool, f32, i32, u16), NanonisError> {
-        let result = self.quick_send("ZSpectr.RetractGet", vec![], vec![], vec!["H", "f", "i", "H"])?;
-        
+        let result = self.quick_send(
+            "ZSpectr.RetractGet",
+            vec![],
+            vec![],
+            vec!["H", "f", "i", "H"],
+        )?;
+
         if result.len() >= 4 {
             let enabled = result[0].as_u16()? == 1;
             let threshold = result[1].as_f32()?;

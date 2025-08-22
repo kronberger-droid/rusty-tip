@@ -387,7 +387,7 @@ impl NanonisClient {
     /// # Returns
     /// A tuple containing:
     /// - `String` - Channel name
-    /// - `Vec<Vec<f32>>` - 2D scan data array [rows][columns]
+    /// - `Vec<Vec<f32>>` - 2D scan data array \[rows\]\[columns\]
     /// - `bool` - Scan direction: `true` for up, `false` for down
     ///
     /// # Errors
