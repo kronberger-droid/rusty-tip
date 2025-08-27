@@ -2,7 +2,7 @@ use super::protocol::{Protocol, HEADER_SIZE};
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
 use log::{debug, trace, warn};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
@@ -168,7 +168,10 @@ impl NanonisClientBuilder {
                 if e.kind() == std::io::ErrorKind::TimedOut {
                     NanonisError::Timeout
                 } else {
-                    NanonisError::Io(e)
+                    NanonisError::Io { 
+                        source: e, 
+                        context: format!("Failed to connect to {address}") 
+                    }
                 }
             })?;
 
@@ -346,6 +349,12 @@ impl NanonisClient {
         // Create command header
         let header = Protocol::create_command_header(command, body.len() as u32);
 
+        if self.debug {
+            debug!("Header size: {}, Body size: {}", header.len(), body.len());
+            debug!("Header bytes: {:02x?}", &header[..20]); // First 20 bytes
+            debug!("Command in header: {:?}", String::from_utf8_lossy(&header[0..32]).trim_end_matches('\0'));
+        }
+
         // Send command
         self.stream.write_all(&header)?;
         if !body.is_empty() {
@@ -356,24 +365,28 @@ impl NanonisClient {
             trace!("Command sent, waiting for response...");
         }
 
-        // Read response header
-        let mut response_header = [0u8; HEADER_SIZE];
-        self.stream.read_exact(&mut response_header)?;
+        // Read response header with improved error handling
+        let response_header = Protocol::read_exact_bytes::<HEADER_SIZE>(&mut self.stream)?;
 
         // Validate and get body size
         let body_size = Protocol::validate_response_header(&response_header, command)?;
 
-        // Read response body
-        let mut response_body = vec![0u8; body_size as usize];
-        if body_size > 0 {
-            self.stream.read_exact(&mut response_body)?;
-        }
+        // Read response body with size validation
+        let response_body = if body_size > 0 {
+            Protocol::read_variable_bytes(&mut self.stream, body_size as usize)?
+        } else {
+            Vec::new()
+        };
 
         if self.debug {
             trace!("Response received, body size: {}", body_size);
+            if body_size > 0 && body_size < 200 { // Only log small responses
+                trace!("Response body: {:02x?}", &response_body);
+                trace!("Response as string: {:?}", String::from_utf8_lossy(&response_body));
+            }
         }
 
-        // Parse response
-        Protocol::parse_response(&response_body, &return_types)
+        // Parse response with error checking
+        Protocol::parse_response_with_error_check(&response_body, &return_types)
     }
 }

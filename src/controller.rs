@@ -594,7 +594,7 @@ impl Controller {
     ) -> Result<(), NanonisError> {
         // Add position information if available
         if let Ok(position) = self.client.folme_xy_pos_get(true) {
-            machine_state.position = Some((position.x, position.y));
+            machine_state.position = Some(position);
         }
 
         // Note: signal names now handled via SessionMetadata, not MachineState
