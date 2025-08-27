@@ -48,8 +48,8 @@ impl NanonisClient {
             vec!["f", "f", "f", "f", "f"],
         )?;
         if result.len() >= 5 {
-            let center_x = result[0].as_f32()? as f64;
-            let center_y = result[1].as_f32()? as f64;
+            let center_x = result[0].as_f64()?;
+            let center_y = result[1].as_f64()?;
             let width = result[2].as_f32()?;
             let height = result[3].as_f32()?;
             let angle = result[4].as_f32()?;

@@ -1,3 +1,5 @@
+pub mod actions;
+pub mod action_driver;
 pub mod classifier;
 pub mod controller;
 pub mod error;
@@ -6,6 +8,8 @@ pub mod policy;
 pub mod signal_monitor;
 pub mod types;
 
+pub use actions::{Action, ActionChain, ActionResult};
+pub use action_driver::{ActionDriver, ExecutionStats};
 pub use classifier::{BoundaryClassifier, StateClassifier, TipState};
 pub use controller::{Controller, SystemStats};
 pub use error::NanonisError;
@@ -19,8 +23,8 @@ pub use signal_monitor::{
     JsonDiskWriterBuilder, MonitorStats, SignalReceiver, SyncSignalMonitor,
 };
 pub use types::{
-    Amplitude, ChannelIndex, Frequency, MachineState, MotorAxis, MotorDirection, MotorGroup,
-    MovementMode, NanonisValue, OscilloscopeIndex, Position, Position3D, SampleCount, ScanAction,
-    ScanDirection, ScanFrame, SessionMetadata, SignalIndex, StepCount, TriggerLevel,
+    ActionCondition, Amplitude, ChannelIndex, Frequency, MachineState, MotorAxis, MotorDirection, MotorGroup,
+    MotorMovement, MotorPosition, MovementMode, NanonisValue, OscilloscopeIndex, Position, Position3D, SampleCount, ScanAction,
+    ScanDirection, ScanFrame, SessionMetadata, SignalIndex, SignalRef, SignalRegistry, SignalValue, StepCount, SystemPosition, TriggerLevel,
     TriggerMode, TriggerSlope,
 };

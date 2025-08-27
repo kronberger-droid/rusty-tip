@@ -5,7 +5,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     client.auto_approach_and_wait()?;
 
-    client.bias_sweep_props_set(number_of_steps, period_ms, autosave, save_dialog_box)
+    client.bias_sweep_props_set(10, 500, 0, 0)?;
 
     Ok(())
 }
