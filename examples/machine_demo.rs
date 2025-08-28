@@ -3,7 +3,7 @@ use std::time::Duration;
 use log::info;
 use rusty_tip::{
     Action, ActionChain, ActionDriver, ActionSequence, ExecutionPriority, MachineRepresentation,
-    NanonisClient, Position,
+    NanonisClient, Position, SignalIndex,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,12 +12,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create client and driver
     let driver = ActionDriver::new("127.0.0.1", 6501)?;
 
-    // println!("{:?}", driver.client_mut().get_bias()?);
     let mut machine = MachineRepresentation::new(driver);
 
-    let result = machine.driver().execute(Action::Withdraw {
-        wait_until_finished: true,
-        timeout_ms: 500,
+    let result = machine.driver().execute(Action::ReadSignal {
+        signal: SignalIndex(24),
+        wait_for_newest: true,
     })?;
 
     info!("BadAction result: {result:?}");

@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::classifier::TipState;
 use crate::error::NanonisError;
 use std::collections::VecDeque;
 
@@ -295,19 +294,6 @@ impl NanonisValue {
                 "Expected 2D f32 array, got {self:?}"
             ))),
         }
-    }
-}
-
-/// Type-safe wrappers for common Nanonis values
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct Position {
-    pub x: f64,
-    pub y: f64,
-}
-
-impl Position {
-    pub fn new(x: f64, y: f64) -> Self {
-        Self { x, y }
     }
 }
 
@@ -822,6 +808,36 @@ impl TryFrom<u32> for ScanDirection {
     }
 }
 
+// Interface Types
+/// z-controller hold choice used in bias_pulse
+#[derive(Debug, Clone, Copy)]
+pub enum ZControllerHold {
+    Keep = 0,
+    On = 1,
+    Off = 2,
+}
+
+/// pulse mode choice used in bias_pulse
+#[derive(Debug, Clone, Copy)]
+pub enum PulseMode {
+    Keep = 0,
+    Relative = 1,
+    Absolute = 2,
+}
+
+/// position 2d used in
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Position {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl Position {
+    pub fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+}
+
 /// Session metadata - static information written once per monitoring session
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMetadata {
@@ -858,32 +874,14 @@ pub struct MachineState {
     pub last_action: Option<String>, // Last action executed
     pub system_parameters: Vec<f32>, // Configurable system params
 
-    // Classification result
-    pub classification: TipState, // How the classifier interpreted this state
-
-                                  // For future ML/transformer expansion:
-                                  // pub embedding: Option<Vec<f32>>,         // Learned state representation
-                                  // pub attention_weights: Option<Vec<f32>>, // Transformer attention scores
-                                  // pub confidence: f32,                     // Model confidence in decision
+                                     // For future ML/transformer expansion:
+                                     // pub embedding: Option<Vec<f32>>,         // Learned state representation
+                                     // pub attention_weights: Option<Vec<f32>>, // Transformer attention scores
+                                     // pub confidence: f32,                     // Model confidence in decision
 }
 
 // ==================== Action System Types ====================
 
-/// Lightweight reference to a signal by index
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SignalRef {
-    index: i32,
-}
-
-impl SignalRef {
-    pub fn new(index: i32) -> Self {
-        Self { index }
-    }
-
-    pub fn index(&self) -> i32 {
-        self.index
-    }
-}
 
 /// Registry for mapping signal names to indices
 #[derive(Debug, Clone)]
@@ -927,31 +925,31 @@ impl SignalRegistry {
     }
 
     /// Get signal by name
-    pub fn get_signal(&self, name: &str) -> Option<SignalRef> {
+    pub fn get_signal(&self, name: &str) -> Option<SignalIndex> {
         self.name_to_index
             .get(name)
-            .map(|&index| SignalRef::new(index))
+            .map(|&index| SignalIndex(index))
     }
 
     /// Get signal by index
-    pub fn get_signal_by_index(&self, index: i32) -> Option<SignalRef> {
+    pub fn get_signal_by_index(&self, index: i32) -> Option<SignalIndex> {
         if (index as usize) < self.signals.len() && !self.signals[index as usize].is_empty() {
-            Some(SignalRef::new(index))
+            Some(SignalIndex(index))
         } else {
             None
         }
     }
 
-    /// Get signal name for a SignalRef
-    pub fn get_name(&self, signal: SignalRef) -> Option<&str> {
+    /// Get signal name for a SignalIndex
+    pub fn get_name(&self, signal: SignalIndex) -> Option<&str> {
         self.signals
-            .get(signal.index as usize)
+            .get(signal.0 as usize)
             .map(|s| s.as_str())
             .filter(|s| !s.is_empty())
     }
 
     /// Find signal by trying multiple name variants
-    pub fn find_signal(&self, names: &[&str]) -> Option<SignalRef> {
+    pub fn find_signal(&self, names: &[&str]) -> Option<SignalIndex> {
         for name in names {
             if let Some(signal) = self.get_signal(name) {
                 return Some(signal);
@@ -961,25 +959,25 @@ impl SignalRegistry {
     }
 
     /// Get bias voltage signal (tries common variants)
-    pub fn bias_voltage(&self) -> Option<SignalRef> {
+    pub fn bias_voltage(&self) -> Option<SignalIndex> {
         self.find_signal(&["Bias (V)", "Bias Voltage", "Bias"])
             .or_else(|| self.get_signal_by_index(24)) // Common fallback
     }
 
     /// Get current signal (tries common variants)
-    pub fn current(&self) -> Option<SignalRef> {
+    pub fn current(&self) -> Option<SignalIndex> {
         self.find_signal(&["Current (A)", "Current", "I"])
             .or_else(|| self.get_signal_by_index(0)) // Common fallback
     }
 
     /// Get height/Z signal (tries common variants)  
-    pub fn height(&self) -> Option<SignalRef> {
+    pub fn height(&self) -> Option<SignalIndex> {
         self.find_signal(&["Z (m)", "Height", "Z Position"])
             .or_else(|| self.get_signal_by_index(1)) // Common fallback
     }
 
     /// Get all available signals
-    pub fn all_signals(&self) -> Vec<SignalRef> {
+    pub fn all_signals(&self) -> Vec<SignalIndex> {
         (0..self.signals.len())
             .filter_map(|i| self.get_signal_by_index(i as i32))
             .collect()
@@ -1066,7 +1064,7 @@ pub enum ActionCondition {
         max: f32,
     },
     SignalInRange {
-        signal: SignalRef,
+        signal: SignalIndex,
         min: f32,
         max: f32,
     },

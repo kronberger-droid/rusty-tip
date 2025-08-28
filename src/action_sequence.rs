@@ -1,6 +1,6 @@
 use crate::{
     actions::{Action, ActionChain},
-    SignalRef,
+    SignalIndex,
 };
 use std::time::Duration;
 
@@ -48,7 +48,7 @@ impl ActionSequence {
                 Action::AutoApproach,
                 // Step 6: Check tip state (read signal names to verify recovery)
                 Action::ReadSignal {
-                    signal: SignalRef::new(0),
+                    signal: SignalIndex(0),
                     wait_for_newest: true,
                 },
             ]),

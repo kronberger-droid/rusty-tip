@@ -1,6 +1,7 @@
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use log::debug;
 use std::io::Read;
 
 // Protocol constants
@@ -100,12 +101,22 @@ impl Protocol {
     pub fn read_exact_bytes<const N: usize>(
         reader: &mut dyn Read,
     ) -> Result<[u8; N], NanonisError> {
+        debug!("Attempting to read exactly {} bytes", N);
         let mut buf = [0u8; N];
-        reader.read_exact(&mut buf).map_err(|e| NanonisError::Io {
-            source: e,
-            context: format!("Failed to read {} bytes from Nanonis", N),
-        })?;
-        Ok(buf)
+        
+        match reader.read_exact(&mut buf) {
+            Ok(()) => {
+                debug!("Successfully read {} bytes: {:02x?}", N, if N <= 20 { &buf[..] } else { &buf[..20] });
+                Ok(buf)
+            }
+            Err(e) => {
+                debug!("Failed to read {} bytes: {} (kind: {:?})", N, e, e.kind());
+                Err(NanonisError::Io {
+                    source: e,
+                    context: format!("Failed to read {} bytes from Nanonis", N),
+                })
+            }
+        }
     }
 
     /// Helper for reading variable-length data with size validation
@@ -113,8 +124,11 @@ impl Protocol {
         reader: &mut dyn Read,
         size: usize,
     ) -> Result<Vec<u8>, NanonisError> {
+        debug!("Attempting to read {} variable bytes", size);
+        
         // Reasonable size limit to prevent memory attacks
         if size > MAX_RESPONSE_SIZE {
+            debug!("Size {} exceeds maximum {}", size, MAX_RESPONSE_SIZE);
             return Err(NanonisError::Protocol(format!(
                 "Response size {} exceeds maximum {}",
                 size, MAX_RESPONSE_SIZE
@@ -122,11 +136,24 @@ impl Protocol {
         }
 
         let mut body = vec![0u8; size];
-        reader.read_exact(&mut body).map_err(|e| NanonisError::Io {
-            source: e,
-            context: format!("Failed to read {} byte response body", size),
-        })?;
-        Ok(body)
+        match reader.read_exact(&mut body) {
+            Ok(()) => {
+                debug!("Successfully read {} variable bytes: {:02x?}", size, if size <= 50 { &body[..] } else { &body[..50] });
+                Ok(body)
+            }
+            Err(e) => {
+                debug!("Failed to read {} variable bytes: {} (kind: {:?})", size, e, e.kind());
+                // Try to read whatever we can to diagnose the issue
+                let mut partial_buf = Vec::new();
+                if let Ok(bytes_read) = reader.read_to_end(&mut partial_buf) {
+                    debug!("Partial read got {} bytes: {:02x?}", bytes_read, if bytes_read <= 50 { &partial_buf[..] } else { &partial_buf[..50] });
+                }
+                Err(NanonisError::Io {
+                    source: e,
+                    context: format!("Failed to read {} byte response body", size),
+                })
+            }
+        }
     }
 
     /// Parse response with error checking - returns (values, cursor_position)
@@ -165,12 +192,12 @@ impl Protocol {
                     cursor.read_i16::<BigEndian>()?;
                 }
                 "I" => {
-                    cursor.read_u32::<BigEndian>()?;
-                    result.push(cursor.position() as u32);
+                    let val = cursor.read_u32::<BigEndian>()?;
+                    result.push(val);
                 }
                 "i" => {
-                    cursor.read_i32::<BigEndian>()?;
-                    result.push(cursor.position() as u32);
+                    let val = cursor.read_i32::<BigEndian>()? as u32;
+                    result.push(val);
                 }
                 "f" => {
                     cursor.read_f32::<BigEndian>()?;
