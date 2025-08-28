@@ -1,8 +1,10 @@
 pub mod actions;
 pub mod action_driver;
+pub mod action_sequence;
 pub mod classifier;
 pub mod controller;
 pub mod error;
+pub mod machine;
 pub mod nanonis;
 pub mod policy;
 pub mod signal_monitor;
@@ -10,6 +12,8 @@ pub mod types;
 
 pub use actions::{Action, ActionChain, ActionResult};
 pub use action_driver::{ActionDriver, ExecutionStats};
+pub use action_sequence::ActionSequence;
+pub use machine::{ExecutionPriority, MachineRepresentation};
 pub use classifier::{BoundaryClassifier, StateClassifier, TipState};
 pub use controller::{Controller, SystemStats};
 pub use error::NanonisError;

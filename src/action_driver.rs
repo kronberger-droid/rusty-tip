@@ -18,7 +18,9 @@ pub struct ActionDriver {
 
 impl ActionDriver {
     /// Create a new ActionDriver with the given client and auto-discover signals
-    pub fn new(mut client: NanonisClient) -> Result<Self, NanonisError> {
+    pub fn new(addr: &str, port: u16) -> Result<Self, NanonisError> {
+        let mut client = NanonisClient::new(addr, port)?;
+
         let names = client.signal_names_get(false)?;
         let registry = SignalRegistry::from_names(names);
 
@@ -29,6 +31,15 @@ impl ActionDriver {
         })
     }
 
+    pub fn with_client(mut client: NanonisClient) -> Result<Self, NanonisError> {
+        let names = client.signal_names_get(false)?;
+        let registry = SignalRegistry::from_names(names);
+        Ok(Self {
+            client,
+            registry,
+            stored_values: HashMap::new(),
+        })
+    }
     /// Create a new ActionDriver with a provided registry (for testing)
     pub fn with_registry(client: NanonisClient, registry: SignalRegistry) -> Self {
         Self {
@@ -183,29 +194,19 @@ impl ActionDriver {
 
             // === Advanced Operations ===
             Action::BiasPulse {
-                voltage,
-                duration_ms,
-                restore_original,
+                wait_until_done,
+                pulse_width_s,
+                bias_value_v,
+                z_controller_hold,
+                pulse_mode,
             } => {
-                let original_bias = if restore_original {
-                    Some(self.client.get_bias()?)
-                } else {
-                    None
-                };
-
-                // Set pulse voltage
-                self.client.set_bias(voltage)?;
-
-                // Wait for pulse duration
-                thread::sleep(std::time::Duration::from_millis(duration_ms as u64));
-
-                // Restore original voltage if requested
-                if let Some(original) = original_bias {
-                    self.client.set_bias(original)?;
-                } else {
-                    // Set to safe default
-                    self.client.set_bias(0.0)?;
-                }
+                self.client.bias_pulse(
+                    wait_until_done,
+                    pulse_width_s.as_secs() as f32,
+                    bias_value_v,
+                    z_controller_hold,
+                    pulse_mode,
+                )?;
 
                 Ok(ActionResult::Success)
             }
@@ -395,37 +396,28 @@ mod tests {
         // This test shows how the translator would be used
         // It will fail without actual hardware, but demonstrates the API
 
-        let client = NanonisClient::new("127.0.0.1", 6501);
-        match client {
-            Ok(client) => {
-                let driver_result = ActionDriver::new(client);
-                match driver_result {
-                    Ok(mut driver) => {
-                        // Test single action
-                        let action = Action::ReadBias;
-                        let _result = driver.execute(action);
+        let driver_result = ActionDriver::new("127.0.0.1", 6501);
+        match driver_result {
+            Ok(mut driver) => {
+                // Test single action
+                let action = Action::ReadBias;
+                let _result = driver.execute(action);
 
-                        // With real hardware, this would succeed
-                        // Without hardware, it will error, which is expected
+                // With real hardware, this would succeed
+                // Without hardware, it will error, which is expected
 
-                        // Test chain
-                        let chain = ActionChain::new(vec![
-                            Action::ReadBias,
-                            Action::wait_ms(100),
-                            Action::SetBias { voltage: 1.0 },
-                        ]);
+                // Test chain
+                let chain = ActionChain::new(vec![
+                    Action::ReadBias,
+                    Action::wait_ms(100),
+                    Action::SetBias { voltage: 1.0 },
+                ]);
 
-                        let _chain_result = driver.execute_chain(chain);
-                    }
-                    Err(_) => {
-                        // Expected when signals can't be discovered
-                        println!("Signal discovery failed - this is expected without hardware");
-                    }
-                }
+                let _chain_result = driver.execute_chain(chain);
             }
             Err(_) => {
-                // Expected when no Nanonis hardware is available
-                println!("No Nanonis hardware available - this is expected in tests");
+                // Expected when signals can't be discovered
+                println!("Signal discovery failed - this is expected without hardware");
             }
         }
     }

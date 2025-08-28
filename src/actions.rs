@@ -77,9 +77,11 @@ pub enum Action {
     // === Advanced Operations ===
     /// Execute bias pulse with parameters
     BiasPulse {
-        voltage: f32,
-        duration_ms: u32,
-        restore_original: bool,
+        wait_until_done: bool,
+        pulse_width_s: Duration,
+        bias_value_v: f32,
+        z_controller_hold: u16,
+        pulse_mode: u16,
     },
 
     /// Wait for a specific duration
@@ -255,11 +257,13 @@ impl Action {
                 format!("Wait {:.1}s", duration.as_secs_f64())
             }
             Action::BiasPulse {
-                voltage,
-                duration_ms,
-                ..
+                wait_until_done,
+                pulse_width_s,
+                bias_value_v,
+                z_controller_hold,
+                pulse_mode,
             } => {
-                format!("Bias pulse {:.3}V for {}ms", voltage, duration_ms)
+                format!("Bias pulse {:.3}V for {:?}ms", bias_value_v, pulse_width_s)
             }
             _ => format!("{:?}", self),
         }
