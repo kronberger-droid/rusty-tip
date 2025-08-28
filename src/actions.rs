@@ -1,5 +1,5 @@
 use crate::types::{
-    ActionCondition, MotorMovement, MovementMode, Position, Position3D, ScanAction, SignalRef,
+    ActionCondition, MotorMovement, MovementMode, Position, Position3D, ScanAction, SignalIndex,
     SignalValue,
 };
 use std::time::Duration;
@@ -11,13 +11,13 @@ pub enum Action {
     // === Signal Operations ===
     /// Read single signal value
     ReadSignal {
-        signal: SignalRef,
+        signal: SignalIndex,
         wait_for_newest: bool,
     },
 
     /// Read multiple signal values
     ReadSignals {
-        signals: Vec<SignalRef>,
+        signals: Vec<SignalIndex>,
         wait_for_newest: bool,
     },
 
@@ -228,10 +228,10 @@ impl Action {
     pub fn description(&self) -> String {
         match self {
             Action::ReadSignal { signal, .. } => {
-                format!("Read signal {}", signal.index())
+                format!("Read signal {}", signal.0)
             }
             Action::ReadSignals { signals, .. } => {
-                let indices: Vec<i32> = signals.iter().map(|s| s.index()).collect();
+                let indices: Vec<i32> = signals.iter().map(|s| s.0).collect();
                 format!("Read signals: {:?}", indices)
             }
             Action::SetBias { voltage } => {
@@ -257,11 +257,11 @@ impl Action {
                 format!("Wait {:.1}s", duration.as_secs_f64())
             }
             Action::BiasPulse {
-                wait_until_done,
+                wait_until_done: _,
                 pulse_width_s,
                 bias_value_v,
-                z_controller_hold,
-                pulse_mode,
+                z_controller_hold: _,
+                pulse_mode: _,
             } => {
                 format!("Bias pulse {:.3}V for {:?}ms", bias_value_v, pulse_width_s)
             }
@@ -276,7 +276,7 @@ impl Action {
     /// Create ReadSignal action for single index
     pub fn read_signal_index(index: i32, wait_for_newest: bool) -> Self {
         Self::ReadSignal {
-            signal: SignalRef::new(index),
+            signal: SignalIndex(index),
             wait_for_newest,
         }
     }
@@ -284,7 +284,7 @@ impl Action {
     /// Create ReadSignals action for multiple indices
     pub fn read_signal_indices(indices: Vec<i32>, wait_for_newest: bool) -> Self {
         Self::ReadSignals {
-            signals: indices.into_iter().map(SignalRef::new).collect(),
+            signals: indices.into_iter().map(SignalIndex).collect(),
             wait_for_newest,
         }
     }

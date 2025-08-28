@@ -63,7 +63,7 @@ impl NanonisClient {
     }
 
     /// Get current values of signals by index(es)
-    pub fn signals_val_get(
+    pub fn signals_vals_get(
         &mut self,
         signal_indexes: Vec<i32>,
         wait_for_newest_data: bool,
@@ -149,7 +149,7 @@ impl NanonisClient {
     /// let fresh_value = client.signals_val_get_single(SignalIndex(24), true)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn signals_val_get_single(
+    pub fn signal_val_get(
         &mut self,
         signal_index: impl Into<SignalIndex>,
         wait_for_newest_data: bool,
@@ -279,7 +279,7 @@ impl NanonisClient {
     ) -> Result<f32, NanonisError> {
         match self.find_signal_index(signal_name)? {
             Some(index) => {
-                let values = self.signals_val_get(vec![index.into()], wait_for_newest)?;
+                let values = self.signals_vals_get(vec![index.into()], wait_for_newest)?;
                 values
                     .first()
                     .copied()

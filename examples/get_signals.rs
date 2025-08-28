@@ -6,7 +6,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     client.signal_names_get(true)?;
 
-    let values = client.signals_val_get((0..=127).collect::<Vec<i32>>(), true)?;
+    let values = client.signals_vals_get((0..=127).collect::<Vec<i32>>(), true)?;
 
     let names = client.signal_names_get(false)?;
 

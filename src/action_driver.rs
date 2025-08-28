@@ -2,15 +2,15 @@ use log::info;
 
 use crate::actions::{Action, ActionChain, ActionResult};
 use crate::error::NanonisError;
-use crate::nanonis::NanonisClient;
+use crate::nanonis::{NanonisClient, SPMInterface, PulseMode, ZControllerHold};
 use crate::types::{MotorGroup, Position, ScanDirection, SignalRegistry, SignalValue};
 use std::collections::HashMap;
 use std::thread;
 
-/// Direct 1:1 translation layer between Actions and NanonisClient calls
+/// Direct 1:1 translation layer between Actions and SPM interface calls
 /// No safety checks, no validation - maximum performance and flexibility
 pub struct ActionDriver {
-    client: NanonisClient,
+    client: Box<dyn SPMInterface>,
     registry: SignalRegistry,
     /// Storage for Store/Retrieve actions
     stored_values: HashMap<String, ActionResult>,
@@ -20,10 +20,21 @@ impl ActionDriver {
     /// Create a new ActionDriver with the given client and auto-discover signals
     pub fn new(addr: &str, port: u16) -> Result<Self, NanonisError> {
         let mut client = NanonisClient::new(addr, port)?;
-
+        
         let names = client.signal_names_get(false)?;
         let registry = SignalRegistry::from_names(names);
 
+        Ok(Self {
+            client: Box::new(client),
+            registry,
+            stored_values: HashMap::new(),
+        })
+    }
+
+    /// Create ActionDriver with any SPM interface implementation
+    pub fn with_spm_interface(mut client: Box<dyn SPMInterface>) -> Result<Self, NanonisError> {
+        let names = client.get_signal_names()?;
+        let registry = SignalRegistry::from_names(names);
         Ok(Self {
             client,
             registry,
@@ -31,17 +42,8 @@ impl ActionDriver {
         })
     }
 
-    pub fn with_client(mut client: NanonisClient) -> Result<Self, NanonisError> {
-        let names = client.signal_names_get(false)?;
-        let registry = SignalRegistry::from_names(names);
-        Ok(Self {
-            client,
-            registry,
-            stored_values: HashMap::new(),
-        })
-    }
     /// Create a new ActionDriver with a provided registry (for testing)
-    pub fn with_registry(client: NanonisClient, registry: SignalRegistry) -> Self {
+    pub fn with_registry(client: Box<dyn SPMInterface>, registry: SignalRegistry) -> Self {
         Self {
             client,
             registry,
@@ -49,14 +51,25 @@ impl ActionDriver {
         }
     }
 
-    /// Get a reference to the underlying client
-    pub fn client(&self) -> &NanonisClient {
-        &self.client
+    /// Convenience method to create with NanonisClient
+    pub fn with_nanonis_client(mut client: NanonisClient) -> Result<Self, NanonisError> {
+        let names = client.signal_names_get(false)?;
+        let registry = SignalRegistry::from_names(names);
+        Ok(Self {
+            client: Box::new(client),
+            registry,
+            stored_values: HashMap::new(),
+        })
     }
 
-    /// Get a mutable reference to the underlying client
-    pub fn client_mut(&mut self) -> &mut NanonisClient {
-        &mut self.client
+    /// Get a reference to the underlying SPM interface
+    pub fn spm_interface(&self) -> &dyn SPMInterface {
+        self.client.as_ref()
+    }
+
+    /// Get a mutable reference to the underlying SPM interface
+    pub fn spm_interface_mut(&mut self) -> &mut dyn SPMInterface {
+        self.client.as_mut()
     }
 
     /// Get a reference to the signal registry
@@ -74,7 +87,7 @@ impl ActionDriver {
             } => {
                 let value = self
                     .client
-                    .signals_val_get(vec![signal.index()], wait_for_newest)?;
+                    .read_signals(vec![signal.into()], wait_for_newest)?;
                 let signal_value = SignalValue::Unitless(value[0] as f64);
                 Ok(ActionResult::Signals(vec![signal_value]))
             }
@@ -83,8 +96,8 @@ impl ActionDriver {
                 signals,
                 wait_for_newest,
             } => {
-                let indices: Vec<i32> = signals.iter().map(|s| s.index()).collect();
-                let values = self.client.signals_val_get(indices, wait_for_newest)?;
+                let indices: Vec<i32> = signals.iter().map(|s| (*s).into()).collect();
+                let values = self.client.read_signals(indices, wait_for_newest)?;
 
                 // Convert to SignalValue with basic type inference
                 let signal_values: Vec<SignalValue> = values
@@ -96,7 +109,7 @@ impl ActionDriver {
             }
 
             Action::ReadSignalNames => {
-                let names = self.client.signal_names_get(false)?;
+                let names = self.client.get_signal_names()?;
                 Ok(ActionResult::SignalNames(names))
             }
 
@@ -115,7 +128,7 @@ impl ActionDriver {
             Action::ReadPiezoPosition {
                 wait_for_newest_data,
             } => {
-                let pos = self.client.folme_xy_pos_get(wait_for_newest_data)?;
+                let pos = self.client.get_xy_position(wait_for_newest_data)?;
                 Ok(ActionResult::PiezoPosition(pos))
             }
 
@@ -124,19 +137,19 @@ impl ActionDriver {
                 wait_until_finished,
             } => {
                 self.client
-                    .folme_xy_pos_set(position, wait_until_finished)?;
+                    .set_xy_position(position, wait_until_finished)?;
                 Ok(ActionResult::Success)
             }
 
             Action::MovePiezoRelative { delta } => {
                 // Get current position and add delta
-                let current = self.client.folme_xy_pos_get(true)?;
+                let current = self.client.get_xy_position(true)?;
                 info!("Current position: {current:?}");
                 let new_position = Position {
                     x: current.x + delta.x,
                     y: current.y + delta.y,
                 };
-                self.client.folme_xy_pos_set(new_position, true)?;
+                self.client.set_xy_position(new_position, true)?;
                 Ok(ActionResult::Success)
             }
 
@@ -168,7 +181,7 @@ impl ActionDriver {
 
             // === Control Operations ===
             Action::AutoApproach => {
-                self.client.auto_approach_and_wait()?;
+                self.client.auto_approach(true)?;
                 Ok(ActionResult::Success)
             }
 
@@ -200,12 +213,27 @@ impl ActionDriver {
                 z_controller_hold,
                 pulse_mode,
             } => {
+                // Convert u16 parameters to enums (safe conversion with fallback)
+                let hold_enum = match z_controller_hold {
+                    0 => ZControllerHold::NoChange,
+                    1 => ZControllerHold::Hold,
+                    2 => ZControllerHold::Release,
+                    _ => ZControllerHold::NoChange, // Safe fallback
+                };
+                
+                let mode_enum = match pulse_mode {
+                    0 => PulseMode::Keep,
+                    1 => PulseMode::Relative,
+                    2 => PulseMode::Absolute,
+                    _ => PulseMode::Keep, // Safe fallback
+                };
+
                 self.client.bias_pulse(
                     wait_until_done,
-                    pulse_width_s.as_secs() as f32,
+                    pulse_width_s,
                     bias_value_v,
-                    z_controller_hold,
-                    pulse_mode,
+                    hold_enum,
+                    mode_enum,
                 )?;
 
                 Ok(ActionResult::Success)
@@ -307,13 +335,13 @@ impl ActionDriver {
             }
 
             ActionCondition::SignalInRange { signal, min, max } => {
-                let values = self.client.signals_val_get(vec![signal.index()], true)?;
+                let values = self.client.read_signals(vec![signal.into()], true)?;
                 let value = values[0];
                 Ok(value >= min && value <= max)
             }
 
             ActionCondition::PositionInBounds { bounds, tolerance } => {
-                let current = self.client.folme_xy_pos_get(true)?;
+                let current = self.client.get_xy_position(true)?;
                 let dx = (current.x - bounds.x).abs();
                 let dy = (current.y - bounds.y).abs();
                 Ok(dx <= tolerance && dy <= tolerance)
@@ -452,7 +480,7 @@ mod tests {
 
     #[test]
     fn test_signal_registry() {
-        use crate::SignalRef;
+        use crate::SignalIndex;
         // Test registry functionality without requiring hardware
         let registry = SignalRegistry::from_names(vec![
             "Bias (V)".to_string(),
@@ -463,20 +491,20 @@ mod tests {
         // Test signal lookup by name
         let bias_signal = registry.get_signal("Bias (V)");
         assert!(bias_signal.is_some());
-        assert_eq!(bias_signal.unwrap().index(), 0);
+        assert_eq!(bias_signal.unwrap().0, 0);
 
         // Test helper methods
         let bias_voltage = registry.bias_voltage();
         assert!(bias_voltage.is_some());
-        assert_eq!(bias_voltage.unwrap().index(), 0);
+        assert_eq!(bias_voltage.unwrap().0, 0);
 
         let current = registry.current();
         assert!(current.is_some());
-        assert_eq!(current.unwrap().index(), 1);
+        assert_eq!(current.unwrap().0, 1);
 
         // Test name retrieval
-        let signal_ref = SignalRef::new(0);
-        let name = registry.get_name(signal_ref);
+        let signal_index = SignalIndex(0);
+        let name = registry.get_name(signal_index);
         assert_eq!(name, Some("Bias (V)"));
     }
 }

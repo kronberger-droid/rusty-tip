@@ -1,7 +1,7 @@
 use super::protocol::{Protocol, HEADER_SIZE};
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
-use log::{debug, trace, warn};
+use log::{debug, warn};
 use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
@@ -18,6 +18,7 @@ pub mod osci_hr;
 pub mod safe_tip;
 pub mod scan;
 pub mod signals;
+pub mod spm_impl;
 pub mod tip_recovery;
 pub mod z_ctrl;
 pub mod z_spectr;
@@ -225,7 +226,7 @@ impl NanonisClientBuilder {
 /// client.set_bias(1.0)?;
 ///
 /// // Read signal values
-/// let values = client.signals_val_get(vec![0, 1, 2], true)?;
+/// let values = client.signals_vals_get(vec![0, 1, 2], true)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
@@ -336,57 +337,88 @@ impl NanonisClient {
         argument_types: Vec<&str>,
         return_types: Vec<&str>,
     ) -> Result<Vec<NanonisValue>, NanonisError> {
-        if self.debug {
-            debug!("Sending command: {}", command);
-        }
+        debug!("=== COMMAND START: {} ===", command);
+        debug!("Arguments: {:?}", args);
+        debug!("Argument types: {:?}", argument_types);
+        debug!("Return types: {:?}", return_types);
 
         // Serialize arguments
         let mut body = Vec::new();
         for (arg, arg_type) in args.iter().zip(argument_types.iter()) {
+            debug!("Serializing {:?} as {}", arg, arg_type);
             Protocol::serialize_value(arg, arg_type, &mut body)?;
         }
 
         // Create command header
         let header = Protocol::create_command_header(command, body.len() as u32);
 
-        if self.debug {
-            debug!("Header size: {}, Body size: {}", header.len(), body.len());
-            debug!("Header bytes: {:02x?}", &header[..20]); // First 20 bytes
-            debug!("Command in header: {:?}", String::from_utf8_lossy(&header[0..32]).trim_end_matches('\0'));
+        debug!("Header size: {}, Body size: {}", header.len(), body.len());
+        debug!("Full header bytes: {:02x?}", header);
+        debug!("Command in header: {:?}", String::from_utf8_lossy(&header[0..32]).trim_end_matches('\0'));
+        debug!("Body size in header: {}", u32::from_be_bytes([header[32], header[33], header[34], header[35]]));
+        
+        if !body.is_empty() {
+            debug!("Body bytes: {:02x?}", body);
         }
 
         // Send command
-        self.stream.write_all(&header)?;
+        debug!("Sending header ({} bytes)...", header.len());
+        self.stream.write_all(&header).map_err(|e| {
+            debug!("Failed to write header: {}", e);
+            NanonisError::Io { source: e, context: "Writing command header".to_string() }
+        })?;
+        
         if !body.is_empty() {
-            self.stream.write_all(&body)?;
+            debug!("Sending body ({} bytes)...", body.len());
+            self.stream.write_all(&body).map_err(|e| {
+                debug!("Failed to write body: {}", e);
+                NanonisError::Io { source: e, context: "Writing command body".to_string() }
+            })?;
         }
-
-        if self.debug {
-            trace!("Command sent, waiting for response...");
-        }
+        
+        debug!("Command data sent successfully");
 
         // Read response header with improved error handling
-        let response_header = Protocol::read_exact_bytes::<HEADER_SIZE>(&mut self.stream)?;
+        debug!("Reading response header ({} bytes)...", HEADER_SIZE);
+        let response_header = Protocol::read_exact_bytes::<HEADER_SIZE>(&mut self.stream)
+            .map_err(|e| {
+                debug!("Failed to read response header: {}", e);
+                e
+            })?;
+        
+        debug!("Response header received: {:02x?}", response_header);
+        debug!("Response command: {:?}", String::from_utf8_lossy(&response_header[0..32]).trim_end_matches('\0'));
 
         // Validate and get body size
         let body_size = Protocol::validate_response_header(&response_header, command)?;
+        debug!("Expected response body size: {}", body_size);
 
         // Read response body with size validation
         let response_body = if body_size > 0 {
-            Protocol::read_variable_bytes(&mut self.stream, body_size as usize)?
+            debug!("Reading response body ({} bytes)...", body_size);
+            let body = Protocol::read_variable_bytes(&mut self.stream, body_size as usize)
+                .map_err(|e| {
+                    debug!("Failed to read response body: {}", e);
+                    e
+                })?;
+            debug!("Response body received ({} bytes): {:02x?}", body.len(), if body.len() <= 100 { &body[..] } else { &body[..100] });
+            body
         } else {
+            debug!("No response body expected");
             Vec::new()
         };
 
-        if self.debug {
-            trace!("Response received, body size: {}", body_size);
-            if body_size > 0 && body_size < 200 { // Only log small responses
-                trace!("Response body: {:02x?}", &response_body);
-                trace!("Response as string: {:?}", String::from_utf8_lossy(&response_body));
-            }
-        }
-
         // Parse response with error checking
-        Protocol::parse_response_with_error_check(&response_body, &return_types)
+        debug!("Parsing response with types: {:?}", return_types);
+        let result = Protocol::parse_response_with_error_check(&response_body, &return_types)
+            .map_err(|e| {
+                debug!("Failed to parse response: {}", e);
+                e
+            })?;
+        
+        debug!("=== COMMAND SUCCESS: {} ===", command);
+        debug!("Parsed result: {:?}", result);
+        
+        Ok(result)
     }
 }
