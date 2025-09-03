@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use crate::error::NanonisError;
 use crate::types::{
-    MotorDirection, MotorGroup, MovementMode, Position, Position3D, ScanAction, ScanDirection,
-    StepCount,
+    DataToGet, MotorDirection, MotorGroup, MovementMode, OsciTriggerMode, OversamplingIndex,
+    Position, Position3D, ScanAction, ScanDirection, StepCount, TimebaseIndex, TriggerSlope,
 };
 
 /// Universal SPM pulse modes - concepts that apply to any SPM system
@@ -188,4 +188,139 @@ pub trait SPMInterface: Send + Sync {
     /// # Returns
     /// True if currently scanning, false otherwise
     fn scan_status_get(&mut self) -> Result<bool, NanonisError>;
+
+    // === Oscilloscope 1-Channel Operations ===
+
+    /// Set the channel for Oscilloscope 1-Channel
+    ///
+    /// # Arguments
+    /// * `channel_index` - Signal index (0-23)
+    fn osci1t_ch_set(&mut self, channel_index: i32) -> Result<(), NanonisError>;
+
+    /// Get the channel for Oscilloscope 1-Channel
+    ///
+    /// # Returns
+    /// Channel index (0-23)
+    fn osci1t_ch_get(&mut self) -> Result<i32, NanonisError>;
+
+    /// Set the timebase for Oscilloscope 1-Channel
+    ///
+    /// # Arguments
+    /// * `timebase_index` - Timebase index from available timebases
+    fn osci1t_timebase_set(&mut self, timebase_index: TimebaseIndex) -> Result<(), NanonisError>;
+
+    /// Get the timebase for Oscilloscope 1-Channel
+    ///
+    /// # Returns
+    /// Tuple of (timebase_index, available_timebases)
+    fn osci1t_timebase_get(&mut self) -> Result<(TimebaseIndex, Vec<f32>), NanonisError>;
+
+    /// Set trigger configuration for Oscilloscope 1-Channel
+    ///
+    /// # Arguments
+    /// * `trigger_mode` - Trigger mode (Immediate, Level, Auto)
+    /// * `trigger_slope` - Trigger slope (Falling, Rising)
+    /// * `trigger_level` - Trigger level value
+    /// * `trigger_hysteresis` - Trigger hysteresis value
+    fn osci1t_trig_set(
+        &mut self,
+        trigger_mode: OsciTriggerMode,
+        trigger_slope: TriggerSlope,
+        trigger_level: f32,
+        trigger_hysteresis: f32,
+    ) -> Result<(), NanonisError>;
+
+    /// Get trigger configuration for Oscilloscope 1-Channel
+    ///
+    /// # Returns
+    /// Tuple of (trigger_mode, trigger_slope, trigger_level, trigger_hysteresis)
+    fn osci1t_trig_get(&mut self) -> Result<(OsciTriggerMode, TriggerSlope, f64, f64), NanonisError>;
+
+    /// Start the Oscilloscope 1-Channel
+    fn osci1t_run(&mut self) -> Result<(), NanonisError>;
+
+    /// Get data from Oscilloscope 1-Channel
+    ///
+    /// # Arguments
+    /// * `data_to_get` - Data acquisition mode (Current, NextTrigger, Wait2Triggers)
+    ///
+    /// # Returns
+    /// Tuple of (t0, dt, size, data_values)
+    fn osci1t_data_get(&mut self, data_to_get: DataToGet) -> Result<(f64, f64, i32, Vec<f64>), NanonisError>;
+
+    // === Oscilloscope 2-Channels Operations ===
+
+    /// Set channels for Oscilloscope 2-Channels
+    ///
+    /// # Arguments
+    /// * `channel_a_index` - Channel A signal index (0-23)
+    /// * `channel_b_index` - Channel B signal index (0-23)
+    fn osci2t_ch_set(&mut self, channel_a_index: i32, channel_b_index: i32) -> Result<(), NanonisError>;
+
+    /// Get channels for Oscilloscope 2-Channels
+    ///
+    /// # Returns
+    /// Tuple of (channel_a_index, channel_b_index)
+    fn osci2t_ch_get(&mut self) -> Result<(i32, i32), NanonisError>;
+
+    /// Set timebase for Oscilloscope 2-Channels
+    ///
+    /// # Arguments
+    /// * `timebase_index` - Timebase index from available timebases
+    fn osci2t_timebase_set(&mut self, timebase_index: TimebaseIndex) -> Result<(), NanonisError>;
+
+    /// Get timebase for Oscilloscope 2-Channels
+    ///
+    /// # Returns
+    /// Tuple of (timebase_index, available_timebases)
+    fn osci2t_timebase_get(&mut self) -> Result<(TimebaseIndex, Vec<f32>), NanonisError>;
+
+    /// Set oversampling for Oscilloscope 2-Channels
+    ///
+    /// # Arguments
+    /// * `oversampling_index` - Oversampling configuration
+    fn osci2t_oversampl_set(&mut self, oversampling_index: OversamplingIndex) -> Result<(), NanonisError>;
+
+    /// Get oversampling for Oscilloscope 2-Channels
+    ///
+    /// # Returns
+    /// Current oversampling configuration
+    fn osci2t_oversampl_get(&mut self) -> Result<OversamplingIndex, NanonisError>;
+
+    /// Set trigger configuration for Oscilloscope 2-Channels
+    ///
+    /// # Arguments
+    /// * `trigger_mode` - Trigger mode (Immediate, Level, Auto)
+    /// * `trig_channel` - Trigger channel
+    /// * `trigger_slope` - Trigger slope (Falling, Rising)
+    /// * `trigger_level` - Trigger level value
+    /// * `trigger_hysteresis` - Trigger hysteresis value
+    /// * `trig_position` - Trigger position
+    fn osci2t_trig_set(
+        &mut self,
+        trigger_mode: OsciTriggerMode,
+        trig_channel: u16,
+        trigger_slope: TriggerSlope,
+        trigger_level: f64,
+        trigger_hysteresis: f64,
+        trig_position: f64,
+    ) -> Result<(), NanonisError>;
+
+    /// Get trigger configuration for Oscilloscope 2-Channels
+    ///
+    /// # Returns
+    /// Tuple of (trigger_mode, trig_channel, trigger_slope, trigger_level, trigger_hysteresis, trig_position)
+    fn osci2t_trig_get(&mut self) -> Result<(OsciTriggerMode, u16, TriggerSlope, f64, f64, f64), NanonisError>;
+
+    /// Start the Oscilloscope 2-Channels
+    fn osci2t_run(&mut self) -> Result<(), NanonisError>;
+
+    /// Get data from Oscilloscope 2-Channels
+    ///
+    /// # Arguments
+    /// * `data_to_get` - Data acquisition mode (Current, NextTrigger, Wait2Triggers)
+    ///
+    /// # Returns
+    /// Tuple of (t0, dt, channel_a_data, channel_b_data)
+    fn osci2t_data_get(&mut self, data_to_get: DataToGet) -> Result<(f64, f64, Vec<f64>, Vec<f64>), NanonisError>;
 }

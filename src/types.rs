@@ -1110,3 +1110,124 @@ impl MotorPosition {
         }
     }
 }
+
+/// Oscilloscope trigger mode for Osci1T and Osci2T
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsciTriggerMode {
+    Immediate = 0,
+    Level = 1,
+    Auto = 2,
+}
+
+impl From<OsciTriggerMode> for u16 {
+    fn from(mode: OsciTriggerMode) -> Self {
+        mode as u16
+    }
+}
+
+impl TryFrom<u16> for OsciTriggerMode {
+    type Error = NanonisError;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(OsciTriggerMode::Immediate),
+            1 => Ok(OsciTriggerMode::Level),
+            2 => Ok(OsciTriggerMode::Auto),
+            _ => Err(NanonisError::InvalidCommand(format!(
+                "Invalid oscilloscope trigger mode: {}", value
+            ))),
+        }
+    }
+}
+
+/// Oversampling index for Osci2T
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OversamplingIndex {
+    Samples50 = 0,
+    Samples20 = 1,
+    Samples10 = 2,
+    Samples5 = 3,
+    Samples2 = 4,
+    Samples1 = 5,
+}
+
+impl From<OversamplingIndex> for u16 {
+    fn from(index: OversamplingIndex) -> Self {
+        index as u16
+    }
+}
+
+impl TryFrom<u16> for OversamplingIndex {
+    type Error = NanonisError;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(OversamplingIndex::Samples50),
+            1 => Ok(OversamplingIndex::Samples20),
+            2 => Ok(OversamplingIndex::Samples10),
+            3 => Ok(OversamplingIndex::Samples5),
+            4 => Ok(OversamplingIndex::Samples2),
+            5 => Ok(OversamplingIndex::Samples1),
+            _ => Err(NanonisError::InvalidCommand(format!(
+                "Invalid oversampling index: {}", value
+            ))),
+        }
+    }
+}
+
+/// Timebase index for oscilloscope operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimebaseIndex(pub i32);
+
+impl From<TimebaseIndex> for i32 {
+    fn from(index: TimebaseIndex) -> Self {
+        index.0
+    }
+}
+
+impl From<TimebaseIndex> for u16 {
+    fn from(index: TimebaseIndex) -> Self {
+        index.0 as u16
+    }
+}
+
+impl From<i32> for TimebaseIndex {
+    fn from(value: i32) -> Self {
+        TimebaseIndex(value)
+    }
+}
+
+impl From<u16> for TimebaseIndex {
+    fn from(value: u16) -> Self {
+        TimebaseIndex(value as i32)
+    }
+}
+
+/// Data acquisition mode for oscilloscope operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataToGet {
+    Current = 0,
+    NextTrigger = 1,
+    Wait2Triggers = 2,
+}
+
+impl From<DataToGet> for u16 {
+    fn from(mode: DataToGet) -> Self {
+        mode as u16
+    }
+}
+
+impl TryFrom<u16> for DataToGet {
+    type Error = NanonisError;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(DataToGet::Current),
+            1 => Ok(DataToGet::NextTrigger),
+            2 => Ok(DataToGet::Wait2Triggers),
+            _ => Err(NanonisError::InvalidCommand(format!(
+                "Invalid data to get mode: {}", value
+            ))),
+        }
+    }
+}
