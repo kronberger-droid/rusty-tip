@@ -4,8 +4,8 @@ use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::nanonis::interface::{PulseMode, SPMInterface, ZControllerHold};
 use crate::types::{
-    MotorDirection, MotorGroup, MovementMode, Position, Position3D, ScanAction, ScanDirection,
-    StepCount,
+    DataToGet, MotorDirection, MotorGroup, MovementMode, OsciTriggerMode, OversamplingIndex,
+    Position, Position3D, ScanAction, ScanDirection, StepCount, TimebaseIndex, TriggerSlope,
 };
 
 /// Implementation of SPMInterface for NanonisClient
@@ -117,5 +117,126 @@ impl SPMInterface for NanonisClient {
 
     fn scan_status_get(&mut self) -> Result<bool, NanonisError> {
         NanonisClient::scan_status_get(self)
+    }
+
+    // === Oscilloscope 1-Channel Operations ===
+
+    fn osci1t_ch_set(&mut self, channel_index: i32) -> Result<(), NanonisError> {
+        NanonisClient::osci1t_ch_set(self, channel_index)
+    }
+
+    fn osci1t_ch_get(&mut self) -> Result<i32, NanonisError> {
+        NanonisClient::osci1t_ch_get(self)
+    }
+
+    fn osci1t_timebase_set(&mut self, timebase_index: TimebaseIndex) -> Result<(), NanonisError> {
+        NanonisClient::osci1t_timebase_set(self, timebase_index.into())
+    }
+
+    fn osci1t_timebase_get(&mut self) -> Result<(TimebaseIndex, Vec<f32>), NanonisError> {
+        let (index, timebases) = NanonisClient::osci1t_timebase_get(self)?;
+        Ok((TimebaseIndex::from(index), timebases))
+    }
+
+    fn osci1t_trig_set(
+        &mut self,
+        trigger_mode: OsciTriggerMode,
+        trigger_slope: TriggerSlope,
+        trigger_level: f32,
+        trigger_hysteresis: f32,
+    ) -> Result<(), NanonisError> {
+        NanonisClient::osci1t_trig_set(
+            self,
+            trigger_mode.into(),
+            trigger_slope.into(),
+            trigger_level,
+            trigger_hysteresis,
+        )
+    }
+
+    fn osci1t_trig_get(&mut self) -> Result<(OsciTriggerMode, TriggerSlope, f64, f64), NanonisError> {
+        let (mode, slope, level, hysteresis) = NanonisClient::osci1t_trig_get(self)?;
+        Ok((
+            OsciTriggerMode::try_from(mode)?,
+            TriggerSlope::try_from(slope)?,
+            level,
+            hysteresis,
+        ))
+    }
+
+    fn osci1t_run(&mut self) -> Result<(), NanonisError> {
+        NanonisClient::osci1t_run(self)
+    }
+
+    fn osci1t_data_get(&mut self, data_to_get: DataToGet) -> Result<(f64, f64, i32, Vec<f64>), NanonisError> {
+        NanonisClient::osci1t_data_get(self, data_to_get.into())
+    }
+
+    // === Oscilloscope 2-Channels Operations ===
+
+    fn osci2t_ch_set(&mut self, channel_a_index: i32, channel_b_index: i32) -> Result<(), NanonisError> {
+        NanonisClient::osci2t_ch_set(self, channel_a_index, channel_b_index)
+    }
+
+    fn osci2t_ch_get(&mut self) -> Result<(i32, i32), NanonisError> {
+        NanonisClient::osci2t_ch_get(self)
+    }
+
+    fn osci2t_timebase_set(&mut self, timebase_index: TimebaseIndex) -> Result<(), NanonisError> {
+        NanonisClient::osci2t_timebase_set(self, timebase_index.into())
+    }
+
+    fn osci2t_timebase_get(&mut self) -> Result<(TimebaseIndex, Vec<f32>), NanonisError> {
+        let (index, timebases) = NanonisClient::osci2t_timebase_get(self)?;
+        Ok((TimebaseIndex::from(index), timebases))
+    }
+
+    fn osci2t_oversampl_set(&mut self, oversampling_index: OversamplingIndex) -> Result<(), NanonisError> {
+        NanonisClient::osci2t_oversampl_set(self, oversampling_index.into())
+    }
+
+    fn osci2t_oversampl_get(&mut self) -> Result<OversamplingIndex, NanonisError> {
+        let index = NanonisClient::osci2t_oversampl_get(self)?;
+        OversamplingIndex::try_from(index)
+    }
+
+    fn osci2t_trig_set(
+        &mut self,
+        trigger_mode: OsciTriggerMode,
+        trig_channel: u16,
+        trigger_slope: TriggerSlope,
+        trigger_level: f64,
+        trigger_hysteresis: f64,
+        trig_position: f64,
+    ) -> Result<(), NanonisError> {
+        NanonisClient::osci2t_trig_set(
+            self,
+            trigger_mode.into(),
+            trig_channel,
+            trigger_slope.into(),
+            trigger_level,
+            trigger_hysteresis,
+            trig_position,
+        )
+    }
+
+    fn osci2t_trig_get(&mut self) -> Result<(OsciTriggerMode, u16, TriggerSlope, f64, f64, f64), NanonisError> {
+        let (mode, channel, slope, level, hysteresis, position) = NanonisClient::osci2t_trig_get(self)?;
+        Ok((
+            OsciTriggerMode::try_from(mode)?,
+            channel,
+            TriggerSlope::try_from(slope)?,
+            level,
+            hysteresis,
+            position,
+        ))
+    }
+
+    fn osci2t_run(&mut self) -> Result<(), NanonisError> {
+        NanonisClient::osci2t_run(self)
+    }
+
+    fn osci2t_data_get(&mut self, data_to_get: DataToGet) -> Result<(f64, f64, Vec<f64>, Vec<f64>), NanonisError> {
+        NanonisClient::osci2t_data_get(self, data_to_get.into())
     }
 }

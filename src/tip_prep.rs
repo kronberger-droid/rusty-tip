@@ -1,7 +1,7 @@
 use crate::action_driver::ActionDriver;
 use crate::actions::{Action, ActionResult};
 use crate::error::NanonisError;
-use crate::types::{Position, SignalIndex};
+use crate::types::{DataToGet, Position, SignalIndex};
 use log::{debug, info, warn};
 use std::time::{Duration, Instant};
 
@@ -62,27 +62,6 @@ impl TipController {
 
         let start = Instant::now();
         let mut cycle = 0;
-
-        // First, verify signal exists to avoid IO errors
-        let signal_names = self.driver.execute(Action::ReadSignalNames)?;
-        info!("Read Signal Names");
-        match signal_names {
-            ActionResult::SignalNames(names) => {
-                info!("Found {} signals", names.len());
-                if names.len() <= self.signal_index.0 as usize {
-                    return Err(NanonisError::InvalidCommand(format!(
-                        "Signal index {} not available (only {} signals)",
-                        self.signal_index.0,
-                        names.len()
-                    )));
-                }
-            }
-            _ => {
-                return Err(NanonisError::Protocol(
-                    "Failed to get signal names".to_string(),
-                ))
-            }
-        }
 
         while start.elapsed() < timeout {
             cycle += 1;
@@ -206,14 +185,19 @@ impl TipController {
 
     /// Read signal value
     fn read_signal(&mut self) -> Result<f32, NanonisError> {
-        let result = self.driver.execute(Action::ReadSignal {
-            signal: self.signal_index,
-            wait_for_newest: true,
-        })?;
+        self.driver
+            .spm_interface_mut()
+            .osci1t_ch_set(self.signal_index.into())?;
 
-        match result {
-            ActionResult::Signals(values) => Ok(values[0].value() as f32),
-            _ => Err(NanonisError::Protocol("Invalid signal result".to_string())),
-        }
+        let (_, _, _, osci_screen) = self
+            .driver
+            .spm_interface_mut()
+            .osci1t_data_get(DataToGet::NextTrigger)?;
+
+        debug!("Osci_data: {osci_screen:?}");
+        let max: f32 = osci_screen.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b)) as f32;
+        debug!("Result of osci max = {max:?}");
+
+        Ok(max)
     }
 }
