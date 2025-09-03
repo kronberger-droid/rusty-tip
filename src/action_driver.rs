@@ -2,7 +2,7 @@ use log::info;
 
 use crate::actions::{Action, ActionChain, ActionResult};
 use crate::error::NanonisError;
-use crate::nanonis::{NanonisClient, SPMInterface, PulseMode, ZControllerHold};
+use crate::nanonis::{NanonisClient, PulseMode, SPMInterface, ZControllerHold};
 use crate::types::{MotorGroup, Position, ScanDirection, SignalRegistry, SignalValue};
 use std::collections::HashMap;
 use std::thread;
@@ -20,7 +20,7 @@ impl ActionDriver {
     /// Create a new ActionDriver with the given client and auto-discover signals
     pub fn new(addr: &str, port: u16) -> Result<Self, NanonisError> {
         let mut client = NanonisClient::new(addr, port)?;
-        
+
         let names = client.signal_names_get(false)?;
         let registry = SignalRegistry::from_names(names);
 
@@ -136,8 +136,7 @@ impl ActionDriver {
                 position,
                 wait_until_finished,
             } => {
-                self.client
-                    .set_xy_position(position, wait_until_finished)?;
+                self.client.set_xy_position(position, wait_until_finished)?;
                 Ok(ActionResult::Success)
             }
 
@@ -196,7 +195,7 @@ impl ActionDriver {
 
             // === Scan Operations ===
             Action::ScanControl { action } => {
-                self.client.scan_action(action.into(), ScanDirection::Up)?;
+                self.client.scan_action(action, ScanDirection::Up)?;
                 Ok(ActionResult::Success)
             }
 
@@ -220,7 +219,7 @@ impl ActionDriver {
                     2 => ZControllerHold::Release,
                     _ => ZControllerHold::NoChange, // Safe fallback
                 };
-                
+
                 let mode_enum = match pulse_mode {
                     0 => PulseMode::Keep,
                     1 => PulseMode::Relative,
@@ -459,7 +458,7 @@ mod tests {
             Ok(client) => {
                 // Create test registry
                 let registry = SignalRegistry::from_names(vec!["Test Signal".to_string()]);
-                let mut driver = ActionDriver::with_registry(client, registry);
+                let mut driver = ActionDriver::with_registry(Box::new(client), registry);
 
                 // Test storage operations
                 driver

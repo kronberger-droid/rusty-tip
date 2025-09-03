@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use log::info;
-use rusty_tip::{ActionDriver, NanonisClient, SignalIndex, TipController};
+use rusty_tip::{ActionDriver, SignalIndex, TipController};
 
 /// Simple tip control loop demo
 ///
@@ -15,8 +15,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("=== Simple Tip Control Demo ===");
 
-    let mut client = NanonisClient::new("127.0.0.1", 6502)?;
-
     // Create ActionDriver
     let driver = ActionDriver::new("127.0.0.1", 6501)?;
 
@@ -24,8 +22,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut controller = TipController::new(
         driver,
         SignalIndex(24), // Bias voltage signal
-        0.0,                // min bound (V)
-        2.0,                // max bound (V)
+        0.0,             // min bound (V)
+        2.0,             // max bound (V)
     );
 
     info!("Starting tip control loop...");

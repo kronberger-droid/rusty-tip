@@ -131,6 +131,25 @@ impl TipController {
         // Reset good count
         self.good_count = 0;
 
+        self.driver.execute_chain(vec![
+            Action::AutoApproach,
+            Action::BiasPulse {
+                wait_until_done: true,
+                pulse_width_s: Duration::from_millis(500),
+                bias_value_v: 4.0,
+                z_controller_hold: (),
+                pulse_mode: (),
+            },
+            Action::Withdraw {
+                wait_until_finished: true,
+                timeout_ms: (),
+            },
+            Action::MovePiezoRelative {
+                delta: Position::new(3e-9, 3e-9),
+            },
+            Action::AutoApproach,
+        ]);
+
         // Step 1: Initial approach
         info!("Cycle {}: Step 1 - Initial approach", cycle);
         self.driver.execute(Action::AutoApproach)?;

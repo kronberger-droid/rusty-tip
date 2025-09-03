@@ -3,7 +3,7 @@ use std::time::Duration;
 use log::info;
 use rusty_tip::{
     Action, ActionChain, ActionDriver, ActionSequence, ExecutionPriority, MachineRepresentation,
-    NanonisClient, Position, SignalIndex,
+    NanonisClient, Position, ScanAction, ScanDirection, SignalIndex,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -18,6 +18,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         signal: SignalIndex(24),
         wait_for_newest: true,
     })?;
+
+    machine
+        .driver()
+        .spm_interface_mut()
+        .scan_action(ScanAction::Start, ScanDirection::Down)?;
 
     info!("BadAction result: {result:?}");
     // info!("Executing BadAction recovery sequence");
