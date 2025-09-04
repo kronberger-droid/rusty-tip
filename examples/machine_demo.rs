@@ -14,6 +14,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     client.motor_start_move(MotorDirection::XPlus, 2, MotorGroup::Group1, true);
 
+    client.motor_start_move(MotorDirection::YPlus, 2, MotorGroup::Group1, true);
+
     client.osci1t_ch_set(24)?;
 
     Ok(())
