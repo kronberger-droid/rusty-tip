@@ -15,6 +15,7 @@
       "Bash(rm:*)",
       "Bash(/nix/store/h1c2imj0dpfyyfrd0i6195xznqxcar8x-rust-stable-2025-08-07/bin/cargo check)"
     ],
-    "deny": []
+    "deny": [],
+    "defaultMode": "acceptEdits"
   }
 }

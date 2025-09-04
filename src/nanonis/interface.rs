@@ -3,7 +3,7 @@ use std::time::Duration;
 use crate::error::NanonisError;
 use crate::types::{
     DataToGet, MotorDirection, MotorGroup, MovementMode, OsciTriggerMode, OversamplingIndex,
-    Position, Position3D, ScanAction, ScanDirection, StepCount, TimebaseIndex, TriggerSlope,
+    Position, Position3D, ScanAction, ScanDirection, TimebaseIndex, TriggerSlope,
 };
 
 /// Universal SPM pulse modes - concepts that apply to any SPM system
@@ -132,7 +132,7 @@ pub trait SPMInterface: Send + Sync {
     fn motor_start_move(
         &mut self,
         direction: MotorDirection,
-        steps: StepCount,
+        steps: u16,
         group: MotorGroup,
         wait: bool,
     ) -> Result<(), NanonisError>;

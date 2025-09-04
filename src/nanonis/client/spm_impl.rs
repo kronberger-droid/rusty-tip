@@ -5,7 +5,7 @@ use crate::error::NanonisError;
 use crate::nanonis::interface::{PulseMode, SPMInterface, ZControllerHold};
 use crate::types::{
     DataToGet, MotorDirection, MotorGroup, MovementMode, OsciTriggerMode, OversamplingIndex,
-    Position, Position3D, ScanAction, ScanDirection, StepCount, TimebaseIndex, TriggerSlope,
+    Position, Position3D, ScanAction, ScanDirection, TimebaseIndex, TriggerSlope,
 };
 
 /// Implementation of SPMInterface for NanonisClient
@@ -67,7 +67,7 @@ impl SPMInterface for NanonisClient {
     fn motor_start_move(
         &mut self,
         direction: MotorDirection,
-        steps: StepCount,
+        steps: u16,
         group: MotorGroup,
         wait: bool,
     ) -> Result<(), NanonisError> {

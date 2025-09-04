@@ -1,6 +1,8 @@
-use crate::types::{
-    ActionCondition, MotorMovement, MovementMode, Position, Position3D, ScanAction, SignalIndex,
-    SignalValue,
+use crate::{
+    types::{
+        ActionCondition, MovementMode, Position, Position3D, ScanAction, SignalIndex, SignalValue,
+    },
+    MotorDirection,
 };
 use std::time::Duration;
 
@@ -46,7 +48,10 @@ pub enum Action {
 
     // === Coarse Positioning Operations (Motor) ===
     /// Move motor in steps (discrete positioning)
-    MoveMotor { movement: MotorMovement },
+    MoveMotor {
+        direction: MotorDirection,
+        steps: u16,
+    },
 
     /// Move motor using closed-loop to target position
     MoveMotorClosedLoop {
@@ -243,15 +248,12 @@ impl Action {
                     position.x, position.y
                 )
             }
-            Action::MoveMotor { movement } => {
-                format!(
-                    "Move motor {:?} {} steps",
-                    movement.direction, movement.steps.0
-                )
+            Action::MoveMotor { direction, steps } => {
+                format!("Move motor {:?} {} steps", direction, steps)
             }
             Action::AutoApproach => "Auto approach".to_string(),
             Action::Withdraw { timeout_ms, .. } => {
-                format!("Withdraw tip (timeout: {}ms)", timeout_ms)
+                format!("Withdraw tip (timeout: {}ms)", timeout_ms.as_micros())
             }
             Action::Wait { duration } => {
                 format!("Wait {:.1}s", duration.as_secs_f64())
@@ -270,90 +272,9 @@ impl Action {
     }
 }
 
-// === Convenience Constructors ===
-
-impl Action {
-    /// Create ReadSignal action for single index
-    pub fn read_signal_index(index: i32, wait_for_newest: bool) -> Self {
-        Self::ReadSignal {
-            signal: SignalIndex(index),
-            wait_for_newest,
-        }
-    }
-
-    /// Create ReadSignals action for multiple indices
-    pub fn read_signal_indices(indices: Vec<i32>, wait_for_newest: bool) -> Self {
-        Self::ReadSignals {
-            signals: indices.into_iter().map(SignalIndex).collect(),
-            wait_for_newest,
-        }
-    }
-
-    /// Create motor movement action
-    pub fn move_motor_steps(direction: crate::types::MotorDirection, steps: u16) -> Self {
-        use crate::types::{MotorGroup, StepCount};
-        Self::MoveMotor {
-            movement: MotorMovement::new(direction, StepCount(steps), MotorGroup::Group1),
-        }
-    }
-
-    /// Create simple wait action
-    pub fn wait_ms(milliseconds: u64) -> Self {
-        Self::Wait {
-            duration: Duration::from_millis(milliseconds),
-        }
-    }
-
-    /// Create simple wait action in seconds
-    pub fn wait_secs(seconds: f64) -> Self {
-        Self::Wait {
-            duration: Duration::from_secs_f64(seconds),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::MotorDirection;
-
-    #[test]
-    fn test_action_categorization() {
-        let read_action = Action::ReadBias;
-        assert!(read_action.is_read_action());
-        assert!(!read_action.is_positioning_action());
-        assert!(!read_action.is_control_action());
-
-        let motor_action = Action::move_motor_steps(MotorDirection::XPlus, 100);
-        assert!(motor_action.is_positioning_action());
-        assert!(motor_action.involves_motor());
-        assert!(!motor_action.involves_piezo());
-
-        let piezo_action = Action::SetPiezoPosition {
-            position: Position { x: 1e-9, y: 2e-9 },
-            wait_until_finished: true,
-        };
-        assert!(piezo_action.is_positioning_action());
-        assert!(piezo_action.involves_piezo());
-        assert!(!piezo_action.involves_motor());
-    }
-
-    #[test]
-    fn test_convenience_constructors() {
-        let signal_action = Action::read_signal_index(24, true);
-        assert!(signal_action.is_read_action());
-
-        let signal_action2 = Action::read_signal_indices(vec![0, 1, 24], true);
-        assert!(signal_action2.is_read_action());
-
-        let wait_action = Action::wait_ms(500);
-        match wait_action {
-            Action::Wait { duration } => {
-                assert_eq!(duration, Duration::from_millis(500));
-            }
-            _ => panic!("Expected Wait action"),
-        }
-    }
 
     #[test]
     fn test_action_result_extraction() {
@@ -367,8 +288,6 @@ mod tests {
         );
     }
 }
-
-// ==================== Simplified ActionChain System ====================
 
 /// A sequence of actions with simple Vec<Action> foundation
 #[derive(Debug, Clone)]
@@ -606,9 +525,17 @@ impl ActionChain {
                     wait_for_newest_data: true,
                 },
                 Action::AutoApproach,
-                Action::wait_ms(500),
-                Action::read_signal_index(24, true), // Typical bias voltage
-                Action::read_signal_index(0, true),  // Typical current
+                Action::Wait {
+                    duration: Duration::from_millis(500),
+                },
+                Action::ReadSignal {
+                    signal: SignalIndex(24),
+                    wait_for_newest: true,
+                }, // Typical bias voltage
+                Action::ReadSignal {
+                    signal: SignalIndex(0),
+                    wait_for_newest: true,
+                }, // Typical current
             ],
             "Safe tip approach",
         )
@@ -622,9 +549,14 @@ impl ActionChain {
                     position: target,
                     wait_until_finished: true,
                 },
-                Action::wait_ms(100),
+                Action::Wait {
+                    duration: Duration::from_millis(100),
+                },
                 Action::AutoApproach,
-                Action::read_signal_index(24, true),
+                Action::ReadSignal {
+                    signal: SignalIndex(24),
+                    wait_for_newest: true,
+                },
             ],
             format!("Move to ({:.1e}, {:.1e}) and approach", target.x, target.y),
         )
@@ -636,8 +568,12 @@ impl ActionChain {
             vec![
                 Action::ReadBias,
                 Action::SetBias { voltage },
-                Action::wait_ms(50),
-                Action::wait_ms(duration_ms as u64),
+                Action::Wait {
+                    duration: Duration::from_millis(50),
+                },
+                Action::Wait {
+                    duration: Duration::from_millis(duration_ms as u64),
+                },
                 Action::SetBias { voltage: 0.0 },
             ],
             format!("Bias pulse {:.3}V for {}ms", voltage, duration_ms),
@@ -655,13 +591,21 @@ impl ActionChain {
                     position: pos,
                     wait_until_finished: true,
                 },
-                Action::wait_ms(100),
+                Action::Wait {
+                    duration: Duration::from_millis(100),
+                },
                 Action::AutoApproach,
-                Action::read_signal_index(24, true), // Bias voltage
-                Action::read_signal_index(0, true),  // Current
+                Action::ReadSignal {
+                    signal: SignalIndex(24),
+                    wait_for_newest: true,
+                }, // Bias voltage
+                Action::ReadSignal {
+                    signal: SignalIndex(0),
+                    wait_for_newest: true,
+                }, // Current
                 Action::Withdraw {
                     wait_until_finished: true,
-                    timeout_ms: 5000,
+                    timeout_ms: Duration::from_secs(5),
                 },
             ]);
         }
@@ -678,14 +622,19 @@ impl ActionChain {
             vec![
                 Action::Withdraw {
                     wait_until_finished: true,
-                    timeout_ms: 5000,
+                    timeout_ms: Duration::from_secs(5),
                 },
                 Action::MovePiezoRelative {
                     delta: Position { x: 3e-9, y: 3e-9 },
                 },
-                Action::wait_ms(200),
+                Action::Wait {
+                    duration: Duration::from_millis(200),
+                },
                 Action::AutoApproach,
-                Action::read_signal_index(24, true),
+                Action::ReadSignal {
+                    signal: SignalIndex(24),
+                    wait_for_newest: true,
+                },
             ],
             "Tip recovery sequence",
         )
