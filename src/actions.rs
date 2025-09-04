@@ -64,7 +64,7 @@ pub enum Action {
     /// Withdraw tip with timeout
     Withdraw {
         wait_until_finished: bool,
-        timeout_ms: i32,
+        timeout_ms: Duration,
     },
 
     // === Scan Operations ===

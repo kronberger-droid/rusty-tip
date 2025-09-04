@@ -9,7 +9,7 @@ use crate::types::{
 };
 
 /// Implementation of SPMInterface for NanonisClient
-/// 
+///
 /// This implementation maps universal SPM concepts to Nanonis-specific protocol commands.
 /// The mapping handles type conversions and maintains the semantic meaning of operations
 /// while adapting to Nanonis protocol requirements.
@@ -48,7 +48,7 @@ impl SPMInterface for NanonisClient {
         let width_seconds = width.as_secs_f32();
         let nanonis_hold: u16 = hold.into();
         let nanonis_mode: u16 = mode.into();
-        
+
         self.bias_pulse(wait, width_seconds, voltage, nanonis_hold, nanonis_mode)
     }
 
@@ -101,7 +101,7 @@ impl SPMInterface for NanonisClient {
         }
     }
 
-    fn z_ctrl_withdraw(&mut self, wait: bool, timeout_ms: i32) -> Result<(), NanonisError> {
+    fn z_ctrl_withdraw(&mut self, wait: bool, timeout_ms: Duration) -> Result<(), NanonisError> {
         NanonisClient::z_ctrl_withdraw(self, wait, timeout_ms)
     }
 
@@ -154,7 +154,9 @@ impl SPMInterface for NanonisClient {
         )
     }
 
-    fn osci1t_trig_get(&mut self) -> Result<(OsciTriggerMode, TriggerSlope, f64, f64), NanonisError> {
+    fn osci1t_trig_get(
+        &mut self,
+    ) -> Result<(OsciTriggerMode, TriggerSlope, f64, f64), NanonisError> {
         let (mode, slope, level, hysteresis) = NanonisClient::osci1t_trig_get(self)?;
         Ok((
             OsciTriggerMode::try_from(mode)?,
@@ -168,13 +170,20 @@ impl SPMInterface for NanonisClient {
         NanonisClient::osci1t_run(self)
     }
 
-    fn osci1t_data_get(&mut self, data_to_get: DataToGet) -> Result<(f64, f64, i32, Vec<f64>), NanonisError> {
+    fn osci1t_data_get(
+        &mut self,
+        data_to_get: DataToGet,
+    ) -> Result<(f64, f64, i32, Vec<f64>), NanonisError> {
         NanonisClient::osci1t_data_get(self, data_to_get.into())
     }
 
     // === Oscilloscope 2-Channels Operations ===
 
-    fn osci2t_ch_set(&mut self, channel_a_index: i32, channel_b_index: i32) -> Result<(), NanonisError> {
+    fn osci2t_ch_set(
+        &mut self,
+        channel_a_index: i32,
+        channel_b_index: i32,
+    ) -> Result<(), NanonisError> {
         NanonisClient::osci2t_ch_set(self, channel_a_index, channel_b_index)
     }
 
@@ -191,7 +200,10 @@ impl SPMInterface for NanonisClient {
         Ok((TimebaseIndex::from(index), timebases))
     }
 
-    fn osci2t_oversampl_set(&mut self, oversampling_index: OversamplingIndex) -> Result<(), NanonisError> {
+    fn osci2t_oversampl_set(
+        &mut self,
+        oversampling_index: OversamplingIndex,
+    ) -> Result<(), NanonisError> {
         NanonisClient::osci2t_oversampl_set(self, oversampling_index.into())
     }
 
@@ -220,8 +232,11 @@ impl SPMInterface for NanonisClient {
         )
     }
 
-    fn osci2t_trig_get(&mut self) -> Result<(OsciTriggerMode, u16, TriggerSlope, f64, f64, f64), NanonisError> {
-        let (mode, channel, slope, level, hysteresis, position) = NanonisClient::osci2t_trig_get(self)?;
+    fn osci2t_trig_get(
+        &mut self,
+    ) -> Result<(OsciTriggerMode, u16, TriggerSlope, f64, f64, f64), NanonisError> {
+        let (mode, channel, slope, level, hysteresis, position) =
+            NanonisClient::osci2t_trig_get(self)?;
         Ok((
             OsciTriggerMode::try_from(mode)?,
             channel,
@@ -236,7 +251,10 @@ impl SPMInterface for NanonisClient {
         NanonisClient::osci2t_run(self)
     }
 
-    fn osci2t_data_get(&mut self, data_to_get: DataToGet) -> Result<(f64, f64, Vec<f64>, Vec<f64>), NanonisError> {
+    fn osci2t_data_get(
+        &mut self,
+        data_to_get: DataToGet,
+    ) -> Result<(f64, f64, Vec<f64>, Vec<f64>), NanonisError> {
         NanonisClient::osci2t_data_get(self, data_to_get.into())
     }
 }

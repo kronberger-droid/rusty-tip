@@ -38,7 +38,7 @@ impl ActionSequence {
                 // Step 3: Withdraw tip
                 Action::Withdraw {
                     wait_until_finished: true,
-                    timeout_ms: 5000,
+                    timeout_ms: Duration::from_millis(5000),
                 },
                 // Step 4: Move to new position (3nm offset)
                 Action::MovePiezoRelative {
@@ -65,7 +65,7 @@ impl ActionSequence {
                 Action::SetBias { voltage: 0.0 },
                 Action::Withdraw {
                     wait_until_finished: true,
-                    timeout_ms: 1000,
+                    timeout_ms: Duration::from_millis(1000),
                 },
             ]),
 
