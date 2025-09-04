@@ -1,7 +1,7 @@
 use crate::action_driver::ActionDriver;
-use crate::actions::{Action, ActionResult};
+use crate::actions::{Action, ActionChain};
 use crate::error::NanonisError;
-use crate::types::{DataToGet, Position, SignalIndex};
+use crate::types::{DataToGet, MotorDirection, SignalIndex};
 use log::{debug, info, warn};
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,7 @@ pub enum LoopType {
 pub struct TipController {
     driver: ActionDriver,
     signal_index: SignalIndex,
+    pulse_voltage: f32,
     min_bound: f32,
     max_bound: f32,
     // Simple state tracking
@@ -41,12 +42,14 @@ impl TipController {
     pub fn new(
         driver: ActionDriver,
         signal_index: SignalIndex,
+        pulse_voltage: f32,
         min_bound: f32,
         max_bound: f32,
     ) -> Self {
         Self {
             driver,
             signal_index,
+            pulse_voltage,
             min_bound,
             max_bound,
             good_count: 0,
@@ -75,11 +78,11 @@ impl TipController {
                     continue; // Skip this cycle
                 }
             };
-            debug!("Cycle {}: Signal = {:.6}", cycle, signal);
+            info!("Cycle {}: Signal = {:.6}", cycle, signal);
 
             // 2. Classify
             let state = self.classify(signal);
-            debug!("Cycle {}: State = {:?}", cycle, state);
+            info!("Cycle {}: State = {:?}", cycle, state);
 
             // 3. Execute based on state (original controller behavior)
             match state {
@@ -110,33 +113,36 @@ impl TipController {
         // Reset good count
         self.good_count = 0;
 
-        // Step 1: Initial approach
-        info!("Cycle {}: Step 1 - Initial approach", cycle);
-        self.driver.execute(Action::AutoApproach)?;
+        self.driver.execute_chain(ActionChain::new(vec![
+            Action::BiasPulse {
+                wait_until_done: true,
+                pulse_width_s: Duration::from_millis(50),
+                bias_value_v: self.pulse_voltage,
+                z_controller_hold: 1,
+                pulse_mode: 2,
+            },
+            Action::Withdraw {
+                wait_until_finished: true,
+                timeout_ms: Duration::from_secs(5),
+            },
+            Action::MoveMotor {
+                direction: MotorDirection::ZMinus,
+                steps: 3,
+            },
+            Action::MoveMotor {
+                direction: MotorDirection::XPlus,
+                steps: 2,
+            },
+            Action::MoveMotor {
+                direction: MotorDirection::YPlus,
+                steps: 2,
+            },
+            Action::AutoApproach,
+            Action::Wait {
+                duration: Duration::from_secs(1),
+            },
+        ]))?;
 
-        // Step 2: Pulse operation (simulate like original)
-        info!("Cycle {}: Step 2 - Pulse operation", cycle);
-        std::thread::sleep(Duration::from_millis(200));
-        debug!("Pulse simulation completed");
-
-        // Step 3: Withdraw tip
-        info!("Cycle {}: Step 3 - Withdrawing tip", cycle);
-        self.driver.execute(Action::Withdraw {
-            wait_until_finished: true,
-            timeout_ms: Duration::from_secs(5),
-        })?;
-
-        // Step 4: Move to new position (3nm like original)
-        info!("Cycle {}: Step 4 - Moving to new position", cycle);
-        self.driver.execute(Action::MovePiezoRelative {
-            delta: Position::new(3e-9, 3e-9), // 3nm in both directions
-        })?;
-
-        // Step 5: Approach at new position
-        info!("Cycle {}: Step 5 - Approach at new position", cycle);
-        self.driver.execute(Action::AutoApproach)?;
-
-        // Step 6: Check tip state (will happen in next loop iteration)
         info!(
             "Cycle {}: Recovery sequence completed - checking tip state",
             cycle

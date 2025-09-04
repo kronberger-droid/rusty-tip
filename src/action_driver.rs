@@ -153,11 +153,11 @@ impl ActionDriver {
             }
 
             // === Coarse Positioning Operations (Motor) ===
-            Action::MoveMotor { movement } => {
+            Action::MoveMotor { direction, steps } => {
                 self.client.motor_start_move(
-                    movement.direction,
-                    movement.steps,
-                    movement.group,
+                    direction,
+                    steps,
+                    MotorGroup::Group1,
                     true, // wait_until_finished
                 )?;
                 Ok(ActionResult::Success)
@@ -414,6 +414,8 @@ impl ActionDriver {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     // Note: These tests will fail without actual Nanonis hardware
     // They're included to show the intended interface
@@ -436,7 +438,9 @@ mod tests {
                 // Test chain
                 let chain = ActionChain::new(vec![
                     Action::ReadBias,
-                    Action::wait_ms(100),
+                    Action::Wait {
+                        duration: Duration::from_millis(500),
+                    },
                     Action::SetBias { voltage: 1.0 },
                 ]);
 
