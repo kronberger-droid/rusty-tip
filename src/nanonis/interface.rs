@@ -168,7 +168,7 @@ pub trait SPMInterface: Send + Sync {
     /// # Arguments
     /// * `wait` - Whether to wait until withdrawal completes
     /// * `timeout_ms` - Maximum time to wait in milliseconds
-    fn z_ctrl_withdraw(&mut self, wait: bool, timeout_ms: i32) -> Result<(), NanonisError>;
+    fn z_ctrl_withdraw(&mut self, wait: bool, timeout_ms: Duration) -> Result<(), NanonisError>;
 
     // === Scan Operations ===
 

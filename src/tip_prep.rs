@@ -123,7 +123,7 @@ impl TipController {
         info!("Cycle {}: Step 3 - Withdrawing tip", cycle);
         self.driver.execute(Action::Withdraw {
             wait_until_finished: true,
-            timeout_ms: 5000,
+            timeout_ms: Duration::from_secs(5),
         })?;
 
         // Step 4: Move to new position (3nm like original)

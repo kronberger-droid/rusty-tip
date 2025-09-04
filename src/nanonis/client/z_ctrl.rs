@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
@@ -363,12 +365,15 @@ impl NanonisClient {
     pub fn z_ctrl_withdraw(
         &mut self,
         wait_until_finished: bool,
-        timeout_ms: i32,
+        timeout_ms: Duration,
     ) -> Result<(), NanonisError> {
         let wait_flag = if wait_until_finished { 1u32 } else { 0u32 };
         self.quick_send(
             "ZCtrl.Withdraw",
-            vec![NanonisValue::U32(wait_flag), NanonisValue::I32(timeout_ms)],
+            vec![
+                NanonisValue::U32(wait_flag),
+                NanonisValue::I32(timeout_ms.as_millis() as i32),
+            ],
             vec!["I", "i"],
             vec![],
         )?;
