@@ -234,7 +234,9 @@ pub trait SPMInterface: Send + Sync {
     ///
     /// # Returns
     /// Tuple of (trigger_mode, trigger_slope, trigger_level, trigger_hysteresis)
-    fn osci1t_trig_get(&mut self) -> Result<(OsciTriggerMode, TriggerSlope, f64, f64), NanonisError>;
+    fn osci1t_trig_get(
+        &mut self,
+    ) -> Result<(OsciTriggerMode, TriggerSlope, f64, f64), NanonisError>;
 
     /// Start the Oscilloscope 1-Channel
     fn osci1t_run(&mut self) -> Result<(), NanonisError>;
@@ -246,7 +248,10 @@ pub trait SPMInterface: Send + Sync {
     ///
     /// # Returns
     /// Tuple of (t0, dt, size, data_values)
-    fn osci1t_data_get(&mut self, data_to_get: DataToGet) -> Result<(f64, f64, i32, Vec<f64>), NanonisError>;
+    fn osci1t_data_get(
+        &mut self,
+        data_to_get: DataToGet,
+    ) -> Result<(f64, f64, i32, Vec<f64>), NanonisError>;
 
     // === Oscilloscope 2-Channels Operations ===
 
@@ -255,7 +260,11 @@ pub trait SPMInterface: Send + Sync {
     /// # Arguments
     /// * `channel_a_index` - Channel A signal index (0-23)
     /// * `channel_b_index` - Channel B signal index (0-23)
-    fn osci2t_ch_set(&mut self, channel_a_index: i32, channel_b_index: i32) -> Result<(), NanonisError>;
+    fn osci2t_ch_set(
+        &mut self,
+        channel_a_index: i32,
+        channel_b_index: i32,
+    ) -> Result<(), NanonisError>;
 
     /// Get channels for Oscilloscope 2-Channels
     ///
@@ -279,7 +288,10 @@ pub trait SPMInterface: Send + Sync {
     ///
     /// # Arguments
     /// * `oversampling_index` - Oversampling configuration
-    fn osci2t_oversampl_set(&mut self, oversampling_index: OversamplingIndex) -> Result<(), NanonisError>;
+    fn osci2t_oversampl_set(
+        &mut self,
+        oversampling_index: OversamplingIndex,
+    ) -> Result<(), NanonisError>;
 
     /// Get oversampling for Oscilloscope 2-Channels
     ///
@@ -310,7 +322,9 @@ pub trait SPMInterface: Send + Sync {
     ///
     /// # Returns
     /// Tuple of (trigger_mode, trig_channel, trigger_slope, trigger_level, trigger_hysteresis, trig_position)
-    fn osci2t_trig_get(&mut self) -> Result<(OsciTriggerMode, u16, TriggerSlope, f64, f64, f64), NanonisError>;
+    fn osci2t_trig_get(
+        &mut self,
+    ) -> Result<(OsciTriggerMode, u16, TriggerSlope, f64, f64, f64), NanonisError>;
 
     /// Start the Oscilloscope 2-Channels
     fn osci2t_run(&mut self) -> Result<(), NanonisError>;
@@ -322,5 +336,8 @@ pub trait SPMInterface: Send + Sync {
     ///
     /// # Returns
     /// Tuple of (t0, dt, channel_a_data, channel_b_data)
-    fn osci2t_data_get(&mut self, data_to_get: DataToGet) -> Result<(f64, f64, Vec<f64>, Vec<f64>), NanonisError>;
+    fn osci2t_data_get(
+        &mut self,
+        data_to_get: DataToGet,
+    ) -> Result<(f64, f64, Vec<f64>, Vec<f64>), NanonisError>;
 }
