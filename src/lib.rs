@@ -11,7 +11,7 @@ pub use action_driver::{ActionDriver, ExecutionStats};
 pub use error::NanonisError;
 pub use job::Job;
 pub use nanonis::{ConnectionConfig, NanonisClient, NanonisClientBuilder, PulseMode, SPMInterface, ZControllerHold};
-pub use tip_prep::{LoopType, TipController, TipControllerConfig, TipState};
+pub use tip_prep::{LoopType, TipController, TipState};
 pub use types::{
     ActionCondition, Amplitude, ChannelIndex, Frequency, MachineState, MotorAxis, MotorDirection, MotorGroup,
     MotorMovement, MotorPosition, MovementMode, NanonisValue, OscilloscopeIndex, Position, Position3D, SampleCount, ScanAction,
