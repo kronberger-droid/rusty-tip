@@ -2,6 +2,9 @@ use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
 
+/// Return type for Z spectroscopy start operation (channel names, data, bias values)
+pub type ZSpectroscopyResult = (Vec<String>, Vec<Vec<f32>>, Vec<f32>);
+
 impl NanonisClient {
     /// Open the Z Spectroscopy module.
     ///
@@ -63,7 +66,7 @@ impl NanonisClient {
         &mut self,
         get_data: bool,
         save_base_name: &str,
-    ) -> Result<(Vec<String>, Vec<Vec<f32>>, Vec<f32>), NanonisError> {
+    ) -> Result<ZSpectroscopyResult, NanonisError> {
         let get_data_flag = if get_data { 1u32 } else { 0u32 };
 
         let result = self.quick_send(
