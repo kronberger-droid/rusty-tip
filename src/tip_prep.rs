@@ -1,5 +1,5 @@
 use crate::action_driver::ActionDriver;
-use crate::actions::{Action, ActionChain, ActionResult};
+use crate::actions::{Action, ActionChain};
 use crate::error::NanonisError;
 use crate::job::Job;
 use crate::types::{DataToGet, MotorDirection, SignalIndex};
@@ -22,19 +22,17 @@ pub enum LoopType {
     StableLoop, // Success condition
 }
 
-/// Enhanced tip controller with dynamic bias adjustment and configurable parameters
+/// Enhanced tip controller with pulse voltage stepping
 pub struct TipController {
     driver: ActionDriver,
     signal_index: SignalIndex,
     
-    // Bias control parameters
-    pulse_voltage: f32,
-    current_bias: f32,
-    start_bias: f32,            // Starting bias voltage
-    voltage_step: f32,          // Voltage increment per step
-    change_threshold: f32,      // Minimum signal change to consider significant
-    cycles_before_step: u32,    // Cycles without change before stepping bias
-    max_bias: f32,              // Maximum bias voltage (e.g., 10V)
+    // Pulse stepping parameters
+    pulse_voltage: f32,              // Current pulse voltage (gets stepped up)
+    pulse_voltage_step: f32,         // How much to increase pulse voltage per step
+    change_threshold: f32,           // Minimum signal change to consider significant
+    cycles_before_step: u32,         // Cycles without change before stepping pulse voltage
+    max_pulse_voltage: f32,          // Maximum pulse voltage allowed
     
     // Step tracking
     cycles_without_change: u32,
@@ -71,12 +69,10 @@ impl TipController {
             driver,
             signal_index,
             pulse_voltage,
-            current_bias: 0.0,    // Will be read from system on first loop
-            start_bias: 0.0,      // Will be set from initial bias reading
-            voltage_step: 0.1,    // Default 0.1V steps
-            change_threshold: 0.05, // Signal must change by at least 0.05 
-            cycles_before_step: 3,  // 3 cycles without change triggers step
-            max_bias: 10.0,       // Maximum bias voltage
+            pulse_voltage_step: 0.1,    // Default 0.1V pulse steps
+            change_threshold: 0.05,     // Signal must change by at least 0.05 
+            cycles_before_step: 3,      // 3 cycles without change triggers pulse step
+            max_pulse_voltage: 5.0,     // Maximum pulse voltage
             cycles_without_change: 0,
             last_significant_signal: 0.0,
             min_bound,
@@ -91,23 +87,13 @@ impl TipController {
         }
     }
     
-    /// Create a more configurable tip controller
-    pub fn with_config(
-        driver: ActionDriver,
-        signal_index: SignalIndex,
-        pulse_voltage: f32,
-        min_bound: f32,
-        max_bound: f32,
-    ) -> TipControllerConfig {
-        TipControllerConfig::new(driver, signal_index, pulse_voltage, min_bound, max_bound)
-    }
     
-    /// Set bias stepping parameters
-    pub fn set_bias_stepping(&mut self, voltage_step: f32, change_threshold: f32, cycles_before_step: u32, max_bias: f32) -> &mut Self {
-        self.voltage_step = voltage_step.abs(); // Ensure positive
+    /// Set pulse stepping parameters
+    pub fn set_pulse_stepping(&mut self, pulse_step: f32, change_threshold: f32, cycles_before_step: u32, max_pulse: f32) -> &mut Self {
+        self.pulse_voltage_step = pulse_step.abs(); // Ensure positive
         self.change_threshold = change_threshold.abs();
         self.cycles_before_step = cycles_before_step.max(1); // At least 1
-        self.max_bias = max_bias.abs();
+        self.max_pulse_voltage = max_pulse.abs();
         self
     }
     
@@ -123,9 +109,9 @@ impl TipController {
         self
     }
     
-    /// Get current bias voltage
-    pub fn current_bias(&self) -> f32 {
-        self.current_bias
+    /// Get current pulse voltage
+    pub fn current_pulse_voltage(&self) -> f32 {
+        self.pulse_voltage
     }
     
     /// Get signal history (most recent first)
@@ -142,8 +128,8 @@ impl TipController {
         }
     }
     
-    /// Update signal history and check for bias stepping
-    fn update_signal_and_bias(&mut self, signal: f32) -> Result<(), NanonisError> {
+    /// Update signal history and step pulse voltage if needed
+    fn update_signal_and_pulse(&mut self, signal: f32) {
         // Add to history
         self.signal_history.insert(0, signal);
         if self.signal_history.len() > self.max_history_size {
@@ -155,8 +141,8 @@ impl TipController {
         
         if signal_change >= self.change_threshold {
             // Signal changed significantly - reset cycle counter
-            debug!("Signal changed significantly: {:.3} -> {:.3} (change: {:.3}, threshold: {:.3})", 
-                   self.last_significant_signal, signal, signal_change, self.change_threshold);
+            debug!("Signal changed significantly: {:.3} -> {:.3} (change: {:.3})", 
+                   self.last_significant_signal, signal, signal_change);
             self.last_significant_signal = signal;
             self.cycles_without_change = 0;
         } else {
@@ -165,155 +151,27 @@ impl TipController {
             debug!("Signal unchanged: {:.3}, cycles without change: {}/{}", 
                    signal, self.cycles_without_change, self.cycles_before_step);
             
-            // Check if we need to step the bias
+            // Check if we need to step the pulse voltage
             if self.cycles_without_change >= self.cycles_before_step {
-                self.step_bias()?;
+                let new_pulse = (self.pulse_voltage + self.pulse_voltage_step).min(self.max_pulse_voltage);
+                if new_pulse > self.pulse_voltage {
+                    info!("Stepping pulse voltage: {:.3}V -> {:.3}V", self.pulse_voltage, new_pulse);
+                    self.pulse_voltage = new_pulse;
+                } else {
+                    debug!("Pulse voltage already at maximum: {:.3}V", self.max_pulse_voltage);
+                }
                 self.cycles_without_change = 0; // Reset counter after stepping
             }
         }
-        
-        Ok(())
     }
     
-    /// Step the bias voltage up by one increment
-    fn step_bias(&mut self) -> Result<(), NanonisError> {
-        let new_bias = self.current_bias + self.voltage_step;
-        
-        if new_bias <= self.max_bias {
-            info!("Stepping bias: {:.3}V -> {:.3}V (step: {:.3}V, max: {:.3}V)", 
-                  self.current_bias, new_bias, self.voltage_step, self.max_bias);
-            
-            // Set new bias
-            self.driver.execute(Action::SetBias { voltage: new_bias })?;
-            self.current_bias = new_bias;
-        } else {
-            warn!("Cannot step bias beyond maximum: current {:.3}V, would step to {:.3}V, max {:.3}V", 
-                  self.current_bias, new_bias, self.max_bias);
-        }
-        
-        Ok(())
-    }
-    
-    /// Initialize bias settings on first loop
-    fn initialize_bias(&mut self) -> Result<(), NanonisError> {
-        if self.start_bias == 0.0 { // First time initialization
-            // Read current bias from system
-            let result = self.driver.execute(Action::ReadBias)?;
-            if let ActionResult::BiasVoltage(bias) = result {
-                self.current_bias = bias;
-                self.start_bias = bias;
-                self.last_significant_signal = 0.0; // Will be set from first signal reading
-                info!("Initialized bias stepping: start = {:.3}V, step = {:.3}V, threshold = {:.3}, cycles = {}, max = {:.3}V", 
-                      self.start_bias, self.voltage_step, self.change_threshold, self.cycles_before_step, self.max_bias);
-            }
-        }
-        Ok(())
-    }
 }
 
-/// Configuration builder for TipController
-pub struct TipControllerConfig {
-    driver: ActionDriver,
-    signal_index: SignalIndex,
-    pulse_voltage: f32,
-    min_bound: f32,
-    max_bound: f32,
-    voltage_step: f32,
-    change_threshold: f32,
-    cycles_before_step: u32,
-    max_bias: f32,
-    stable_threshold: u32,
-    max_moves: u32,
-    max_history_size: usize,
-}
-
-impl TipControllerConfig {
-    fn new(
-        driver: ActionDriver,
-        signal_index: SignalIndex,
-        pulse_voltage: f32,
-        min_bound: f32,
-        max_bound: f32,
-    ) -> Self {
-        Self {
-            driver,
-            signal_index,
-            pulse_voltage,
-            min_bound,
-            max_bound,
-            voltage_step: 0.1,
-            change_threshold: 0.05,
-            cycles_before_step: 3,
-            max_bias: 10.0,
-            stable_threshold: 3,
-            max_moves: 10,
-            max_history_size: 10,
-        }
-    }
-    
-    /// Set bias stepping parameters
-    pub fn bias_stepping(mut self, voltage_step: f32, change_threshold: f32, cycles_before_step: u32, max_bias: f32) -> Self {
-        self.voltage_step = voltage_step.abs();
-        self.change_threshold = change_threshold.abs();
-        self.cycles_before_step = cycles_before_step.max(1);
-        self.max_bias = max_bias.abs();
-        self
-    }
-    
-    /// Set stability threshold
-    pub fn stability_threshold(mut self, threshold: u32) -> Self {
-        self.stable_threshold = threshold.max(1);
-        self
-    }
-    
-    /// Set maximum moves
-    pub fn max_moves(mut self, max_moves: u32) -> Self {
-        self.max_moves = max_moves;
-        self
-    }
-    
-    /// Set signal history size
-    pub fn history_size(mut self, size: usize) -> Self {
-        self.max_history_size = size.max(1);
-        self
-    }
-    
-    /// Build the configured TipController
-    pub fn build(self) -> TipController {
-        let target_signal = (self.min_bound + self.max_bound) / 2.0;
-        
-        TipController {
-            driver: self.driver,
-            signal_index: self.signal_index,
-            pulse_voltage: self.pulse_voltage,
-            current_bias: 0.0,
-            start_bias: 0.0,
-            voltage_step: self.voltage_step,
-            change_threshold: self.change_threshold,
-            cycles_before_step: self.cycles_before_step,
-            max_bias: self.max_bias,
-            cycles_without_change: 0,
-            last_significant_signal: 0.0,
-            min_bound: self.min_bound,
-            max_bound: self.max_bound,
-            target_signal,
-            good_count: 0,
-            stable_threshold: self.stable_threshold,
-            move_count: 0,
-            max_moves: self.max_moves,
-            signal_history: Vec::new(),
-            max_history_size: self.max_history_size,
-        }
-    }
-}
 
 impl TipController {
-    /// Main control loop - enhanced with dynamic bias adjustment
+    /// Main control loop - with pulse voltage stepping
     pub fn run_loop(&mut self, timeout: Duration) -> Result<TipState, NanonisError> {
-        info!("Starting enhanced tip control loop (timeout: {:?})", timeout);
-        
-        // Initialize bias control on first run
-        self.initialize_bias()?;
+        info!("Starting tip control loop with pulse stepping (timeout: {:?})", timeout);
 
         let start = Instant::now();
         let mut cycle = 0;
@@ -337,13 +195,11 @@ impl TipController {
                 debug!("Initialized first signal reference: {:.3}", signal);
             }
             
-            // 3. Update signal history and check for bias stepping
-            if let Err(e) = self.update_signal_and_bias(signal) {
-                warn!("Cycle {}: Failed to step bias: {}", cycle, e);
-            }
+            // 3. Update signal history and step pulse voltage if needed
+            self.update_signal_and_pulse(signal);
             
-            info!("Cycle {}: Signal = {:.6}, Bias = {:.3}V, Cycles w/o change = {}/{}", 
-                  cycle, signal, self.current_bias, self.cycles_without_change, self.cycles_before_step);
+            info!("Cycle {}: Signal = {:.6}, Pulse = {:.3}V, Cycles w/o change = {}/{}", 
+                  cycle, signal, self.pulse_voltage, self.cycles_without_change, self.cycles_before_step);
 
             // 4. Classify
             let state = self.classify(signal);
@@ -358,7 +214,7 @@ impl TipController {
                     self.good_loop(cycle)?; // Monitor and count
                 }
                 TipState::Stable => {
-                    info!("STABLE achieved after {} cycles! Final bias: {:.3}V", cycle, self.current_bias);
+                    info!("STABLE achieved after {} cycles! Final pulse voltage: {:.3}V", cycle, self.pulse_voltage);
                     return Ok(TipState::Stable);
                 }
             }
