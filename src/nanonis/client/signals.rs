@@ -1,6 +1,6 @@
+use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::{NanonisValue, SignalIndex};
-use super::NanonisClient;
 
 impl NanonisClient {
     /// Get available signal names
@@ -31,7 +31,10 @@ impl NanonisClient {
     }
 
     /// Get calibration and offset of a signal by index
-    pub fn signals_calibr_get(&mut self, signal_index: SignalIndex) -> Result<(f32, f32), NanonisError> {
+    pub fn signals_calibr_get(
+        &mut self,
+        signal_index: SignalIndex,
+    ) -> Result<(f32, f32), NanonisError> {
         let result = self.quick_send(
             "Signals.CalibrGet",
             vec![NanonisValue::I32(signal_index.into())],
@@ -48,7 +51,10 @@ impl NanonisClient {
     }
 
     /// Get range limits of a signal by index
-    pub fn signals_range_get(&mut self, signal_index: SignalIndex) -> Result<(f32, f32), NanonisError> {
+    pub fn signals_range_get(
+        &mut self,
+        signal_index: SignalIndex,
+    ) -> Result<(f32, f32), NanonisError> {
         let result = self.quick_send(
             "Signals.RangeGet",
             vec![NanonisValue::I32(signal_index.into())],
@@ -96,7 +102,10 @@ impl NanonisClient {
     }
 
     /// Find signal index by name (case-insensitive)
-    pub fn find_signal_index(&mut self, signal_name: &str) -> Result<Option<SignalIndex>, NanonisError> {
+    pub fn find_signal_index(
+        &mut self,
+        signal_name: &str,
+    ) -> Result<Option<SignalIndex>, NanonisError> {
         let signals = self.signal_names_get(false)?;
         let signal_name_lower = signal_name.to_lowercase();
 
@@ -110,7 +119,7 @@ impl NanonisClient {
 
     /// Get the current value of a single selected signal.
     ///
-    /// Returns the current value of the selected signal, oversampled during the 
+    /// Returns the current value of the selected signal, oversampled during the
     /// Acquisition Period time (Tap). The signal is continuously oversampled and published
     /// every Tap seconds.
     ///
@@ -143,10 +152,10 @@ impl NanonisClient {
     /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
     ///
     /// // Read bias signal immediately
-    /// let bias_value = client.signals_val_get_single(SignalIndex(24), false)?;
+    /// let bias_value = client.signal_val_get(SignalIndex(24), false)?;
     ///
     /// // Wait for fresh data after signal change
-    /// let fresh_value = client.signals_val_get_single(SignalIndex(24), true)?;
+    /// let fresh_value = client.signal_val_get(SignalIndex(24), true)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn signal_val_get(
@@ -155,7 +164,7 @@ impl NanonisClient {
         wait_for_newest_data: bool,
     ) -> Result<f32, NanonisError> {
         let wait_flag = if wait_for_newest_data { 1u32 } else { 0u32 };
-        
+
         let result = self.quick_send(
             "Signals.ValGet",
             vec![
@@ -165,7 +174,7 @@ impl NanonisClient {
             vec!["i", "I"],
             vec!["f"],
         )?;
-        
+
         match result.first() {
             Some(value) => Ok(value.as_f32()?),
             None => Err(NanonisError::Protocol(
@@ -177,7 +186,7 @@ impl NanonisClient {
     /// Get the list of measurement channels names available in the software.
     ///
     /// Returns the names of measurement channels used in sweepers and other measurement modules.
-    /// 
+    ///
     /// **Important Note**: Measurement channels are different from Signals. Measurement channels
     /// are used in sweepers, while Signals are used by graphs and other modules. The indexes
     /// returned here are used for sweeper channel configuration (e.g., `GenSwp.ChannelsGet/Set`).
@@ -197,15 +206,20 @@ impl NanonisClient {
     ///
     /// let meas_channels = client.signals_meas_names_get()?;
     /// println!("Available measurement channels: {}", meas_channels.len());
-    /// 
+    ///
     /// for (index, name) in meas_channels.iter().enumerate() {
     ///     println!("  {}: {}", index, name);
     /// }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn signals_meas_names_get(&mut self) -> Result<Vec<String>, NanonisError> {
-        let result = self.quick_send("Signals.MeasNamesGet", vec![], vec![], vec!["i", "i", "*+c"])?;
-        
+        let result = self.quick_send(
+            "Signals.MeasNamesGet",
+            vec![],
+            vec![],
+            vec!["i", "i", "*+c"],
+        )?;
+
         if result.len() >= 3 {
             let meas_names = result[2].as_string_array()?.to_vec();
             Ok(meas_names)
@@ -241,24 +255,24 @@ impl NanonisClient {
     /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
     ///
     /// let (available_signals, internal_23, internal_24) = client.signals_add_rt_get()?;
-    /// 
+    ///
     /// println!("Available additional RT signals: {}", available_signals.len());
     /// for (i, signal) in available_signals.iter().enumerate() {
     ///     println!("  {}: {}", i, signal);
     /// }
-    /// 
+    ///
     /// println!("Internal 23 assigned to: {}", internal_23);
     /// println!("Internal 24 assigned to: {}", internal_24);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn signals_add_rt_get(&mut self) -> Result<(Vec<String>, String, String), NanonisError> {
         let result = self.quick_send(
-            "Signals.AddRTGet", 
-            vec![], 
-            vec![], 
-            vec!["i", "i", "*+c", "i", "*-c", "i", "*-c"]
+            "Signals.AddRTGet",
+            vec![],
+            vec![],
+            vec!["i", "i", "*+c", "i", "*-c", "i", "*-c"],
         )?;
-        
+
         if result.len() >= 7 {
             let available_signals = result[2].as_string_array()?.to_vec();
             let internal_23 = result[4].as_string()?.to_string();

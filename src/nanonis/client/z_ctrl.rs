@@ -351,14 +351,15 @@ impl NanonisClient {
     /// # Examples
     /// ```no_run
     /// use rusty_tip::NanonisClient;
+    /// use std::time::Duration;
     ///
     /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
     ///
     /// // Emergency withdrawal - don't wait
-    /// client.z_ctrl_withdraw(false, 5000)?;
+    /// client.z_ctrl_withdraw(false, Duration::from_secs(5))?;
     ///
     /// // Controlled withdrawal with waiting
-    /// client.z_ctrl_withdraw(true, 10000)?;
+    /// client.z_ctrl_withdraw(true, Duration::from_secs(10))?;
     /// println!("Tip safely withdrawn");
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```

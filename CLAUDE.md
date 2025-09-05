@@ -23,6 +23,7 @@ cargo run --example simple_dual_client_test
 cargo run --example osci_continuity_analysis  # Comprehensive analysis of oscilloscope data continuity
 cargo run --example scan_heatmap_plotter    # Creates heatmap visualization from scan data
 cargo run --example egui_scan_reader        # Interactive GUI for reading and visualizing scan data
+cargo run --example tcplog_demo             # TCP Logger configuration and control demo
 
 # Run tests
 cargo test
@@ -153,6 +154,12 @@ The library now uses **`MachineState`** as the central data structure, replacing
 - `Bias.Set` / `Bias.Get` - Control bias voltage
 - `FolMe.XYPosSet` / `FolMe.XYPosGet` - Position control with type-safe Position struct
 - `ZCtrl.Withdraw` - Tip withdrawal with timeout control
+
+**TCP Logger Operations:**
+- `TCPLog.Start` / `TCPLog.Stop` - Control data logging acquisition
+- `TCPLog.ChsSet` - Configure channels to record (0-23 signal slots)
+- `TCPLog.OversamplSet` - Set oversampling rate (0-1000)
+- `TCPLog.StatusGet` - Monitor logger status (idle, running, overflow, etc.)
 
 **Automation:**
 - `AutoApproach.Open` / `AutoApproach.OnOffSet` / `AutoApproach.OnOffGet` - Auto-approach control
