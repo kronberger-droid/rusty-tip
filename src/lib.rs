@@ -10,7 +10,7 @@ pub use actions::{Action, ActionChain, ActionResult};
 pub use action_driver::{ActionDriver, ExecutionStats};
 pub use error::NanonisError;
 pub use job::Job;
-pub use nanonis::{ConnectionConfig, NanonisClient, NanonisClientBuilder, PulseMode, SPMInterface, ZControllerHold};
+pub use nanonis::{ConnectionConfig, NanonisClient, NanonisClientBuilder, PulseMode, SPMInterface, TipShaperConfig, TipShaperProps, ZControllerHold, ZSpectroscopyResult};
 pub use tip_prep::{LoopType, TipController, TipState};
 pub use types::{
     ActionCondition, Amplitude, ChannelIndex, Frequency, MachineState, MotorAxis, MotorDirection, MotorGroup,

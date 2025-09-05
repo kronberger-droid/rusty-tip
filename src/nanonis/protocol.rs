@@ -37,7 +37,7 @@ impl MessageHeader {
     }
 
     // Safe serialization without unsafe code
-    fn to_bytes(self) -> [u8; HEADER_SIZE] {
+    fn to_bytes(&self) -> [u8; HEADER_SIZE] {
         let mut buf = [0u8; HEADER_SIZE];
         buf[0..32].copy_from_slice(&self.command);
         buf[32..36].copy_from_slice(&self.body_size.to_be_bytes());

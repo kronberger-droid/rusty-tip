@@ -24,6 +24,10 @@ pub mod tip_recovery;
 pub mod z_ctrl;
 pub mod z_spectr;
 
+// Re-export types from submodules
+pub use tip_recovery::{TipShaperConfig, TipShaperProps};
+pub use z_spectr::ZSpectroscopyResult;
+
 /// Connection configuration for the Nanonis TCP client.
 ///
 /// Contains timeout settings for different phases of the TCP connection lifecycle.
