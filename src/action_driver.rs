@@ -270,7 +270,8 @@ impl ActionDriver {
     }
 
     /// Execute a chain of actions sequentially
-    pub fn execute_chain(&mut self, chain: ActionChain) -> Result<Vec<ActionResult>, NanonisError> {
+    pub fn execute_chain(&mut self, chain: impl Into<ActionChain>) -> Result<Vec<ActionResult>, NanonisError> {
+        let chain = chain.into();
         let mut results = Vec::with_capacity(chain.len());
 
         for action in chain.into_iter() {
@@ -284,7 +285,7 @@ impl ActionDriver {
     /// Execute chain and return only the final result
     pub fn execute_chain_final(
         &mut self,
-        chain: ActionChain,
+        chain: impl Into<ActionChain>,
     ) -> Result<ActionResult, NanonisError> {
         let results = self.execute_chain(chain)?;
         Ok(results.into_iter().last().unwrap_or(ActionResult::None))
@@ -293,8 +294,9 @@ impl ActionDriver {
     /// Execute chain with early termination on error, returning partial results
     pub fn execute_chain_partial(
         &mut self,
-        chain: ActionChain,
+        chain: impl Into<ActionChain>,
     ) -> Result<Vec<ActionResult>, (Vec<ActionResult>, NanonisError)> {
+        let chain = chain.into();
         let mut results = Vec::new();
 
         for action in chain.into_iter() {
@@ -379,8 +381,9 @@ impl ActionDriver {
     /// Execute chain with detailed statistics
     pub fn execute_chain_with_stats(
         &mut self,
-        chain: ActionChain,
+        chain: impl Into<ActionChain>,
     ) -> Result<(Vec<ActionResult>, ExecutionStats), NanonisError> {
+        let chain = chain.into();
         let start_time = std::time::Instant::now();
         let mut results = Vec::with_capacity(chain.len());
         let mut successful = 0;

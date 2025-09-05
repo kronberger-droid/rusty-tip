@@ -500,6 +500,12 @@ impl FromIterator<Action> for ActionChain {
     }
 }
 
+impl From<Vec<Action>> for ActionChain {
+    fn from(actions: Vec<Action>) -> Self {
+        Self::new(actions)
+    }
+}
+
 // ==================== Pre-built Common Patterns ====================
 
 impl ActionChain {
@@ -662,7 +668,7 @@ mod chain_tests {
         assert_eq!(chain.len(), 2);
 
         // Test extension
-        chain.extend([Action::wait_ms(100), Action::ReadBias]);
+        chain.extend([Action::Wait { duration: Duration::from_millis(100) }, Action::ReadBias]);
         assert_eq!(chain.len(), 4);
     }
 
@@ -672,7 +678,7 @@ mod chain_tests {
             vec![
                 Action::ReadBias,
                 Action::SetBias { voltage: 1.0 },
-                Action::wait_ms(100),
+                Action::Wait { duration: Duration::from_millis(100) },
                 Action::AutoApproach,
             ],
             "Test chain",
@@ -694,8 +700,8 @@ mod chain_tests {
         let mut chain = ActionChain::empty();
 
         for _ in 0..3 {
-            chain.push(Action::move_motor_steps(MotorDirection::XPlus, 10));
-            chain.push(Action::wait_ms(100));
+            chain.push(Action::MoveMotor { direction: MotorDirection::XPlus, steps: 10 });
+            chain.push(Action::Wait { duration: Duration::from_millis(100) });
         }
 
         assert_eq!(chain.len(), 6);
@@ -725,7 +731,7 @@ mod chain_tests {
     #[test]
     fn test_chain_analysis() {
         let chain = ActionChain::new(vec![
-            Action::move_motor_steps(MotorDirection::XPlus, 100),
+            Action::MoveMotor { direction: MotorDirection::XPlus, steps: 100 },
             Action::SetPiezoPosition {
                 position: Position { x: 1e-9, y: 1e-9 },
                 wait_until_finished: true,
@@ -750,7 +756,7 @@ mod chain_tests {
         let chain = ActionChain::new(vec![
             Action::ReadBias,
             Action::AutoApproach,
-            Action::wait_ms(100),
+            Action::Wait { duration: Duration::from_millis(100) },
         ]);
 
         // Test iterator
@@ -764,5 +770,32 @@ mod chain_tests {
         // Test into_iter
         let actions: Vec<Action> = chain.into_iter().collect();
         assert_eq!(actions.len(), 3);
+    }
+
+    #[test]
+    fn test_from_vec_action() {
+        // Test From<Vec<Action>> trait
+        let actions = vec![
+            Action::ReadBias,
+            Action::SetBias { voltage: 1.5 },
+            Action::AutoApproach,
+        ];
+        
+        let chain: ActionChain = actions.into();
+        assert_eq!(chain.len(), 3);
+        assert!(chain.name().is_none());
+        
+        // Test that it's usable with Into<ActionChain> parameters
+        let vec_actions = vec![
+            Action::ReadBias,
+            Action::Wait { duration: Duration::from_millis(50) },
+        ];
+        
+        // This should compile thanks to Into<ActionChain>
+        fn accepts_into_action_chain(_chain: impl Into<ActionChain>) {
+            // This function would be called by execute methods
+        }
+        
+        accepts_into_action_chain(vec_actions);
     }
 }

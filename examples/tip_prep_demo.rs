@@ -4,12 +4,6 @@ use log::info;
 use rusty_tip::{ActionDriver, SignalIndex, TipController};
 
 /// Simple tip control loop demo
-///
-/// Minimal replication of original controller behavior:
-/// - Read signal → Classify → Execute based on state
-/// - Bad: move tip, withdraw if too many moves  
-/// - Good: wait, count towards stable
-/// - Stable: success, exit
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
