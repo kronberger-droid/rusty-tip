@@ -15,6 +15,6 @@ pub use tip_prep::{LoopType, TipController, TipState};
 pub use types::{
     ActionCondition, Amplitude, ChannelIndex, Frequency, MachineState, MotorAxis, MotorDirection, MotorGroup,
     MotorMovement, MotorPosition, MovementMode, NanonisValue, OscilloscopeIndex, Position, Position3D, SampleCount, ScanAction,
-    ScanDirection, ScanFrame, SessionMetadata, SignalIndex, SignalRegistry, SignalValue, StepCount, SystemPosition, TriggerLevel,
+    ScanDirection, ScanFrame, SessionMetadata, SignalIndex, SignalRegistry, SignalValue, StepCount, SystemPosition, TCPLogStatus, TriggerLevel,
     TriggerMode, TriggerSlope,
 };
