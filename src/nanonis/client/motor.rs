@@ -20,7 +20,7 @@ impl NanonisClient {
             "Motor.StartMove",
             vec![
                 NanonisValue::U32(direction.into().into()),
-                NanonisValue::U16(number_of_steps.into().into()),
+                NanonisValue::U16(number_of_steps.into()),
                 NanonisValue::U32(group.into().into()),
                 NanonisValue::U32(wait_flag),
             ],
