@@ -158,11 +158,22 @@ impl TipController {
             if stable_period_size == 0 {
                 // No stable period yet, compare against last signal
                 let last_signal = self.signal_history[1];
+                info!(
+                    "Last signal: {} | Current threshold: {}",
+                    last_signal,
+                    (self.change_threshold)(signal)
+                );
                 (signal - last_signal).abs() >= (self.change_threshold)(signal)
             } else {
                 // Compare against mean of current stable period (skip current signal at index 0)
                 let stable_signals = &self.signal_history[1..=stable_period_size];
                 let stable_mean = stable_signals.iter().sum::<f32>() / stable_signals.len() as f32;
+
+                info!(
+                    "Stable mean: {} | Current threshold: {}",
+                    stable_mean,
+                    (self.change_threshold)(signal)
+                );
                 (signal - stable_mean).abs() >= (self.change_threshold)(signal)
             }
         }
