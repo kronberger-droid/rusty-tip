@@ -12,22 +12,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("=== Custom Configuration ===");
     // Create controller with custom pulse stepping parameters
-    let mut custom_controller = TipController::new(
-        driver,
-        SignalIndex(24), // Signal to monitor
-        1.5,             // Initial pulse voltage (V)
-        -0.5,            // Min signal bound (V)
-        2.5,             // Max signal bound (V)
-    );
+    let mut custom_controller = TipController::new(driver, SignalIndex(76), 2.0, -2.0, 0.0);
 
-    // Configure custom pulse stepping parameters
+    // Configure custom pulse stepping parameters with dynamic threshold
     custom_controller
-        .set_pulse_stepping(0.15, 0.08, 4, 4.0) // 0.15V steps, 0.08 threshold, 4 cycles, max 4V
-        .set_stability_threshold(5) // Need 5 consecutive good readings for stable
-        .set_max_moves(20); // Allow up to 20 moves before giving up
+        .set_pulse_stepping(1.5, Box::new(|signal| signal.abs() / 10.0), 4, 8.0)
+        .set_stability_threshold(5);
 
     // Run the custom configured controller
-    match custom_controller.run(Duration::from_secs(30)) {
+    match custom_controller.run(Duration::from_secs(1000)) {
         Ok(final_state) => {
             info!("Custom controller result: {:?}", final_state);
             info!(
