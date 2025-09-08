@@ -313,6 +313,8 @@ impl TipController {
 
     /// Read signal value
     fn read_signal(&mut self) -> Result<f32, NanonisError> {
+        self.driver.spm_interface_mut().osci1t_run()?;
+
         self.driver
             .spm_interface_mut()
             .osci1t_ch_set(self.signal_index.into())?;
