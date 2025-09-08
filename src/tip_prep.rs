@@ -30,13 +30,13 @@ pub struct TipController {
     // Pulse stepping parameters
     pulse_voltage: f32,
     pulse_voltage_step: f32,
-    change_threshold: f32,
+    change_threshold: Box<dyn Fn(f32) -> f32>,
     cycles_before_step: u32,
+    min_pulse_voltage: f32,
     max_pulse_voltage: f32,
 
     // Step tracking
     cycles_without_change: u32,
-    last_significant_signal: f32,
 
     // Signal bounds and thresholds
     min_bound: f32,
@@ -45,7 +45,6 @@ pub struct TipController {
     // State tracking
     good_count: u32,
     stable_threshold: u32,
-    max_moves: u32,
 
     // History for bias adjustment
     signal_history: Vec<f32>,
@@ -65,46 +64,56 @@ impl TipController {
             driver,
             signal_index,
             pulse_voltage,
-            pulse_voltage_step: 0.1, // Default 0.1V pulse steps
-            change_threshold: 0.05,  // Signal must change by at least 0.05
-            cycles_before_step: 3,   // 3 cycles without change triggers pulse step
-            max_pulse_voltage: 5.0,  // Maximum pulse voltage
+            pulse_voltage_step: 0.1,
+            change_threshold: Box::new(|_| 0.1),
+            cycles_before_step: 3,
+            min_pulse_voltage: pulse_voltage,
+            max_pulse_voltage: 5.0, // Maximum pulse voltage
             cycles_without_change: 0,
-            last_significant_signal: 0.0,
             min_bound,
             max_bound,
             good_count: 0,
             stable_threshold: 3, // 3 consecutive good readings = stable
-            max_moves: 10,       // Max moves before withdraw/approach
             signal_history: Vec::new(),
             max_history_size: 10, // Keep last 10 signal readings
         }
     }
 
-    /// Set pulse stepping parameters
+    /// Set pulse stepping parameters with closure-based threshold
     pub fn set_pulse_stepping(
+        &mut self,
+        pulse_step: f32,
+        change_threshold: Box<dyn Fn(f32) -> f32>,
+        cycles_before_step: u32,
+        max_pulse: f32,
+    ) -> &mut Self {
+        self.pulse_voltage_step = pulse_step.abs(); // Ensure positive
+        self.change_threshold = change_threshold;
+        self.cycles_before_step = cycles_before_step.max(1); // At least 1
+        self.max_pulse_voltage = max_pulse.abs();
+        self
+    }
+
+    /// Set pulse stepping parameters with fixed threshold (convenience method)
+    pub fn set_pulse_stepping_fixed(
         &mut self,
         pulse_step: f32,
         change_threshold: f32,
         cycles_before_step: u32,
         max_pulse: f32,
     ) -> &mut Self {
-        self.pulse_voltage_step = pulse_step.abs(); // Ensure positive
-        self.change_threshold = change_threshold.abs();
-        self.cycles_before_step = cycles_before_step.max(1); // At least 1
-        self.max_pulse_voltage = max_pulse.abs();
-        self
+        let threshold = change_threshold.abs();
+        self.set_pulse_stepping(
+            pulse_step,
+            Box::new(move |_| threshold),
+            cycles_before_step,
+            max_pulse,
+        )
     }
 
     /// Set stability threshold (how many good readings needed for stable)
     pub fn set_stability_threshold(&mut self, threshold: u32) -> &mut Self {
         self.stable_threshold = threshold.max(1); // At least 1
-        self
-    }
-
-    /// Set maximum moves before giving up
-    pub fn set_max_moves(&mut self, max_moves: u32) -> &mut Self {
-        self.max_moves = max_moves;
         self
     }
 
@@ -127,51 +136,95 @@ impl TipController {
         }
     }
 
-    /// Update signal history and step pulse voltage if needed
-    fn update_signal_and_pulse(&mut self, signal: f32) {
-        // Add to history
+    /// Update signal history with new signal value
+    fn update_signal_history(&mut self, signal: f32) {
         self.signal_history.insert(0, signal);
         if self.signal_history.len() > self.max_history_size {
             self.signal_history.truncate(self.max_history_size);
         }
+    }
 
-        // Check if signal has changed significantly since last significant change
-        let signal_change = (signal - self.last_significant_signal).abs();
-
-        if signal_change >= self.change_threshold {
-            // Signal changed significantly - reset cycle counter
-            debug!(
-                "Signal changed significantly: {:.3} -> {:.3} (change: {:.3})",
-                self.last_significant_signal, signal, signal_change
-            );
-            self.last_significant_signal = signal;
-            self.cycles_without_change = 0;
+    /// Check if current signal represents a significant change from recent stable period
+    fn has_significant_change(&self, signal: f32) -> bool {
+        if self.signal_history.len() < 2 {
+            // First signal - consider it a significant change to initialize properly
+            true
         } else {
-            // Signal hasn't changed enough - increment counter
-            self.cycles_without_change += 1;
-            debug!(
-                "Signal unchanged: {:.3}, cycles without change: {}/{}",
-                signal, self.cycles_without_change, self.cycles_before_step
-            );
-
-            // Check if we need to step the pulse voltage
-            if self.cycles_without_change >= self.cycles_before_step {
-                let new_pulse =
-                    (self.pulse_voltage + self.pulse_voltage_step).min(self.max_pulse_voltage);
-                if new_pulse > self.pulse_voltage {
-                    info!(
-                        "Stepping pulse voltage: {:.3}V -> {:.3}V",
-                        self.pulse_voltage, new_pulse
-                    );
-                    self.pulse_voltage = new_pulse;
-                } else {
-                    debug!(
-                        "Pulse voltage already at maximum: {:.3}V",
-                        self.max_pulse_voltage
-                    );
-                }
-                self.cycles_without_change = 0; // Reset counter after stepping
+            // Compare only against signals from the current stable period
+            // cycles_without_change tells us how many recent signals were stable
+            let stable_period_size = (self.cycles_without_change as usize).min(self.signal_history.len() - 1);
+            
+            if stable_period_size == 0 {
+                // No stable period yet, compare against last signal
+                let last_signal = self.signal_history[1];
+                (signal - last_signal).abs() >= (self.change_threshold)(signal)
+            } else {
+                // Compare against mean of current stable period (skip current signal at index 0)
+                let stable_signals = &self.signal_history[1..=stable_period_size];
+                let stable_mean = stable_signals.iter().sum::<f32>() / stable_signals.len() as f32;
+                (signal - stable_mean).abs() >= (self.change_threshold)(signal)
             }
+        }
+    }
+
+    /// Handle response to significant signal change
+    fn handle_significant_change(&mut self, signal: f32) {
+        let comparison_signal = self.signal_history.get(1).unwrap_or(&0.0);
+        debug!(
+            "Signal changed significantly: {:.3} -> {:.3} (change: {:.3})",
+            comparison_signal,
+            signal,
+            (signal - comparison_signal).abs()
+        );
+        self.cycles_without_change = 0;
+        self.pulse_voltage = self.min_pulse_voltage;
+    }
+
+    /// Handle response to stable signal (no significant change)
+    fn handle_stable_signal(&mut self, signal: f32) {
+        self.cycles_without_change += 1;
+        debug!(
+            "Signal unchanged: {:.3}, cycles without change: {}/{}",
+            signal, self.cycles_without_change, self.cycles_before_step
+        );
+
+        // Check if we need to step the pulse voltage
+        if self.cycles_without_change >= self.cycles_before_step {
+            self.step_pulse_voltage();
+        }
+    }
+
+    /// Step up the pulse voltage if possible
+    fn step_pulse_voltage(&mut self) -> bool {
+        let new_pulse = (self.pulse_voltage + self.pulse_voltage_step).min(self.max_pulse_voltage);
+        if new_pulse > self.pulse_voltage {
+            info!(
+                "Stepping pulse voltage: {:.3}V -> {:.3}V",
+                self.pulse_voltage, new_pulse
+            );
+            self.pulse_voltage = new_pulse;
+            self.cycles_without_change = 0; // Reset counter after stepping
+            true
+        } else {
+            debug!(
+                "Pulse voltage already at maximum: {:.3}V",
+                self.max_pulse_voltage
+            );
+            self.cycles_without_change = 0; // Reset counter even if at max
+            false
+        }
+    }
+
+    /// Update signal history and step pulse voltage if needed
+    fn update_signal_and_pulse(&mut self, signal: f32) {
+        // 1. Update signal history
+        self.update_signal_history(signal);
+        
+        // 2. Check for significant change and respond accordingly
+        if self.has_significant_change(signal) {
+            self.handle_significant_change(signal);
+        } else {
+            self.handle_stable_signal(signal);
         }
     }
 }
@@ -190,23 +243,10 @@ impl TipController {
         while start.elapsed() < timeout {
             cycle += 1;
 
-            // 1. Read signal (with error handling)
-            let signal = match self.read_signal() {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!("Cycle {}: Failed to read signal: {}", cycle, e);
-                    std::thread::sleep(Duration::from_millis(500));
-                    continue; // Skip this cycle
-                }
-            };
+            // Read signal (with error handling)
+            let signal = self.read_signal()?;
 
-            // 2. Initialize first signal reference if needed
-            if self.last_significant_signal == 0.0 {
-                self.last_significant_signal = signal;
-                debug!("Initialized first signal reference: {:.3}", signal);
-            }
-
-            // 3. Update signal history and step pulse voltage if needed
+            // Update signal history and step pulse voltage if needed
             self.update_signal_and_pulse(signal);
 
             info!(
@@ -218,11 +258,11 @@ impl TipController {
                 self.cycles_before_step
             );
 
-            // 4. Classify
+            // Classify
             let state = self.classify(signal);
             info!("Cycle {}: State = {:?}", cycle, state);
 
-            // 5. Execute based on state
+            // Execute based on state
             match state {
                 TipState::Bad => {
                     self.bad_loop(cycle)?; // Execute full recovery sequence
