@@ -1,6 +1,6 @@
+use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
-use super::NanonisClient;
 
 impl NanonisClient {
     /// Open the Auto-Approach module
@@ -37,18 +37,18 @@ impl NanonisClient {
 
     /// Auto-approach and wait until completion (convenience function)
     pub fn auto_approach_and_wait(&mut self) -> Result<(), NanonisError> {
-        log::info!("Starting auto-approach...");
+        log::debug!("Starting auto-approach...");
 
         // Open auto-approach module
         self.auto_approach_open()?;
 
         // Wait a bit for module to initialize
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+        std::thread::sleep(std::time::Duration::from_millis(500));
 
         // Start auto-approach
         self.auto_approach_on_off_set(true)?;
 
-        log::info!("Waiting for auto-approach to complete...");
+        log::debug!("Waiting for auto-approach to complete...");
 
         // Wait until auto-approach completes
         loop {
@@ -59,7 +59,7 @@ impl NanonisClient {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
-        log::info!("Auto-approach finished");
+        log::debug!("Auto-approach finished");
         Ok(())
     }
 }
