@@ -152,8 +152,9 @@ impl TipController {
         } else {
             // Compare only against signals from the current stable period
             // cycles_without_change tells us how many recent signals were stable
-            let stable_period_size = (self.cycles_without_change as usize).min(self.signal_history.len() - 1);
-            
+            let stable_period_size =
+                (self.cycles_without_change as usize).min(self.signal_history.len() - 1);
+
             if stable_period_size == 0 {
                 // No stable period yet, compare against last signal
                 let last_signal = self.signal_history[1];
@@ -219,7 +220,7 @@ impl TipController {
     fn update_signal_and_pulse(&mut self, signal: f32) {
         // 1. Update signal history
         self.update_signal_history(signal);
-        
+
         // 2. Check for significant change and respond accordingly
         if self.has_significant_change(signal) {
             self.handle_significant_change(signal);
@@ -325,7 +326,7 @@ impl TipController {
         ]))?;
 
         info!(
-            "Cycle {}: Recovery sequence completed - checking tip state",
+            "Cycle {}: Recovery sequence completed - checking tip state... \n",
             cycle
         );
 
