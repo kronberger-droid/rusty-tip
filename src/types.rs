@@ -882,7 +882,6 @@ pub struct MachineState {
 
 // ==================== Action System Types ====================
 
-
 /// Registry for mapping signal names to indices
 #[derive(Debug, Clone)]
 pub struct SignalRegistry {
@@ -1134,7 +1133,8 @@ impl TryFrom<u16> for OsciTriggerMode {
             1 => Ok(OsciTriggerMode::Level),
             2 => Ok(OsciTriggerMode::Auto),
             _ => Err(NanonisError::InvalidCommand(format!(
-                "Invalid oscilloscope trigger mode: {}", value
+                "Invalid oscilloscope trigger mode: {}",
+                value
             ))),
         }
     }
@@ -1169,7 +1169,8 @@ impl TryFrom<u16> for OversamplingIndex {
             4 => Ok(OversamplingIndex::Samples2),
             5 => Ok(OversamplingIndex::Samples1),
             _ => Err(NanonisError::InvalidCommand(format!(
-                "Invalid oversampling index: {}", value
+                "Invalid oversampling index: {}",
+                value
             ))),
         }
     }
@@ -1209,6 +1210,7 @@ pub enum DataToGet {
     Current = 0,
     NextTrigger = 1,
     Wait2Triggers = 2,
+    Stable = 3,
 }
 
 impl From<DataToGet> for u16 {
@@ -1226,7 +1228,8 @@ impl TryFrom<u16> for DataToGet {
             1 => Ok(DataToGet::NextTrigger),
             2 => Ok(DataToGet::Wait2Triggers),
             _ => Err(NanonisError::InvalidCommand(format!(
-                "Invalid data to get mode: {}", value
+                "Invalid data to get mode: {}",
+                value
             ))),
         }
     }
@@ -1266,7 +1269,8 @@ impl TryFrom<i32> for TCPLogStatus {
             6 => Ok(TCPLogStatus::TCPDisconnect),
             7 => Ok(TCPLogStatus::BufferOverflow),
             _ => Err(NanonisError::InvalidCommand(format!(
-                "Invalid TCP Logger status: {}", value
+                "Invalid TCP Logger status: {}",
+                value
             ))),
         }
     }
@@ -1278,12 +1282,92 @@ impl std::fmt::Display for TCPLogStatus {
             TCPLogStatus::Disconnected => "Disconnected",
             TCPLogStatus::Idle => "Idle",
             TCPLogStatus::Start => "Start",
-            TCPLogStatus::Stop => "Stop", 
+            TCPLogStatus::Stop => "Stop",
             TCPLogStatus::Running => "Running",
             TCPLogStatus::TCPConnect => "TCP Connect",
             TCPLogStatus::TCPDisconnect => "TCP Disconnect",
             TCPLogStatus::BufferOverflow => "Buffer Overflow",
         };
         write!(f, "{}", status_str)
+    }
+}
+
+/// Trigger configuration for oscilloscope operations
+#[derive(Debug, Clone, Copy)]
+pub struct TriggerConfig {
+    pub mode: OsciTriggerMode,
+    pub slope: TriggerSlope,
+    pub level: f64,
+    pub hysteresis: f64,
+}
+
+impl TriggerConfig {
+    pub fn new(mode: OsciTriggerMode, slope: TriggerSlope, level: f64, hysteresis: f64) -> Self {
+        Self {
+            mode,
+            slope,
+            level,
+            hysteresis,
+        }
+    }
+
+    pub fn immediate() -> Self {
+        Self {
+            mode: OsciTriggerMode::Immediate,
+            slope: TriggerSlope::Rising,
+            level: 0.0,
+            hysteresis: 0.0,
+        }
+    }
+
+    pub fn level_trigger(level: f64, slope: TriggerSlope) -> Self {
+        Self {
+            mode: OsciTriggerMode::Level,
+            slope,
+            level,
+            hysteresis: 0.1,
+        }
+    }
+
+    pub fn auto_trigger() -> Self {
+        Self {
+            mode: OsciTriggerMode::Auto,
+            slope: TriggerSlope::Rising,
+            level: 0.0,
+            hysteresis: 0.1,
+        }
+    }
+}
+
+/// Oscilloscope data structure containing timing and measurement information
+#[derive(Debug, Clone)]
+pub struct OsciData {
+    pub t0: f64,
+    pub dt: f64,
+    pub size: i32,
+    pub data: Vec<f64>,
+}
+
+impl OsciData {
+    pub fn new(t0: f64, dt: f64, size: i32, data: Vec<f64>) -> Self {
+        Self { t0, dt, size, data }
+    }
+
+    pub fn duration(&self) -> f64 {
+        (self.size - 1) as f64 * self.dt
+    }
+
+    pub fn sample_rate(&self) -> f64 {
+        if self.dt > 0.0 {
+            1.0 / self.dt
+        } else {
+            0.0
+        }
+    }
+
+    pub fn time_points(&self) -> Vec<f64> {
+        (0..self.size)
+            .map(|i| self.t0 + i as f64 * self.dt)
+            .collect()
     }
 }

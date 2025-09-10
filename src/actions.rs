@@ -1,6 +1,7 @@
 use crate::{
     types::{
-        ActionCondition, MovementMode, Position, Position3D, ScanAction, SignalIndex, SignalValue,
+        ActionCondition, DataToGet, MovementMode, OsciData, Position, Position3D, ScanAction,
+        SignalIndex, SignalValue, TriggerConfig,
     },
     MotorDirection,
 };
@@ -10,7 +11,6 @@ use std::time::Duration;
 /// Properly separates motor (step-based) and piezo (continuous) movements
 #[derive(Debug, Clone)]
 pub enum Action {
-    // === Signal Operations ===
     /// Read single signal value
     ReadSignal {
         signal: SignalIndex,
@@ -26,14 +26,19 @@ pub enum Action {
     /// Read all available signal names
     ReadSignalNames,
 
-    // === Bias Operations ===
     /// Read current bias voltage
     ReadBias,
 
     /// Set bias voltage to specific value
     SetBias { voltage: f32 },
 
-    // === Fine Positioning Operations (Piezo) ===
+    // Osci functions
+    ReadOsci {
+        signal: SignalIndex,
+        trigger: Option<TriggerConfig>,
+        data_to_get: DataToGet,
+    },
+
     /// Read current piezo position (continuous coordinates)
     ReadPiezoPosition { wait_for_newest_data: bool },
 
@@ -131,6 +136,10 @@ pub enum ActionResult {
     /// Stored value retrieved by key
     StoredValue(Box<ActionResult>),
 
+    // === Oscilloscope Results ===
+    /// Oscilloscope data with timing and measurement information
+    OscilloscopeData(OsciData),
+
     // === Status Results ===
     /// Operation completed successfully (no return value)
     Success,
@@ -162,6 +171,14 @@ impl ActionResult {
     pub fn as_position(&self) -> Option<Position> {
         match self {
             ActionResult::PiezoPosition(pos) => Some(*pos),
+            _ => None,
+        }
+    }
+
+    /// Convert to OsciData if possible
+    pub fn as_osci_data(&self) -> Option<&OsciData> {
+        match self {
+            ActionResult::OscilloscopeData(data) => Some(data),
             _ => None,
         }
     }
@@ -266,6 +283,20 @@ impl Action {
                 pulse_mode: _,
             } => {
                 format!("Bias pulse {:.3}V for {:?}ms", bias_value_v, pulse_width_s)
+            }
+            Action::ReadOsci {
+                signal,
+                trigger,
+                data_to_get,
+            } => {
+                let trigger_desc = match trigger {
+                    Some(config) => format!("trigger: {:?}", config.mode),
+                    None => "no trigger config".to_string(),
+                };
+                format!(
+                    "Read oscilloscope signal {} with {} (mode: {:?})",
+                    signal.0, trigger_desc, data_to_get
+                )
             }
             _ => format!("{:?}", self),
         }
@@ -668,7 +699,12 @@ mod chain_tests {
         assert_eq!(chain.len(), 2);
 
         // Test extension
-        chain.extend([Action::Wait { duration: Duration::from_millis(100) }, Action::ReadBias]);
+        chain.extend([
+            Action::Wait {
+                duration: Duration::from_millis(100),
+            },
+            Action::ReadBias,
+        ]);
         assert_eq!(chain.len(), 4);
     }
 
@@ -678,7 +714,9 @@ mod chain_tests {
             vec![
                 Action::ReadBias,
                 Action::SetBias { voltage: 1.0 },
-                Action::Wait { duration: Duration::from_millis(100) },
+                Action::Wait {
+                    duration: Duration::from_millis(100),
+                },
                 Action::AutoApproach,
             ],
             "Test chain",
@@ -700,8 +738,13 @@ mod chain_tests {
         let mut chain = ActionChain::empty();
 
         for _ in 0..3 {
-            chain.push(Action::MoveMotor { direction: MotorDirection::XPlus, steps: 10 });
-            chain.push(Action::Wait { duration: Duration::from_millis(100) });
+            chain.push(Action::MoveMotor {
+                direction: MotorDirection::XPlus,
+                steps: 10,
+            });
+            chain.push(Action::Wait {
+                duration: Duration::from_millis(100),
+            });
         }
 
         assert_eq!(chain.len(), 6);
@@ -731,7 +774,10 @@ mod chain_tests {
     #[test]
     fn test_chain_analysis() {
         let chain = ActionChain::new(vec![
-            Action::MoveMotor { direction: MotorDirection::XPlus, steps: 100 },
+            Action::MoveMotor {
+                direction: MotorDirection::XPlus,
+                steps: 100,
+            },
             Action::SetPiezoPosition {
                 position: Position { x: 1e-9, y: 1e-9 },
                 wait_until_finished: true,
@@ -756,7 +802,9 @@ mod chain_tests {
         let chain = ActionChain::new(vec![
             Action::ReadBias,
             Action::AutoApproach,
-            Action::Wait { duration: Duration::from_millis(100) },
+            Action::Wait {
+                duration: Duration::from_millis(100),
+            },
         ]);
 
         // Test iterator
@@ -780,22 +828,24 @@ mod chain_tests {
             Action::SetBias { voltage: 1.5 },
             Action::AutoApproach,
         ];
-        
+
         let chain: ActionChain = actions.into();
         assert_eq!(chain.len(), 3);
         assert!(chain.name().is_none());
-        
+
         // Test that it's usable with Into<ActionChain> parameters
         let vec_actions = vec![
             Action::ReadBias,
-            Action::Wait { duration: Duration::from_millis(50) },
+            Action::Wait {
+                duration: Duration::from_millis(50),
+            },
         ];
-        
+
         // This should compile thanks to Into<ActionChain>
         fn accepts_into_action_chain(_chain: impl Into<ActionChain>) {
             // This function would be called by execute methods
         }
-        
+
         accepts_into_action_chain(vec_actions);
     }
 }
