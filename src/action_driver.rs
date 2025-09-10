@@ -3,7 +3,7 @@ use log::info;
 use crate::actions::{Action, ActionChain, ActionResult};
 use crate::error::NanonisError;
 use crate::nanonis::{NanonisClient, PulseMode, SPMInterface, ZControllerHold};
-use crate::types::{MotorGroup, Position, ScanDirection, SignalRegistry, SignalValue};
+use crate::types::{MotorGroup, OsciData, Position, ScanDirection, SignalRegistry, SignalValue};
 use std::collections::HashMap;
 use std::thread;
 
@@ -122,6 +122,35 @@ impl ActionDriver {
             Action::SetBias { voltage } => {
                 self.client.set_bias(voltage)?;
                 Ok(ActionResult::Success)
+            }
+
+            // === Oscilloscope Operations ===
+            Action::ReadOsci {
+                signal,
+                trigger,
+                data_to_get,
+            } => {
+                // Set the channel first
+                self.client.osci1t_ch_set(signal.0)?;
+
+                // Configure trigger if provided
+                if let Some(trigger_config) = trigger {
+                    self.client.osci1t_trig_set(
+                        trigger_config.mode,
+                        trigger_config.slope,
+                        trigger_config.level as f32,
+                        trigger_config.hysteresis as f32,
+                    )?;
+                }
+
+                // Start the oscilloscope
+                self.client.osci1t_run()?;
+
+                // Get the data using user-specified mode
+                let (t0, dt, size, data) = self.client.osci1t_data_get(data_to_get)?;
+                let osci_data = OsciData::new(t0, dt, size, data);
+
+                Ok(ActionResult::OscilloscopeData(osci_data))
             }
 
             // === Fine Positioning Operations (Piezo) ===
@@ -270,7 +299,10 @@ impl ActionDriver {
     }
 
     /// Execute a chain of actions sequentially
-    pub fn execute_chain(&mut self, chain: impl Into<ActionChain>) -> Result<Vec<ActionResult>, NanonisError> {
+    pub fn execute_chain(
+        &mut self,
+        chain: impl Into<ActionChain>,
+    ) -> Result<Vec<ActionResult>, NanonisError> {
         let chain = chain.into();
         let mut results = Vec::with_capacity(chain.len());
 

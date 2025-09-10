@@ -3,11 +3,13 @@ use crate::actions::{Action, ActionChain};
 use crate::error::NanonisError;
 use crate::job::Job;
 use crate::types::{DataToGet, MotorDirection, SignalIndex};
+use crate::Logger;
 use log::{debug, info, warn};
+use serde::Serialize;
 use std::time::{Duration, Instant};
 
 /// Simple tip state - matches original controller
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum TipState {
     Bad,
     Good,
@@ -20,6 +22,16 @@ pub enum LoopType {
     BadLoop,
     GoodLoop,
     StableLoop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct LogLine {
+    cycle: u32,
+    freq_shift: f32,
+    tip_state: TipState,
+    pulse_voltage: f32,
+    freq_shift_change: Option<f32>,
+    z_change: Option<f32>,
 }
 
 /// Enhanced tip controller with pulse voltage stepping
@@ -49,6 +61,9 @@ pub struct TipController {
     // History for bias adjustment
     signal_history: Vec<f32>,
     max_history_size: usize,
+
+    // Json Logger
+    logger: Option<Logger<LogLine>>,
 }
 
 impl TipController {
@@ -76,6 +91,7 @@ impl TipController {
             stable_threshold: 3, // 3 consecutive good readings = stable
             signal_history: Vec::new(),
             max_history_size: 10, // Keep last 10 signal readings
+            logger: None,
         }
     }
 
@@ -109,6 +125,12 @@ impl TipController {
             cycles_before_step,
             max_pulse,
         )
+    }
+
+    /// Provide Json File logger for inspecting behavior
+    pub fn with_logger(&mut self, logger: Logger<LogLine>) -> &mut Self {
+        self.logger = Some(logger);
+        self
     }
 
     /// Set stability threshold (how many good readings needed for stable)
@@ -256,26 +278,26 @@ impl TipController {
             cycle += 1;
 
             // Read signal (with error handling)
-            let signal = self.read_signal()?;
+            let freq_shift = self.read_signal()?;
 
             // Update signal history and step pulse voltage if needed
-            self.update_signal_and_pulse(signal);
+            self.update_signal_and_pulse(freq_shift);
 
             info!(
                 "Cycle {}: Signal = {:.6}, Pulse = {:.3}V, Cycles w/o change = {}/{}",
                 cycle,
-                signal,
+                freq_shift,
                 self.pulse_voltage,
                 self.cycles_without_change,
                 self.cycles_before_step
             );
 
             // Classify
-            let state = self.classify(signal);
-            info!("Cycle {}: State = {:?}", cycle, state);
+            let tip_state = self.classify(freq_shift);
+            info!("Cycle {}: State = {:?}", cycle, tip_state);
 
             // Execute based on state
-            match state {
+            match tip_state {
                 TipState::Bad => {
                     self.bad_loop(cycle)?; // Execute full recovery sequence
                 }
@@ -291,7 +313,27 @@ impl TipController {
                 }
             }
 
-            std::thread::sleep(Duration::from_millis(500)); // Match original timing
+            // Add information about this cycle to the logger buffer
+            if let Some(ref mut logger) = self.logger {
+                let freq_shift_change = if self.signal_history.len() >= 2 {
+                    Some(
+                        self.signal_history[self.signal_history.len() - 1]
+                            - self.signal_history[self.signal_history.len() - 2],
+                    )
+                } else {
+                    None
+                };
+                logger.add(LogLine {
+                    cycle,
+                    freq_shift,
+                    tip_state,
+                    pulse_voltage: self.pulse_voltage,
+                    freq_shift_change,
+                    z_change: None,
+                })?
+            }
+
+            std::thread::sleep(Duration::from_millis(500));
         }
 
         warn!("Tip control loop timed out");

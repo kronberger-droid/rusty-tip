@@ -2,6 +2,7 @@ pub mod actions;
 pub mod action_driver;
 pub mod error;
 pub mod job;
+pub mod logger;
 pub mod nanonis;
 pub mod tip_prep;
 pub mod types;
@@ -10,6 +11,7 @@ pub use actions::{Action, ActionChain, ActionResult};
 pub use action_driver::{ActionDriver, ExecutionStats};
 pub use error::NanonisError;
 pub use job::Job;
+pub use logger::Logger;
 pub use nanonis::{ConnectionConfig, NanonisClient, NanonisClientBuilder, PulseMode, SPMInterface, TipShaperConfig, TipShaperProps, ZControllerHold, ZSpectroscopyResult};
 pub use tip_prep::{LoopType, TipController, TipState};
 pub use types::{
