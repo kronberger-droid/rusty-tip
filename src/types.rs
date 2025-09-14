@@ -1213,27 +1213,6 @@ pub enum DataToGet {
     Stable = 3,
 }
 
-impl From<DataToGet> for u16 {
-    fn from(mode: DataToGet) -> Self {
-        mode as u16
-    }
-}
-
-impl TryFrom<u16> for DataToGet {
-    type Error = NanonisError;
-
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(DataToGet::Current),
-            1 => Ok(DataToGet::NextTrigger),
-            2 => Ok(DataToGet::Wait2Triggers),
-            _ => Err(NanonisError::InvalidCommand(format!(
-                "Invalid data to get mode: {}",
-                value
-            ))),
-        }
-    }
-}
 
 /// TCP Logger status enumeration
 /// Represents the different states of the TCP Logger module in Nanonis
@@ -1339,6 +1318,17 @@ impl TriggerConfig {
     }
 }
 
+/// Statistical analysis of signal data
+#[derive(Debug, Clone)]
+pub struct SignalStats {
+    pub mean: f64,
+    pub std_dev: f64,
+    pub relative_std: f64,
+    pub window_size: usize,
+    /// Method used to determine stability: "relative", "absolute", or "both"
+    pub stability_method: String,
+}
+
 /// Oscilloscope data structure containing timing and measurement information
 #[derive(Debug, Clone)]
 pub struct OsciData {
@@ -1346,11 +1336,38 @@ pub struct OsciData {
     pub dt: f64,
     pub size: i32,
     pub data: Vec<f64>,
+    pub signal_stats: Option<SignalStats>,
 }
 
 impl OsciData {
     pub fn new(t0: f64, dt: f64, size: i32, data: Vec<f64>) -> Self {
-        Self { t0, dt, size, data }
+        Self { t0, dt, size, data, signal_stats: None }
+    }
+    
+    pub fn new_with_stats(t0: f64, dt: f64, size: i32, data: Vec<f64>, stats: SignalStats) -> Self {
+        Self { t0, dt, size, data, signal_stats: Some(stats) }
+    }
+
+    /// Get just the measurement values
+    pub fn values(&self) -> &[f64] {
+        &self.data
+    }
+    
+    /// Get time series as (time, value) pairs
+    pub fn time_series(&self) -> Vec<(f64, f64)> {
+        self.data.iter().enumerate()
+            .map(|(i, &value)| (self.t0 + i as f64 * self.dt, value))
+            .collect()
+    }
+    
+    /// Get signal statistics if available
+    pub fn stats(&self) -> Option<&SignalStats> {
+        self.signal_stats.as_ref()
+    }
+    
+    /// Check if this data includes stability analysis
+    pub fn is_stable(&self) -> bool {
+        self.signal_stats.is_some()
     }
 
     pub fn duration(&self) -> f64 {
@@ -1370,4 +1387,19 @@ impl OsciData {
             .map(|i| self.t0 + i as f64 * self.dt)
             .collect()
     }
+}
+
+/// TCP Logger data stream frame from Nanonis TCP Logger.
+#[derive(Debug, Clone)]
+pub struct TCPLoggerData {
+    /// Number of channels (32-bit integer)
+    pub num_channels: u32,
+    /// Oversampling rate (32-bit float)
+    pub oversampling: f32,
+    /// Frame counter (64-bit integer)
+    pub counter: u64,
+    /// Logger state (16-bit unsigned integer)
+    pub state: TCPLogStatus,
+    /// Signal data (num_channels × 32-bit floats)
+    pub data: Vec<f32>,
 }

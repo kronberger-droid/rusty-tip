@@ -1,9 +1,13 @@
 use log::info;
+use ndarray::Array1;
 
 use crate::actions::{Action, ActionChain, ActionResult};
 use crate::error::NanonisError;
 use crate::nanonis::{NanonisClient, PulseMode, SPMInterface, ZControllerHold};
-use crate::types::{MotorGroup, OsciData, Position, ScanDirection, SignalRegistry, SignalValue};
+use crate::types::{
+    DataToGet, MotorGroup, OsciData, Position, ScanDirection, SignalIndex, SignalRegistry,
+    SignalStats, SignalValue, TriggerConfig,
+};
 use std::collections::HashMap;
 use std::thread;
 
@@ -130,27 +134,85 @@ impl ActionDriver {
                 trigger,
                 data_to_get,
             } => {
-                // Set the channel first
+                self.client.osci1t_run()?;
+
                 self.client.osci1t_ch_set(signal.0)?;
 
-                // Configure trigger if provided
-                if let Some(trigger_config) = trigger {
+                if let Some(trigger) = trigger {
                     self.client.osci1t_trig_set(
-                        trigger_config.mode,
-                        trigger_config.slope,
-                        trigger_config.level as f32,
-                        trigger_config.hysteresis as f32,
+                        trigger.mode,
+                        trigger.slope,
+                        trigger.level as f32,
+                        trigger.hysteresis as f32,
                     )?;
                 }
 
-                // Start the oscilloscope
-                self.client.osci1t_run()?;
+                match data_to_get {
+                    crate::types::DataToGet::Stable => {
+                        let max_attempts = 3;
+                        let relative_threshold = 0.01; // 1% relative threshold for normal signals
+                        let absolute_threshold = 50e-15; // 50 fA absolute threshold for small signals near zero
+                        let min_window_percent = 0.1;
 
-                // Get the data using user-specified mode
-                let (t0, dt, size, data) = self.client.osci1t_data_get(data_to_get)?;
-                let osci_data = OsciData::new(t0, dt, size, data);
+                        for _ in 0..max_attempts {
+                            let (t0, dt, size, data) = self.client.osci1t_data_get(data_to_get)?;
 
-                Ok(ActionResult::OscilloscopeData(osci_data))
+                            let min_window = (size as f64 * min_window_percent) as usize;
+                            let mut start = 0;
+                            let mut end = data.len();
+
+                            while (end - start) > min_window {
+                                let window = &data[start..end];
+                                let arr = Array1::from_vec(window.to_vec());
+                                let mean = arr.mean().expect("There must be an non-empty array, osci1t_data_get would have returned early.");
+                                let std_dev = arr.std(0.0);
+                                let relative_std = std_dev / mean.abs();
+
+                                // Use dual-threshold approach: relative OR absolute
+                                let is_relative_stable = relative_std < relative_threshold;
+                                let is_absolute_stable = std_dev < absolute_threshold;
+
+                                if is_relative_stable || is_absolute_stable {
+                                    let stable_data = window.to_vec();
+                                    let stability_method = match (is_relative_stable, is_absolute_stable) {
+                                        (true, true) => "both".to_string(),
+                                        (true, false) => "relative".to_string(),
+                                        (false, true) => "absolute".to_string(),
+                                        (false, false) => unreachable!(),
+                                    };
+
+                                    let stats = SignalStats {
+                                        mean,
+                                        std_dev,
+                                        relative_std,
+                                        window_size: stable_data.len(),
+                                        stability_method,
+                                    };
+
+                                    let osci_data = OsciData::new_with_stats(
+                                        t0,
+                                        dt,
+                                        stable_data.len() as i32,
+                                        stable_data,
+                                        stats,
+                                    );
+                                    return Ok(ActionResult::OscilloscopeData(osci_data));
+                                }
+
+                                let shrink = ((end - start) / 10).max(1);
+                                start += shrink;
+                                end -= shrink;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                        }
+                        Ok(ActionResult::None)
+                    }
+                    _ => {
+                        let (t0, dt, size, data) = self.client.osci1t_data_get(data_to_get)?;
+                        let osci_data = OsciData::new(t0, dt, size, data);
+                        Ok(ActionResult::OscilloscopeData(osci_data))
+                    }
+                }
             }
 
             // === Fine Positioning Operations (Piezo) ===
@@ -385,6 +447,26 @@ impl ActionDriver {
                 // Return false as safe default
                 Ok(false)
             }
+        }
+    }
+
+    /// Convenience method to read oscilloscope data directly
+    pub fn read_oscilloscope(
+        &mut self,
+        signal: SignalIndex,
+        trigger: Option<TriggerConfig>,
+        data_to_get: DataToGet,
+    ) -> Result<Option<OsciData>, NanonisError> {
+        match self.execute(Action::ReadOsci {
+            signal,
+            trigger,
+            data_to_get,
+        })? {
+            ActionResult::OscilloscopeData(osci_data) => Ok(Some(osci_data)),
+            ActionResult::None => Ok(None),
+            _ => Err(NanonisError::InvalidCommand(
+                "Expected oscilloscope data".into(),
+            )),
         }
     }
 }

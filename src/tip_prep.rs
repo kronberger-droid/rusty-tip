@@ -83,14 +83,14 @@ impl TipController {
             change_threshold: Box::new(|_| 0.1),
             cycles_before_step: 3,
             min_pulse_voltage: pulse_voltage,
-            max_pulse_voltage: 5.0, // Maximum pulse voltage
+            max_pulse_voltage: 5.0,
             cycles_without_change: 0,
             min_bound,
             max_bound,
             good_count: 0,
-            stable_threshold: 3, // 3 consecutive good readings = stable
+            stable_threshold: 3,
             signal_history: Vec::new(),
-            max_history_size: 10, // Keep last 10 signal readings
+            max_history_size: 10,
             logger: None,
         }
     }

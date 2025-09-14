@@ -174,7 +174,13 @@ impl SPMInterface for NanonisClient {
         &mut self,
         data_to_get: DataToGet,
     ) -> Result<(f64, f64, i32, Vec<f64>), NanonisError> {
-        NanonisClient::osci1t_data_get(self, data_to_get.into())
+        let data_mode = match data_to_get {
+            DataToGet::Current => 0,
+            DataToGet::NextTrigger => 1,
+            DataToGet::Wait2Triggers => 2,
+            DataToGet::Stable => 3,
+        };
+        NanonisClient::osci1t_data_get(self, data_mode)
     }
 
     // === Oscilloscope 2-Channels Operations ===
@@ -255,6 +261,12 @@ impl SPMInterface for NanonisClient {
         &mut self,
         data_to_get: DataToGet,
     ) -> Result<(f64, f64, Vec<f64>, Vec<f64>), NanonisError> {
-        NanonisClient::osci2t_data_get(self, data_to_get.into())
+        let data_mode = match data_to_get {
+            DataToGet::Current => 0,
+            DataToGet::NextTrigger => 1,
+            DataToGet::Wait2Triggers => 2,
+            DataToGet::Stable => 3,
+        };
+        NanonisClient::osci2t_data_get(self, data_mode)
     }
 }
