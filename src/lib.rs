@@ -12,11 +12,11 @@ pub use action_driver::{ActionDriver, ExecutionStats};
 pub use error::NanonisError;
 pub use job::Job;
 pub use logger::Logger;
-pub use nanonis::{ConnectionConfig, NanonisClient, NanonisClientBuilder, PulseMode, SPMInterface, TipShaperConfig, TipShaperProps, ZControllerHold, ZSpectroscopyResult};
+pub use nanonis::{ConnectionConfig, NanonisClient, NanonisClientBuilder, PulseMode, SPMInterface, TCPLoggerStream, TipShaperConfig, TipShaperProps, ZControllerHold, ZSpectroscopyResult};
 pub use tip_prep::{LoopType, TipController, TipState};
 pub use types::{
     ActionCondition, Amplitude, ChannelIndex, Frequency, MachineState, MotorAxis, MotorDirection, MotorGroup,
     MotorMovement, MotorPosition, MovementMode, NanonisValue, OscilloscopeIndex, Position, Position3D, SampleCount, ScanAction,
-    ScanDirection, ScanFrame, SessionMetadata, SignalIndex, SignalRegistry, SignalValue, StepCount, SystemPosition, TCPLogStatus, TriggerLevel,
+    ScanDirection, ScanFrame, SessionMetadata, SignalIndex, SignalRegistry, SignalValue, StepCount, SystemPosition, TCPLoggerData, TCPLogStatus, TriggerLevel,
     TriggerMode, TriggerSlope,
 };

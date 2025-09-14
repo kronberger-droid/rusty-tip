@@ -1,6 +1,7 @@
 use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::{NanonisValue, TCPLogStatus};
+use crate::TCPLoggerData;
 
 impl NanonisClient {
     /// Start the acquisition in the TCP Logger module.
@@ -184,10 +185,22 @@ impl NanonisClient {
     pub fn tcplog_status_get(&mut self) -> Result<TCPLogStatus, NanonisError> {
         let result = self.quick_send("TCPLog.StatusGet", vec![], vec![], vec!["i"])?;
 
+        println!("{result:?}");
+
         match result.first() {
             Some(value) => {
-                let status_value = value.as_i32()?;
-                TCPLogStatus::try_from(status_value)
+                let value = value.as_i32()?;
+                match value {
+                    0 => Ok(TCPLogStatus::Disconnected),
+                    1 => Ok(TCPLogStatus::Idle),
+                    2 => Ok(TCPLogStatus::Start),
+                    3 => Ok(TCPLogStatus::Stop),
+                    4 => Ok(TCPLogStatus::Running),
+                    5 => Ok(TCPLogStatus::TCPConnect),
+                    6 => Ok(TCPLogStatus::TCPDisconnect),
+                    7 => Ok(TCPLogStatus::BufferOverflow),
+                    _ => Err(NanonisError::Protocol("Invalid Status value".to_string())),
+                }
             }
             None => Err(NanonisError::Protocol(
                 "No status value returned".to_string(),
