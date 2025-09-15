@@ -178,7 +178,11 @@ impl SPMInterface for NanonisClient {
             DataToGet::Current => 0,
             DataToGet::NextTrigger => 1,
             DataToGet::Wait2Triggers => 2,
-            DataToGet::Stable => 3,
+            DataToGet::Stable { .. } => {
+                return Err(NanonisError::InvalidCommand(
+                    "DataToGet::Stable is only supported by ActionDriver, not SPM interface layer".to_string()
+                ));
+            }
         };
         NanonisClient::osci1t_data_get(self, data_mode)
     }
@@ -265,7 +269,11 @@ impl SPMInterface for NanonisClient {
             DataToGet::Current => 0,
             DataToGet::NextTrigger => 1,
             DataToGet::Wait2Triggers => 2,
-            DataToGet::Stable => 3,
+            DataToGet::Stable { .. } => {
+                return Err(NanonisError::InvalidCommand(
+                    "DataToGet::Stable is only supported by ActionDriver, not SPM interface layer".to_string()
+                ));
+            }
         };
         NanonisClient::osci2t_data_get(self, data_mode)
     }

@@ -8,6 +8,8 @@ use std::time::Duration;
 /// TCP Logger stream client for reading continuous data from Nanonis TCP Logger.
 ///
 /// This client reads the binary data stream from the TCP Logger module.
+/// Uses an internal buffer that's reused across frame reads for efficiency.
+///
 /// The stream format is:
 /// - Header (18 bytes):
 ///   - Number of channels: 32-bit integer (4 bytes)
@@ -17,6 +19,7 @@ use std::time::Duration;
 /// - Data: N × 32-bit floats (N × 4 bytes)
 pub struct TCPLoggerStream {
     stream: TcpStream,
+    /// Reusable buffer for frame data - resized as needed to fit frames
     buffer: Vec<u8>,
 }
 
@@ -76,9 +79,44 @@ impl TCPLoggerStream {
     /// # Frame Format
     /// Always reads 18 bytes header first, then reads data based on num_channels.
     pub fn read_frame(&mut self) -> Result<TCPLoggerData, NanonisError> {
-        let (num_channels, oversampling, counter, state) = self.read_header()?;
+        // First read header to determine frame size
+        let header_size = 18;
+        self.buffer.resize(header_size, 0);
+        
+        // Read header into buffer
+        self.stream.read_exact(&mut self.buffer[..header_size]).map_err(|e| NanonisError::Io {
+            source: e,
+            context: "Reading TCP Logger frame header".to_string(),
+        })?;
 
-        let data = self.read_data(num_channels)?;
+        // Parse header from buffer
+        let mut cursor = Cursor::new(&self.buffer[..header_size]);
+        let num_channels = cursor.read_u32::<BigEndian>()?;
+        let oversampling = cursor.read_f32::<BigEndian>()?;
+        let counter = cursor.read_u64::<BigEndian>()?;
+        let state_val = cursor.read_u16::<BigEndian>()?;
+        let state = TCPLogStatus::try_from(state_val as i32)?;
+
+        // Calculate total frame size and read data portion
+        let data_size = num_channels as usize * 4;
+        let total_size = header_size + data_size;
+        
+        // Resize buffer to fit entire frame and read data portion
+        self.buffer.resize(total_size, 0);
+        
+        // Read data portion into buffer
+        self.stream.read_exact(&mut self.buffer[header_size..]).map_err(|e| NanonisError::Io {
+            source: e,
+            context: "Reading TCP Logger frame data".to_string(),
+        })?;
+
+        // Parse data from buffer
+        let mut cursor = Cursor::new(&self.buffer[header_size..]);
+        let mut data = Vec::with_capacity(num_channels as usize);
+        
+        for _ in 0..num_channels {
+            data.push(cursor.read_f32::<BigEndian>()?);
+        }
 
         Ok(TCPLoggerData {
             num_channels,
@@ -89,65 +127,7 @@ impl TCPLoggerStream {
         })
     }
 
-    /// Read the 18-byte header and parse fields using byteorder crate.
-    ///
-    /// # Returns
-    /// Tuple of (num_channels, oversampling, counter, state)
-    fn read_header(&mut self) -> Result<(u32, f32, u64, TCPLogStatus), NanonisError> {
-        let mut buf = [0u8; 18];
-        self.read_exact(&mut buf)?;
 
-        let mut cursor = Cursor::new(buf);
-        let num_channels = cursor.read_u32::<BigEndian>()?;
-        let oversampling = cursor.read_f32::<BigEndian>()?;
-        let counter = cursor.read_u64::<BigEndian>()?;
-        let state_val = cursor.read_u16::<BigEndian>()?;
-
-        let state = TCPLogStatus::try_from(state_val as i32)?;
-
-        Ok((num_channels, oversampling, counter, state))
-    }
-
-    /// Read data array based on number of channels using byteorder crate.
-    ///
-    /// # Arguments
-    /// * `num_channels` - Number of f32 values to read
-    ///
-    /// # Returns
-    /// Vector of signal values
-    fn read_data(&mut self, num_channels: u32) -> Result<Vec<f32>, NanonisError> {
-        // TODO: Implement data array reading with byteorder
-        // 1. Read num_channels * 4 bytes
-        // 2. Create Cursor and loop:
-        //    - cursor.read_f32::<BigEndian>()? for each value
-        let data_bytes = num_channels as usize * 4;
-
-        let mut buf = vec![0u8; data_bytes];
-        self.read_exact(&mut buf)?;
-
-        let mut cursor = Cursor::new(buf);
-        let mut data = Vec::with_capacity(num_channels as usize);
-
-        for _ in 0..num_channels {
-            data.push(cursor.read_f32::<BigEndian>()?);
-        }
-
-        Ok(data)
-    }
-
-    /// Read exact number of bytes from stream.
-    ///
-    /// # Arguments
-    /// * `buf` - Buffer to fill
-    ///
-    /// # Returns
-    /// Ok(()) if all bytes read successfully
-    fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), NanonisError> {
-        self.stream.read_exact(buf).map_err(|e| NanonisError::Io {
-            source: e,
-            context: "Reading TCP Logger frame".to_string(),
-        })
-    }
 
     /// Set read timeout for the stream.
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<(), NanonisError> {

@@ -2,14 +2,14 @@
 #import "@preview/lilaq:0.4.0" as lq
 #import calc: abs
 
+
 #{
-  let read_jsonl(filename) = {
-    let content = read(filename)
+  let file_name = sys.inputs.path
+  let read_jsonl(file_name) = {
+    let content = read(file_name)
     let lines = content.split("\n")
     lines.filter(line => line.trim() != "").map(line => json(bytes(line)))
   }
-
-  let file_name = "../history/log_20250909_134749.json"
 
   let data = read_jsonl(file_name).map(entry => entry.data)
 

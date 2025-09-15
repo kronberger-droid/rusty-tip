@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::NanonisError;
-use std::collections::VecDeque;
+use std::{collections::VecDeque, time::Duration};
 
 #[derive(Debug, Clone)]
 pub enum NanonisValue {
@@ -298,7 +298,7 @@ impl NanonisValue {
 }
 
 /// Signal and Channel Types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SignalIndex(pub i32);
 
 impl SignalIndex {
@@ -1205,14 +1205,22 @@ impl From<u16> for TimebaseIndex {
 }
 
 /// Data acquisition mode for oscilloscope operations
+/// 
+/// Note: `DataToGet::Stable` is only supported by the ActionDriver layer,
+/// which implements sophisticated stability detection logic. The SPM interface
+/// layer (spm_impl.rs) will return an error if `Stable` is used directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataToGet {
-    Current = 0,
-    NextTrigger = 1,
-    Wait2Triggers = 2,
-    Stable = 3,
+    Current,
+    NextTrigger,
+    Wait2Triggers,
+    /// Stability detection mode - only supported by ActionDriver
+    /// 
+    /// Parameters:
+    /// - `readings`: Number of stable readings required
+    /// - `timeout`: Maximum time to wait for stability
+    Stable { readings: u32, timeout: Duration },
 }
-
 
 /// TCP Logger status enumeration
 /// Represents the different states of the TCP Logger module in Nanonis
@@ -1341,30 +1349,44 @@ pub struct OsciData {
 
 impl OsciData {
     pub fn new(t0: f64, dt: f64, size: i32, data: Vec<f64>) -> Self {
-        Self { t0, dt, size, data, signal_stats: None }
+        Self {
+            t0,
+            dt,
+            size,
+            data,
+            signal_stats: None,
+        }
     }
-    
+
     pub fn new_with_stats(t0: f64, dt: f64, size: i32, data: Vec<f64>, stats: SignalStats) -> Self {
-        Self { t0, dt, size, data, signal_stats: Some(stats) }
+        Self {
+            t0,
+            dt,
+            size,
+            data,
+            signal_stats: Some(stats),
+        }
     }
 
     /// Get just the measurement values
     pub fn values(&self) -> &[f64] {
         &self.data
     }
-    
+
     /// Get time series as (time, value) pairs
     pub fn time_series(&self) -> Vec<(f64, f64)> {
-        self.data.iter().enumerate()
+        self.data
+            .iter()
+            .enumerate()
             .map(|(i, &value)| (self.t0 + i as f64 * self.dt, value))
             .collect()
     }
-    
+
     /// Get signal statistics if available
     pub fn stats(&self) -> Option<&SignalStats> {
         self.signal_stats.as_ref()
     }
-    
+
     /// Check if this data includes stability analysis
     pub fn is_stable(&self) -> bool {
         self.signal_stats.is_some()

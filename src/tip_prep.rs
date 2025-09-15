@@ -6,6 +6,7 @@ use crate::types::{DataToGet, MotorDirection, SignalIndex};
 use crate::Logger;
 use log::{debug, info, warn};
 use serde::Serialize;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 /// Simple tip state - matches original controller
@@ -32,6 +33,7 @@ pub struct LogLine {
     pulse_voltage: f32,
     freq_shift_change: Option<f32>,
     z_change: Option<f32>,
+    pulse_signal_change: Option<f32>,
 }
 
 /// Enhanced tip controller with pulse voltage stepping
@@ -42,7 +44,7 @@ pub struct TipController {
     // Pulse stepping parameters
     pulse_voltage: f32,
     pulse_voltage_step: f32,
-    change_threshold: Box<dyn Fn(f32) -> f32>,
+    change_threshold: Box<dyn Fn(f32) -> f32 + Send + Sync>,
     cycles_before_step: u32,
     min_pulse_voltage: f32,
     max_pulse_voltage: f32,
@@ -57,9 +59,10 @@ pub struct TipController {
     // State tracking
     good_count: u32,
     stable_threshold: u32,
+    cycle_count: u32,
 
-    // History for bias adjustment
-    signal_history: Vec<f32>,
+    // Multi-signal history for bias adjustment and analysis
+    signal_histories: HashMap<SignalIndex, VecDeque<f32>>,
     max_history_size: usize,
 
     // Json Logger
@@ -89,7 +92,8 @@ impl TipController {
             max_bound,
             good_count: 0,
             stable_threshold: 3,
-            signal_history: Vec::new(),
+            cycle_count: 0,
+            signal_histories: HashMap::new(),
             max_history_size: 10,
             logger: None,
         }
@@ -99,7 +103,7 @@ impl TipController {
     pub fn set_pulse_stepping(
         &mut self,
         pulse_step: f32,
-        change_threshold: Box<dyn Fn(f32) -> f32>,
+        change_threshold: Box<dyn Fn(f32) -> f32 + Send + Sync>,
         cycles_before_step: u32,
         max_pulse: f32,
     ) -> &mut Self {
@@ -133,6 +137,14 @@ impl TipController {
         self
     }
 
+    /// Flush the logger (useful for signal handlers)
+    pub fn flush_logger(&mut self) -> Result<(), NanonisError> {
+        if let Some(ref mut logger) = self.logger {
+            logger.flush()?;
+        }
+        Ok(())
+    }
+
     /// Set stability threshold (how many good readings needed for stable)
     pub fn set_stability_threshold(&mut self, threshold: u32) -> &mut Self {
         self.stable_threshold = threshold.max(1); // At least 1
@@ -144,66 +156,129 @@ impl TipController {
         self.pulse_voltage
     }
 
-    /// Get signal history (most recent first)
-    pub fn signal_history(&self) -> &[f32] {
-        &self.signal_history
+    /// Get signal history (most recent first) for the frequency shift signal
+    pub fn signal_history(&self) -> Option<&VecDeque<f32>> {
+        self.get_signal_history(self.signal_index)
     }
 
-    /// Calculate average of recent signals
+    /// Calculate average of recent signals for the frequency shift signal
     pub fn average_signal(&self) -> Option<f32> {
-        if self.signal_history.is_empty() {
-            None
+        self.average_signal_for(self.signal_index)
+    }
+
+    /// Calculate average of recent signals for a specific signal
+    pub fn average_signal_for(&self, signal_index: SignalIndex) -> Option<f32> {
+        if let Some(history) = self.signal_histories.get(&signal_index) {
+            if history.is_empty() {
+                None
+            } else {
+                Some(history.iter().sum::<f32>() / history.len() as f32)
+            }
         } else {
-            Some(self.signal_history.iter().sum::<f32>() / self.signal_history.len() as f32)
+            None
         }
     }
 
-    /// Update signal history with new signal value
-    fn update_signal_history(&mut self, signal: f32) {
-        self.signal_history.insert(0, signal);
-        if self.signal_history.len() > self.max_history_size {
-            self.signal_history.truncate(self.max_history_size);
+    /// Track a signal value in history
+    pub fn track_signal(&mut self, signal_index: SignalIndex, value: f32) {
+        let history = self.signal_histories.entry(signal_index).or_default();
+
+        // Add new value to front
+        history.push_front(value);
+
+        // Maintain size limit
+        while history.len() > self.max_history_size {
+            history.pop_back();
         }
+    }
+
+    /// Get signal change (latest - previous) for a specific signal
+    pub fn get_signal_change(&self, signal_index: SignalIndex) -> Option<f32> {
+        if let Some(history) = self.signal_histories.get(&signal_index) {
+            if history.len() >= 2 {
+                Some(history[0] - history[1]) // Latest - Previous
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Get signal history for a specific signal (most recent first)
+    pub fn get_signal_history(&self, signal_index: SignalIndex) -> Option<&VecDeque<f32>> {
+        self.signal_histories.get(&signal_index)
+    }
+
+    /// Clear all signal histories (useful for logger integration)
+    pub fn clear_all_histories(&mut self) {
+        self.signal_histories.clear();
+    }
+
+    /// Clear history for a specific signal
+    pub fn clear_signal_history(&mut self, signal_index: SignalIndex) {
+        self.signal_histories.remove(&signal_index);
+    }
+
+    /// Update signal history with new signal value (for frequency shift)
+    fn update_signal_history(&mut self, signal: f32) {
+        self.track_signal(self.signal_index, signal);
     }
 
     /// Check if current signal represents a significant change from recent stable period
     fn has_significant_change(&self, signal: f32) -> bool {
-        if self.signal_history.len() < 2 {
-            // First signal - consider it a significant change to initialize properly
-            true
-        } else {
-            // Compare only against signals from the current stable period
-            // cycles_without_change tells us how many recent signals were stable
-            let stable_period_size =
-                (self.cycles_without_change as usize).min(self.signal_history.len() - 1);
-
-            if stable_period_size == 0 {
-                // No stable period yet, compare against last signal
-                let last_signal = self.signal_history[1];
-                info!(
-                    "Last signal: {} | Current threshold: {}",
-                    last_signal,
-                    (self.change_threshold)(signal)
-                );
-                (signal - last_signal).abs() >= (self.change_threshold)(signal)
+        if let Some(freq_history) = self.signal_histories.get(&self.signal_index) {
+            if freq_history.len() < 2 {
+                // First signal - consider it a significant change to initialize properly
+                true
             } else {
-                // Compare against mean of current stable period (skip current signal at index 0)
-                let stable_signals = &self.signal_history[1..=stable_period_size];
-                let stable_mean = stable_signals.iter().sum::<f32>() / stable_signals.len() as f32;
+                // Compare only against signals from the current stable period
+                // cycles_without_change tells us how many recent signals were stable
+                let stable_period_size =
+                    (self.cycles_without_change as usize).min(freq_history.len() - 1);
 
-                info!(
-                    "Stable mean: {} | Current threshold: {}",
-                    stable_mean,
-                    (self.change_threshold)(signal)
-                );
-                (signal - stable_mean).abs() >= (self.change_threshold)(signal)
+                if stable_period_size == 0 {
+                    // No stable period yet, compare against last signal
+                    let last_signal = freq_history[1];
+                    info!(
+                        "Last signal: {} | Current threshold: {}",
+                        last_signal,
+                        (self.change_threshold)(signal)
+                    );
+                    (signal - last_signal).abs() >= (self.change_threshold)(signal)
+                } else {
+                    // Compare against mean of current stable period (skip current signal at index 0)
+                    let stable_signals: Vec<f32> = freq_history
+                        .iter()
+                        .skip(1)
+                        .take(stable_period_size)
+                        .cloned()
+                        .collect();
+                    let stable_mean =
+                        stable_signals.iter().sum::<f32>() / stable_signals.len() as f32;
+
+                    info!(
+                        "Stable mean: {} | Current threshold: {}",
+                        stable_mean,
+                        (self.change_threshold)(signal)
+                    );
+                    (signal - stable_mean).abs() >= (self.change_threshold)(signal)
+                }
             }
+        } else {
+            // No history yet - consider it a significant change
+            true
         }
     }
 
     /// Handle response to significant signal change
     fn handle_significant_change(&mut self, signal: f32) {
-        let comparison_signal = self.signal_history.get(1).unwrap_or(&0.0);
+        let comparison_signal =
+            if let Some(freq_history) = self.signal_histories.get(&self.signal_index) {
+                freq_history.get(1).unwrap_or(&0.0)
+            } else {
+                &0.0
+            };
         debug!(
             "Signal changed significantly: {:.3} -> {:.3} (change: {:.3})",
             comparison_signal,
@@ -266,96 +341,158 @@ impl TipController {
 impl TipController {
     /// Main control loop - with pulse voltage stepping
     pub fn run_loop(&mut self, timeout: Duration) -> Result<TipState, NanonisError> {
-        info!(
-            "Starting tip control loop with pulse stepping (timeout: {:?})",
-            timeout
-        );
+        if self.cycle_count == 0 {
+            info!(
+                "Starting tip control loop with pulse stepping (timeout: {:?})",
+                timeout
+            );
+        } else {
+            info!(
+                "Resuming tip control loop from cycle {} (timeout: {:?})",
+                self.cycle_count + 1, timeout
+            );
+        }
 
         let start = Instant::now();
-        let mut cycle = 0;
 
         while start.elapsed() < timeout {
-            cycle += 1;
+            self.cycle_count += 1;
 
-            // Read signal (with error handling)
-            let freq_shift = self.read_signal()?;
+            // Read frequency shift signal (unchanged behavior)
+            let freq_shift = self.read_freq_shift()?;
 
-            // Update signal history and step pulse voltage if needed
+            // Update signal history and step pulse voltage if needed (based on freq shift)
             self.update_signal_and_pulse(freq_shift);
 
             info!(
-                "Cycle {}: Signal = {:.6}, Pulse = {:.3}V, Cycles w/o change = {}/{}",
-                cycle,
+                "Cycle {}: Freq Shift = {:.6}, Pulse = {:.3}V, Cycles w/o change = {}/{}",
+                self.cycle_count,
                 freq_shift,
                 self.pulse_voltage,
                 self.cycles_without_change,
                 self.cycles_before_step
             );
 
-            // Classify
+            // Classify based on frequency shift (unchanged behavior)
             let tip_state = self.classify(freq_shift);
-            info!("Cycle {}: State = {:?}", cycle, tip_state);
+            info!("Cycle {}: State = {:?}", self.cycle_count, tip_state);
 
             // Execute based on state
             match tip_state {
                 TipState::Bad => {
-                    self.bad_loop(cycle)?; // Execute full recovery sequence
+                    self.bad_loop(self.cycle_count)?; // Execute full recovery sequence
                 }
                 TipState::Good => {
-                    self.good_loop(cycle)?; // Monitor and count
+                    self.good_loop(self.cycle_count)?; // Monitor and count
                 }
                 TipState::Stable => {
                     info!(
                         "STABLE achieved after {} cycles! Final pulse voltage: {:.3}V",
-                        cycle, self.pulse_voltage
+                        self.cycle_count, self.pulse_voltage
                     );
                     return Ok(TipState::Stable);
                 }
             }
 
             // Add information about this cycle to the logger buffer
-            if let Some(ref mut logger) = self.logger {
-                let freq_shift_change = if self.signal_history.len() >= 2 {
-                    Some(
-                        self.signal_history[self.signal_history.len() - 1]
-                            - self.signal_history[self.signal_history.len() - 2],
-                    )
-                } else {
-                    None
-                };
-                logger.add(LogLine {
-                    cycle,
-                    freq_shift,
-                    tip_state,
-                    pulse_voltage: self.pulse_voltage,
-                    freq_shift_change,
-                    z_change: None,
-                })?
+            if self.logger.is_some() {
+                // Calculate changes before borrowing logger mutably
+                let freq_shift_change = self.get_signal_change(self.signal_index);
+                let z_change = self.get_signal_change(SignalIndex(0)); // TODO: Use actual Z position signal index
+                let pulse_change = None; // TODO: Calculate from stable readings if needed
+
+                if let Some(ref mut logger) = self.logger {
+                    logger.add(LogLine {
+                        cycle: self.cycle_count,
+                        freq_shift,
+                        tip_state,
+                        pulse_voltage: self.pulse_voltage,
+                        freq_shift_change,
+                        z_change,
+                        pulse_signal_change: pulse_change,
+                    })?
+                }
             }
 
             std::thread::sleep(Duration::from_millis(500));
         }
 
-        warn!("Tip control loop timed out");
+        debug!("Tip control loop reached timeout");
         Err(NanonisError::InvalidCommand("Loop timeout".to_string()))
     }
 
-    /// Bad loop - execute original controller recovery sequence
-    /// Sequence: approach → pulse → withdraw → move → approach → check
+    /// Bad loop - execute recovery sequence with stable signal monitoring
+    /// Sequence: capture_stable_before → pulse → capture_stable_after → withdraw → move → approach → check
     fn bad_loop(&mut self, cycle: u32) -> Result<(), NanonisError> {
-        info!("Cycle {}: Executing bad signal recovery sequence", cycle);
+        info!(
+            "Cycle {}: Executing bad signal recovery sequence with stability detection",
+            cycle
+        );
 
         // Reset good count
         self.good_count = 0;
 
+        // 1. Capture stable Z signal before pulse
+        info!("Cycle {}: Capturing stable Z signal before pulse...", cycle);
+        let z_signal_index = SignalIndex(30); // Z (m) signal index
+        let z_before = self.read_stable_signal(
+            z_signal_index,
+            Duration::from_secs(5), // 5 second timeout for stability
+            1,                      // Require 1 stable reading
+        )?;
+
+        if let Some(signal) = z_before {
+            info!(
+                "Cycle {}: Stable Z signal before pulse: {:.6}",
+                cycle, signal
+            );
+            // Track Z position in history for change calculation
+            self.track_signal(z_signal_index, signal);
+        } else {
+            warn!(
+                "Cycle {}: Could not achieve stable Z signal before pulse",
+                cycle
+            );
+        }
+
+        // 2. Execute bias pulse
+        info!(
+            "Cycle {}: Executing bias pulse at {:.3}V",
+            cycle, self.pulse_voltage
+        );
+        self.driver.execute(Action::BiasPulse {
+            wait_until_done: true,
+            pulse_width_s: Duration::from_millis(50),
+            bias_value_v: self.pulse_voltage,
+            z_controller_hold: 1,
+            pulse_mode: 2,
+        })?;
+
+        // 3. Capture stable Z signal after pulse
+        info!("Cycle {}: Capturing stable Z signal after pulse...", cycle);
+        let z_after = self.read_stable_signal(
+            z_signal_index,
+            Duration::from_secs(5), // 5 second timeout for stability
+            3,                      // Require 3 stable readings
+        )?;
+
+        if let Some(signal) = z_after {
+            info!(
+                "Cycle {}: Stable Z signal after pulse: {:.6}",
+                cycle, signal
+            );
+            // Track Z position in history for change calculation
+            self.track_signal(z_signal_index, signal);
+        } else {
+            warn!(
+                "Cycle {}: Could not achieve stable Z signal after pulse",
+                cycle
+            );
+        }
+
+        // 5. Continue with rest of recovery sequence
+        info!("Cycle {}: Continuing with withdraw and movement...", cycle);
         self.driver.execute_chain(ActionChain::new(vec![
-            Action::BiasPulse {
-                wait_until_done: true,
-                pulse_width_s: Duration::from_millis(50),
-                bias_value_v: self.pulse_voltage,
-                z_controller_hold: 1,
-                pulse_mode: 2,
-            },
             Action::Withdraw {
                 wait_until_finished: true,
                 timeout_ms: Duration::from_secs(5),
@@ -405,24 +542,96 @@ impl TipController {
         }
     }
 
-    /// Read signal value
-    fn read_signal(&mut self) -> Result<f32, NanonisError> {
-        self.driver.spm_interface_mut().osci1t_run()?;
+    /// Read frequency shift signal value using stable signal acquisition
+    fn read_freq_shift(&mut self) -> Result<f32, NanonisError> {
+        debug!("Reading signal from index {} (should be bias voltage)", self.signal_index.0);
+        
+        // Use stable signal acquisition with 3 readings and 2 second timeout
+        if let Some(stable_signal) = self.read_stable_signal(
+            self.signal_index,
+            Duration::from_secs(2),
+            3,
+        )? {
+            debug!("Stable signal from index {}: {:.6}", self.signal_index.0, stable_signal);
+            
+            // Sanity check - bias voltage should never be near zero
+            if stable_signal.abs() < 0.1 {
+                warn!("Signal index {} returned unexpectedly low value: {:.6} (expected ~4.4V bias)", 
+                      self.signal_index.0, stable_signal);
+            }
+            
+            Ok(stable_signal)
+        } else {
+            // Fallback to single reading if stable acquisition fails
+            warn!("Could not acquire stable signal from index {}, falling back to single reading", self.signal_index.0);
+            
+            self.driver.spm_interface_mut().osci1t_run()?;
+            self.driver
+                .spm_interface_mut()
+                .osci1t_ch_set(self.signal_index.into())?;
 
+            let (_, _, _, osci_screen) = self
+                .driver
+                .spm_interface_mut()
+                .osci1t_data_get(DataToGet::NextTrigger)?;
+
+            debug!("Fallback osci_data from index {}: {osci_screen:?}", self.signal_index.0);
+            let mean: f32 = (osci_screen.iter().sum::<f64>() / osci_screen.len() as f64) as f32;
+            debug!("Fallback result from index {} = {mean:?}", self.signal_index.0);
+
+            // Sanity check for fallback too
+            if mean.abs() < 0.1 {
+                warn!("Fallback signal from index {} returned unexpectedly low value: {:.6} (expected ~4.4V bias)", 
+                      self.signal_index.0, mean);
+            }
+
+            Ok(mean)
+        }
+    }
+
+    /// Read stable signal value using ActionDriver's stability detection
+    ///
+    /// This method leverages the ActionDriver's sophisticated stability detection
+    /// to capture stable oscilloscope signals, which is especially useful for
+    /// measuring signal state before and after bias pulses.
+    ///
+    /// # Parameters
+    /// - `signal_index`: The signal channel to monitor for stability
+    /// - `timeout`: Maximum time to wait for stability detection
+    /// - `readings`: Number of stable readings required
+    fn read_stable_signal(
+        &mut self,
+        signal_index: SignalIndex,
+        timeout: Duration,
+        readings: u32,
+    ) -> Result<Option<f32>, NanonisError> {
+        // Set up oscilloscope for the specified signal
+        self.driver.spm_interface_mut().osci1t_run()?;
         self.driver
             .spm_interface_mut()
-            .osci1t_ch_set(self.signal_index.into())?;
+            .osci1t_ch_set(signal_index.into())?;
 
-        let (_, _, _, osci_screen) = self
-            .driver
-            .spm_interface_mut()
-            .osci1t_data_get(DataToGet::NextTrigger)?;
-
-        debug!("Osci_data: {osci_screen:?}");
-        let min: f32 = osci_screen.iter().fold(f64::INFINITY, |a, &b| a.min(b)) as f32;
-        debug!("Result of osci max = {min:?}");
-
-        Ok(min)
+        // Use ActionDriver's stability detection
+        if let Some(osci_data) = self.driver.read_oscilloscope(
+            signal_index,
+            None, // No trigger config needed for stability detection
+            DataToGet::Stable { readings, timeout },
+        )? {
+            // Extract mean value from stable data (more robust than min/max)
+            let values = osci_data.values();
+            let mean = values.iter().sum::<f64>() / values.len() as f64;
+            debug!(
+                "Stable signal found for index {}: mean = {:.6} (from {} values)",
+                signal_index.0, mean, values.len()
+            );
+            Ok(Some(mean as f32))
+        } else {
+            debug!(
+                "No stable signal found within timeout for index {}",
+                signal_index.0
+            );
+            Ok(None)
+        }
     }
 }
 
