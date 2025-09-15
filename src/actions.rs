@@ -761,10 +761,10 @@ mod chain_tests {
     fn test_pre_built_patterns() {
         let status_check = ActionChain::system_status_check();
         assert!(status_check.name().is_some());
-        assert!(status_check.len() > 0);
+        assert!(!status_check.is_empty());
 
         let approach = ActionChain::safe_tip_approach();
-        assert!(approach.control_actions().len() > 0);
+        assert!(!approach.control_actions().is_empty());
 
         let positions = vec![Position { x: 1e-9, y: 1e-9 }, Position { x: 2e-9, y: 2e-9 }];
         let survey = ActionChain::position_survey(positions);

@@ -1,5 +1,6 @@
 use rusty_tip::action_driver::ActionDriver;
 use rusty_tip::types::{DataToGet, SignalIndex};
+use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
@@ -10,7 +11,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 1..=10 {
         println!("Measurement {i}:");
         if let Some(osci_data) =
-            driver.read_oscilloscope(SignalIndex(0), None, DataToGet::Stable)?
+            driver.read_oscilloscope(SignalIndex(0), None, DataToGet::Stable { 
+                readings: 5, 
+                timeout: Duration::from_secs(10) 
+            })?
         {
             // Use convenience methods for cleaner data access
             let values = osci_data.values();

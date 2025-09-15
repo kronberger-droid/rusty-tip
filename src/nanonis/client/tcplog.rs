@@ -1,7 +1,6 @@
 use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::{NanonisValue, TCPLogStatus};
-use crate::TCPLoggerData;
 
 impl NanonisClient {
     /// Start the acquisition in the TCP Logger module.

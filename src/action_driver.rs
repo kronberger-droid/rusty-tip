@@ -148,67 +148,22 @@ impl ActionDriver {
                 }
 
                 match data_to_get {
-                    crate::types::DataToGet::Stable => {
-                        let max_attempts = 3;
-                        let relative_threshold = 0.01; // 1% relative threshold for normal signals
-                        let absolute_threshold = 50e-15; // 50 fA absolute threshold for small signals near zero
-                        let min_window_percent = 0.1;
-
-                        for _ in 0..max_attempts {
-                            let (t0, dt, size, data) = self.client.osci1t_data_get(data_to_get)?;
-
-                            let min_window = (size as f64 * min_window_percent) as usize;
-                            let mut start = 0;
-                            let mut end = data.len();
-
-                            while (end - start) > min_window {
-                                let window = &data[start..end];
-                                let arr = Array1::from_vec(window.to_vec());
-                                let mean = arr.mean().expect("There must be an non-empty array, osci1t_data_get would have returned early.");
-                                let std_dev = arr.std(0.0);
-                                let relative_std = std_dev / mean.abs();
-
-                                // Use dual-threshold approach: relative OR absolute
-                                let is_relative_stable = relative_std < relative_threshold;
-                                let is_absolute_stable = std_dev < absolute_threshold;
-
-                                if is_relative_stable || is_absolute_stable {
-                                    let stable_data = window.to_vec();
-                                    let stability_method = match (is_relative_stable, is_absolute_stable) {
-                                        (true, true) => "both".to_string(),
-                                        (true, false) => "relative".to_string(),
-                                        (false, true) => "absolute".to_string(),
-                                        (false, false) => unreachable!(),
-                                    };
-
-                                    let stats = SignalStats {
-                                        mean,
-                                        std_dev,
-                                        relative_std,
-                                        window_size: stable_data.len(),
-                                        stability_method,
-                                    };
-
-                                    let osci_data = OsciData::new_with_stats(
-                                        t0,
-                                        dt,
-                                        stable_data.len() as i32,
-                                        stable_data,
-                                        stats,
-                                    );
-                                    return Ok(ActionResult::OscilloscopeData(osci_data));
-                                }
-
-                                let shrink = ((end - start) / 10).max(1);
-                                start += shrink;
-                                end -= shrink;
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(500));
+                    crate::types::DataToGet::Stable { readings, timeout } => {
+                        match self.find_stable_oscilloscope_data(
+                            data_to_get,
+                            readings,
+                            timeout,
+                            0.01,   // relative_threshold (1%)
+                            50e-15, // absolute_threshold (50 fA)
+                            0.1,    // min_window_percent (10%)
+                        )? {
+                            Some(osci_data) => Ok(ActionResult::OscilloscopeData(osci_data)),
+                            None => Ok(ActionResult::None),
                         }
-                        Ok(ActionResult::None)
                     }
                     _ => {
-                        let (t0, dt, size, data) = self.client.osci1t_data_get(data_to_get)?;
+                        // Use NextTrigger for actual data reading - Stable is just for our algorithm
+                let (t0, dt, size, data) = self.client.osci1t_data_get(DataToGet::NextTrigger)?;
                         let osci_data = OsciData::new(t0, dt, size, data);
                         Ok(ActionResult::OscilloscopeData(osci_data))
                     }
@@ -358,6 +313,96 @@ impl ActionDriver {
                 }
             }
         }
+    }
+
+    /// Find stable oscilloscope data with proper timeout handling
+    ///
+    /// This method implements stability detection logic with dual-threshold
+    /// approach and timeout handling. It repeatedly reads oscilloscope data until
+    /// stable values are found or timeout is reached.
+    fn find_stable_oscilloscope_data(
+        &mut self,
+        _data_to_get: DataToGet,
+        readings: u32,
+        timeout: std::time::Duration,
+        relative_threshold: f64,
+        absolute_threshold: f64,
+        min_window_percent: f64,
+    ) -> Result<Option<OsciData>, NanonisError> {
+        let start_time = std::time::Instant::now();
+
+        while start_time.elapsed() < timeout {
+            for _attempt in 0..readings {
+                // Check timeout before each reading attempt
+                if start_time.elapsed() >= timeout {
+                    return Ok(None);
+                }
+
+                // Use NextTrigger for actual data reading - Stable is just for our algorithm
+                let (t0, dt, size, data) = self.client.osci1t_data_get(DataToGet::NextTrigger)?;
+
+                let min_window = (size as f64 * min_window_percent) as usize;
+                let mut start = 0;
+                let mut end = data.len();
+
+                while (end - start) > min_window {
+                    // Check timeout during window analysis
+                    if start_time.elapsed() >= timeout {
+                        return Ok(None);
+                    }
+
+                    let window = &data[start..end];
+                    let arr = Array1::from_vec(window.to_vec());
+                    let mean = arr.mean().expect("There must be an non-empty array, osci1t_data_get would have returned early.");
+                    let std_dev = arr.std(0.0);
+                    let relative_std = std_dev / mean.abs();
+
+                    // Use dual-threshold approach: relative OR absolute
+                    let is_relative_stable = relative_std < relative_threshold;
+                    let is_absolute_stable = std_dev < absolute_threshold;
+
+                    if is_relative_stable || is_absolute_stable {
+                        let stable_data = window.to_vec();
+                        let stability_method = match (is_relative_stable, is_absolute_stable) {
+                            (true, true) => "both".to_string(),
+                            (true, false) => "relative".to_string(),
+                            (false, true) => "absolute".to_string(),
+                            (false, false) => unreachable!(),
+                        };
+
+                        let stats = SignalStats {
+                            mean,
+                            std_dev,
+                            relative_std,
+                            window_size: stable_data.len(),
+                            stability_method,
+                        };
+
+                        let osci_data = OsciData::new_with_stats(
+                            t0,
+                            dt,
+                            stable_data.len() as i32,
+                            stable_data,
+                            stats,
+                        );
+                        return Ok(Some(osci_data));
+                    }
+
+                    let shrink = ((end - start) / 10).max(1);
+                    start += shrink;
+                    end -= shrink;
+                }
+
+                // Small delay between attempts to avoid overwhelming the system
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+
+            // Brief pause between reading cycles
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        // Timeout reached without finding stable data
+        Ok(None)
     }
 
     /// Execute a chain of actions sequentially
