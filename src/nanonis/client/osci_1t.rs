@@ -1,6 +1,6 @@
+use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
-use super::NanonisClient;
 
 impl NanonisClient {
     /// Set the channel to display in the Oscilloscope 1-Channel
@@ -29,7 +29,10 @@ impl NanonisClient {
 
     /// Set the timebase in the Oscilloscope 1-Channel
     /// Use osci1t_timebase_get() first to obtain available timebases, then use the index
-    pub fn osci1t_timebase_set(&mut self, timebase_index: i32) -> Result<(), NanonisError> {
+    pub fn osci1t_timebase_set(
+        &mut self,
+        timebase_index: i32,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "Osci1T.TimebaseSet",
             vec![NanonisValue::I32(timebase_index)],
@@ -42,7 +45,12 @@ impl NanonisClient {
     /// Get the timebase in the Oscilloscope 1-Channel
     /// Returns: (timebase_index, timebases_array)
     pub fn osci1t_timebase_get(&mut self) -> Result<(i32, Vec<f32>), NanonisError> {
-        let result = self.quick_send("Osci1T.TimebaseGet", vec![], vec![], vec!["i", "i", "*f"])?;
+        let result = self.quick_send(
+            "Osci1T.TimebaseGet",
+            vec![],
+            vec![],
+            vec!["i", "i", "*f"],
+        )?;
         if result.len() >= 3 {
             let timebase_index = result[0].as_i32()?;
             let timebases = result[2].as_f32_array()?.to_vec();
@@ -61,18 +69,18 @@ impl NanonisClient {
         &mut self,
         trigger_mode: u16,
         trigger_slope: u16,
-        trigger_level: f32,
-        trigger_hysteresis: f32,
+        trigger_level: f64,
+        trigger_hysteresis: f64,
     ) -> Result<(), NanonisError> {
         self.quick_send(
             "Osci1T.TrigSet",
             vec![
                 NanonisValue::U16(trigger_mode),
                 NanonisValue::U16(trigger_slope),
-                NanonisValue::F32(trigger_level),
-                NanonisValue::F32(trigger_hysteresis),
+                NanonisValue::F64(trigger_level),
+                NanonisValue::F64(trigger_hysteresis),
             ],
-            vec!["H", "H", "f", "f"],
+            vec!["H", "H", "d", "d"],
             vec![],
         )?;
         Ok(())
@@ -81,7 +89,12 @@ impl NanonisClient {
     /// Get the trigger configuration in the Oscilloscope 1-Channel
     /// Returns: (trigger_mode, trigger_slope, trigger_level, trigger_hysteresis)
     pub fn osci1t_trig_get(&mut self) -> Result<(u16, u16, f64, f64), NanonisError> {
-        let result = self.quick_send("Osci1T.TrigGet", vec![], vec![], vec!["H", "H", "d", "d"])?;
+        let result = self.quick_send(
+            "Osci1T.TrigGet",
+            vec![],
+            vec![],
+            vec!["H", "H", "d", "d"],
+        )?;
         if result.len() >= 4 {
             let trigger_mode = result[0].as_u16()?;
             let trigger_slope = result[1].as_u16()?;
