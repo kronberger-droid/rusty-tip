@@ -2,8 +2,9 @@ use std::time::Duration;
 
 use crate::error::NanonisError;
 use crate::types::{
-    DataToGet, MotorDirection, MotorGroup, MovementMode, OsciTriggerMode, OversamplingIndex,
-    Position, Position3D, ScanAction, ScanDirection, TimebaseIndex, TriggerSlope,
+    DataToGet, MotorDirection, MotorGroup, MovementMode, OsciTriggerMode,
+    OversamplingIndex, Position, Position3D, ScanAction, ScanDirection,
+    TimebaseIndex, TriggerSlope,
 };
 
 /// Universal SPM pulse modes - concepts that apply to any SPM system
@@ -63,7 +64,11 @@ pub trait SPMInterface: Send + Sync {
     ///
     /// # Returns
     /// Vector of signal values in the same order as requested indices
-    fn read_signals(&mut self, indices: Vec<i32>, wait: bool) -> Result<Vec<f32>, NanonisError>;
+    fn read_signals(
+        &mut self,
+        indices: Vec<i32>,
+        wait: bool,
+    ) -> Result<Vec<f32>, NanonisError>;
 
     /// Get available signal names from the SPM system
     ///
@@ -118,7 +123,11 @@ pub trait SPMInterface: Send + Sync {
     /// # Arguments
     /// * `position` - Target XY position in meters
     /// * `wait` - Whether to wait until movement completes
-    fn set_xy_position(&mut self, position: Position, wait: bool) -> Result<(), NanonisError>;
+    fn set_xy_position(
+        &mut self,
+        position: Position,
+        wait: bool,
+    ) -> Result<(), NanonisError>;
 
     // === Motor Operations (Coarse Positioning) ===
 
@@ -168,7 +177,11 @@ pub trait SPMInterface: Send + Sync {
     /// # Arguments
     /// * `wait` - Whether to wait until withdrawal completes
     /// * `timeout_ms` - Maximum time to wait in milliseconds
-    fn z_ctrl_withdraw(&mut self, wait: bool, timeout_ms: Duration) -> Result<(), NanonisError>;
+    fn z_ctrl_withdraw(
+        &mut self,
+        wait: bool,
+        timeout_ms: Duration,
+    ) -> Result<(), NanonisError>;
 
     // === Scan Operations ===
 
@@ -207,13 +220,18 @@ pub trait SPMInterface: Send + Sync {
     ///
     /// # Arguments
     /// * `timebase_index` - Timebase index from available timebases
-    fn osci1t_timebase_set(&mut self, timebase_index: TimebaseIndex) -> Result<(), NanonisError>;
+    fn osci1t_timebase_set(
+        &mut self,
+        timebase_index: TimebaseIndex,
+    ) -> Result<(), NanonisError>;
 
     /// Get the timebase for Oscilloscope 1-Channel
     ///
     /// # Returns
     /// Tuple of (timebase_index, available_timebases)
-    fn osci1t_timebase_get(&mut self) -> Result<(TimebaseIndex, Vec<f32>), NanonisError>;
+    fn osci1t_timebase_get(
+        &mut self,
+    ) -> Result<(TimebaseIndex, Vec<f32>), NanonisError>;
 
     /// Set trigger configuration for Oscilloscope 1-Channel
     ///
@@ -226,8 +244,8 @@ pub trait SPMInterface: Send + Sync {
         &mut self,
         trigger_mode: OsciTriggerMode,
         trigger_slope: TriggerSlope,
-        trigger_level: f32,
-        trigger_hysteresis: f32,
+        trigger_level: f64,
+        trigger_hysteresis: f64,
     ) -> Result<(), NanonisError>;
 
     /// Get trigger configuration for Oscilloscope 1-Channel
@@ -276,13 +294,18 @@ pub trait SPMInterface: Send + Sync {
     ///
     /// # Arguments
     /// * `timebase_index` - Timebase index from available timebases
-    fn osci2t_timebase_set(&mut self, timebase_index: TimebaseIndex) -> Result<(), NanonisError>;
+    fn osci2t_timebase_set(
+        &mut self,
+        timebase_index: TimebaseIndex,
+    ) -> Result<(), NanonisError>;
 
     /// Get timebase for Oscilloscope 2-Channels
     ///
     /// # Returns
     /// Tuple of (timebase_index, available_timebases)
-    fn osci2t_timebase_get(&mut self) -> Result<(TimebaseIndex, Vec<f32>), NanonisError>;
+    fn osci2t_timebase_get(
+        &mut self,
+    ) -> Result<(TimebaseIndex, Vec<f32>), NanonisError>;
 
     /// Set oversampling for Oscilloscope 2-Channels
     ///
