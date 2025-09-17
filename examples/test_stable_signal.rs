@@ -74,7 +74,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let scaled_max_time = max_time * time_scale;
 
-        println!("Plotting z-position data (time in {}, value in {}units):", time_unit, value_unit);
+        println!("Plotting z-position data (time in {}, value in {}):", time_unit, value_unit);
         Chart::new(140, 60, 0.0, scaled_max_time as f32)
             .lineplot(&textplots::Shape::Lines(&frame))
             .nice();
