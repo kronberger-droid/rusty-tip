@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let driver = ActionDriver::new("127.0.0.1", 6501)?;
 
     // Create controller with custom pulse stepping parameters
-    let mut custom_controller = TipController::new(driver, SignalIndex(24), 2.0, -2.0, 0.0);
+    let mut custom_controller = TipController::new(driver, SignalIndex(76), 2.0, -2.0, 0.0);
 
     let file_path = create_log_file_path()?;
     println!("{file_path:?}");

@@ -252,6 +252,11 @@ impl ActionDriver {
                 Ok(ActionResult::Success)
             }
 
+            Action::SetZSetpoint { setpoint } => {
+                self.client.z_ctrl_setpoint_set(setpoint)?;
+                Ok(ActionResult::Success)
+            }
+
             // === Scan Operations ===
             Action::ScanControl { action } => {
                 self.client.scan_action(action, ScanDirection::Up)?;
