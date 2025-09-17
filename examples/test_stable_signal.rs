@@ -75,10 +75,20 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let scaled_max_time = max_time * time_scale;
 
-        println!("Plotting z-position data (time in {}, value in {}units):", time_unit, value_unit);
+        println!("Z-Position Oscilloscope Data");
+        println!("Time axis: {} | Value axis: {}units", time_unit, value_unit);
+        println!("Range: 0 to {:.2} {} | Values: {:.2} to {:.2} {}units", 
+                scaled_max_time, time_unit,
+                osci_data.data.iter().fold(f64::INFINITY, |a, &b| a.min(b)) * value_scale,
+                osci_data.data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b)) * value_scale,
+                value_unit);
+        println!("{}", "─".repeat(140));
+        
         Chart::new(140, 60, 0.0, scaled_max_time as f32)
             .lineplot(&textplots::Shape::Lines(&frame))
             .nice();
+            
+        println!("Time ({}) →", time_unit);
 
         let is_stable = stability::trend_analysis_stability(&osci_data.data);
 
