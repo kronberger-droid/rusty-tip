@@ -357,7 +357,7 @@ impl ActionDriver {
                     return Ok(None);
                 }
 
-                let (t0, dt, size, data) = self.client.osci1t_data_get(DataToGet::NextTrigger)?;
+                let (t0, dt, size, data) = self.client.osci1t_data_get(DataToGet::Wait2Triggers)?;
 
                 let min_window = (size as f64 * min_window_percent) as usize;
                 let mut start = 0;
