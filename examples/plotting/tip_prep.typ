@@ -4,7 +4,8 @@
 
 
 #{
-  let file_name = sys.inputs.path
+  // let file_name = sys.inputs.path
+  let file_name = "../history"
   let read_jsonl(file_name) = {
     let content = read(file_name)
     let lines = content.split("\n")
@@ -65,6 +66,18 @@
         stroke: (top: 2pt, bottom: none, left: none, right: none),
         width: 1.0,
         label: $Delta Delta f$,
+      ),
+      lq.bar(
+        data.map(entry => entry.z),
+        data.map(entry => {
+          if entry.freq_shift_change == none { 0 } else {
+            abs(entry.freq_shift_change)
+          }
+        }),
+        fill: none,
+        stroke: (top: 2pt, bottom: none, left: none, right: none),
+        width: 1.0,
+        label: $z_pos$,
       ),
     ),
   )

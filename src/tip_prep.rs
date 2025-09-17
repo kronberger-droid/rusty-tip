@@ -206,10 +206,7 @@ impl TipController {
     }
 
     /// Get signal history for a specific signal (most recent first)
-    pub fn get_signal_history(
-        &self,
-        signal_index: SignalIndex,
-    ) -> Option<&VecDeque<f32>> {
+    pub fn get_signal_history(&self, signal_index: SignalIndex) -> Option<&VecDeque<f32>> {
         self.signal_histories.get(&signal_index)
     }
 
@@ -237,8 +234,8 @@ impl TipController {
             } else {
                 // Compare only against signals from the current stable period
                 // cycles_without_change tells us how many recent signals were stable
-                let stable_period_size = (self.cycles_without_change as usize)
-                    .min(freq_history.len() - 1);
+                let stable_period_size =
+                    (self.cycles_without_change as usize).min(freq_history.len() - 1);
 
                 if stable_period_size == 0 {
                     // No stable period yet, compare against last signal
@@ -257,8 +254,8 @@ impl TipController {
                         .take(stable_period_size)
                         .cloned()
                         .collect();
-                    let stable_mean = stable_signals.iter().sum::<f32>()
-                        / stable_signals.len() as f32;
+                    let stable_mean =
+                        stable_signals.iter().sum::<f32>() / stable_signals.len() as f32;
 
                     info!(
                         "Stable mean: {} | Current threshold: {}",
@@ -276,13 +273,12 @@ impl TipController {
 
     /// Handle response to significant signal change
     fn handle_significant_change(&mut self, signal: f32) {
-        let comparison_signal = if let Some(freq_history) =
-            self.signal_histories.get(&self.signal_index)
-        {
-            freq_history.get(1).unwrap_or(&0.0)
-        } else {
-            &0.0
-        };
+        let comparison_signal =
+            if let Some(freq_history) = self.signal_histories.get(&self.signal_index) {
+                freq_history.get(1).unwrap_or(&0.0)
+            } else {
+                &0.0
+            };
         debug!(
             "Signal changed significantly: {:.3} -> {:.3} (change: {:.3})",
             comparison_signal,
@@ -309,8 +305,7 @@ impl TipController {
 
     /// Step up the pulse voltage if possible
     fn step_pulse_voltage(&mut self) -> bool {
-        let new_pulse = (self.pulse_voltage + self.pulse_voltage_step)
-            .min(self.max_pulse_voltage);
+        let new_pulse = (self.pulse_voltage + self.pulse_voltage_step).min(self.max_pulse_voltage);
         if new_pulse > self.pulse_voltage {
             info!(
                 "Stepping pulse voltage: {:.3}V -> {:.3}V",
@@ -346,19 +341,6 @@ impl TipController {
 impl TipController {
     /// Main control loop - with pulse voltage stepping
     pub fn run_loop(&mut self, timeout: Duration) -> Result<TipState, NanonisError> {
-        if self.cycle_count == 0 {
-            info!(
-                "Starting tip control loop with pulse stepping (timeout: {:?})",
-                timeout
-            );
-        } else {
-            info!(
-                "Resuming tip control loop from cycle {} (timeout: {:?})",
-                self.cycle_count + 1,
-                timeout
-            );
-        }
-
         let start = Instant::now();
 
         while start.elapsed() < timeout {
@@ -596,8 +578,7 @@ impl TipController {
                 "Fallback osci_data from index {}: {osci_screen:?}",
                 self.signal_index.0
             );
-            let mean: f32 =
-                (osci_screen.iter().sum::<f64>() / osci_screen.len() as f64) as f32;
+            let mean: f32 = (osci_screen.iter().sum::<f64>() / osci_screen.len() as f64) as f32;
             debug!(
                 "Fallback result from index {} = {mean:?}",
                 self.signal_index.0
