@@ -585,7 +585,7 @@ pub mod stability {
         let relative_std = std_dev / mean.abs();
 
         // Stable if EITHER relative OR absolute threshold is met
-        relative_std < 0.01 || std_dev < 50e-15
+        relative_std < 0.05 || std_dev < 50e-15
     }
 
     /// Trend analysis stability detector
