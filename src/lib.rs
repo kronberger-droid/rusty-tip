@@ -4,6 +4,7 @@ pub mod error;
 pub mod job;
 pub mod logger;
 pub mod nanonis;
+pub mod plotting;
 pub mod tip_prep;
 pub mod types;
 
@@ -12,6 +13,7 @@ pub use actions::{Action, ActionChain, ActionResult};
 pub use error::NanonisError;
 pub use job::Job;
 pub use logger::Logger;
+pub use plotting::{plot_values, plot_values_with_range};
 pub use nanonis::{
     ConnectionConfig, NanonisClient, NanonisClientBuilder, PulseMode, SPMInterface,
     TCPLoggerStream, TipShaperConfig, TipShaperProps, ZControllerHold,

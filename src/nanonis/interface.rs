@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::error::NanonisError;
 use crate::types::{
-    DataToGet, MotorDirection, MotorGroup, MovementMode, OsciTriggerMode,
+    AutoApproachResult, DataToGet, MotorDirection, MotorGroup, MovementMode, OsciTriggerMode,
     OversamplingIndex, Position, Position3D, ScanAction, ScanDirection,
     TimebaseIndex, TriggerSlope,
 };
@@ -166,11 +166,27 @@ pub trait SPMInterface: Send + Sync {
 
     // === Control Operations ===
 
-    /// Start automatic approach sequence
+    /// Perform auto-approach operation with timeout and proper error handling
     ///
     /// # Arguments
     /// * `wait` - Whether to wait until approach completes
-    fn auto_approach(&mut self, wait: bool) -> Result<(), NanonisError>;
+    /// * `timeout` - Maximum time to wait for completion
+    fn auto_approach_with_timeout(&mut self, wait: bool, timeout: Duration) -> Result<AutoApproachResult, NanonisError>;
+
+    /// Start automatic approach sequence (legacy compatibility)
+    ///
+    /// # Arguments
+    /// * `wait` - Whether to wait until approach completes
+    fn auto_approach(&mut self, wait: bool) -> Result<(), NanonisError> {
+        let result = self.auto_approach_with_timeout(wait, Duration::from_secs(300))?;
+        match result {
+            AutoApproachResult::Success => Ok(()),
+            _ => Err(NanonisError::InvalidCommand(format!(
+                "Auto-approach failed: {}",
+                result.error_message().unwrap_or("Unknown error")
+            ))),
+        }
+    }
 
     /// Withdraw the tip from the sample
     ///

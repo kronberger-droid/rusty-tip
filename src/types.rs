@@ -1450,3 +1450,52 @@ pub struct TCPLoggerData {
     /// Signal data (num_channels × 32-bit floats)
     pub data: Vec<f32>,
 }
+
+/// Result of an auto-approach operation
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutoApproachResult {
+    /// Auto-approach completed successfully
+    Success,
+    /// Auto-approach timed out before completion
+    Timeout,
+    /// Auto-approach failed (e.g., hardware error, abnormal termination)
+    Failed(String),
+    /// Auto-approach was already running when attempted to start
+    AlreadyRunning,
+    /// Auto-approach was cancelled/stopped externally
+    Cancelled,
+}
+
+impl AutoApproachResult {
+    /// Check if the result represents a successful operation
+    pub fn is_success(&self) -> bool {
+        matches!(self, AutoApproachResult::Success)
+    }
+
+    /// Check if the result represents a failure
+    pub fn is_failure(&self) -> bool {
+        matches!(self, AutoApproachResult::Failed(_) | AutoApproachResult::Timeout)
+    }
+
+    /// Get error description if this is a failure
+    pub fn error_message(&self) -> Option<&str> {
+        match self {
+            AutoApproachResult::Failed(msg) => Some(msg),
+            AutoApproachResult::Timeout => Some("Auto-approach timed out"),
+            AutoApproachResult::AlreadyRunning => Some("Auto-approach already running"),
+            AutoApproachResult::Cancelled => Some("Auto-approach was cancelled"),
+            AutoApproachResult::Success => None,
+        }
+    }
+}
+
+/// Status information for auto-approach operations
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutoApproachStatus {
+    /// Auto-approach is not running
+    Idle,
+    /// Auto-approach is currently running
+    Running,
+    /// Auto-approach status is unknown (e.g., communication error)
+    Unknown,
+}

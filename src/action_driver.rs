@@ -5,7 +5,7 @@ use crate::actions::{Action, ActionChain, ActionResult};
 use crate::error::NanonisError;
 use crate::nanonis::{NanonisClient, PulseMode, SPMInterface, ZControllerHold};
 use crate::types::{
-    DataToGet, MotorGroup, OsciData, Position, ScanDirection, SignalIndex, SignalRegistry,
+    AutoApproachResult, DataToGet, MotorGroup, OsciData, Position, ScanDirection, SignalIndex, SignalRegistry,
     SignalStats, SignalValue, TriggerConfig,
 };
 use std::collections::HashMap;
@@ -230,9 +230,17 @@ impl ActionDriver {
             // === Control Operations ===
             Action::AutoApproach {
                 wait_until_finished,
+                timeout,
             } => {
-                self.client.auto_approach(wait_until_finished)?;
-                Ok(ActionResult::Success)
+                let result = self.client.auto_approach_with_timeout(wait_until_finished, timeout)?;
+                match result {
+                    AutoApproachResult::Success => Ok(ActionResult::Success),
+                    AutoApproachResult::AlreadyRunning => Ok(ActionResult::Success), // Could be considered success
+                    _ => Err(NanonisError::InvalidCommand(format!(
+                        "Auto-approach failed: {}",
+                        result.error_message().unwrap_or("Unknown error")
+                    ))),
+                }
             }
 
             Action::Withdraw {
