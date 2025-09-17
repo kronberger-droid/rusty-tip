@@ -81,6 +81,9 @@ pub enum Action {
         timeout: Duration,
     },
 
+    /// Set Z-controller setpoint
+    SetZSetpoint { setpoint: f32 },
+
     // === Scan Operations ===
     /// Control scan operations
     ScanControl { action: ScanAction },
@@ -281,6 +284,9 @@ impl Action {
             ),
             Action::Withdraw { timeout, .. } => {
                 format!("Withdraw tip (timeout: {}ms)", timeout.as_micros())
+            }
+            Action::SetZSetpoint { setpoint } => {
+                format!("Set Z setpoint: {:.3e}", setpoint)
             }
             Action::Wait { duration } => {
                 format!("Wait {:.1}s", duration.as_secs_f64())
