@@ -62,7 +62,10 @@ where
             .open(&self.file_path)
             .map_err(|source| NanonisError::Io {
                 source,
-                context: format!("Logger could not create file at {:?}", self.file_path),
+                context: format!(
+                    "Logger could not create file at {:?}",
+                    self.file_path
+                ),
             })?;
 
         let mut writer = std::io::BufWriter::new(file);

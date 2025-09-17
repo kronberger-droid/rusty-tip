@@ -70,8 +70,12 @@ impl NanonisClient {
     /// Get the scan buffer parameters
     /// Returns: (channel_indexes, pixels, lines)
     pub fn scan_buffer_get(&mut self) -> Result<(Vec<i32>, i32, i32), NanonisError> {
-        let result =
-            self.quick_send("Scan.BufferGet", vec![], vec![], vec!["i", "*i", "i", "i"])?;
+        let result = self.quick_send(
+            "Scan.BufferGet",
+            vec![],
+            vec![],
+            vec!["i", "*i", "i", "i"],
+        )?;
         if result.len() >= 4 {
             let channel_indexes = result[1].as_i32_array()?.to_vec();
             let pixels = result[2].as_i32()?;
@@ -252,7 +256,9 @@ impl NanonisClient {
     /// println!("Speed ratio: {:.1}", speed_ratio);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn scan_speed_get(&mut self) -> Result<(f32, f32, f32, f32, u16, f32), NanonisError> {
+    pub fn scan_speed_get(
+        &mut self,
+    ) -> Result<(f32, f32, f32, f32, u16, f32), NanonisError> {
         let result = self.quick_send(
             "Scan.SpeedGet",
             vec![],
@@ -304,7 +310,10 @@ impl NanonisClient {
     /// let (x, y) = client.scan_xy_pos_get(true)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn scan_xy_pos_get(&mut self, wait_newest_data: bool) -> Result<(f32, f32), NanonisError> {
+    pub fn scan_xy_pos_get(
+        &mut self,
+        wait_newest_data: bool,
+    ) -> Result<(f32, f32), NanonisError> {
         let wait_flag = if wait_newest_data { 1u32 } else { 0u32 };
 
         let result = self.quick_send(

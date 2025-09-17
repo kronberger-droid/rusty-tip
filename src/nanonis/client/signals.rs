@@ -4,8 +4,12 @@ use crate::types::{NanonisValue, SignalIndex};
 
 impl NanonisClient {
     /// Get available signal names
-    pub fn signal_names_get(&mut self, print: bool) -> Result<Vec<String>, NanonisError> {
-        let result = self.quick_send("Signals.NamesGet", vec![], vec![], vec!["+*c"])?;
+    pub fn signal_names_get(
+        &mut self,
+        print: bool,
+    ) -> Result<Vec<String>, NanonisError> {
+        let result =
+            self.quick_send("Signals.NamesGet", vec![], vec![], vec!["+*c"])?;
         match result.first() {
             Some(value) => {
                 let signal_names = value.as_string_array()?.to_vec();
@@ -265,7 +269,9 @@ impl NanonisClient {
     /// println!("Internal 24 assigned to: {}", internal_24);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn signals_add_rt_get(&mut self) -> Result<(Vec<String>, String, String), NanonisError> {
+    pub fn signals_add_rt_get(
+        &mut self,
+    ) -> Result<(Vec<String>, String, String), NanonisError> {
         let result = self.quick_send(
             "Signals.AddRTGet",
             vec![],
@@ -293,11 +299,11 @@ impl NanonisClient {
     ) -> Result<f32, NanonisError> {
         match self.find_signal_index(signal_name)? {
             Some(index) => {
-                let values = self.signals_vals_get(vec![index.into()], wait_for_newest)?;
-                values
-                    .first()
-                    .copied()
-                    .ok_or_else(|| NanonisError::Protocol("No signal value returned".to_string()))
+                let values =
+                    self.signals_vals_get(vec![index.into()], wait_for_newest)?;
+                values.first().copied().ok_or_else(|| {
+                    NanonisError::Protocol("No signal value returned".to_string())
+                })
             }
             None => Err(NanonisError::InvalidCommand(format!(
                 "Signal '{signal_name}' not found"

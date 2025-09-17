@@ -4,8 +4,9 @@ use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::nanonis::interface::{PulseMode, SPMInterface, ZControllerHold};
 use crate::types::{
-    DataToGet, MotorDirection, MotorGroup, MovementMode, OsciTriggerMode, OversamplingIndex,
-    Position, Position3D, ScanAction, ScanDirection, TimebaseIndex, TriggerSlope,
+    DataToGet, MotorDirection, MotorGroup, MovementMode, OsciTriggerMode,
+    OversamplingIndex, Position, Position3D, ScanAction, ScanDirection,
+    TimebaseIndex, TriggerSlope,
 };
 
 /// Implementation of SPMInterface for NanonisClient
@@ -16,7 +17,11 @@ use crate::types::{
 impl SPMInterface for NanonisClient {
     // === Signal Operations ===
 
-    fn read_signals(&mut self, indices: Vec<i32>, wait: bool) -> Result<Vec<f32>, NanonisError> {
+    fn read_signals(
+        &mut self,
+        indices: Vec<i32>,
+        wait: bool,
+    ) -> Result<Vec<f32>, NanonisError> {
         self.signals_vals_get(indices, wait)
     }
 
@@ -58,7 +63,11 @@ impl SPMInterface for NanonisClient {
         self.folme_xy_pos_get(wait)
     }
 
-    fn set_xy_position(&mut self, position: Position, wait: bool) -> Result<(), NanonisError> {
+    fn set_xy_position(
+        &mut self,
+        position: Position,
+        wait: bool,
+    ) -> Result<(), NanonisError> {
         self.folme_xy_pos_set(position, wait)
     }
 
@@ -101,7 +110,11 @@ impl SPMInterface for NanonisClient {
         }
     }
 
-    fn z_ctrl_withdraw(&mut self, wait: bool, timeout_ms: Duration) -> Result<(), NanonisError> {
+    fn z_ctrl_withdraw(
+        &mut self,
+        wait: bool,
+        timeout_ms: Duration,
+    ) -> Result<(), NanonisError> {
         NanonisClient::z_ctrl_withdraw(self, wait, timeout_ms)
     }
 
@@ -129,11 +142,16 @@ impl SPMInterface for NanonisClient {
         NanonisClient::osci1t_ch_get(self)
     }
 
-    fn osci1t_timebase_set(&mut self, timebase_index: TimebaseIndex) -> Result<(), NanonisError> {
+    fn osci1t_timebase_set(
+        &mut self,
+        timebase_index: TimebaseIndex,
+    ) -> Result<(), NanonisError> {
         NanonisClient::osci1t_timebase_set(self, timebase_index.into())
     }
 
-    fn osci1t_timebase_get(&mut self) -> Result<(TimebaseIndex, Vec<f32>), NanonisError> {
+    fn osci1t_timebase_get(
+        &mut self,
+    ) -> Result<(TimebaseIndex, Vec<f32>), NanonisError> {
         let (index, timebases) = NanonisClient::osci1t_timebase_get(self)?;
         Ok((TimebaseIndex::from(index), timebases))
     }
@@ -142,8 +160,8 @@ impl SPMInterface for NanonisClient {
         &mut self,
         trigger_mode: OsciTriggerMode,
         trigger_slope: TriggerSlope,
-        trigger_level: f32,
-        trigger_hysteresis: f32,
+        trigger_level: f64,
+        trigger_hysteresis: f64,
     ) -> Result<(), NanonisError> {
         NanonisClient::osci1t_trig_set(
             self,
@@ -201,11 +219,16 @@ impl SPMInterface for NanonisClient {
         NanonisClient::osci2t_ch_get(self)
     }
 
-    fn osci2t_timebase_set(&mut self, timebase_index: TimebaseIndex) -> Result<(), NanonisError> {
+    fn osci2t_timebase_set(
+        &mut self,
+        timebase_index: TimebaseIndex,
+    ) -> Result<(), NanonisError> {
         NanonisClient::osci2t_timebase_set(self, timebase_index.into())
     }
 
-    fn osci2t_timebase_get(&mut self) -> Result<(TimebaseIndex, Vec<f32>), NanonisError> {
+    fn osci2t_timebase_get(
+        &mut self,
+    ) -> Result<(TimebaseIndex, Vec<f32>), NanonisError> {
         let (index, timebases) = NanonisClient::osci2t_timebase_get(self)?;
         Ok((TimebaseIndex::from(index), timebases))
     }
@@ -244,7 +267,8 @@ impl SPMInterface for NanonisClient {
 
     fn osci2t_trig_get(
         &mut self,
-    ) -> Result<(OsciTriggerMode, u16, TriggerSlope, f64, f64, f64), NanonisError> {
+    ) -> Result<(OsciTriggerMode, u16, TriggerSlope, f64, f64, f64), NanonisError>
+    {
         let (mode, channel, slope, level, hysteresis, position) =
             NanonisClient::osci2t_trig_get(self)?;
         Ok((

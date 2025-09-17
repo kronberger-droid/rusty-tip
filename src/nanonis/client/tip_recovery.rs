@@ -47,7 +47,10 @@ impl NanonisClient {
     /// client.tip_rec_buffer_size_set(1000)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn tip_rec_buffer_size_set(&mut self, buffer_size: i32) -> Result<(), NanonisError> {
+    pub fn tip_rec_buffer_size_set(
+        &mut self,
+        buffer_size: i32,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "TipRec.BufferSizeSet",
             vec![NanonisValue::I32(buffer_size)],
@@ -78,7 +81,8 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn tip_rec_buffer_size_get(&mut self) -> Result<i32, NanonisError> {
-        let result = self.quick_send("TipRec.BufferSizeGet", vec![], vec![], vec!["i"])?;
+        let result =
+            self.quick_send("TipRec.BufferSizeGet", vec![], vec![], vec!["i"])?;
 
         match result.first() {
             Some(value) => Ok(value.as_i32()?),
@@ -146,7 +150,9 @@ impl NanonisClient {
     /// }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn tip_rec_data_get(&mut self) -> Result<(Vec<i32>, Vec<Vec<f32>>), NanonisError> {
+    pub fn tip_rec_data_get(
+        &mut self,
+    ) -> Result<(Vec<i32>, Vec<Vec<f32>>), NanonisError> {
         let result = self.quick_send(
             "TipRec.DataGet",
             vec![],
@@ -360,9 +366,7 @@ impl NanonisClient {
     ///          switch_delay + lift_time1 + settling + lift_time2 + end_wait);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn tip_shaper_props_get(
-        &mut self,
-    ) -> Result<TipShaperProps, NanonisError> {
+    pub fn tip_shaper_props_get(&mut self) -> Result<TipShaperProps, NanonisError> {
         let result = self.quick_send(
             "TipShaper.PropsGet",
             vec![],

@@ -47,7 +47,11 @@ impl NanonisClient {
         )?;
         Ok(())
     }
-    pub fn folme_speed_set(&mut self, speed: f32, custom_speed: bool) -> Result<(), NanonisError> {
+    pub fn folme_speed_set(
+        &mut self,
+        speed: f32,
+        custom_speed: bool,
+    ) -> Result<(), NanonisError> {
         let custom_speed_flag = if custom_speed { 1u32 } else { 0u32 };
         self.quick_send(
             "FolMe.Speed",

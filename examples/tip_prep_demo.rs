@@ -1,4 +1,11 @@
-use std::{path::PathBuf, time::Duration, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}};
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
 
 use chrono::Utc;
 use log::info;
@@ -12,7 +19,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let driver = ActionDriver::new("127.0.0.1", 6501)?;
 
     // Create controller with custom pulse stepping parameters
-    let mut custom_controller = TipController::new(driver, SignalIndex(24), 2.0, -2.0, 0.0);
+    let mut custom_controller =
+        TipController::new(driver, SignalIndex(24), 2.0, -2.0, 0.0);
 
     let file_path = PathBuf::from(format!(
         "./examples/history/log_{}.json",
@@ -38,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ctrlc::set_handler(move || {
         info!("Received Ctrl-C, signaling stop and flushing logger...");
         running_clone.store(false, Ordering::SeqCst);
-        
+
         if let Ok(mut ctrl) = controller_clone.lock() {
             // Force flush the logger
             match ctrl.flush_logger() {
@@ -51,16 +59,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run control loop with periodic checks for the stop signal
     let result: Result<(), Box<dyn std::error::Error>> = {
         let mut ctrl = controller.lock().unwrap();
-        
+
         // Run in shorter intervals so we can check the stop signal
         let mut total_elapsed = Duration::from_secs(0);
         let max_duration = Duration::from_secs(1000);
         let check_interval = Duration::from_secs(5);
-        
+
         while total_elapsed < max_duration && running.load(Ordering::SeqCst) {
             let remaining = max_duration - total_elapsed;
             let run_duration = check_interval.min(remaining);
-            
+
             match ctrl.run(run_duration) {
                 Ok(final_state) => {
                     info!("Controller finished with state: {:?}", final_state);
@@ -80,7 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        
+
         Ok(())
     };
 
