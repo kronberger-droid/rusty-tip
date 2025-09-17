@@ -225,11 +225,11 @@ impl TipController {
     }
 
     /// Check if current signal represents a significant change from recent stable period
-    fn has_significant_change(&self, signal: f32) -> bool {
+    fn has_significant_change(&self, signal: f32) -> (bool, f32) {
         if let Some(freq_history) = self.signal_histories.get(&self.signal_index) {
             if freq_history.len() < 2 {
                 // First signal - consider it a significant change to initialize properly
-                true
+                (true, 0.0)
             } else {
                 // Compare only against signals from the current stable period
                 // cycles_without_change tells us how many recent signals were stable
@@ -244,7 +244,10 @@ impl TipController {
                         last_signal,
                         (self.change_threshold)(signal)
                     );
-                    (signal - last_signal).abs() >= (self.change_threshold)(signal)
+                    let has_change =
+                        (signal - last_signal).abs() >= (self.change_threshold)(signal);
+
+                    return (has_change, (signal - last_signal));
                 } else {
                     // Compare against mean of current stable period (skip current signal at index 0)
                     let stable_signals: Vec<f32> = freq_history
@@ -261,12 +264,14 @@ impl TipController {
                         stable_mean,
                         (self.change_threshold)(signal)
                     );
-                    (signal - stable_mean).abs() >= (self.change_threshold)(signal)
+                    let has_change =
+                        (signal - stable_mean).abs() >= (self.change_threshold)(signal);
+                    return (has_change, (signal - stable_mean));
                 }
             }
         } else {
             // No history yet - consider it a significant change
-            true
+            (true, 0.0)
         }
     }
 
@@ -328,9 +333,13 @@ impl TipController {
         // 1. Update signal history
         self.update_signal_history(signal);
 
+        let (is_significant, change) = self.has_significant_change(signal);
+
         // 2. Check for significant change and respond accordingly
-        if self.has_significant_change(signal) {
+        if is_significant && change >= 0.0 {
             self.handle_significant_change(signal);
+        } else if is_significant {
+            self.handle_stable_signal(signal);
         } else {
             self.handle_stable_signal(signal);
         }
