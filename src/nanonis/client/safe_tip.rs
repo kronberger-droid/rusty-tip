@@ -1,6 +1,6 @@
+use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
-use super::NanonisClient;
 
 impl NanonisClient {
     /// Switch the Safe Tip feature on or off.
@@ -29,9 +29,12 @@ impl NanonisClient {
     /// client.safe_tip_on_off_set(false)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn safe_tip_on_off_set(&mut self, safe_tip_on: bool) -> Result<(), NanonisError> {
+    pub fn safe_tip_on_off_set(
+        &mut self,
+        safe_tip_on: bool,
+    ) -> Result<(), NanonisError> {
         let status = if safe_tip_on { 1u16 } else { 2u16 };
-        
+
         self.quick_send(
             "SafeTip.OnOffSet",
             vec![NanonisValue::U16(status)],
@@ -66,8 +69,9 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn safe_tip_on_off_get(&mut self) -> Result<bool, NanonisError> {
-        let result = self.quick_send("SafeTip.OnOffGet", vec![], vec![], vec!["H"])?;
-        
+        let result =
+            self.quick_send("SafeTip.OnOffGet", vec![], vec![], vec!["H"])?;
+
         match result.first() {
             Some(value) => Ok(value.as_u16()? == 1),
             None => Err(NanonisError::Protocol(
@@ -104,8 +108,9 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn safe_tip_signal_get(&mut self) -> Result<f32, NanonisError> {
-        let result = self.quick_send("SafeTip.SignalGet", vec![], vec![], vec!["f"])?;
-        
+        let result =
+            self.quick_send("SafeTip.SignalGet", vec![], vec![], vec!["f"])?;
+
         match result.first() {
             Some(value) => Ok(value.as_f32()?),
             None => Err(NanonisError::Protocol(
@@ -149,7 +154,7 @@ impl NanonisClient {
     ) -> Result<(), NanonisError> {
         let recovery_flag = if auto_recovery { 1u16 } else { 0u16 };
         let pause_flag = if auto_pause_scan { 1u16 } else { 0u16 };
-        
+
         self.quick_send(
             "SafeTip.PropsSet",
             vec![
@@ -184,7 +189,7 @@ impl NanonisClient {
     /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
     ///
     /// let (auto_recovery, auto_pause, threshold) = client.safe_tip_props_get()?;
-    /// 
+    ///
     /// println!("Safe Tip Configuration:");
     /// println!("  Auto recovery: {}", if auto_recovery { "On" } else { "Off" });
     /// println!("  Auto pause scan: {}", if auto_pause { "On" } else { "Off" });
@@ -199,8 +204,13 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn safe_tip_props_get(&mut self) -> Result<(bool, bool, f32), NanonisError> {
-        let result = self.quick_send("SafeTip.PropsGet", vec![], vec![], vec!["H", "H", "f"])?;
-        
+        let result = self.quick_send(
+            "SafeTip.PropsGet",
+            vec![],
+            vec![],
+            vec!["H", "H", "f"],
+        )?;
+
         if result.len() >= 3 {
             let auto_recovery = result[0].as_u16()? == 1;
             let auto_pause_scan = result[1].as_u16()? == 1;
@@ -241,7 +251,10 @@ impl NanonisClient {
     /// client.z_ctrl_tip_lift_set(500e-9)?;  // 500 nm lift
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn z_ctrl_tip_lift_set(&mut self, tip_lift_m: f32) -> Result<(), NanonisError> {
+    pub fn z_ctrl_tip_lift_set(
+        &mut self,
+        tip_lift_m: f32,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "ZCtrl.TipLiftSet",
             vec![NanonisValue::F32(tip_lift_m)],
@@ -278,8 +291,9 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn z_ctrl_tip_lift_get(&mut self) -> Result<f32, NanonisError> {
-        let result = self.quick_send("ZCtrl.TipLiftGet", vec![], vec![], vec!["f"])?;
-        
+        let result =
+            self.quick_send("ZCtrl.TipLiftGet", vec![], vec![], vec!["f"])?;
+
         match result.first() {
             Some(value) => Ok(value.as_f32()?),
             None => Err(NanonisError::Protocol(
@@ -311,7 +325,7 @@ impl NanonisClient {
     ///
     /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
     ///
-    /// let (safe_tip_on, signal_val, threshold, tip_lift, z_ctrl_on) = 
+    /// let (safe_tip_on, signal_val, threshold, tip_lift, z_ctrl_on) =
     ///     client.safety_status_comprehensive()?;
     ///
     /// println!("=== Tip Safety Status ===");
@@ -325,13 +339,15 @@ impl NanonisClient {
     /// }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn safety_status_comprehensive(&mut self) -> Result<(bool, f32, f32, f32, bool), NanonisError> {
+    pub fn safety_status_comprehensive(
+        &mut self,
+    ) -> Result<(bool, f32, f32, f32, bool), NanonisError> {
         let safe_tip_on = self.safe_tip_on_off_get()?;
         let signal_value = self.safe_tip_signal_get()?;
         let (_, _, threshold) = self.safe_tip_props_get()?;
         let tip_lift = self.z_ctrl_tip_lift_get()?;
         let z_ctrl_on = self.z_ctrl_on_off_get()?;
-        
+
         Ok((safe_tip_on, signal_value, threshold, tip_lift, z_ctrl_on))
     }
 }

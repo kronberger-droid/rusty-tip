@@ -1,8 +1,8 @@
 use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::{
-    Amplitude, Frequency, MotorAxis, MotorDirection, MotorGroup, MovementMode, NanonisValue,
-    Position3D,
+    Amplitude, Frequency, MotorAxis, MotorDirection, MotorGroup, MovementMode,
+    NanonisValue, Position3D,
 };
 use std::time::Duration;
 

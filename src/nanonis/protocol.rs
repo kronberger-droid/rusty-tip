@@ -52,7 +52,10 @@ pub struct Protocol;
 
 impl Protocol {
     /// Parse error information from the end of a response body using safe slice operations
-    pub fn parse_error_info(body: &[u8], data_end_cursor: usize) -> Result<(), NanonisError> {
+    pub fn parse_error_info(
+        body: &[u8],
+        data_end_cursor: usize,
+    ) -> Result<(), NanonisError> {
         // Get error section safely
         let error_section = match body.get(data_end_cursor..) {
             Some(section) if section.len() >= ERROR_INFO_SIZE => section,
@@ -63,27 +66,27 @@ impl Protocol {
         let (status_bytes, rest) = error_section.split_at(4);
         let (size_bytes, message_bytes) = rest.split_at(4);
 
-        let error_status = i32::from_be_bytes(
-            status_bytes
-                .try_into()
-                .map_err(|_| NanonisError::Protocol("Invalid error status format".into()))?,
-        );
+        let error_status =
+            i32::from_be_bytes(status_bytes.try_into().map_err(|_| {
+                NanonisError::Protocol("Invalid error status format".into())
+            })?);
 
-        let error_desc_size = i32::from_be_bytes(
-            size_bytes
-                .try_into()
-                .map_err(|_| NanonisError::Protocol("Invalid error size format".into()))?,
-        ) as usize;
+        let error_desc_size =
+            i32::from_be_bytes(size_bytes.try_into().map_err(|_| {
+                NanonisError::Protocol("Invalid error size format".into())
+            })?) as usize;
 
         if error_desc_size > 0 {
             // Safe message extraction with bounds checking
-            let message_slice = message_bytes
-                .get(..error_desc_size)
-                .ok_or_else(|| NanonisError::Protocol("Error message truncated".into()))?;
+            let message_slice =
+                message_bytes.get(..error_desc_size).ok_or_else(|| {
+                    NanonisError::Protocol("Error message truncated".into())
+                })?;
 
             // Use from_utf8 for better error handling
-            let error_msg = std::str::from_utf8(message_slice)
-                .map_err(|_| NanonisError::Protocol("Invalid UTF-8 in error message".into()))?;
+            let error_msg = std::str::from_utf8(message_slice).map_err(|_| {
+                NanonisError::Protocol("Invalid UTF-8 in error message".into())
+            })?;
 
             let trimmed_msg = error_msg.trim();
             if !trimmed_msg.is_empty() {
@@ -103,10 +106,14 @@ impl Protocol {
     ) -> Result<[u8; N], NanonisError> {
         debug!("Attempting to read exactly {} bytes", N);
         let mut buf = [0u8; N];
-        
+
         match reader.read_exact(&mut buf) {
             Ok(()) => {
-                debug!("Successfully read {} bytes: {:02x?}", N, if N <= 20 { &buf[..] } else { &buf[..20] });
+                debug!(
+                    "Successfully read {} bytes: {:02x?}",
+                    N,
+                    if N <= 20 { &buf[..] } else { &buf[..20] }
+                );
                 Ok(buf)
             }
             Err(e) => {
@@ -125,7 +132,7 @@ impl Protocol {
         size: usize,
     ) -> Result<Vec<u8>, NanonisError> {
         debug!("Attempting to read {} variable bytes", size);
-        
+
         // Reasonable size limit to prevent memory attacks
         if size > MAX_RESPONSE_SIZE {
             debug!("Size {} exceeds maximum {}", size, MAX_RESPONSE_SIZE);
@@ -138,15 +145,32 @@ impl Protocol {
         let mut body = vec![0u8; size];
         match reader.read_exact(&mut body) {
             Ok(()) => {
-                debug!("Successfully read {} variable bytes: {:02x?}", size, if size <= 50 { &body[..] } else { &body[..50] });
+                debug!(
+                    "Successfully read {} variable bytes: {:02x?}",
+                    size,
+                    if size <= 50 { &body[..] } else { &body[..50] }
+                );
                 Ok(body)
             }
             Err(e) => {
-                debug!("Failed to read {} variable bytes: {} (kind: {:?})", size, e, e.kind());
+                debug!(
+                    "Failed to read {} variable bytes: {} (kind: {:?})",
+                    size,
+                    e,
+                    e.kind()
+                );
                 // Try to read whatever we can to diagnose the issue
                 let mut partial_buf = Vec::new();
                 if let Ok(bytes_read) = reader.read_to_end(&mut partial_buf) {
-                    debug!("Partial read got {} bytes: {:02x?}", bytes_read, if bytes_read <= 50 { &partial_buf[..] } else { &partial_buf[..50] });
+                    debug!(
+                        "Partial read got {} bytes: {:02x?}",
+                        bytes_read,
+                        if bytes_read <= 50 {
+                            &partial_buf[..]
+                        } else {
+                            &partial_buf[..50]
+                        }
+                    );
                 }
                 Err(NanonisError::Io {
                     source: e,
@@ -267,7 +291,9 @@ impl Protocol {
 
                 "*-c" => {
                     let string_length = result.last().ok_or_else(|| {
-                        NanonisError::Protocol("String length not found for *-c type".to_string())
+                        NanonisError::Protocol(
+                            "String length not found for *-c type".to_string(),
+                        )
                     })?;
 
                     let mut string_bytes = vec![0u8; *string_length as usize];
@@ -474,7 +500,8 @@ impl Protocol {
                         let string_len = cursor.read_u32::<BigEndian>()? as usize;
                         let mut string_bytes = vec![0u8; string_len];
                         cursor.read_exact(&mut string_bytes)?;
-                        let string = String::from_utf8_lossy(&string_bytes).to_string();
+                        let string =
+                            String::from_utf8_lossy(&string_bytes).to_string();
                         strings.push(string);
                     }
 

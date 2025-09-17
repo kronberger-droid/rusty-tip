@@ -206,7 +206,10 @@ impl TipController {
     }
 
     /// Get signal history for a specific signal (most recent first)
-    pub fn get_signal_history(&self, signal_index: SignalIndex) -> Option<&VecDeque<f32>> {
+    pub fn get_signal_history(
+        &self,
+        signal_index: SignalIndex,
+    ) -> Option<&VecDeque<f32>> {
         self.signal_histories.get(&signal_index)
     }
 
@@ -234,8 +237,8 @@ impl TipController {
             } else {
                 // Compare only against signals from the current stable period
                 // cycles_without_change tells us how many recent signals were stable
-                let stable_period_size =
-                    (self.cycles_without_change as usize).min(freq_history.len() - 1);
+                let stable_period_size = (self.cycles_without_change as usize)
+                    .min(freq_history.len() - 1);
 
                 if stable_period_size == 0 {
                     // No stable period yet, compare against last signal
@@ -254,8 +257,8 @@ impl TipController {
                         .take(stable_period_size)
                         .cloned()
                         .collect();
-                    let stable_mean =
-                        stable_signals.iter().sum::<f32>() / stable_signals.len() as f32;
+                    let stable_mean = stable_signals.iter().sum::<f32>()
+                        / stable_signals.len() as f32;
 
                     info!(
                         "Stable mean: {} | Current threshold: {}",
@@ -273,12 +276,13 @@ impl TipController {
 
     /// Handle response to significant signal change
     fn handle_significant_change(&mut self, signal: f32) {
-        let comparison_signal =
-            if let Some(freq_history) = self.signal_histories.get(&self.signal_index) {
-                freq_history.get(1).unwrap_or(&0.0)
-            } else {
-                &0.0
-            };
+        let comparison_signal = if let Some(freq_history) =
+            self.signal_histories.get(&self.signal_index)
+        {
+            freq_history.get(1).unwrap_or(&0.0)
+        } else {
+            &0.0
+        };
         debug!(
             "Signal changed significantly: {:.3} -> {:.3} (change: {:.3})",
             comparison_signal,
@@ -305,7 +309,8 @@ impl TipController {
 
     /// Step up the pulse voltage if possible
     fn step_pulse_voltage(&mut self) -> bool {
-        let new_pulse = (self.pulse_voltage + self.pulse_voltage_step).min(self.max_pulse_voltage);
+        let new_pulse = (self.pulse_voltage + self.pulse_voltage_step)
+            .min(self.max_pulse_voltage);
         if new_pulse > self.pulse_voltage {
             info!(
                 "Stepping pulse voltage: {:.3}V -> {:.3}V",
@@ -349,7 +354,8 @@ impl TipController {
         } else {
             info!(
                 "Resuming tip control loop from cycle {} (timeout: {:?})",
-                self.cycle_count + 1, timeout
+                self.cycle_count + 1,
+                timeout
             );
         }
 
@@ -462,7 +468,7 @@ impl TipController {
         );
         self.driver.execute(Action::BiasPulse {
             wait_until_done: true,
-            pulse_width_s: Duration::from_millis(50),
+            pulse_width: Duration::from_millis(50),
             bias_value_v: self.pulse_voltage,
             z_controller_hold: 1,
             pulse_mode: 2,
@@ -495,7 +501,7 @@ impl TipController {
         self.driver.execute_chain(ActionChain::new(vec![
             Action::Withdraw {
                 wait_until_finished: true,
-                timeout_ms: Duration::from_secs(5),
+                timeout: Duration::from_secs(5),
             },
             Action::MoveMotor {
                 direction: MotorDirection::ZMinus,
@@ -509,7 +515,9 @@ impl TipController {
                 direction: MotorDirection::YPlus,
                 steps: 2,
             },
-            Action::AutoApproach,
+            Action::AutoApproach {
+                wait_until_finished: true,
+            },
             Action::Wait {
                 duration: Duration::from_secs(1),
             },
@@ -544,27 +552,36 @@ impl TipController {
 
     /// Read frequency shift signal value using stable signal acquisition
     fn read_freq_shift(&mut self) -> Result<f32, NanonisError> {
-        debug!("Reading signal from index {} (should be bias voltage)", self.signal_index.0);
-        
+        debug!(
+            "Reading signal from index {} (should be bias voltage)",
+            self.signal_index.0
+        );
+
         // Use stable signal acquisition with 3 readings and 2 second timeout
-        if let Some(stable_signal) = self.read_stable_signal(
-            self.signal_index,
-            Duration::from_secs(2),
-            3,
-        )? {
-            debug!("Stable signal from index {}: {:.6}", self.signal_index.0, stable_signal);
-            
+        if let Some(stable_signal) =
+            self.read_stable_signal(self.signal_index, Duration::from_secs(2), 3)?
+        {
+            debug!(
+                "Stable signal from index {}: {:.6}",
+                self.signal_index.0, stable_signal
+            );
+
             // Sanity check - bias voltage should never be near zero
             if stable_signal.abs() < 0.1 {
-                warn!("Signal index {} returned unexpectedly low value: {:.6} (expected ~4.4V bias)", 
-                      self.signal_index.0, stable_signal);
+                warn!(
+                    "Signal index {} returned unexpectedly low value: {:.6} (expected ~4.4V bias)",
+                    self.signal_index.0, stable_signal
+                );
             }
-            
+
             Ok(stable_signal)
         } else {
             // Fallback to single reading if stable acquisition fails
-            warn!("Could not acquire stable signal from index {}, falling back to single reading", self.signal_index.0);
-            
+            warn!(
+                "Could not acquire stable signal from index {}, falling back to single reading",
+                self.signal_index.0
+            );
+
             self.driver.spm_interface_mut().osci1t_run()?;
             self.driver
                 .spm_interface_mut()
@@ -575,9 +592,16 @@ impl TipController {
                 .spm_interface_mut()
                 .osci1t_data_get(DataToGet::NextTrigger)?;
 
-            debug!("Fallback osci_data from index {}: {osci_screen:?}", self.signal_index.0);
-            let mean: f32 = (osci_screen.iter().sum::<f64>() / osci_screen.len() as f64) as f32;
-            debug!("Fallback result from index {} = {mean:?}", self.signal_index.0);
+            debug!(
+                "Fallback osci_data from index {}: {osci_screen:?}",
+                self.signal_index.0
+            );
+            let mean: f32 =
+                (osci_screen.iter().sum::<f64>() / osci_screen.len() as f64) as f32;
+            debug!(
+                "Fallback result from index {} = {mean:?}",
+                self.signal_index.0
+            );
 
             // Sanity check for fallback too
             if mean.abs() < 0.1 {
@@ -622,7 +646,9 @@ impl TipController {
             let mean = values.iter().sum::<f64>() / values.len() as f64;
             debug!(
                 "Stable signal found for index {}: mean = {:.6} (from {} values)",
-                signal_index.0, mean, values.len()
+                signal_index.0,
+                mean,
+                values.len()
             );
             Ok(Some(mean as f32))
         } else {

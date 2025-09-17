@@ -1,7 +1,7 @@
 use crate::{
     types::{
-        ActionCondition, DataToGet, MovementMode, OsciData, Position, Position3D, ScanAction,
-        SignalIndex, SignalValue, TriggerConfig,
+        ActionCondition, DataToGet, MovementMode, OsciData, Position, Position3D,
+        ScanAction, SignalIndex, SignalValue, TriggerConfig,
     },
     MotorDirection,
 };
@@ -37,6 +37,7 @@ pub enum Action {
         signal: SignalIndex,
         trigger: Option<TriggerConfig>,
         data_to_get: DataToGet,
+        is_stable: Option<fn(&[f64]) -> bool>,
     },
 
     /// Read current piezo position (continuous coordinates)
@@ -69,12 +70,12 @@ pub enum Action {
 
     // === Control Operations ===
     /// Perform auto-approach and wait for completion
-    AutoApproach,
+    AutoApproach { wait_until_finished: bool },
 
     /// Withdraw tip with timeout
     Withdraw {
         wait_until_finished: bool,
-        timeout_ms: Duration,
+        timeout: Duration,
     },
 
     // === Scan Operations ===
@@ -88,7 +89,7 @@ pub enum Action {
     /// Execute bias pulse with parameters
     BiasPulse {
         wait_until_done: bool,
-        pulse_width_s: Duration,
+        pulse_width: Duration,
         bias_value_v: f32,
         z_controller_hold: u16,
         pulse_mode: u16,
@@ -216,7 +217,7 @@ impl Action {
     pub fn is_control_action(&self) -> bool {
         matches!(
             self,
-            Action::AutoApproach
+            Action::AutoApproach { .. }
                 | Action::Withdraw { .. }
                 | Action::ScanControl { .. }
                 | Action::StopMotor
@@ -232,7 +233,9 @@ impl Action {
     pub fn involves_motor(&self) -> bool {
         matches!(
             self,
-            Action::MoveMotor { .. } | Action::MoveMotorClosedLoop { .. } | Action::StopMotor
+            Action::MoveMotor { .. }
+                | Action::MoveMotorClosedLoop { .. }
+                | Action::StopMotor
         )
     }
 
@@ -268,34 +271,41 @@ impl Action {
             Action::MoveMotor { direction, steps } => {
                 format!("Move motor {:?} {} steps", direction, steps)
             }
-            Action::AutoApproach => "Auto approach".to_string(),
-            Action::Withdraw { timeout_ms, .. } => {
-                format!("Withdraw tip (timeout: {}ms)", timeout_ms.as_micros())
+            Action::AutoApproach {
+                wait_until_finished,
+            } => format!("Auto approach blocking: {wait_until_finished}"),
+            Action::Withdraw { timeout, .. } => {
+                format!("Withdraw tip (timeout: {}ms)", timeout.as_micros())
             }
             Action::Wait { duration } => {
                 format!("Wait {:.1}s", duration.as_secs_f64())
             }
             Action::BiasPulse {
                 wait_until_done: _,
-                pulse_width_s,
+                pulse_width,
                 bias_value_v,
                 z_controller_hold: _,
                 pulse_mode: _,
             } => {
-                format!("Bias pulse {:.3}V for {:?}ms", bias_value_v, pulse_width_s)
+                format!("Bias pulse {:.3}V for {:?}ms", bias_value_v, pulse_width)
             }
             Action::ReadOsci {
                 signal,
                 trigger,
                 data_to_get,
+                is_stable,
             } => {
                 let trigger_desc = match trigger {
                     Some(config) => format!("trigger: {:?}", config.mode),
                     None => "no trigger config".to_string(),
                 };
+                let stability_desc = match is_stable {
+                    Some(_) => " with custom stability",
+                    None => "",
+                };
                 format!(
-                    "Read oscilloscope signal {} with {} (mode: {:?})",
-                    signal.0, trigger_desc, data_to_get
+                    "Read oscilloscope signal {} with {} (mode: {:?}){}",
+                    signal.0, trigger_desc, data_to_get, stability_desc
                 )
             }
             _ => format!("{:?}", self),
@@ -312,7 +322,8 @@ mod tests {
         let bias_result = ActionResult::BiasVoltage(2.5);
         assert_eq!(bias_result.as_f64(), Some(2.5));
 
-        let position_result = ActionResult::PiezoPosition(Position { x: 1e-9, y: 2e-9 });
+        let position_result =
+            ActionResult::PiezoPosition(Position { x: 1e-9, y: 2e-9 });
         assert_eq!(
             position_result.as_position(),
             Some(Position { x: 1e-9, y: 2e-9 })
@@ -561,7 +572,9 @@ impl ActionChain {
                 Action::ReadPiezoPosition {
                     wait_for_newest_data: true,
                 },
-                Action::AutoApproach,
+                Action::AutoApproach {
+                    wait_until_finished: true,
+                },
                 Action::Wait {
                     duration: Duration::from_millis(500),
                 },
@@ -589,7 +602,9 @@ impl ActionChain {
                 Action::Wait {
                     duration: Duration::from_millis(100),
                 },
-                Action::AutoApproach,
+                Action::AutoApproach {
+                    wait_until_finished: true,
+                },
                 Action::ReadSignal {
                     signal: SignalIndex(24),
                     wait_for_newest: true,
@@ -631,7 +646,9 @@ impl ActionChain {
                 Action::Wait {
                     duration: Duration::from_millis(100),
                 },
-                Action::AutoApproach,
+                Action::AutoApproach {
+                    wait_until_finished: true,
+                },
                 Action::ReadSignal {
                     signal: SignalIndex(24),
                     wait_for_newest: true,
@@ -642,7 +659,7 @@ impl ActionChain {
                 }, // Current
                 Action::Withdraw {
                     wait_until_finished: true,
-                    timeout_ms: Duration::from_secs(5),
+                    timeout: Duration::from_secs(5),
                 },
             ]);
         }
@@ -659,7 +676,7 @@ impl ActionChain {
             vec![
                 Action::Withdraw {
                     wait_until_finished: true,
-                    timeout_ms: Duration::from_secs(5),
+                    timeout: Duration::from_secs(5),
                 },
                 Action::MovePiezoRelative {
                     delta: Position { x: 3e-9, y: 3e-9 },
@@ -667,7 +684,9 @@ impl ActionChain {
                 Action::Wait {
                     duration: Duration::from_millis(200),
                 },
-                Action::AutoApproach,
+                Action::AutoApproach {
+                    wait_until_finished: true,
+                },
                 Action::ReadSignal {
                     signal: SignalIndex(24),
                     wait_for_newest: true,
@@ -686,16 +705,26 @@ mod chain_tests {
     #[test]
     fn test_vec_foundation() {
         // Test direct Vec<Action> usage
-        let mut chain = ActionChain::new(vec![Action::ReadBias, Action::SetBias { voltage: 1.0 }]);
+        let mut chain = ActionChain::new(vec![
+            Action::ReadBias,
+            Action::SetBias { voltage: 1.0 },
+        ]);
 
         assert_eq!(chain.len(), 2);
 
         // Test Vec operations
-        chain.push(Action::AutoApproach);
+        chain.push(Action::AutoApproach {
+            wait_until_finished: true,
+        });
         assert_eq!(chain.len(), 3);
 
         let action = chain.pop().unwrap();
-        assert!(matches!(action, Action::AutoApproach));
+        assert!(matches!(
+            action,
+            Action::AutoApproach {
+                wait_until_finished: true
+            }
+        ));
         assert_eq!(chain.len(), 2);
 
         // Test extension
@@ -717,7 +746,9 @@ mod chain_tests {
                 Action::Wait {
                     duration: Duration::from_millis(100),
                 },
-                Action::AutoApproach,
+                Action::AutoApproach {
+                    wait_until_finished: true,
+                },
             ],
             "Test chain",
         );
@@ -766,7 +797,8 @@ mod chain_tests {
         let approach = ActionChain::safe_tip_approach();
         assert!(!approach.control_actions().is_empty());
 
-        let positions = vec![Position { x: 1e-9, y: 1e-9 }, Position { x: 2e-9, y: 2e-9 }];
+        let positions =
+            vec![Position { x: 1e-9, y: 1e-9 }, Position { x: 2e-9, y: 2e-9 }];
         let survey = ActionChain::position_survey(positions);
         assert_eq!(survey.len(), 12); // 6 actions per position × 2 positions
     }
@@ -783,7 +815,9 @@ mod chain_tests {
                 wait_until_finished: true,
             },
             Action::ReadBias,
-            Action::AutoApproach,
+            Action::AutoApproach {
+                wait_until_finished: true,
+            },
             Action::SetBias { voltage: 1.5 },
         ]);
 
@@ -801,7 +835,9 @@ mod chain_tests {
     fn test_iteration() {
         let chain = ActionChain::new(vec![
             Action::ReadBias,
-            Action::AutoApproach,
+            Action::AutoApproach {
+                wait_until_finished: true,
+            },
             Action::Wait {
                 duration: Duration::from_millis(100),
             },
@@ -826,7 +862,9 @@ mod chain_tests {
         let actions = vec![
             Action::ReadBias,
             Action::SetBias { voltage: 1.5 },
-            Action::AutoApproach,
+            Action::AutoApproach {
+                wait_until_finished: true,
+            },
         ];
 
         let chain: ActionChain = actions.into();

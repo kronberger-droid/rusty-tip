@@ -29,7 +29,10 @@ impl NanonisClient {
     /// client.z_ctrl_on_off_set(false)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn z_ctrl_on_off_set(&mut self, controller_on: bool) -> Result<(), NanonisError> {
+    pub fn z_ctrl_on_off_set(
+        &mut self,
+        controller_on: bool,
+    ) -> Result<(), NanonisError> {
         let status_flag = if controller_on { 1u32 } else { 0u32 };
 
         self.quick_send(
@@ -108,7 +111,10 @@ impl NanonisClient {
     /// client.z_ctrl_z_pos_set(2e-9)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn z_ctrl_z_pos_set(&mut self, z_position_m: f32) -> Result<(), NanonisError> {
+    pub fn z_ctrl_z_pos_set(
+        &mut self,
+        z_position_m: f32,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "ZCtrl.ZPosSet",
             vec![NanonisValue::F32(z_position_m)],
@@ -149,7 +155,9 @@ impl NanonisClient {
 
         match result.first() {
             Some(value) => Ok(value.as_f32()?),
-            None => Err(NanonisError::Protocol("No Z position returned".to_string())),
+            None => {
+                Err(NanonisError::Protocol("No Z position returned".to_string()))
+            }
         }
     }
 
@@ -177,7 +185,10 @@ impl NanonisClient {
     /// client.z_ctrl_setpoint_set(1e-9)?;  // 1 nN
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn z_ctrl_setpoint_set(&mut self, setpoint: f32) -> Result<(), NanonisError> {
+    pub fn z_ctrl_setpoint_set(
+        &mut self,
+        setpoint: f32,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "ZCtrl.SetpntSet",
             vec![NanonisValue::F32(setpoint)],
@@ -208,7 +219,8 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn z_ctrl_setpoint_get(&mut self) -> Result<f32, NanonisError> {
-        let result = self.quick_send("ZCtrl.SetpntGet", vec![], vec![], vec!["f"])?;
+        let result =
+            self.quick_send("ZCtrl.SetpntGet", vec![], vec![], vec!["f"])?;
 
         match result.first() {
             Some(value) => Ok(value.as_f32()?),
@@ -291,7 +303,8 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn z_ctrl_gain_get(&mut self) -> Result<(f32, f32, f32), NanonisError> {
-        let result = self.quick_send("ZCtrl.GainGet", vec![], vec![], vec!["f", "f", "f"])?;
+        let result =
+            self.quick_send("ZCtrl.GainGet", vec![], vec![], vec!["f", "f", "f"])?;
 
         if result.len() >= 3 {
             Ok((

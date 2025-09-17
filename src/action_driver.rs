@@ -5,8 +5,8 @@ use crate::actions::{Action, ActionChain, ActionResult};
 use crate::error::NanonisError;
 use crate::nanonis::{NanonisClient, PulseMode, SPMInterface, ZControllerHold};
 use crate::types::{
-    DataToGet, MotorGroup, OsciData, Position, ScanDirection, SignalIndex, SignalRegistry,
-    SignalStats, SignalValue, TriggerConfig,
+    DataToGet, MotorGroup, OsciData, Position, ScanDirection, SignalIndex,
+    SignalRegistry, SignalStats, SignalValue, TriggerConfig,
 };
 use std::collections::HashMap;
 use std::thread;
@@ -36,7 +36,9 @@ impl ActionDriver {
     }
 
     /// Create ActionDriver with any SPM interface implementation
-    pub fn with_spm_interface(mut client: Box<dyn SPMInterface>) -> Result<Self, NanonisError> {
+    pub fn with_spm_interface(
+        mut client: Box<dyn SPMInterface>,
+    ) -> Result<Self, NanonisError> {
         let names = client.get_signal_names()?;
         let registry = SignalRegistry::from_names(names);
         Ok(Self {
@@ -47,7 +49,10 @@ impl ActionDriver {
     }
 
     /// Create a new ActionDriver with a provided registry (for testing)
-    pub fn with_registry(client: Box<dyn SPMInterface>, registry: SignalRegistry) -> Self {
+    pub fn with_registry(
+        client: Box<dyn SPMInterface>,
+        registry: SignalRegistry,
+    ) -> Self {
         Self {
             client,
             registry,
@@ -56,7 +61,9 @@ impl ActionDriver {
     }
 
     /// Convenience method to create with NanonisClient
-    pub fn with_nanonis_client(mut client: NanonisClient) -> Result<Self, NanonisError> {
+    pub fn with_nanonis_client(
+        mut client: NanonisClient,
+    ) -> Result<Self, NanonisError> {
         let names = client.signal_names_get(false)?;
         let registry = SignalRegistry::from_names(names);
         Ok(Self {
@@ -100,7 +107,8 @@ impl ActionDriver {
                 signals,
                 wait_for_newest,
             } => {
-                let indices: Vec<i32> = signals.iter().map(|s| (*s).into()).collect();
+                let indices: Vec<i32> =
+                    signals.iter().map(|s| (*s).into()).collect();
                 let values = self.client.read_signals(indices, wait_for_newest)?;
 
                 // Convert to SignalValue with basic type inference
@@ -133,6 +141,7 @@ impl ActionDriver {
                 signal,
                 trigger,
                 data_to_get,
+                is_stable,
             } => {
                 self.client.osci1t_run()?;
 
@@ -142,8 +151,8 @@ impl ActionDriver {
                     self.client.osci1t_trig_set(
                         trigger.mode,
                         trigger.slope,
-                        trigger.level as f32,
-                        trigger.hysteresis as f32,
+                        trigger.level,
+                        trigger.hysteresis,
                     )?;
                 }
 
@@ -156,14 +165,18 @@ impl ActionDriver {
                             0.01,   // relative_threshold (1%)
                             50e-15, // absolute_threshold (50 fA)
                             0.1,    // min_window_percent (10%)
+                            is_stable,
                         )? {
-                            Some(osci_data) => Ok(ActionResult::OscilloscopeData(osci_data)),
+                            Some(osci_data) => {
+                                Ok(ActionResult::OscilloscopeData(osci_data))
+                            }
                             None => Ok(ActionResult::None),
                         }
                     }
                     _ => {
                         // Use NextTrigger for actual data reading - Stable is just for our algorithm
-                let (t0, dt, size, data) = self.client.osci1t_data_get(DataToGet::NextTrigger)?;
+                        let (t0, dt, size, data) =
+                            self.client.osci1t_data_get(DataToGet::NextTrigger)?;
                         let osci_data = OsciData::new(t0, dt, size, data);
                         Ok(ActionResult::OscilloscopeData(osci_data))
                     }
@@ -225,17 +238,18 @@ impl ActionDriver {
             }
 
             // === Control Operations ===
-            Action::AutoApproach => {
-                self.client.auto_approach(true)?;
+            Action::AutoApproach {
+                wait_until_finished,
+            } => {
+                self.client.auto_approach(wait_until_finished)?;
                 Ok(ActionResult::Success)
             }
 
             Action::Withdraw {
                 wait_until_finished,
-                timeout_ms,
+                timeout,
             } => {
-                self.client
-                    .z_ctrl_withdraw(wait_until_finished, timeout_ms)?;
+                self.client.z_ctrl_withdraw(wait_until_finished, timeout)?;
                 Ok(ActionResult::Success)
             }
 
@@ -253,7 +267,7 @@ impl ActionDriver {
             // === Advanced Operations ===
             Action::BiasPulse {
                 wait_until_done,
-                pulse_width_s,
+                pulse_width,
                 bias_value_v,
                 z_controller_hold,
                 pulse_mode,
@@ -275,7 +289,7 @@ impl ActionDriver {
 
                 self.client.bias_pulse(
                     wait_until_done,
-                    pulse_width_s,
+                    pulse_width,
                     bias_value_v,
                     hold_enum,
                     mode_enum,
@@ -297,7 +311,9 @@ impl ActionDriver {
             }
 
             Action::Retrieve { key } => match self.stored_values.get(&key) {
-                Some(value) => Ok(ActionResult::StoredValue(Box::new(value.clone()))),
+                Some(value) => {
+                    Ok(ActionResult::StoredValue(Box::new(value.clone())))
+                }
                 None => Err(NanonisError::InvalidCommand(format!(
                     "No stored value found for key: {}",
                     key
@@ -328,6 +344,7 @@ impl ActionDriver {
         relative_threshold: f64,
         absolute_threshold: f64,
         min_window_percent: f64,
+        stability_fn: Option<fn(&[f64]) -> bool>,
     ) -> Result<Option<OsciData>, NanonisError> {
         let start_time = std::time::Instant::now();
 
@@ -338,12 +355,12 @@ impl ActionDriver {
                     return Ok(None);
                 }
 
-                // Use NextTrigger for actual data reading - Stable is just for our algorithm
-                let (t0, dt, size, data) = self.client.osci1t_data_get(DataToGet::NextTrigger)?;
+                let (t0, dt, size, data) =
+                    self.client.osci1t_data_get(DataToGet::Current)?;
 
                 let min_window = (size as f64 * min_window_percent) as usize;
                 let mut start = 0;
-                let mut end = data.len();
+                let mut end = size as usize;
 
                 while (end - start) > min_window {
                     // Check timeout during window analysis
@@ -357,17 +374,31 @@ impl ActionDriver {
                     let std_dev = arr.std(0.0);
                     let relative_std = std_dev / mean.abs();
 
-                    // Use dual-threshold approach: relative OR absolute
-                    let is_relative_stable = relative_std < relative_threshold;
-                    let is_absolute_stable = std_dev < absolute_threshold;
+                    // Use custom stability function if provided, otherwise default dual-threshold
+                    let is_stable = if let Some(stability_fn) = stability_fn {
+                        stability_fn(window)
+                    } else {
+                        // Default dual-threshold approach: relative OR absolute
+                        let is_relative_stable = relative_std < relative_threshold;
+                        let is_absolute_stable = std_dev < absolute_threshold;
+                        is_relative_stable || is_absolute_stable
+                    };
 
-                    if is_relative_stable || is_absolute_stable {
+                    if is_stable {
                         let stable_data = window.to_vec();
-                        let stability_method = match (is_relative_stable, is_absolute_stable) {
-                            (true, true) => "both".to_string(),
-                            (true, false) => "relative".to_string(),
-                            (false, true) => "absolute".to_string(),
-                            (false, false) => unreachable!(),
+                        let stability_method = if stability_fn.is_some() {
+                            "custom".to_string()
+                        } else {
+                            // Default dual-threshold logic
+                            let is_relative_stable =
+                                relative_std < relative_threshold;
+                            let is_absolute_stable = std_dev < absolute_threshold;
+                            match (is_relative_stable, is_absolute_stable) {
+                                (true, true) => "both".to_string(),
+                                (true, false) => "relative".to_string(),
+                                (false, true) => "absolute".to_string(),
+                                (false, false) => unreachable!(),
+                            }
                         };
 
                         let stats = SignalStats {
@@ -506,6 +537,7 @@ impl ActionDriver {
             signal,
             trigger,
             data_to_get,
+            is_stable: None,
         })? {
             ActionResult::OscilloscopeData(osci_data) => Ok(Some(osci_data)),
             ActionResult::None => Ok(None),
@@ -513,6 +545,93 @@ impl ActionDriver {
                 "Expected oscilloscope data".into(),
             )),
         }
+    }
+
+    /// Convenience method to read oscilloscope data with custom stability function
+    pub fn read_oscilloscope_with_stability(
+        &mut self,
+        signal: SignalIndex,
+        trigger: Option<TriggerConfig>,
+        data_to_get: DataToGet,
+        is_stable: fn(&[f64]) -> bool,
+    ) -> Result<Option<OsciData>, NanonisError> {
+        match self.execute(Action::ReadOsci {
+            signal,
+            trigger,
+            data_to_get,
+            is_stable: Some(is_stable),
+        })? {
+            ActionResult::OscilloscopeData(osci_data) => Ok(Some(osci_data)),
+            ActionResult::None => Ok(None),
+            _ => Err(NanonisError::InvalidCommand(
+                "Expected oscilloscope data".into(),
+            )),
+        }
+    }
+}
+
+/// Simple stability detection functions for oscilloscope windows
+pub mod stability {
+    /// Dual threshold stability (current default behavior)
+    /// Uses relative (1%) OR absolute (50fA) thresholds
+    pub fn dual_threshold_stability(window: &[f64]) -> bool {
+        if window.len() < 3 {
+            return false;
+        }
+
+        let mean = window.iter().sum::<f64>() / window.len() as f64;
+        let variance = window.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
+            / window.len() as f64;
+        let std_dev = variance.sqrt();
+        let relative_std = std_dev / mean.abs();
+
+        // Stable if EITHER relative OR absolute threshold is met
+        relative_std < 0.01 || std_dev < 50e-15
+    }
+
+    /// Trend analysis stability detector
+    /// Checks for low slope (no trend) and good signal-to-noise ratio
+    pub fn trend_analysis_stability(window: &[f64]) -> bool {
+        if window.len() < 5 {
+            return false;
+        }
+
+        // Calculate linear regression slope
+        let n = window.len() as f64;
+        let x_mean = (n - 1.0) / 2.0; // 0, 1, 2, ... n-1 mean
+        let y_mean = window.iter().sum::<f64>() / n;
+
+        let mut numerator = 0.0;
+        let mut denominator = 0.0;
+
+        for (i, &y) in window.iter().enumerate() {
+            let x = i as f64;
+            numerator += (x - x_mean) * (y - y_mean);
+            denominator += (x - x_mean).powi(2);
+        }
+
+        let slope = if denominator != 0.0 {
+            numerator / denominator
+        } else {
+            0.0
+        };
+
+        // Calculate signal-to-noise ratio
+        let signal_level = y_mean.abs();
+        let noise_level = {
+            let variance =
+                window.iter().map(|y| (y - y_mean).powi(2)).sum::<f64>() / n;
+            variance.sqrt()
+        };
+
+        let snr = if noise_level != 0.0 {
+            signal_level / noise_level
+        } else {
+            f64::INFINITY
+        };
+
+        // Thresholds: very low slope and decent SNR
+        slope.abs() < 0.001 && snr > 10.0
     }
 }
 
@@ -610,7 +729,9 @@ mod tests {
             }
             Err(_) => {
                 // Expected when signals can't be discovered
-                println!("Signal discovery failed - this is expected without hardware");
+                println!(
+                    "Signal discovery failed - this is expected without hardware"
+                );
             }
         }
     }
@@ -623,8 +744,10 @@ mod tests {
         match client {
             Ok(client) => {
                 // Create test registry
-                let registry = SignalRegistry::from_names(vec!["Test Signal".to_string()]);
-                let mut driver = ActionDriver::with_registry(Box::new(client), registry);
+                let registry =
+                    SignalRegistry::from_names(vec!["Test Signal".to_string()]);
+                let mut driver =
+                    ActionDriver::with_registry(Box::new(client), registry);
 
                 // Test storage operations
                 driver

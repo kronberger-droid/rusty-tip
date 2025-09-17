@@ -153,7 +153,8 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn z_spectr_status_get(&mut self) -> Result<bool, NanonisError> {
-        let result = self.quick_send("ZSpectr.StatusGet", vec![], vec![], vec!["I"])?;
+        let result =
+            self.quick_send("ZSpectr.StatusGet", vec![], vec![], vec!["I"])?;
 
         match result.first() {
             Some(value) => Ok(value.as_u32()? == 1),
@@ -187,7 +188,10 @@ impl NanonisClient {
     /// client.z_spectr_chs_set(vec![0, 1, 2, 3, 4, 5])?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn z_spectr_chs_set(&mut self, channel_indexes: Vec<i32>) -> Result<(), NanonisError> {
+    pub fn z_spectr_chs_set(
+        &mut self,
+        channel_indexes: Vec<i32>,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "ZSpectr.ChsSet",
             vec![NanonisValue::ArrayI32(channel_indexes)],
@@ -222,7 +226,9 @@ impl NanonisClient {
     /// }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn z_spectr_chs_get(&mut self) -> Result<(Vec<i32>, Vec<String>), NanonisError> {
+    pub fn z_spectr_chs_get(
+        &mut self,
+    ) -> Result<(Vec<i32>, Vec<String>), NanonisError> {
         let result = self.quick_send(
             "ZSpectr.ChsGet",
             vec![],
@@ -306,7 +312,8 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn z_spectr_range_get(&mut self) -> Result<(f32, f32), NanonisError> {
-        let result = self.quick_send("ZSpectr.RangeGet", vec![], vec![], vec!["f", "f"])?;
+        let result =
+            self.quick_send("ZSpectr.RangeGet", vec![], vec![], vec!["f", "f"])?;
 
         if result.len() >= 2 {
             Ok((result[0].as_f32()?, result[1].as_f32()?))
@@ -398,7 +405,9 @@ impl NanonisClient {
     /// println!("Integration time: {:.3} s, settling: {:.3} s", integrate, settle);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn z_spectr_timing_get(&mut self) -> Result<(f32, f32, f32, f32, f32, f32), NanonisError> {
+    pub fn z_spectr_timing_get(
+        &mut self,
+    ) -> Result<(f32, f32, f32, f32, f32, f32), NanonisError> {
         let result = self.quick_send(
             "ZSpectr.TimingGet",
             vec![],
@@ -499,7 +508,9 @@ impl NanonisClient {
     /// }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn z_spectr_retract_get(&mut self) -> Result<(bool, f32, i32, u16), NanonisError> {
+    pub fn z_spectr_retract_get(
+        &mut self,
+    ) -> Result<(bool, f32, i32, u16), NanonisError> {
         let result = self.quick_send(
             "ZSpectr.RetractGet",
             vec![],

@@ -39,7 +39,8 @@ impl TCPLoggerStream {
             .map_err(|_| NanonisError::InvalidAddress(addr.to_string()))?;
 
         // connect with timeout
-        let stream = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(5))?;
+        let stream =
+            TcpStream::connect_timeout(&socket_addr, Duration::from_secs(5))?;
 
         stream.set_nonblocking(false)?;
 
@@ -53,7 +54,11 @@ impl TCPLoggerStream {
     }
 
     /// Connect with custom timeout.
-    pub fn connect_timeout(addr: &str, port: u16, timeout: Duration) -> Result<Self, NanonisError> {
+    pub fn connect_timeout(
+        addr: &str,
+        port: u16,
+        timeout: Duration,
+    ) -> Result<Self, NanonisError> {
         // create the socket address
         let socket_addr: SocketAddr = format!("{addr}:{port}")
             .parse()
@@ -82,12 +87,14 @@ impl TCPLoggerStream {
         // First read header to determine frame size
         let header_size = 18;
         self.buffer.resize(header_size, 0);
-        
+
         // Read header into buffer
-        self.stream.read_exact(&mut self.buffer[..header_size]).map_err(|e| NanonisError::Io {
-            source: e,
-            context: "Reading TCP Logger frame header".to_string(),
-        })?;
+        self.stream
+            .read_exact(&mut self.buffer[..header_size])
+            .map_err(|e| NanonisError::Io {
+                source: e,
+                context: "Reading TCP Logger frame header".to_string(),
+            })?;
 
         // Parse header from buffer
         let mut cursor = Cursor::new(&self.buffer[..header_size]);
@@ -100,20 +107,22 @@ impl TCPLoggerStream {
         // Calculate total frame size and read data portion
         let data_size = num_channels as usize * 4;
         let total_size = header_size + data_size;
-        
+
         // Resize buffer to fit entire frame and read data portion
         self.buffer.resize(total_size, 0);
-        
+
         // Read data portion into buffer
-        self.stream.read_exact(&mut self.buffer[header_size..]).map_err(|e| NanonisError::Io {
-            source: e,
-            context: "Reading TCP Logger frame data".to_string(),
-        })?;
+        self.stream
+            .read_exact(&mut self.buffer[header_size..])
+            .map_err(|e| NanonisError::Io {
+                source: e,
+                context: "Reading TCP Logger frame data".to_string(),
+            })?;
 
         // Parse data from buffer
         let mut cursor = Cursor::new(&self.buffer[header_size..]);
         let mut data = Vec::with_capacity(num_channels as usize);
-        
+
         for _ in 0..num_channels {
             data.push(cursor.read_f32::<BigEndian>()?);
         }
@@ -127,10 +136,11 @@ impl TCPLoggerStream {
         })
     }
 
-
-
     /// Set read timeout for the stream.
-    pub fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<(), NanonisError> {
+    pub fn set_read_timeout(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<(), NanonisError> {
         self.stream
             .set_read_timeout(timeout)
             .map_err(|e| NanonisError::Io {

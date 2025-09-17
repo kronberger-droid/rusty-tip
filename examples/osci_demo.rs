@@ -10,12 +10,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for i in 1..=10 {
         println!("Measurement {i}:");
-        if let Some(osci_data) =
-            driver.read_oscilloscope(SignalIndex(0), None, DataToGet::Stable { 
-                readings: 5, 
-                timeout: Duration::from_secs(10) 
-            })?
-        {
+        if let Some(osci_data) = driver.read_oscilloscope(
+            SignalIndex(0),
+            None,
+            DataToGet::Stable {
+                readings: 5,
+                timeout: Duration::from_secs(10),
+            },
+        )? {
             // Use convenience methods for cleaner data access
             let values = osci_data.values();
             let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
@@ -23,10 +25,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Show enhanced statistics
             if let Some(stats) = osci_data.stats() {
-                println!("  Signal: mean={:.2e}, std={:.2e} (relative: {:.1}%)", 
-                         stats.mean, stats.std_dev, stats.relative_std * 100.0);
-                println!("  Stability: method={}, window_size={}", 
-                         stats.stability_method, stats.window_size);
+                println!(
+                    "  Signal: mean={:.2e}, std={:.2e} (relative: {:.1}%)",
+                    stats.mean,
+                    stats.std_dev,
+                    stats.relative_std * 100.0
+                );
+                println!(
+                    "  Stability: method={}, window_size={}",
+                    stats.stability_method, stats.window_size
+                );
                 println!("  Range: min={:.2e}, max={:.2e}", min, max);
             }
         } else {

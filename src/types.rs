@@ -734,7 +734,12 @@ pub struct ScanFrame {
 }
 
 impl ScanFrame {
-    pub fn new(center: Position, width_m: f32, height_m: f32, angle_deg: f32) -> Self {
+    pub fn new(
+        center: Position,
+        width_m: f32,
+        height_m: f32,
+        angle_deg: f32,
+    ) -> Self {
         Self {
             center,
             width_m,
@@ -885,7 +890,7 @@ pub struct MachineState {
 /// Registry for mapping signal names to indices
 #[derive(Debug, Clone)]
 pub struct SignalRegistry {
-    signals: Vec<String>,                                  // Index -> Name mapping
+    signals: Vec<String>, // Index -> Name mapping
     name_to_index: std::collections::HashMap<String, i32>, // Name -> Index mapping
 }
 
@@ -932,7 +937,9 @@ impl SignalRegistry {
 
     /// Get signal by index
     pub fn get_signal_by_index(&self, index: i32) -> Option<SignalIndex> {
-        if (index as usize) < self.signals.len() && !self.signals[index as usize].is_empty() {
+        if (index as usize) < self.signals.len()
+            && !self.signals[index as usize].is_empty()
+        {
             Some(SignalIndex(index))
         } else {
             None
@@ -1044,7 +1051,11 @@ pub struct MotorMovement {
 }
 
 impl MotorMovement {
-    pub fn new(direction: MotorDirection, steps: StepCount, group: MotorGroup) -> Self {
+    pub fn new(
+        direction: MotorDirection,
+        steps: StepCount,
+        group: MotorGroup,
+    ) -> Self {
         Self {
             direction,
             steps,
@@ -1205,7 +1216,7 @@ impl From<u16> for TimebaseIndex {
 }
 
 /// Data acquisition mode for oscilloscope operations
-/// 
+///
 /// Note: `DataToGet::Stable` is only supported by the ActionDriver layer,
 /// which implements sophisticated stability detection logic. The SPM interface
 /// layer (spm_impl.rs) will return an error if `Stable` is used directly.
@@ -1215,11 +1226,14 @@ pub enum DataToGet {
     NextTrigger,
     Wait2Triggers,
     /// Stability detection mode - only supported by ActionDriver
-    /// 
+    ///
     /// Parameters:
     /// - `readings`: Number of stable readings required
     /// - `timeout`: Maximum time to wait for stability
-    Stable { readings: u32, timeout: Duration },
+    Stable {
+        readings: u32,
+        timeout: Duration,
+    },
 }
 
 /// TCP Logger status enumeration
@@ -1289,7 +1303,12 @@ pub struct TriggerConfig {
 }
 
 impl TriggerConfig {
-    pub fn new(mode: OsciTriggerMode, slope: TriggerSlope, level: f64, hysteresis: f64) -> Self {
+    pub fn new(
+        mode: OsciTriggerMode,
+        slope: TriggerSlope,
+        level: f64,
+        hysteresis: f64,
+    ) -> Self {
         Self {
             mode,
             slope,
@@ -1358,7 +1377,13 @@ impl OsciData {
         }
     }
 
-    pub fn new_with_stats(t0: f64, dt: f64, size: i32, data: Vec<f64>, stats: SignalStats) -> Self {
+    pub fn new_with_stats(
+        t0: f64,
+        dt: f64,
+        size: i32,
+        data: Vec<f64>,
+        stats: SignalStats,
+    ) -> Self {
         Self {
             t0,
             dt,
