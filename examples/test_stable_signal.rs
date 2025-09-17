@@ -1,4 +1,4 @@
-use rusty_tip::{stability, ActionDriver};
+use rusty_tip::{stability, Action, ActionDriver};
 use std::{error::Error, time::Duration};
 use textplots::{Chart, Plot};
 
@@ -14,9 +14,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         timeout: Duration::from_secs(5),
     })?;
 
-    driver.execute(rusty_tip::Action::AutoApproach {
-        wait_until_finished: true,
-    })?;
+    driver.execute(Action::AutoApproach { wait_until_finished: true })?;
+    // driver.execute(Action::Wait { duration: Duration::from_millis(500) }])?;
 
     if let Some(osci_data) = driver.read_oscilloscope_with_stability(
         z_pos,
@@ -31,7 +30,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             readings: 1,
             timeout: Duration::from_secs(2),
         },
-        stability::trend_analysis_stability,
+        stability::dual_threshold_stability,
     )? {
         let frame: Vec<(f32, f32)> = osci_data
             .data
@@ -46,9 +45,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             .lineplot(&textplots::Shape::Lines(&frame))
             .nice();
 
-        let is_stable = stability::trend_analysis_stability(&osci_data.data);
-
-        println!("{is_stable}");
     };
 
     Ok(())
