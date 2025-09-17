@@ -110,7 +110,7 @@ fn create_log_file_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
     fs::create_dir_all(&history_dir)?;
 
     // Create timestamped filename
-    let filename = format!("log_{}.json", Utc::now().format("%Y%m%d_%H%M%S"));
+    let filename = format!("log_{}.jsonl", Utc::now().format("%Y%m%d_%H%M%S"));
     let file_path = history_dir.join(filename);
 
     Ok(file_path)

@@ -402,13 +402,13 @@ impl TipController {
                 },
                 stability::dual_threshold_stability,
             )? {
-                crate::plot_values(
-                    &z_pos_frame.data,
-                    Some("Z-Position Oscilloscope Frame"),
-                    None,
-                    None,
-                )
-                .unwrap();
+                // crate::plot_values(
+                //     &z_pos_frame.data,
+                //     Some("Z-Position Oscilloscope Frame"),
+                //     None,
+                //     None,
+                // )
+                // .unwrap();
 
                 z_pos = z_pos_frame.data.iter().sum::<f64>() as f32 / z_pos_frame.size as f32;
             } else {
@@ -526,13 +526,13 @@ impl TipController {
             },
             stability::dual_threshold_stability,
         )? {
-            crate::plot_values(
-                &z_pos_frame.data,
-                Some("Z-Position Oscilloscope Frame"),
-                None,
-                None,
-            )
-            .unwrap();
+            // crate::plot_values(
+            //     &z_pos_frame.data,
+            //     Some("Z-Position Oscilloscope Frame"),
+            //     None,
+            //     None,
+            // )
+            // .unwrap();
             z_pos = z_pos_frame.data.iter().sum::<f64>() as f32 / z_pos_frame.size as f32;
         } else {
             warn!("Using read single signal fallback for z position");
