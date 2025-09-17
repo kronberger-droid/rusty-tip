@@ -1,7 +1,7 @@
 use crate::{
     types::{
-        ActionCondition, DataToGet, MovementMode, OsciData, Position, Position3D,
-        ScanAction, SignalIndex, SignalValue, TriggerConfig,
+        ActionCondition, DataToGet, MovementMode, OsciData, Position, Position3D, ScanAction,
+        SignalIndex, SignalValue, TriggerConfig,
     },
     MotorDirection,
 };
@@ -69,8 +69,11 @@ pub enum Action {
     StopMotor,
 
     // === Control Operations ===
-    /// Perform auto-approach and wait for completion
-    AutoApproach { wait_until_finished: bool },
+    /// Perform auto-approach with timeout
+    AutoApproach {
+        wait_until_finished: bool,
+        timeout: Duration,
+    },
 
     /// Withdraw tip with timeout
     Withdraw {
@@ -233,9 +236,7 @@ impl Action {
     pub fn involves_motor(&self) -> bool {
         matches!(
             self,
-            Action::MoveMotor { .. }
-                | Action::MoveMotorClosedLoop { .. }
-                | Action::StopMotor
+            Action::MoveMotor { .. } | Action::MoveMotorClosedLoop { .. } | Action::StopMotor
         )
     }
 
@@ -273,7 +274,11 @@ impl Action {
             }
             Action::AutoApproach {
                 wait_until_finished,
-            } => format!("Auto approach blocking: {wait_until_finished}"),
+                timeout,
+            } => format!(
+                "Auto approach blocking: {wait_until_finished}, timeout: {:?}",
+                timeout
+            ),
             Action::Withdraw { timeout, .. } => {
                 format!("Withdraw tip (timeout: {}ms)", timeout.as_micros())
             }
@@ -322,8 +327,7 @@ mod tests {
         let bias_result = ActionResult::BiasVoltage(2.5);
         assert_eq!(bias_result.as_f64(), Some(2.5));
 
-        let position_result =
-            ActionResult::PiezoPosition(Position { x: 1e-9, y: 2e-9 });
+        let position_result = ActionResult::PiezoPosition(Position { x: 1e-9, y: 2e-9 });
         assert_eq!(
             position_result.as_position(),
             Some(Position { x: 1e-9, y: 2e-9 })
@@ -574,6 +578,7 @@ impl ActionChain {
                 },
                 Action::AutoApproach {
                     wait_until_finished: true,
+                    timeout: Duration::from_secs(300),
                 },
                 Action::Wait {
                     duration: Duration::from_millis(500),
@@ -604,6 +609,7 @@ impl ActionChain {
                 },
                 Action::AutoApproach {
                     wait_until_finished: true,
+                    timeout: Duration::from_secs(300),
                 },
                 Action::ReadSignal {
                     signal: SignalIndex(24),
@@ -648,6 +654,7 @@ impl ActionChain {
                 },
                 Action::AutoApproach {
                     wait_until_finished: true,
+                    timeout: Duration::from_secs(300),
                 },
                 Action::ReadSignal {
                     signal: SignalIndex(24),
@@ -686,6 +693,7 @@ impl ActionChain {
                 },
                 Action::AutoApproach {
                     wait_until_finished: true,
+                    timeout: Duration::from_secs(300),
                 },
                 Action::ReadSignal {
                     signal: SignalIndex(24),
@@ -705,16 +713,14 @@ mod chain_tests {
     #[test]
     fn test_vec_foundation() {
         // Test direct Vec<Action> usage
-        let mut chain = ActionChain::new(vec![
-            Action::ReadBias,
-            Action::SetBias { voltage: 1.0 },
-        ]);
+        let mut chain = ActionChain::new(vec![Action::ReadBias, Action::SetBias { voltage: 1.0 }]);
 
         assert_eq!(chain.len(), 2);
 
         // Test Vec operations
         chain.push(Action::AutoApproach {
             wait_until_finished: true,
+            timeout: Duration::from_secs(300),
         });
         assert_eq!(chain.len(), 3);
 
@@ -722,7 +728,8 @@ mod chain_tests {
         assert!(matches!(
             action,
             Action::AutoApproach {
-                wait_until_finished: true
+                wait_until_finished: true,
+                timeout: _
             }
         ));
         assert_eq!(chain.len(), 2);
@@ -748,6 +755,7 @@ mod chain_tests {
                 },
                 Action::AutoApproach {
                     wait_until_finished: true,
+                    timeout: Duration::from_secs(300),
                 },
             ],
             "Test chain",
@@ -797,8 +805,7 @@ mod chain_tests {
         let approach = ActionChain::safe_tip_approach();
         assert!(!approach.control_actions().is_empty());
 
-        let positions =
-            vec![Position { x: 1e-9, y: 1e-9 }, Position { x: 2e-9, y: 2e-9 }];
+        let positions = vec![Position { x: 1e-9, y: 1e-9 }, Position { x: 2e-9, y: 2e-9 }];
         let survey = ActionChain::position_survey(positions);
         assert_eq!(survey.len(), 12); // 6 actions per position × 2 positions
     }
@@ -817,6 +824,7 @@ mod chain_tests {
             Action::ReadBias,
             Action::AutoApproach {
                 wait_until_finished: true,
+                timeout: Duration::from_secs(1),
             },
             Action::SetBias { voltage: 1.5 },
         ]);
@@ -837,6 +845,7 @@ mod chain_tests {
             Action::ReadBias,
             Action::AutoApproach {
                 wait_until_finished: true,
+                timeout: Duration::from_secs(1),
             },
             Action::Wait {
                 duration: Duration::from_millis(100),
@@ -864,6 +873,7 @@ mod chain_tests {
             Action::SetBias { voltage: 1.5 },
             Action::AutoApproach {
                 wait_until_finished: true,
+                timeout: Duration::from_secs(1),
             },
         ];
 

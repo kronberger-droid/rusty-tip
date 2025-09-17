@@ -3,7 +3,7 @@ use crate::actions::{Action, ActionChain};
 use crate::error::NanonisError;
 use crate::job::Job;
 use crate::types::{DataToGet, MotorDirection, SignalIndex};
-use crate::Logger;
+use crate::{stability, Logger};
 use log::{debug, info, warn};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
@@ -33,7 +33,6 @@ pub struct LogLine {
     pulse_voltage: f32,
     freq_shift_change: Option<f32>,
     z_change: Option<f32>,
-    pulse_signal_change: Option<f32>,
 }
 
 /// Enhanced tip controller with pulse voltage stepping
@@ -342,15 +341,62 @@ impl TipController {
     /// Main control loop - with pulse voltage stepping
     pub fn run_loop(&mut self, timeout: Duration) -> Result<TipState, NanonisError> {
         let start = Instant::now();
+        let mut freq_shift;
+
+        let mut z_pos;
+        let z_signal_index = SignalIndex(30);
 
         while start.elapsed() < timeout {
             self.cycle_count += 1;
 
-            // Read frequency shift signal (unchanged behavior)
-            let freq_shift = self.read_freq_shift()?;
+            if let Some(freq_shift_frame) = self.driver.read_oscilloscope_with_stability(
+                self.signal_index,
+                None,
+                DataToGet::Stable {
+                    readings: 5,
+                    timeout: Duration::from_secs(10),
+                },
+                stability::dual_threshold_stability,
+            )? {
+                freq_shift =
+                    freq_shift_frame.data.iter().sum::<f64>() as f32 / freq_shift_frame.size as f32;
+            } else {
+                warn!("Using single value read fallback for frequency shift");
+                let result = self.driver.execute(Action::ReadSignal {
+                    signal: self.signal_index,
+                    wait_for_newest: true,
+                })?;
+                freq_shift = result
+                    .as_f64()
+                    .expect("Must be able to Read from Interface")
+                    as f32;
+            }
 
             // Update signal history and step pulse voltage if needed (based on freq shift)
             self.update_signal_and_pulse(freq_shift);
+
+            if let Some(z_pos_frame) = self.driver.read_oscilloscope_with_stability(
+                z_signal_index,
+                None,
+                DataToGet::Stable {
+                    readings: 5,
+                    timeout: Duration::from_secs(10),
+                },
+                stability::dual_threshold_stability,
+            )? {
+                z_pos = z_pos_frame.data.iter().sum::<f64>() as f32 / z_pos_frame.size as f32;
+            } else {
+                warn!("Using read single signal fallback for z position");
+                let result = self.driver.execute(Action::ReadSignal {
+                    signal: self.signal_index,
+                    wait_for_newest: true,
+                })?;
+                z_pos = result
+                    .as_f64()
+                    .expect("Must be able to Read from Interface") as f32;
+            }
+
+            self.track_signal(z_signal_index, z_pos);
 
             info!(
                 "Cycle {}: Freq Shift = {:.6}, Pulse = {:.3}V, Cycles w/o change = {}/{}",
@@ -361,7 +407,7 @@ impl TipController {
                 self.cycles_before_step
             );
 
-            // Classify based on frequency shift (unchanged behavior)
+            // Classify based on frequency shift
             let tip_state = self.classify(freq_shift);
             info!("Cycle {}: State = {:?}", self.cycle_count, tip_state);
 
@@ -386,8 +432,7 @@ impl TipController {
             if self.logger.is_some() {
                 // Calculate changes before borrowing logger mutably
                 let freq_shift_change = self.get_signal_change(self.signal_index);
-                let z_change = self.get_signal_change(SignalIndex(0)); // TODO: Use actual Z position signal index
-                let pulse_change = None; // TODO: Calculate from stable readings if needed
+                let z_change = self.get_signal_change(z_signal_index);
 
                 if let Some(ref mut logger) = self.logger {
                     logger.add(LogLine {
@@ -397,7 +442,6 @@ impl TipController {
                         pulse_voltage: self.pulse_voltage,
                         freq_shift_change,
                         z_change,
-                        pulse_signal_change: pulse_change,
                     })?
                 }
             }
@@ -417,33 +461,13 @@ impl TipController {
             cycle
         );
 
+        let z_pos;
+        let z_signal_index = SignalIndex(30); // Z (m) signal index
+
         // Reset good count
         self.good_count = 0;
 
-        // 1. Capture stable Z signal before pulse
-        info!("Cycle {}: Capturing stable Z signal before pulse...", cycle);
-        let z_signal_index = SignalIndex(30); // Z (m) signal index
-        let z_before = self.read_stable_signal(
-            z_signal_index,
-            Duration::from_secs(5), // 5 second timeout for stability
-            1,                      // Require 1 stable reading
-        )?;
-
-        if let Some(signal) = z_before {
-            info!(
-                "Cycle {}: Stable Z signal before pulse: {:.6}",
-                cycle, signal
-            );
-            // Track Z position in history for change calculation
-            self.track_signal(z_signal_index, signal);
-        } else {
-            warn!(
-                "Cycle {}: Could not achieve stable Z signal before pulse",
-                cycle
-            );
-        }
-
-        // 2. Execute bias pulse
+        // Execute bias pulse
         info!(
             "Cycle {}: Executing bias pulse at {:.3}V",
             cycle, self.pulse_voltage
@@ -456,29 +480,31 @@ impl TipController {
             pulse_mode: 2,
         })?;
 
-        // 3. Capture stable Z signal after pulse
-        info!("Cycle {}: Capturing stable Z signal after pulse...", cycle);
-        let z_after = self.read_stable_signal(
+        // Capture stable Z Signal after bias pulse
+        if let Some(z_pos_frame) = self.driver.read_oscilloscope_with_stability(
             z_signal_index,
-            Duration::from_secs(5), // 5 second timeout for stability
-            3,                      // Require 3 stable readings
-        )?;
-
-        if let Some(signal) = z_after {
-            info!(
-                "Cycle {}: Stable Z signal after pulse: {:.6}",
-                cycle, signal
-            );
-            // Track Z position in history for change calculation
-            self.track_signal(z_signal_index, signal);
+            None,
+            DataToGet::Stable {
+                readings: 5,
+                timeout: Duration::from_secs(10),
+            },
+            stability::dual_threshold_stability,
+        )? {
+            z_pos = z_pos_frame.data.iter().sum::<f64>() as f32 / z_pos_frame.size as f32;
         } else {
-            warn!(
-                "Cycle {}: Could not achieve stable Z signal after pulse",
-                cycle
-            );
+            warn!("Using read single signal fallback for z position");
+            let result = self.driver.execute(Action::ReadSignal {
+                signal: self.signal_index,
+                wait_for_newest: true,
+            })?;
+            z_pos = result
+                .as_f64()
+                .expect("Must be able to Read from Interface") as f32;
         }
 
-        // 5. Continue with rest of recovery sequence
+        self.track_signal(z_signal_index, z_pos);
+
+        // Continue with rest of recovery sequence
         info!("Cycle {}: Continuing with withdraw and movement...", cycle);
         self.driver.execute_chain(ActionChain::new(vec![
             Action::Withdraw {
@@ -499,6 +525,7 @@ impl TipController {
             },
             Action::AutoApproach {
                 wait_until_finished: true,
+                timeout: Duration::from_secs(300),
             },
             Action::Wait {
                 duration: Duration::from_secs(1),
@@ -529,115 +556,6 @@ impl TipController {
             TipState::Stable
         } else {
             TipState::Good
-        }
-    }
-
-    /// Read frequency shift signal value using stable signal acquisition
-    fn read_freq_shift(&mut self) -> Result<f32, NanonisError> {
-        debug!(
-            "Reading signal from index {} (should be bias voltage)",
-            self.signal_index.0
-        );
-
-        // Use stable signal acquisition with 3 readings and 2 second timeout
-        if let Some(stable_signal) =
-            self.read_stable_signal(self.signal_index, Duration::from_secs(2), 3)?
-        {
-            debug!(
-                "Stable signal from index {}: {:.6}",
-                self.signal_index.0, stable_signal
-            );
-
-            // Sanity check - bias voltage should never be near zero
-            if stable_signal.abs() < 0.1 {
-                warn!(
-                    "Signal index {} returned unexpectedly low value: {:.6} (expected ~4.4V bias)",
-                    self.signal_index.0, stable_signal
-                );
-            }
-
-            Ok(stable_signal)
-        } else {
-            // Fallback to single reading if stable acquisition fails
-            warn!(
-                "Could not acquire stable signal from index {}, falling back to single reading",
-                self.signal_index.0
-            );
-
-            self.driver.spm_interface_mut().osci1t_run()?;
-            self.driver
-                .spm_interface_mut()
-                .osci1t_ch_set(self.signal_index.into())?;
-
-            let (_, _, _, osci_screen) = self
-                .driver
-                .spm_interface_mut()
-                .osci1t_data_get(DataToGet::NextTrigger)?;
-
-            debug!(
-                "Fallback osci_data from index {}: {osci_screen:?}",
-                self.signal_index.0
-            );
-            let mean: f32 = (osci_screen.iter().sum::<f64>() / osci_screen.len() as f64) as f32;
-            debug!(
-                "Fallback result from index {} = {mean:?}",
-                self.signal_index.0
-            );
-
-            // Sanity check for fallback too
-            if mean.abs() < 0.1 {
-                warn!("Fallback signal from index {} returned unexpectedly low value: {:.6} (expected ~4.4V bias)", 
-                      self.signal_index.0, mean);
-            }
-
-            Ok(mean)
-        }
-    }
-
-    /// Read stable signal value using ActionDriver's stability detection
-    ///
-    /// This method leverages the ActionDriver's sophisticated stability detection
-    /// to capture stable oscilloscope signals, which is especially useful for
-    /// measuring signal state before and after bias pulses.
-    ///
-    /// # Parameters
-    /// - `signal_index`: The signal channel to monitor for stability
-    /// - `timeout`: Maximum time to wait for stability detection
-    /// - `readings`: Number of stable readings required
-    fn read_stable_signal(
-        &mut self,
-        signal_index: SignalIndex,
-        timeout: Duration,
-        readings: u32,
-    ) -> Result<Option<f32>, NanonisError> {
-        // Set up oscilloscope for the specified signal
-        self.driver.spm_interface_mut().osci1t_run()?;
-        self.driver
-            .spm_interface_mut()
-            .osci1t_ch_set(signal_index.into())?;
-
-        // Use ActionDriver's stability detection
-        if let Some(osci_data) = self.driver.read_oscilloscope(
-            signal_index,
-            None, // No trigger config needed for stability detection
-            DataToGet::Stable { readings, timeout },
-        )? {
-            // Extract mean value from stable data (more robust than min/max)
-            let values = osci_data.values();
-            let mean = values.iter().sum::<f64>() / values.len() as f64;
-            debug!(
-                "Stable signal found for index {}: mean = {:.6} (from {} values)",
-                signal_index.0,
-                mean,
-                values.len()
-            );
-            Ok(Some(mean as f32))
-        } else {
-            debug!(
-                "No stable signal found within timeout for index {}",
-                signal_index.0
-            );
-            Ok(None)
         }
     }
 }
