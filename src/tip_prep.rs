@@ -343,7 +343,7 @@ impl TipController {
         let start = Instant::now();
         let mut freq_shift;
 
-        pre_loop_initialisation()?;
+        self.pre_loop_initialization()?;
 
         let mut z_pos;
         let z_signal_index = SignalIndex(30);
