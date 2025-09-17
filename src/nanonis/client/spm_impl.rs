@@ -4,7 +4,7 @@ use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::nanonis::interface::{PulseMode, SPMInterface, ZControllerHold};
 use crate::types::{
-    DataToGet, MotorDirection, MotorGroup, MovementMode, OsciTriggerMode, OversamplingIndex,
+    AutoApproachResult, DataToGet, MotorDirection, MotorGroup, MovementMode, OsciTriggerMode, OversamplingIndex,
     Position, Position3D, ScanAction, ScanDirection, TimebaseIndex, TriggerSlope,
 };
 
@@ -90,15 +90,8 @@ impl SPMInterface for NanonisClient {
 
     // === Control Operations ===
 
-    fn auto_approach(&mut self, wait: bool) -> Result<(), NanonisError> {
-        if wait {
-            self.auto_approach_and_wait()
-        } else {
-            // Non-waiting approach: open module and start approach, then return immediately
-            self.auto_approach_open()?;
-            std::thread::sleep(std::time::Duration::from_millis(500)); // Wait for module init
-            self.auto_approach_on_off_set(true)
-        }
+    fn auto_approach_with_timeout(&mut self, wait: bool, timeout: Duration) -> Result<AutoApproachResult, NanonisError> {
+        self.auto_approach_with_timeout(wait, timeout)
     }
 
     fn z_ctrl_withdraw(&mut self, wait: bool, timeout_ms: Duration) -> Result<(), NanonisError> {
