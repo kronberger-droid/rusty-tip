@@ -98,6 +98,10 @@ impl SPMInterface for NanonisClient {
         NanonisClient::z_ctrl_withdraw(self, wait, timeout_ms)
     }
 
+    fn z_ctrl_setpoint_set(&mut self, setpoint: f32) -> Result<(), NanonisError> {
+        NanonisClient::z_ctrl_setpoint_set(self, setpoint)
+    }
+
     // === Scan Operations ===
 
     fn scan_action(
