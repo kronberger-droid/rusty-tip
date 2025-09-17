@@ -5,8 +5,8 @@ use crate::actions::{Action, ActionChain, ActionResult};
 use crate::error::NanonisError;
 use crate::nanonis::{NanonisClient, PulseMode, SPMInterface, ZControllerHold};
 use crate::types::{
-    DataToGet, MotorGroup, OsciData, Position, ScanDirection, SignalIndex,
-    SignalRegistry, SignalStats, SignalValue, TriggerConfig,
+    DataToGet, MotorGroup, OsciData, Position, ScanDirection, SignalIndex, SignalRegistry,
+    SignalStats, SignalValue, TriggerConfig,
 };
 use std::collections::HashMap;
 use std::thread;
@@ -36,9 +36,7 @@ impl ActionDriver {
     }
 
     /// Create ActionDriver with any SPM interface implementation
-    pub fn with_spm_interface(
-        mut client: Box<dyn SPMInterface>,
-    ) -> Result<Self, NanonisError> {
+    pub fn with_spm_interface(mut client: Box<dyn SPMInterface>) -> Result<Self, NanonisError> {
         let names = client.get_signal_names()?;
         let registry = SignalRegistry::from_names(names);
         Ok(Self {
@@ -49,10 +47,7 @@ impl ActionDriver {
     }
 
     /// Create a new ActionDriver with a provided registry (for testing)
-    pub fn with_registry(
-        client: Box<dyn SPMInterface>,
-        registry: SignalRegistry,
-    ) -> Self {
+    pub fn with_registry(client: Box<dyn SPMInterface>, registry: SignalRegistry) -> Self {
         Self {
             client,
             registry,
@@ -61,9 +56,7 @@ impl ActionDriver {
     }
 
     /// Convenience method to create with NanonisClient
-    pub fn with_nanonis_client(
-        mut client: NanonisClient,
-    ) -> Result<Self, NanonisError> {
+    pub fn with_nanonis_client(mut client: NanonisClient) -> Result<Self, NanonisError> {
         let names = client.signal_names_get(false)?;
         let registry = SignalRegistry::from_names(names);
         Ok(Self {
@@ -107,8 +100,7 @@ impl ActionDriver {
                 signals,
                 wait_for_newest,
             } => {
-                let indices: Vec<i32> =
-                    signals.iter().map(|s| (*s).into()).collect();
+                let indices: Vec<i32> = signals.iter().map(|s| (*s).into()).collect();
                 let values = self.client.read_signals(indices, wait_for_newest)?;
 
                 // Convert to SignalValue with basic type inference
@@ -164,12 +156,10 @@ impl ActionDriver {
                             timeout,
                             0.01,   // relative_threshold (1%)
                             50e-15, // absolute_threshold (50 fA)
-                            0.1,    // min_window_percent (10%)
+                            0.8,    // min_window_percent (10%)
                             is_stable,
                         )? {
-                            Some(osci_data) => {
-                                Ok(ActionResult::OscilloscopeData(osci_data))
-                            }
+                            Some(osci_data) => Ok(ActionResult::OscilloscopeData(osci_data)),
                             None => Ok(ActionResult::None),
                         }
                     }
@@ -311,9 +301,7 @@ impl ActionDriver {
             }
 
             Action::Retrieve { key } => match self.stored_values.get(&key) {
-                Some(value) => {
-                    Ok(ActionResult::StoredValue(Box::new(value.clone())))
-                }
+                Some(value) => Ok(ActionResult::StoredValue(Box::new(value.clone()))),
                 None => Err(NanonisError::InvalidCommand(format!(
                     "No stored value found for key: {}",
                     key
@@ -355,8 +343,7 @@ impl ActionDriver {
                     return Ok(None);
                 }
 
-                let (t0, dt, size, data) =
-                    self.client.osci1t_data_get(DataToGet::Current)?;
+                let (t0, dt, size, data) = self.client.osci1t_data_get(DataToGet::Current)?;
 
                 let min_window = (size as f64 * min_window_percent) as usize;
                 let mut start = 0;
@@ -390,8 +377,7 @@ impl ActionDriver {
                             "custom".to_string()
                         } else {
                             // Default dual-threshold logic
-                            let is_relative_stable =
-                                relative_std < relative_threshold;
+                            let is_relative_stable = relative_std < relative_threshold;
                             let is_absolute_stable = std_dev < absolute_threshold;
                             match (is_relative_stable, is_absolute_stable) {
                                 (true, true) => "both".to_string(),
@@ -580,8 +566,7 @@ pub mod stability {
         }
 
         let mean = window.iter().sum::<f64>() / window.len() as f64;
-        let variance = window.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
-            / window.len() as f64;
+        let variance = window.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / window.len() as f64;
         let std_dev = variance.sqrt();
         let relative_std = std_dev / mean.abs();
 
@@ -619,8 +604,7 @@ pub mod stability {
         // Calculate signal-to-noise ratio
         let signal_level = y_mean.abs();
         let noise_level = {
-            let variance =
-                window.iter().map(|y| (y - y_mean).powi(2)).sum::<f64>() / n;
+            let variance = window.iter().map(|y| (y - y_mean).powi(2)).sum::<f64>() / n;
             variance.sqrt()
         };
 
@@ -729,9 +713,7 @@ mod tests {
             }
             Err(_) => {
                 // Expected when signals can't be discovered
-                println!(
-                    "Signal discovery failed - this is expected without hardware"
-                );
+                println!("Signal discovery failed - this is expected without hardware");
             }
         }
     }
@@ -744,10 +726,8 @@ mod tests {
         match client {
             Ok(client) => {
                 // Create test registry
-                let registry =
-                    SignalRegistry::from_names(vec!["Test Signal".to_string()]);
-                let mut driver =
-                    ActionDriver::with_registry(Box::new(client), registry);
+                let registry = SignalRegistry::from_names(vec!["Test Signal".to_string()]);
+                let mut driver = ActionDriver::with_registry(Box::new(client), registry);
 
                 // Test storage operations
                 driver
