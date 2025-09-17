@@ -94,10 +94,10 @@ impl SPMInterface for NanonisClient {
         if wait {
             self.auto_approach_and_wait()
         } else {
-            // For non-waiting approach, we need to implement the basic approach
-            // This would typically be auto_approach_open + auto_approach_on_off_set
-            // For now, fallback to waiting approach
-            NanonisClient::auto_approach_on_off_set(self, true)
+            // Non-waiting approach: open module and start approach, then return immediately
+            self.auto_approach_open()?;
+            std::thread::sleep(std::time::Duration::from_millis(500)); // Wait for module init
+            self.auto_approach_on_off_set(true)
         }
     }
 
