@@ -7,7 +7,7 @@ fn determine_scale(max_value: f64) -> (f64, &'static str) {
     } else if max_value >= 1e-3 {
         (1e3, "m")
     } else if max_value >= 1e-6 {
-        (1e6, "μ") 
+        (1e6, "μ")
     } else if max_value >= 1e-9 {
         (1e9, "n")
     } else {
@@ -16,17 +16,17 @@ fn determine_scale(max_value: f64) -> (f64, &'static str) {
 }
 
 /// Plot any slice of f64 values with automatic dynamic scaling
-/// 
+///
 /// # Arguments
 /// * `values` - The data values to plot
 /// * `title` - Optional title for the plot
 /// * `width` - Optional plot width (default: 140)
 /// * `height` - Optional plot height (default: 60)
-/// 
+///
 /// # Examples
 /// ```
 /// use rusty_tip::plotting::plot_values;
-/// 
+///
 /// let data = vec![1e-12, 2e-12, 1.5e-12, 3e-12];
 /// plot_values(&data, Some("Current Signal"), None, None).unwrap();
 /// ```
@@ -47,10 +47,10 @@ pub fn plot_values(
     let min_value = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
     let max_value = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
     let max_abs = max_value.abs().max(min_value.abs());
-    
+
     // Determine scaling
     let (value_scale, value_unit) = determine_scale(max_abs);
-    
+
     // Create frame data for plotting (index, scaled_value)
     let frame: Vec<(f32, f32)> = values
         .iter()
@@ -69,18 +69,20 @@ pub fn plot_values(
         println!("Data Plot");
     }
     println!("X-axis: Sample Index | Y-axis: {}units", value_unit);
-    println!("Range: {} samples | Values: {:.3} to {:.3} {}units", 
-             values.len(),
-             scaled_min, 
-             scaled_max,
-             value_unit);
+    println!(
+        "Range: {} samples | Values: {:.3} to {:.3} {}units",
+        values.len(),
+        scaled_min,
+        scaled_max,
+        value_unit
+    );
     println!("{}", "─".repeat(width));
-    
+
     // Create and display the plot
     Chart::new(width as u32, height as u32, 0.0, max_index)
         .lineplot(&textplots::Shape::Lines(&frame))
         .nice();
-        
+
     println!("Sample Index →");
 
     Ok(())
@@ -103,10 +105,10 @@ pub fn plot_values_with_range(
     let width = width.unwrap_or(140);
     let height = height.unwrap_or(60);
     let max_abs = y_max.abs().max(y_min.abs());
-    
+
     // Determine scaling based on provided range
     let (value_scale, value_unit) = determine_scale(max_abs);
-    
+
     // Create frame data, clipping values to the specified range
     let frame: Vec<(f32, f32)> = values
         .iter()
@@ -128,18 +130,20 @@ pub fn plot_values_with_range(
         println!("Data Plot (Clipped to Range)");
     }
     println!("X-axis: Sample Index | Y-axis: {}units", value_unit);
-    println!("Range: {} samples | Y-Range: {:.3} to {:.3} {}units (clipped)", 
-             values.len(),
-             scaled_y_min, 
-             scaled_y_max,
-             value_unit);
+    println!(
+        "Range: {} samples | Y-Range: {:.3} to {:.3} {}units (clipped)",
+        values.len(),
+        scaled_y_min,
+        scaled_y_max,
+        value_unit
+    );
     println!("{}", "─".repeat(width));
-    
+
     // Create plot (textplots will auto-scale to the data)
     Chart::new(width as u32, height as u32, 0.0, max_index)
         .lineplot(&textplots::Shape::Lines(&frame))
         .nice();
-        
+
     println!("Sample Index →");
 
     Ok(())

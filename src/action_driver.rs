@@ -5,8 +5,8 @@ use crate::actions::{Action, ActionChain, ActionResult};
 use crate::error::NanonisError;
 use crate::nanonis::{NanonisClient, PulseMode, SPMInterface, ZControllerHold};
 use crate::types::{
-    AutoApproachResult, DataToGet, MotorGroup, OsciData, Position, ScanDirection, SignalIndex, SignalRegistry,
-    SignalStats, SignalValue, TriggerConfig,
+    AutoApproachResult, DataToGet, MotorGroup, OsciData, Position, ScanDirection, SignalIndex,
+    SignalRegistry, SignalStats, SignalValue, TriggerConfig,
 };
 use std::collections::HashMap;
 use std::thread;
@@ -154,9 +154,9 @@ impl ActionDriver {
                             data_to_get,
                             readings,
                             timeout,
-                            0.01,   // relative_threshold (1%)
-                            50e-15, // absolute_threshold (50 fA)
-                            0.8,    // min_window_percent (10%)
+                            0.01,
+                            50e-15,
+                            0.8,
                             is_stable,
                         )? {
                             Some(osci_data) => Ok(ActionResult::OscilloscopeData(osci_data)),
@@ -165,8 +165,7 @@ impl ActionDriver {
                     }
                     _ => {
                         // Use NextTrigger for actual data reading - Stable is just for our algorithm
-                        let (t0, dt, size, data) =
-                            self.client.osci1t_data_get(DataToGet::NextTrigger)?;
+                        let (t0, dt, size, data) = self.client.osci1t_data_get(data_to_get)?;
                         let osci_data = OsciData::new(t0, dt, size, data);
                         Ok(ActionResult::OscilloscopeData(osci_data))
                     }
@@ -232,7 +231,9 @@ impl ActionDriver {
                 wait_until_finished,
                 timeout,
             } => {
-                let result = self.client.auto_approach_with_timeout(wait_until_finished, timeout)?;
+                let result = self
+                    .client
+                    .auto_approach_with_timeout(wait_until_finished, timeout)?;
                 match result {
                     AutoApproachResult::Success => Ok(ActionResult::Success),
                     AutoApproachResult::AlreadyRunning => Ok(ActionResult::Success), // Could be considered success
