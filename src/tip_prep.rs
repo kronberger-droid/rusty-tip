@@ -343,6 +343,8 @@ impl TipController {
         let start = Instant::now();
         let mut freq_shift;
 
+        pre_loop_initialisation()?;
+
         let mut z_pos;
         let z_signal_index = SignalIndex(30);
 
@@ -466,6 +468,16 @@ impl TipController {
 
         debug!("Tip control loop reached timeout");
         Err(NanonisError::InvalidCommand("Loop timeout".to_string()))
+    }
+
+    fn pre_loop_initialization(&mut self) -> Result<(), NanonisError> {
+        self.driver.spm_interface_mut().set_bias(-500e-3)?;
+
+        self.driver
+            .spm_interface_mut()
+            .z_ctrl_setpoint_set(100e-12)?;
+
+        Ok(())
     }
 
     /// Bad loop - execute recovery sequence with stable signal monitoring
