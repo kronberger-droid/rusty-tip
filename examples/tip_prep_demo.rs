@@ -1,4 +1,5 @@
 use std::{
+    fs,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -19,13 +20,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let driver = ActionDriver::new("127.0.0.1", 6501)?;
 
     // Create controller with custom pulse stepping parameters
-    let mut custom_controller =
-        TipController::new(driver, SignalIndex(24), 2.0, -2.0, 0.0);
+    let mut custom_controller = TipController::new(driver, SignalIndex(24), 2.0, -2.0, 0.0);
 
-    let file_path = PathBuf::from(format!(
-        "./examples/history/log_{}.json",
-        Utc::now().format("%Y%m%d_%H%M%S") // Added seconds
-    ));
+    let file_path = create_log_file_path()?;
+    println!("{file_path:?}");
 
     // Configure custom pulse stepping parameters with dynamic threshold
     custom_controller
@@ -102,4 +100,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+fn create_log_file_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let root_dir = std::env::current_dir()?;
+    let history_dir = root_dir.join("examples").join("history");
+
+    // Ensure directory exists
+    fs::create_dir_all(&history_dir)?;
+
+    // Create timestamped filename
+    let filename = format!("log_{}.json", Utc::now().format("%Y%m%d_%H%M%S"));
+    let file_path = history_dir.join(filename);
+
+    Ok(file_path)
 }
