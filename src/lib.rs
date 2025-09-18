@@ -21,10 +21,10 @@ pub use nanonis::{
 };
 pub use tip_prep::{LoopType, TipController, TipState};
 pub use types::{
-    ActionCondition, Amplitude, ChannelIndex, Frequency, MachineState, MotorAxis,
-    MotorDirection, MotorGroup, MotorMovement, MotorPosition, MovementMode,
+    Amplitude, ChannelIndex, Frequency, MotorAxis,
+    MotorDirection, MotorGroup, MotorMovement, MovementMode,
     NanonisValue, OscilloscopeIndex, Position, Position3D, PulseMode, SampleCount, ScanAction,
-    ScanDirection, ScanFrame, SessionMetadata, SignalIndex, SignalRegistry,
-    SignalValue, StepCount, SystemPosition, TCPLogStatus, TCPLoggerData,
+    ScanDirection, ScanFrame, SessionMetadata, SignalIndex,
+    StepCount, TCPLogStatus, TCPLoggerData,
     TriggerLevel, TriggerMode, TriggerSlope, ZControllerHold,
 };

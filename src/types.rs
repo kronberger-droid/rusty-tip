@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::NanonisError;
-use std::{collections::VecDeque, time::Duration};
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub enum NanonisValue {
@@ -734,12 +734,7 @@ pub struct ScanFrame {
 }
 
 impl ScanFrame {
-    pub fn new(
-        center: Position,
-        width_m: f32,
-        height_m: f32,
-        angle_deg: f32,
-    ) -> Self {
+    pub fn new(center: Position, width_m: f32, height_m: f32, angle_deg: f32) -> Self {
         Self {
             center,
             width_m,
@@ -871,194 +866,7 @@ pub struct SessionMetadata {
     pub session_start: f64,          // Session start timestamp
 }
 
-/// Comprehensive machine state for advanced policy engines
-/// Expandable for transformer/ML models that need rich context
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct MachineState {
-    // Current signal readings
-    pub all_signals: Option<Vec<f32>>, // All available signals for context
-
-    // Runtime signal coordination (not saved to JSON - info is in SessionMetadata)
-    #[serde(skip)]
-    pub signal_indices: Option<Vec<i32>>, // Which signal indices all_signals contains [0,1,2,3,24,30,31]
-
-    // Spatial context
-    pub position: Option<Position>, // Current XY position
-    pub z_position: Option<f64>,    // Z height
-
-    // Temporal context
-    pub timestamp: f64, // When this state was captured
-    #[serde(skip)]
-    pub signal_history: VecDeque<f32>, // Historical signal values
-    #[serde(skip)]
-    pub decision_value_history: VecDeque<f32>, // History of processed values that led to each decision
-
-    // System state
-    pub last_action: Option<String>, // Last action executed
-    pub system_parameters: Vec<f32>, // Configurable system params
-
-                                     // For future ML/transformer expansion:
-                                     // pub embedding: Option<Vec<f32>>,         // Learned state representation
-                                     // pub attention_weights: Option<Vec<f32>>, // Transformer attention scores
-                                     // pub confidence: f32,                     // Model confidence in decision
-}
-
 // ==================== Action System Types ====================
-
-/// Registry for mapping signal names to indices
-#[derive(Debug, Clone)]
-pub struct SignalRegistry {
-    signals: Vec<String>, // Index -> Name mapping
-    name_to_index: std::collections::HashMap<String, i32>, // Name -> Index mapping
-}
-
-impl SignalRegistry {
-    /// Create a new registry from signal names (index = array position)
-    pub fn from_names(names: Vec<String>) -> Self {
-        let mut name_to_index = std::collections::HashMap::new();
-
-        for (index, name) in names.iter().enumerate() {
-            name_to_index.insert(name.clone(), index as i32);
-        }
-
-        Self {
-            signals: names,
-            name_to_index,
-        }
-    }
-
-    /// Create registry from config tuples
-    pub fn from_config(config: Vec<(i32, String)>) -> Self {
-        let max_index = config.iter().map(|(i, _)| *i).max().unwrap_or(0) as usize;
-        let mut signals = vec![String::new(); max_index + 1];
-        let mut name_to_index = std::collections::HashMap::new();
-
-        for (index, name) in config {
-            if (index as usize) < signals.len() {
-                signals[index as usize] = name.clone();
-                name_to_index.insert(name, index);
-            }
-        }
-
-        Self {
-            signals,
-            name_to_index,
-        }
-    }
-
-    /// Get signal by name
-    pub fn get_signal(&self, name: &str) -> Option<SignalIndex> {
-        self.name_to_index
-            .get(name)
-            .map(|&index| SignalIndex(index))
-    }
-
-    /// Get signal by index
-    pub fn get_signal_by_index(&self, index: i32) -> Option<SignalIndex> {
-        if (index as usize) < self.signals.len()
-            && !self.signals[index as usize].is_empty()
-        {
-            Some(SignalIndex(index))
-        } else {
-            None
-        }
-    }
-
-    /// Get signal name for a SignalIndex
-    pub fn get_name(&self, signal: SignalIndex) -> Option<&str> {
-        self.signals
-            .get(signal.0 as usize)
-            .map(|s| s.as_str())
-            .filter(|s| !s.is_empty())
-    }
-
-    /// Find signal by trying multiple name variants
-    pub fn find_signal(&self, names: &[&str]) -> Option<SignalIndex> {
-        for name in names {
-            if let Some(signal) = self.get_signal(name) {
-                return Some(signal);
-            }
-        }
-        None
-    }
-
-    /// Get bias voltage signal (tries common variants)
-    pub fn bias_voltage(&self) -> Option<SignalIndex> {
-        self.find_signal(&["Bias (V)", "Bias Voltage", "Bias"])
-            .or_else(|| self.get_signal_by_index(24)) // Common fallback
-    }
-
-    /// Get current signal (tries common variants)
-    pub fn current(&self) -> Option<SignalIndex> {
-        self.find_signal(&["Current (A)", "Current", "I"])
-            .or_else(|| self.get_signal_by_index(0)) // Common fallback
-    }
-
-    /// Get height/Z signal (tries common variants)  
-    pub fn height(&self) -> Option<SignalIndex> {
-        self.find_signal(&["Z (m)", "Height", "Z Position"])
-            .or_else(|| self.get_signal_by_index(1)) // Common fallback
-    }
-
-    /// Get all available signals
-    pub fn all_signals(&self) -> Vec<SignalIndex> {
-        (0..self.signals.len())
-            .filter_map(|i| self.get_signal_by_index(i as i32))
-            .collect()
-    }
-
-    /// Get number of available signals
-    pub fn len(&self) -> usize {
-        self.signals.iter().filter(|s| !s.is_empty()).count()
-    }
-
-    /// Check if registry is empty
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-/// Known signal types with their typical indices
-#[derive(Debug, Clone)]
-pub enum KnownSignal {
-    BiasVoltage,
-    Current,
-    Height,
-    Frequency,
-}
-
-impl KnownSignal {
-    pub fn typical_index(&self) -> i32 {
-        match self {
-            KnownSignal::BiasVoltage => 24,
-            KnownSignal::Current => 0,
-            KnownSignal::Height => 1,
-            KnownSignal::Frequency => 2,
-        }
-    }
-}
-
-/// Signal value with type information
-#[derive(Debug, Clone)]
-pub enum SignalValue {
-    Voltage(f64),
-    Current(f64),
-    Distance(f64),
-    Frequency(f64),
-    Unitless(f64),
-}
-
-impl SignalValue {
-    pub fn value(&self) -> f64 {
-        match self {
-            SignalValue::Voltage(v) => *v,
-            SignalValue::Current(v) => *v,
-            SignalValue::Distance(v) => *v,
-            SignalValue::Frequency(v) => *v,
-            SignalValue::Unitless(v) => *v,
-        }
-    }
-}
 
 /// Motor movement specification
 #[derive(Debug, Clone)]
@@ -1069,72 +877,11 @@ pub struct MotorMovement {
 }
 
 impl MotorMovement {
-    pub fn new(
-        direction: MotorDirection,
-        steps: StepCount,
-        group: MotorGroup,
-    ) -> Self {
+    pub fn new(direction: MotorDirection, steps: StepCount, group: MotorGroup) -> Self {
         Self {
             direction,
             steps,
             group,
-        }
-    }
-}
-
-/// Conditions for conditional actions
-#[derive(Debug, Clone)]
-pub enum ActionCondition {
-    Always,
-    Never,
-    BiasInRange {
-        min: f32,
-        max: f32,
-    },
-    SignalInRange {
-        signal: SignalIndex,
-        min: f32,
-        max: f32,
-    },
-    PositionInBounds {
-        bounds: Position,
-        tolerance: f64,
-    },
-    Custom(fn(&SystemPosition, &[SignalValue]) -> bool),
-}
-
-/// System position including all positioning systems
-#[derive(Debug, Clone)]
-pub struct SystemPosition {
-    pub piezo: Position,
-    pub motor: MotorPosition,
-    pub z_position: f32,
-}
-
-impl SystemPosition {
-    pub fn new(piezo: Position, motor: MotorPosition, z_position: f32) -> Self {
-        Self {
-            piezo,
-            motor,
-            z_position,
-        }
-    }
-}
-
-/// Motor position in steps
-#[derive(Debug, Clone)]
-pub struct MotorPosition {
-    pub x_steps: i32,
-    pub y_steps: i32,
-    pub z_steps: i32,
-}
-
-impl MotorPosition {
-    pub fn new(x_steps: i32, y_steps: i32, z_steps: i32) -> Self {
-        Self {
-            x_steps,
-            y_steps,
-            z_steps,
         }
     }
 }
@@ -1321,12 +1068,7 @@ pub struct TriggerConfig {
 }
 
 impl TriggerConfig {
-    pub fn new(
-        mode: OsciTriggerMode,
-        slope: TriggerSlope,
-        level: f64,
-        hysteresis: f64,
-    ) -> Self {
+    pub fn new(mode: OsciTriggerMode, slope: TriggerSlope, level: f64, hysteresis: f64) -> Self {
         Self {
             mode,
             slope,
@@ -1395,13 +1137,7 @@ impl OsciData {
         }
     }
 
-    pub fn new_with_stats(
-        t0: f64,
-        dt: f64,
-        size: i32,
-        data: Vec<f64>,
-        stats: SignalStats,
-    ) -> Self {
+    pub fn new_with_stats(t0: f64, dt: f64, size: i32, data: Vec<f64>, stats: SignalStats) -> Self {
         Self {
             t0,
             dt,
@@ -1492,7 +1228,10 @@ impl AutoApproachResult {
 
     /// Check if the result represents a failure
     pub fn is_failure(&self) -> bool {
-        matches!(self, AutoApproachResult::Failed(_) | AutoApproachResult::Timeout)
+        matches!(
+            self,
+            AutoApproachResult::Failed(_) | AutoApproachResult::Timeout
+        )
     }
 
     /// Get error description if this is a failure

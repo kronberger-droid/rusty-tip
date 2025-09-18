@@ -1,7 +1,7 @@
 use crate::{
     types::{
-        ActionCondition, DataToGet, MovementMode, OsciData, Position, Position3D, ScanAction,
-        SignalIndex, SignalValue, TriggerConfig,
+        DataToGet, MovementMode, OsciData, Position, Position3D, ScanAction,
+        SignalIndex, TriggerConfig,
     },
     MotorDirection,
 };
@@ -104,12 +104,6 @@ pub enum Action {
     /// Wait for a specific duration
     Wait { duration: Duration },
 
-    // === Conditional Operations (Future Extension) ===
-    /// Execute action only if condition is met
-    Conditional {
-        condition: ActionCondition,
-        action: Box<Action>,
-    },
 
     // === Data Management ===
     /// Store result value with key for later retrieval
@@ -123,8 +117,10 @@ pub enum Action {
 #[derive(Debug, Clone)]
 pub enum ActionResult {
     // === Signal Results ===
-    /// Multiple signal values with proper typing
-    Signals(Vec<SignalValue>),
+    /// Single signal value
+    Value(f64),
+    /// Multiple signal values
+    Values(Vec<f64>),
 
     /// List of available signal names
     SignalNames(Vec<String>),
@@ -162,10 +158,11 @@ impl ActionResult {
     /// Convert to f64 if possible (for numerical results)
     pub fn as_f64(&self) -> Option<f64> {
         match self {
+            ActionResult::Value(v) => Some(*v),
             ActionResult::BiasVoltage(v) => Some(*v as f64),
-            ActionResult::Signals(signals) => {
-                if signals.len() == 1 {
-                    Some(signals[0].value())
+            ActionResult::Values(values) => {
+                if values.len() == 1 {
+                    Some(values[0])
                 } else {
                     None
                 }
