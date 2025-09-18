@@ -25,6 +25,9 @@ pub enum NanonisError {
     #[error("Invalid command: {0}")]
     InvalidCommand(String),
 
+    #[error("Invalid response: {0}")]
+    InvalidResponse(String),
+
     /// Server explicitly returned an error
     #[error("Nanonis server error: {message} (code: {code})")]
     ServerError { code: i32, message: String },

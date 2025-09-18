@@ -247,7 +247,7 @@ impl TipController {
                     let has_change =
                         (signal - last_signal).abs() >= (self.change_threshold)(signal);
 
-                    return (has_change, (signal - last_signal));
+                    (has_change, (signal - last_signal))
                 } else {
                     // Compare against mean of current stable period (skip current signal at index 0)
                     let stable_signals: Vec<f32> = freq_history
@@ -266,7 +266,7 @@ impl TipController {
                     );
                     let has_change =
                         (signal - stable_mean).abs() >= (self.change_threshold)(signal);
-                    return (has_change, (signal - stable_mean));
+                    (has_change, (signal - stable_mean))
                 }
             }
         } else {
@@ -356,8 +356,6 @@ impl TipController {
 
         let z_signal_index = SignalIndex(30);
 
-        self.driver.client_mut().pll_amp_ctrl_setpnt_get(1)?;
-
         while start.elapsed() < timeout {
             self.cycle_count += 1;
 
@@ -394,7 +392,7 @@ impl TipController {
             // Update signal history and step pulse voltage if needed (based on freq shift)
             self.update_signal_and_pulse(freq_shift);
 
-            self.read_and_track_z_pos(z_signal_index);
+            self.read_and_track_z_pos(z_signal_index)?;
 
             info!(
                 "Cycle {}: Freq Shift = {:.6}, Pulse = {:.3}V, Cycles w/o change = {}/{}",
@@ -477,7 +475,7 @@ impl TipController {
             pulse_mode: 2,
         })?;
 
-        self.read_and_track_z_pos(z_signal_index);
+        self.read_and_track_z_pos(z_signal_index)?;
 
         // Continue with rest of recovery sequence
         info!("Cycle {}: Continuing with withdraw and movement...", cycle);

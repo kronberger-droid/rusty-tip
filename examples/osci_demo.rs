@@ -1,6 +1,4 @@
 use rusty_tip::action_driver::ActionDriver;
-use rusty_tip::types::{DataToGet, SignalIndex};
-use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
