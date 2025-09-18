@@ -276,7 +276,7 @@ impl NanonisClient {
             vec!["f", "f"],
         )?;
 
-        match (response.get(0), response.get(1)) {
+        match (response.first(), response.get(1)) {
             (Some(NanonisValue::F32(p_gain)), Some(NanonisValue::F32(time_const))) => {
                 Ok((*p_gain, *time_const))
             }
