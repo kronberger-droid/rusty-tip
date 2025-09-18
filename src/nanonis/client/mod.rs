@@ -15,10 +15,10 @@ pub mod motor;
 pub mod osci_1t;
 pub mod osci_2t;
 pub mod osci_hr;
+pub mod pll;
 pub mod safe_tip;
 pub mod scan;
 pub mod signals;
-pub mod spm_impl;
 pub mod tcplog;
 pub mod tip_recovery;
 pub mod z_ctrl;
@@ -154,13 +154,13 @@ impl NanonisClientBuilder {
 
     /// Build the NanonisClient
     pub fn build(self) -> Result<NanonisClient, NanonisError> {
-        let address = self.address.ok_or_else(|| {
-            NanonisError::InvalidCommand("Address must be specified".to_string())
-        })?;
+        let address = self
+            .address
+            .ok_or_else(|| NanonisError::InvalidCommand("Address must be specified".to_string()))?;
 
-        let port = self.port.ok_or_else(|| {
-            NanonisError::InvalidCommand("Port must be specified".to_string())
-        })?;
+        let port = self
+            .port
+            .ok_or_else(|| NanonisError::InvalidCommand("Port must be specified".to_string()))?;
 
         let socket_addr: SocketAddr = format!("{address}:{port}")
             .parse()
@@ -168,19 +168,18 @@ impl NanonisClientBuilder {
 
         debug!("Connecting to Nanonis at {address}");
 
-        let stream =
-            TcpStream::connect_timeout(&socket_addr, self.config.connect_timeout)
-                .map_err(|e| {
-                    warn!("Failed to connect to {address}: {e}");
-                    if e.kind() == std::io::ErrorKind::TimedOut {
-                        NanonisError::Timeout
-                    } else {
-                        NanonisError::Io {
-                            source: e,
-                            context: format!("Failed to connect to {address}"),
-                        }
+        let stream = TcpStream::connect_timeout(&socket_addr, self.config.connect_timeout)
+            .map_err(|e| {
+                warn!("Failed to connect to {address}: {e}");
+                if e.kind() == std::io::ErrorKind::TimedOut {
+                    NanonisError::Timeout
+                } else {
+                    NanonisError::Io {
+                        source: e,
+                        context: format!("Failed to connect to {address}"),
                     }
-                })?;
+                }
+            })?;
 
         // Set socket timeouts
         stream.set_read_timeout(Some(self.config.read_timeout))?;
@@ -317,10 +316,7 @@ impl NanonisClient {
     /// # Arguments
     /// * `addr` - Server address in format "host:port"
     /// * `config` - Connection configuration with custom timeouts
-    pub fn with_config(
-        addr: &str,
-        config: ConnectionConfig,
-    ) -> Result<Self, NanonisError> {
+    pub fn with_config(addr: &str, config: ConnectionConfig) -> Result<Self, NanonisError> {
         Self::builder().address(addr).config(config).build()
     }
 
@@ -401,13 +397,11 @@ impl NanonisClient {
 
         // Read response header with improved error handling
         debug!("Reading response header ({} bytes)...", HEADER_SIZE);
-        let response_header = Protocol::read_exact_bytes::<HEADER_SIZE>(
-            &mut self.stream,
-        )
-        .map_err(|e| {
-            debug!("Failed to read response header: {}", e);
-            e
-        })?;
+        let response_header =
+            Protocol::read_exact_bytes::<HEADER_SIZE>(&mut self.stream).map_err(|e| {
+                debug!("Failed to read response header: {}", e);
+                e
+            })?;
 
         debug!("Response header received: {:02x?}", response_header);
         debug!(
@@ -416,19 +410,17 @@ impl NanonisClient {
         );
 
         // Validate and get body size
-        let body_size =
-            Protocol::validate_response_header(&response_header, command)?;
+        let body_size = Protocol::validate_response_header(&response_header, command)?;
         debug!("Expected response body size: {}", body_size);
 
         // Read response body with size validation
         let response_body = if body_size > 0 {
             debug!("Reading response body ({} bytes)...", body_size);
-            let body =
-                Protocol::read_variable_bytes(&mut self.stream, body_size as usize)
-                    .map_err(|e| {
-                        debug!("Failed to read response body: {}", e);
-                        e
-                    })?;
+            let body = Protocol::read_variable_bytes(&mut self.stream, body_size as usize)
+                .map_err(|e| {
+                    debug!("Failed to read response body: {}", e);
+                    e
+                })?;
             debug!(
                 "Response body received ({} bytes): {:02x?}",
                 body.len(),
@@ -446,12 +438,11 @@ impl NanonisClient {
 
         // Parse response with error checking
         debug!("Parsing response with types: {:?}", return_types);
-        let result =
-            Protocol::parse_response_with_error_check(&response_body, &return_types)
-                .map_err(|e| {
-                    debug!("Failed to parse response: {}", e);
-                    e
-                })?;
+        let result = Protocol::parse_response_with_error_check(&response_body, &return_types)
+            .map_err(|e| {
+                debug!("Failed to parse response: {}", e);
+                e
+            })?;
 
         debug!("=== COMMAND SUCCESS: {} ===", command);
         debug!("Parsed result: {:?}", result);

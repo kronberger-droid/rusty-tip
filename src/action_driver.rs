@@ -3,18 +3,18 @@ use ndarray::Array1;
 
 use crate::actions::{Action, ActionChain, ActionResult};
 use crate::error::NanonisError;
-use crate::nanonis::{NanonisClient, PulseMode, SPMInterface, ZControllerHold};
+use crate::nanonis::NanonisClient;
 use crate::types::{
-    AutoApproachResult, DataToGet, MotorGroup, OsciData, Position, ScanDirection, SignalIndex,
-    SignalRegistry, SignalStats, SignalValue, TriggerConfig,
+    AutoApproachResult, DataToGet, MotorGroup, OsciData, Position, PulseMode, ScanDirection, SignalIndex,
+    SignalRegistry, SignalStats, SignalValue, TriggerConfig, ZControllerHold,
 };
 use std::collections::HashMap;
 use std::thread;
 
-/// Direct 1:1 translation layer between Actions and SPM interface calls
+/// Direct 1:1 translation layer between Actions and NanonisClient calls
 /// No safety checks, no validation - maximum performance and flexibility
 pub struct ActionDriver {
-    client: Box<dyn SPMInterface>,
+    client: NanonisClient,
     registry: SignalRegistry,
     /// Storage for Store/Retrieve actions
     stored_values: HashMap<String, ActionResult>,
@@ -29,17 +29,6 @@ impl ActionDriver {
         let registry = SignalRegistry::from_names(names);
 
         Ok(Self {
-            client: Box::new(client),
-            registry,
-            stored_values: HashMap::new(),
-        })
-    }
-
-    /// Create ActionDriver with any SPM interface implementation
-    pub fn with_spm_interface(mut client: Box<dyn SPMInterface>) -> Result<Self, NanonisError> {
-        let names = client.get_signal_names()?;
-        let registry = SignalRegistry::from_names(names);
-        Ok(Self {
             client,
             registry,
             stored_values: HashMap::new(),
@@ -47,7 +36,7 @@ impl ActionDriver {
     }
 
     /// Create a new ActionDriver with a provided registry (for testing)
-    pub fn with_registry(client: Box<dyn SPMInterface>, registry: SignalRegistry) -> Self {
+    pub fn with_registry(client: NanonisClient, registry: SignalRegistry) -> Self {
         Self {
             client,
             registry,
@@ -60,20 +49,20 @@ impl ActionDriver {
         let names = client.signal_names_get(false)?;
         let registry = SignalRegistry::from_names(names);
         Ok(Self {
-            client: Box::new(client),
+            client,
             registry,
             stored_values: HashMap::new(),
         })
     }
 
-    /// Get a reference to the underlying SPM interface
-    pub fn spm_interface(&self) -> &dyn SPMInterface {
-        self.client.as_ref()
+    /// Get a reference to the underlying NanonisClient
+    pub fn client(&self) -> &NanonisClient {
+        &self.client
     }
 
-    /// Get a mutable reference to the underlying SPM interface
-    pub fn spm_interface_mut(&mut self) -> &mut dyn SPMInterface {
-        self.client.as_mut()
+    /// Get a mutable reference to the underlying NanonisClient
+    pub fn client_mut(&mut self) -> &mut NanonisClient {
+        &mut self.client
     }
 
     /// Get a reference to the signal registry
@@ -91,7 +80,7 @@ impl ActionDriver {
             } => {
                 let value = self
                     .client
-                    .read_signals(vec![signal.into()], wait_for_newest)?;
+                    .signals_vals_get(vec![signal.into()], wait_for_newest)?;
                 let signal_value = SignalValue::Unitless(value[0] as f64);
                 Ok(ActionResult::Signals(vec![signal_value]))
             }
@@ -101,7 +90,7 @@ impl ActionDriver {
                 wait_for_newest,
             } => {
                 let indices: Vec<i32> = signals.iter().map(|s| (*s).into()).collect();
-                let values = self.client.read_signals(indices, wait_for_newest)?;
+                let values = self.client.signals_vals_get(indices, wait_for_newest)?;
 
                 // Convert to SignalValue with basic type inference
                 let signal_values: Vec<SignalValue> = values
@@ -113,7 +102,7 @@ impl ActionDriver {
             }
 
             Action::ReadSignalNames => {
-                let names = self.client.get_signal_names()?;
+                let names = self.client.signal_names_get(false)?;
                 Ok(ActionResult::SignalNames(names))
             }
 
@@ -141,8 +130,8 @@ impl ActionDriver {
 
                 if let Some(trigger) = trigger {
                     self.client.osci1t_trig_set(
-                        trigger.mode,
-                        trigger.slope,
+                        trigger.mode.into(),
+                        trigger.slope.into(),
                         trigger.level,
                         trigger.hysteresis,
                     )?;
@@ -165,7 +154,13 @@ impl ActionDriver {
                     }
                     _ => {
                         // Use NextTrigger for actual data reading - Stable is just for our algorithm
-                        let (t0, dt, size, data) = self.client.osci1t_data_get(data_to_get)?;
+                        let data_mode = match data_to_get {
+                            DataToGet::Current => 0,
+                            DataToGet::NextTrigger => 1,
+                            DataToGet::Wait2Triggers => 2,
+                            DataToGet::Stable { .. } => 1, // Use NextTrigger for stable
+                        };
+                        let (t0, dt, size, data) = self.client.osci1t_data_get(data_mode)?;
                         let osci_data = OsciData::new(t0, dt, size, data);
                         Ok(ActionResult::OscilloscopeData(osci_data))
                     }
@@ -176,7 +171,7 @@ impl ActionDriver {
             Action::ReadPiezoPosition {
                 wait_for_newest_data,
             } => {
-                let pos = self.client.get_xy_position(wait_for_newest_data)?;
+                let pos = self.client.folme_xy_pos_get(wait_for_newest_data)?;
                 Ok(ActionResult::PiezoPosition(pos))
             }
 
@@ -184,19 +179,19 @@ impl ActionDriver {
                 position,
                 wait_until_finished,
             } => {
-                self.client.set_xy_position(position, wait_until_finished)?;
+                self.client.folme_xy_pos_set(position, wait_until_finished)?;
                 Ok(ActionResult::Success)
             }
 
             Action::MovePiezoRelative { delta } => {
                 // Get current position and add delta
-                let current = self.client.get_xy_position(true)?;
+                let current = self.client.folme_xy_pos_get(true)?;
                 info!("Current position: {current:?}");
                 let new_position = Position {
                     x: current.x + delta.x,
                     y: current.y + delta.y,
                 };
-                self.client.set_xy_position(new_position, true)?;
+                self.client.folme_xy_pos_set(new_position, true)?;
                 Ok(ActionResult::Success)
             }
 
@@ -293,10 +288,10 @@ impl ActionDriver {
 
                 self.client.bias_pulse(
                     wait_until_done,
-                    pulse_width,
+                    pulse_width.as_secs_f32(),
                     bias_value_v,
-                    hold_enum,
-                    mode_enum,
+                    hold_enum.into(),
+                    mode_enum.into(),
                 )?;
 
                 Ok(ActionResult::Success)
@@ -357,7 +352,7 @@ impl ActionDriver {
                     return Ok(None);
                 }
 
-                let (t0, dt, size, data) = self.client.osci1t_data_get(DataToGet::Wait2Triggers)?;
+                let (t0, dt, size, data) = self.client.osci1t_data_get(2)?; // Wait2Triggers = 2
 
                 let min_window = (size as f64 * min_window_percent) as usize;
                 let mut start = 0;
@@ -506,13 +501,13 @@ impl ActionDriver {
             }
 
             ActionCondition::SignalInRange { signal, min, max } => {
-                let values = self.client.read_signals(vec![signal.into()], true)?;
+                let values = self.client.signals_vals_get(vec![signal.into()], true)?;
                 let value = values[0];
                 Ok(value >= min && value <= max)
             }
 
             ActionCondition::PositionInBounds { bounds, tolerance } => {
-                let current = self.client.get_xy_position(true)?;
+                let current = self.client.folme_xy_pos_get(true)?;
                 let dx = (current.x - bounds.x).abs();
                 let dy = (current.y - bounds.y).abs();
                 Ok(dx <= tolerance && dy <= tolerance)
@@ -741,7 +736,7 @@ mod tests {
             Ok(client) => {
                 // Create test registry
                 let registry = SignalRegistry::from_names(vec!["Test Signal".to_string()]);
-                let mut driver = ActionDriver::with_registry(Box::new(client), registry);
+                let mut driver = ActionDriver::with_registry(client, registry);
 
                 // Test storage operations
                 driver

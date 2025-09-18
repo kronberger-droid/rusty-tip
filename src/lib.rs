@@ -15,16 +15,16 @@ pub use job::Job;
 pub use logger::Logger;
 pub use plotting::{plot_values, plot_values_with_range};
 pub use nanonis::{
-    ConnectionConfig, NanonisClient, NanonisClientBuilder, PulseMode, SPMInterface,
-    TCPLoggerStream, TipShaperConfig, TipShaperProps, ZControllerHold,
+    ConnectionConfig, NanonisClient, NanonisClientBuilder,
+    TCPLoggerStream, TipShaperConfig, TipShaperProps,
     ZSpectroscopyResult,
 };
 pub use tip_prep::{LoopType, TipController, TipState};
 pub use types::{
     ActionCondition, Amplitude, ChannelIndex, Frequency, MachineState, MotorAxis,
     MotorDirection, MotorGroup, MotorMovement, MotorPosition, MovementMode,
-    NanonisValue, OscilloscopeIndex, Position, Position3D, SampleCount, ScanAction,
+    NanonisValue, OscilloscopeIndex, Position, Position3D, PulseMode, SampleCount, ScanAction,
     ScanDirection, ScanFrame, SessionMetadata, SignalIndex, SignalRegistry,
     SignalValue, StepCount, SystemPosition, TCPLogStatus, TCPLoggerData,
-    TriggerLevel, TriggerMode, TriggerSlope,
+    TriggerLevel, TriggerMode, TriggerSlope, ZControllerHold,
 };

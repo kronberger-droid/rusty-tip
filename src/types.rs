@@ -814,20 +814,38 @@ impl TryFrom<u32> for ScanDirection {
 }
 
 // Interface Types
-/// z-controller hold choice used in bias_pulse
-#[derive(Debug, Clone, Copy)]
+/// Universal Z-controller hold states for SPM operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZControllerHold {
-    Keep = 0,
-    On = 1,
-    Off = 2,
+    /// Don't modify Z-controller state
+    NoChange = 0,
+    /// Hold Z-controller during operation
+    Hold = 1,
+    /// Release/disable Z-controller during operation
+    Release = 2,
 }
 
-/// pulse mode choice used in bias_pulse
-#[derive(Debug, Clone, Copy)]
+impl From<ZControllerHold> for u16 {
+    fn from(hold: ZControllerHold) -> Self {
+        hold as u16
+    }
+}
+
+/// Universal SPM pulse modes - concepts that apply to any SPM system
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PulseMode {
+    /// Keep current bias voltage unchanged
     Keep = 0,
+    /// Add voltage to current bias (relative)
     Relative = 1,
+    /// Set bias to absolute voltage value
     Absolute = 2,
+}
+
+impl From<PulseMode> for u16 {
+    fn from(mode: PulseMode) -> Self {
+        mode as u16
+    }
 }
 
 /// position 2d used in
