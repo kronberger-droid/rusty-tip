@@ -342,10 +342,10 @@ impl TipController {
             self.cycle_count += 1;
 
             let ampl_setpoint = self.driver.client_mut().pll_amp_ctrl_setpnt_get(1)?;
-
             let ampl_current = self.driver.client_mut().signal_val_get(75, true)?;
 
             if (ampl_setpoint - 5e-12..ampl_setpoint + 5e-12).contains(&ampl_current) {
+                info!("Amplitude reached the target range");
                 self.read_and_track_freq_shift()?;
 
                 freq_shift = self
@@ -356,6 +356,7 @@ impl TipController {
 
                 tip_state = self.classify(freq_shift);
             } else {
+                info!("Amplitude did not reach the target range");
                 freq_shift = -76.3; // add client call
                 tip_state = TipState::Bad;
 
