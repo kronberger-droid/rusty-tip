@@ -354,8 +354,9 @@ impl TipController {
 
         self.pre_loop_initialization()?;
 
-        let mut z_pos;
         let z_signal_index = SignalIndex(30);
+
+        self.driver.client_mut().pll_amp_ctrl_setpnt_get(1)?;
 
         while start.elapsed() < timeout {
             self.cycle_count += 1;
@@ -393,36 +394,7 @@ impl TipController {
             // Update signal history and step pulse voltage if needed (based on freq shift)
             self.update_signal_and_pulse(freq_shift);
 
-            if let Some(z_pos_frame) = self.driver.read_oscilloscope_with_stability(
-                z_signal_index,
-                None,
-                DataToGet::Stable {
-                    readings: 5,
-                    timeout: Duration::from_secs(10),
-                },
-                stability::dual_threshold_stability,
-            )? {
-                // crate::plot_values(
-                //     &z_pos_frame.data,
-                //     Some("Z-Position Oscilloscope Frame"),
-                //     None,
-                //     None,
-                // )
-                // .unwrap();
-
-                z_pos = z_pos_frame.data.iter().sum::<f64>() as f32 / z_pos_frame.size as f32;
-            } else {
-                warn!("Using read single signal fallback for z position");
-                let result = self.driver.execute(Action::ReadSignal {
-                    signal: self.signal_index,
-                    wait_for_newest: true,
-                })?;
-                z_pos = result
-                    .as_f64()
-                    .expect("Must be able to Read from Interface") as f32;
-            }
-
-            self.track_signal(z_signal_index, z_pos);
+            self.read_and_track_z_pos(z_signal_index);
 
             info!(
                 "Cycle {}: Freq Shift = {:.6}, Pulse = {:.3}V, Cycles w/o change = {}/{}",
@@ -479,16 +451,6 @@ impl TipController {
         Err(NanonisError::InvalidCommand("Loop timeout".to_string()))
     }
 
-    fn pre_loop_initialization(&mut self) -> Result<(), NanonisError> {
-        self.driver.spm_interface_mut().set_bias(-500e-3)?;
-
-        self.driver
-            .spm_interface_mut()
-            .z_ctrl_setpoint_set(100e-12)?;
-
-        Ok(())
-    }
-
     /// Bad loop - execute recovery sequence with stable signal monitoring
     /// Sequence: capture_stable_before → pulse → capture_stable_after → withdraw → move → approach → check
     fn bad_loop(&mut self, cycle: u32) -> Result<(), NanonisError> {
@@ -497,7 +459,6 @@ impl TipController {
             cycle
         );
 
-        let z_pos;
         let z_signal_index = SignalIndex(30); // Z (m) signal index
 
         // Reset good count
@@ -516,36 +477,7 @@ impl TipController {
             pulse_mode: 2,
         })?;
 
-        // Capture stable Z Signal after bias pulse
-        if let Some(z_pos_frame) = self.driver.read_oscilloscope_with_stability(
-            z_signal_index,
-            None,
-            DataToGet::Stable {
-                readings: 5,
-                timeout: Duration::from_secs(10),
-            },
-            stability::dual_threshold_stability,
-        )? {
-            // crate::plot_values(
-            //     &z_pos_frame.data,
-            //     Some("Z-Position Oscilloscope Frame"),
-            //     None,
-            //     None,
-            // )
-            // .unwrap();
-            z_pos = z_pos_frame.data.iter().sum::<f64>() as f32 / z_pos_frame.size as f32;
-        } else {
-            warn!("Using read single signal fallback for z position");
-            let result = self.driver.execute(Action::ReadSignal {
-                signal: self.signal_index,
-                wait_for_newest: true,
-            })?;
-            z_pos = result
-                .as_f64()
-                .expect("Must be able to Read from Interface") as f32;
-        }
-
-        self.track_signal(z_signal_index, z_pos);
+        self.read_and_track_z_pos(z_signal_index);
 
         // Continue with rest of recovery sequence
         info!("Cycle {}: Continuing with withdraw and movement...", cycle);
@@ -600,6 +532,51 @@ impl TipController {
         } else {
             TipState::Good
         }
+    }
+
+    fn pre_loop_initialization(&mut self) -> Result<(), NanonisError> {
+        self.driver.client_mut().set_bias(-500e-3)?;
+
+        self.driver.client_mut().z_ctrl_setpoint_set(100e-12)?;
+
+        Ok(())
+    }
+
+    fn read_and_track_z_pos(&mut self, z_signal_index: SignalIndex) -> Result<(), NanonisError> {
+        let z_pos;
+
+        if let Some(z_pos_frame) = self.driver.read_oscilloscope_with_stability(
+            z_signal_index,
+            None,
+            DataToGet::Stable {
+                readings: 5,
+                timeout: Duration::from_secs(10),
+            },
+            stability::dual_threshold_stability,
+        )? {
+            // crate::plot_values(
+            //     &z_pos_frame.data,
+            //     Some("Z-Position Oscilloscope Frame"),
+            //     None,
+            //     None,
+            // )
+            // .unwrap();
+
+            z_pos = z_pos_frame.data.iter().sum::<f64>() as f32 / z_pos_frame.size as f32;
+        } else {
+            warn!("Using read single signal fallback for z position");
+            let result = self.driver.execute(Action::ReadSignal {
+                signal: self.signal_index,
+                wait_for_newest: true,
+            })?;
+            z_pos = result
+                .as_f64()
+                .expect("Must be able to Read from Interface") as f32;
+        }
+
+        self.track_signal(z_signal_index, z_pos);
+
+        Ok(())
     }
 }
 
