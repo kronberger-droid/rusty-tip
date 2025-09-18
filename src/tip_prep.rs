@@ -52,8 +52,7 @@ pub struct TipController {
     cycles_without_change: u32,
 
     // Signal bounds and thresholds
-    min_bound: f32,
-    max_bound: f32,
+    bound: (f32, f32),
 
     // State tracking
     good_count: u32,
@@ -74,8 +73,7 @@ impl TipController {
         driver: ActionDriver,
         signal_index: SignalIndex,
         pulse_voltage: f32,
-        min_bound: f32,
-        max_bound: f32,
+        bound: (f32, f32),
     ) -> Self {
         Self {
             driver,
@@ -87,8 +85,7 @@ impl TipController {
             min_pulse_voltage: pulse_voltage,
             max_pulse_voltage: 5.0,
             cycles_without_change: 0,
-            min_bound,
-            max_bound,
+            bound,
             good_count: 0,
             stable_threshold: 3,
             cycle_count: 0,
@@ -492,7 +489,7 @@ impl TipController {
 
     /// Simple classification based on bounds
     fn classify(&mut self, signal: f32) -> TipState {
-        if signal < self.min_bound || signal > self.max_bound {
+        if signal < self.bound.0 || signal > self.bound.1 {
             TipState::Bad
         } else if self.good_count >= self.stable_threshold {
             TipState::Stable
@@ -505,6 +502,8 @@ impl TipController {
         self.driver.client_mut().set_bias(-500e-3)?;
 
         self.driver.client_mut().z_ctrl_setpoint_set(100e-12)?;
+
+        self.driver.client_mut().auto_approach_and_wait()?;
 
         Ok(())
     }

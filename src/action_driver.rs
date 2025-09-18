@@ -6,7 +6,7 @@ use crate::error::NanonisError;
 use crate::nanonis::NanonisClient;
 use crate::types::{
     AutoApproachResult, DataToGet, MotorGroup, OsciData, Position, PulseMode, ScanDirection,
-    SignalIndex, SignalRegistry, SignalStats, SignalValue, TriggerConfig, ZControllerHold,
+    SignalIndex, SignalStats, TriggerConfig, ZControllerHold,
 };
 use std::collections::HashMap;
 use std::thread;
@@ -15,44 +15,27 @@ use std::thread;
 /// No safety checks, no validation - maximum performance and flexibility
 pub struct ActionDriver {
     client: NanonisClient,
-    registry: SignalRegistry,
     /// Storage for Store/Retrieve actions
     stored_values: HashMap<String, ActionResult>,
 }
 
 impl ActionDriver {
-    /// Create a new ActionDriver with the given client and auto-discover signals
+    /// Create a new ActionDriver with the given client
     pub fn new(addr: &str, port: u16) -> Result<Self, NanonisError> {
-        let mut client = NanonisClient::new(addr, port)?;
-
-        let names = client.signal_names_get(false)?;
-        let registry = SignalRegistry::from_names(names);
+        let client = NanonisClient::new(addr, port)?;
 
         Ok(Self {
             client,
-            registry,
             stored_values: HashMap::new(),
         })
-    }
-
-    /// Create a new ActionDriver with a provided registry (for testing)
-    pub fn with_registry(client: NanonisClient, registry: SignalRegistry) -> Self {
-        Self {
-            client,
-            registry,
-            stored_values: HashMap::new(),
-        }
     }
 
     /// Convenience method to create with NanonisClient
-    pub fn with_nanonis_client(mut client: NanonisClient) -> Result<Self, NanonisError> {
-        let names = client.signal_names_get(false)?;
-        let registry = SignalRegistry::from_names(names);
-        Ok(Self {
+    pub fn with_nanonis_client(client: NanonisClient) -> Self {
+        Self {
             client,
-            registry,
             stored_values: HashMap::new(),
-        })
+        }
     }
 
     /// Get a reference to the underlying NanonisClient
@@ -65,10 +48,6 @@ impl ActionDriver {
         &mut self.client
     }
 
-    /// Get a reference to the signal registry
-    pub fn registry(&self) -> &SignalRegistry {
-        &self.registry
-    }
 
     /// Execute a single action with direct 1:1 mapping to client methods
     pub fn execute(&mut self, action: Action) -> Result<ActionResult, NanonisError> {
@@ -81,8 +60,7 @@ impl ActionDriver {
                 let value = self
                     .client
                     .signals_vals_get(vec![signal.into()], wait_for_newest)?;
-                let signal_value = SignalValue::Unitless(value[0] as f64);
-                Ok(ActionResult::Signals(vec![signal_value]))
+                Ok(ActionResult::Value(value[0] as f64))
             }
 
             Action::ReadSignals {
@@ -91,14 +69,7 @@ impl ActionDriver {
             } => {
                 let indices: Vec<i32> = signals.iter().map(|s| (*s).into()).collect();
                 let values = self.client.signals_vals_get(indices, wait_for_newest)?;
-
-                // Convert to SignalValue with basic type inference
-                let signal_values: Vec<SignalValue> = values
-                    .into_iter()
-                    .map(|v| SignalValue::Unitless(v as f64))
-                    .collect();
-
-                Ok(ActionResult::Signals(signal_values))
+                Ok(ActionResult::Values(values.into_iter().map(|v| v as f64).collect()))
             }
 
             Action::ReadSignalNames => {
@@ -318,14 +289,6 @@ impl ActionDriver {
                 ))),
             },
 
-            // === Conditional Operations ===
-            Action::Conditional { condition, action } => {
-                if self.evaluate_condition(condition)? {
-                    self.execute(*action)
-                } else {
-                    Ok(ActionResult::None) // Condition not met, skip action
-                }
-            }
         }
     }
 
@@ -485,42 +448,6 @@ impl ActionDriver {
         self.stored_values.keys().collect()
     }
 
-    /// Evaluate action condition (basic implementation)
-    fn evaluate_condition(
-        &mut self,
-        condition: crate::types::ActionCondition,
-    ) -> Result<bool, NanonisError> {
-        use crate::types::ActionCondition;
-
-        match condition {
-            ActionCondition::Always => Ok(true),
-            ActionCondition::Never => Ok(false),
-
-            ActionCondition::BiasInRange { min, max } => {
-                let bias = self.client.get_bias()?;
-                Ok(bias >= min && bias <= max)
-            }
-
-            ActionCondition::SignalInRange { signal, min, max } => {
-                let values = self.client.signals_vals_get(vec![signal.into()], true)?;
-                let value = values[0];
-                Ok(value >= min && value <= max)
-            }
-
-            ActionCondition::PositionInBounds { bounds, tolerance } => {
-                let current = self.client.folme_xy_pos_get(true)?;
-                let dx = (current.x - bounds.x).abs();
-                let dy = (current.y - bounds.y).abs();
-                Ok(dx <= tolerance && dy <= tolerance)
-            }
-
-            ActionCondition::Custom(_func) => {
-                // Custom conditions are not supported without full system position reading
-                // Return false as safe default
-                Ok(false)
-            }
-        }
-    }
 
     /// Convenience method to read oscilloscope data directly
     pub fn read_oscilloscope(
@@ -728,61 +655,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_storage_functionality() {
-        // Test the storage system using a test registry
-        let client = NanonisClient::new("127.0.0.1", 6501);
-
-        match client {
-            Ok(client) => {
-                // Create test registry
-                let registry = SignalRegistry::from_names(vec!["Test Signal".to_string()]);
-                let mut driver = ActionDriver::with_registry(client, registry);
-
-                // Test storage operations
-                driver
-                    .stored_values
-                    .insert("test_key".to_string(), ActionResult::BiasVoltage(2.5));
-
-                assert_eq!(driver.stored_keys().len(), 1);
-                assert!(driver.stored_keys().contains(&&"test_key".to_string()));
-
-                driver.clear_storage();
-                assert_eq!(driver.stored_keys().len(), 0);
-            }
-            Err(_) => {
-                // Expected without hardware
-            }
-        }
-    }
-
-    #[test]
-    fn test_signal_registry() {
-        use crate::SignalIndex;
-        // Test registry functionality without requiring hardware
-        let registry = SignalRegistry::from_names(vec![
-            "Bias (V)".to_string(),
-            "Current (A)".to_string(),
-            "Z (m)".to_string(),
-        ]);
-
-        // Test signal lookup by name
-        let bias_signal = registry.get_signal("Bias (V)");
-        assert!(bias_signal.is_some());
-        assert_eq!(bias_signal.unwrap().0, 0);
-
-        // Test helper methods
-        let bias_voltage = registry.bias_voltage();
-        assert!(bias_voltage.is_some());
-        assert_eq!(bias_voltage.unwrap().0, 0);
-
-        let current = registry.current();
-        assert!(current.is_some());
-        assert_eq!(current.unwrap().0, 1);
-
-        // Test name retrieval
-        let signal_index = SignalIndex(0);
-        let name = registry.get_name(signal_index);
-        assert_eq!(name, Some("Bias (V)"));
-    }
 }
