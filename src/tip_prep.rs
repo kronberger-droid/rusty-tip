@@ -209,6 +209,13 @@ impl TipController {
         self.signal_histories.get(&signal_index)
     }
 
+    pub fn get_last_signal(&self, signal_index: SignalIndex) -> Option<f32> {
+        match self.get_signal_history(signal_index) {
+            Some(history) => history.iter().last().copied(),
+            None => None,
+        }
+    }
+
     /// Clear all signal histories (useful for logger integration)
     pub fn clear_all_histories(&mut self) {
         self.signal_histories.clear();
@@ -219,26 +226,22 @@ impl TipController {
         self.signal_histories.remove(&signal_index);
     }
 
-    /// Update signal history with new signal value (for frequency shift)
-    fn update_signal_history(&mut self, signal: f32) {
-        self.track_signal(self.signal_index, signal);
-    }
-
     /// Check if current signal represents a significant change from recent stable period
-    fn has_significant_change(&self, signal: f32) -> (bool, f32) {
-        if let Some(freq_history) = self.signal_histories.get(&self.signal_index) {
-            if freq_history.len() < 2 {
+    fn has_significant_change(&self, signal_index: SignalIndex) -> (bool, f32) {
+        if let Some(history) = self.signal_histories.get(&signal_index) {
+            if history.len() < 2 {
                 // First signal - consider it a significant change to initialize properly
                 (true, 0.0)
             } else {
                 // Compare only against signals from the current stable period
                 // cycles_without_change tells us how many recent signals were stable
                 let stable_period_size =
-                    (self.cycles_without_change as usize).min(freq_history.len() - 1);
+                    (self.cycles_without_change as usize).min(history.len() - 1);
 
                 if stable_period_size == 0 {
                     // No stable period yet, compare against last signal
-                    let last_signal = freq_history[1];
+                    let signal = history[0];
+                    let last_signal = history[1];
                     info!(
                         "Last signal: {} | Current threshold: {}",
                         last_signal,
@@ -250,7 +253,8 @@ impl TipController {
                     (has_change, (signal - last_signal))
                 } else {
                     // Compare against mean of current stable period (skip current signal at index 0)
-                    let stable_signals: Vec<f32> = freq_history
+                    let signal = history[0];
+                    let stable_signals: Vec<f32> = history
                         .iter()
                         .skip(1)
                         .take(stable_period_size)
@@ -272,38 +276,6 @@ impl TipController {
         } else {
             // No history yet - consider it a significant change
             (true, 0.0)
-        }
-    }
-
-    /// Handle response to significant signal change
-    fn handle_significant_change(&mut self, signal: f32) {
-        let comparison_signal =
-            if let Some(freq_history) = self.signal_histories.get(&self.signal_index) {
-                freq_history.get(1).unwrap_or(&0.0)
-            } else {
-                &0.0
-            };
-        debug!(
-            "Signal changed significantly: {:.3} -> {:.3} (change: {:.3})",
-            comparison_signal,
-            signal,
-            (signal - comparison_signal).abs()
-        );
-        self.cycles_without_change = 0;
-        self.pulse_voltage = self.min_pulse_voltage;
-    }
-
-    /// Handle response to stable signal (no significant change)
-    fn handle_stable_signal(&mut self, signal: f32) {
-        self.cycles_without_change += 1;
-        debug!(
-            "Signal unchanged: {:.3}, cycles without change: {}/{}",
-            signal, self.cycles_without_change, self.cycles_before_step
-        );
-
-        // Check if we need to step the pulse voltage
-        if self.cycles_without_change >= self.cycles_before_step {
-            self.step_pulse_voltage();
         }
     }
 
@@ -329,19 +301,28 @@ impl TipController {
     }
 
     /// Update signal history and step pulse voltage if needed
-    fn update_signal_and_pulse(&mut self, signal: f32) {
-        // 1. Update signal history
-        self.update_signal_history(signal);
-
-        let (is_significant, change) = self.has_significant_change(signal);
+    fn update_pulse_voltage(&mut self) {
+        let (is_significant, change) = self.has_significant_change(self.signal_index);
 
         // 2. Check for significant change and respond accordingly
         if is_significant && change >= 0.0 {
-            self.handle_significant_change(signal);
+            self.cycles_without_change = 0;
+            self.pulse_voltage = self.min_pulse_voltage;
         } else if is_significant {
-            self.handle_stable_signal(signal);
+            warn!("Positive change significant change!");
+            self.cycles_without_change += 1;
+
+            // Check if we need to step the pulse voltage
+            if self.cycles_without_change >= self.cycles_before_step {
+                self.step_pulse_voltage();
+            }
         } else {
-            self.handle_stable_signal(signal);
+            self.cycles_without_change += 1;
+
+            // Check if we need to step the pulse voltage
+            if self.cycles_without_change >= self.cycles_before_step {
+                self.step_pulse_voltage();
+            }
         }
     }
 }
@@ -351,6 +332,7 @@ impl TipController {
     pub fn run_loop(&mut self, timeout: Duration) -> Result<TipState, NanonisError> {
         let start = Instant::now();
         let mut freq_shift;
+        let mut tip_state;
 
         self.pre_loop_initialization()?;
 
@@ -359,53 +341,41 @@ impl TipController {
         while start.elapsed() < timeout {
             self.cycle_count += 1;
 
-            if let Some(freq_shift_frame) = self.driver.read_oscilloscope_with_stability(
-                self.signal_index,
-                None,
-                DataToGet::Stable {
-                    readings: 5,
-                    timeout: Duration::from_secs(10),
-                },
-                stability::dual_threshold_stability,
-            )? {
-                crate::plot_values(
-                    &freq_shift_frame.data,
-                    Some("Frequency Shift Oscilloscope Frame"),
-                    None,
-                    None,
-                )
-                .unwrap();
-                freq_shift =
-                    freq_shift_frame.data.iter().sum::<f64>() as f32 / freq_shift_frame.size as f32;
+            let ampl_setpoint = self.driver.client_mut().pll_amp_ctrl_setpnt_get(1)?;
+
+            let ampl_current = self.driver.client_mut().signal_val_get(75, true)?;
+
+            if (ampl_setpoint - 5e-12..ampl_setpoint + 5e-12).contains(&ampl_current) {
+                self.read_and_track_freq_shift()?;
+
+                freq_shift = self
+                    .get_last_signal(self.signal_index)
+                    .expect("Should have failed earlier");
+
+                self.update_pulse_voltage();
+
+                tip_state = self.classify(freq_shift);
             } else {
-                warn!("Using single value read fallback for frequency shift");
-                let result = self.driver.execute(Action::ReadSignal {
-                    signal: self.signal_index,
-                    wait_for_newest: true,
-                })?;
-                freq_shift = result
-                    .as_f64()
-                    .expect("Must be able to Read from Interface")
-                    as f32;
+                freq_shift = -76.3; // add client call
+                tip_state = TipState::Bad;
+
+                self.track_signal(self.signal_index, freq_shift);
+
+                self.update_pulse_voltage();
             }
 
-            // Update signal history and step pulse voltage if needed (based on freq shift)
-            self.update_signal_and_pulse(freq_shift);
+            info!("Cycle {}: State = {:?}", self.cycle_count, tip_state);
 
             self.read_and_track_z_pos(z_signal_index)?;
 
             info!(
-                "Cycle {}: Freq Shift = {:.6}, Pulse = {:.3}V, Cycles w/o change = {}/{}",
+                "Cycle {}: Freq Shift = {:.6?}, Pulse = {:.3}V, Cycles w/o change = {}/{}",
                 self.cycle_count,
                 freq_shift,
                 self.pulse_voltage,
                 self.cycles_without_change,
                 self.cycles_before_step
             );
-
-            // Classify based on frequency shift
-            let tip_state = self.classify(freq_shift);
-            info!("Cycle {}: State = {:?}", self.cycle_count, tip_state);
 
             // Execute based on state
             match tip_state {
@@ -441,8 +411,6 @@ impl TipController {
                     })?
                 }
             }
-
-            std::thread::sleep(Duration::from_millis(500));
         }
 
         debug!("Tip control loop reached timeout");
@@ -498,7 +466,7 @@ impl TipController {
             },
             Action::AutoApproach {
                 wait_until_finished: true,
-                timeout: Duration::from_secs(300),
+                timeout: Duration::from_secs(5),
             },
             Action::Wait {
                 duration: Duration::from_secs(1),
@@ -540,6 +508,42 @@ impl TipController {
         Ok(())
     }
 
+    fn read_and_track_freq_shift(&mut self) -> Result<(), NanonisError> {
+        let freq_shift;
+
+        if let Some(freq_shift_frame) = self.driver.read_oscilloscope_with_stability(
+            self.signal_index,
+            None,
+            DataToGet::Stable {
+                readings: 5,
+                timeout: Duration::from_secs(10),
+            },
+            stability::dual_threshold_stability,
+        )? {
+            crate::plot_values(
+                &freq_shift_frame.data,
+                Some("Frequency Shift Oscilloscope Frame"),
+                None,
+                None,
+            )
+            .unwrap();
+            freq_shift =
+                freq_shift_frame.data.iter().sum::<f64>() as f32 / freq_shift_frame.size as f32;
+        } else {
+            warn!("Using single value read fallback for frequency shift");
+            let result = self.driver.execute(Action::ReadSignal {
+                signal: self.signal_index,
+                wait_for_newest: true,
+            })?;
+            freq_shift = result
+                .as_f64()
+                .expect("Must be able to Read from Interface") as f32;
+        }
+
+        self.track_signal(self.signal_index, freq_shift);
+
+        Ok(())
+    }
     fn read_and_track_z_pos(&mut self, z_signal_index: SignalIndex) -> Result<(), NanonisError> {
         let z_pos;
 

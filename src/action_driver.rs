@@ -5,8 +5,8 @@ use crate::actions::{Action, ActionChain, ActionResult};
 use crate::error::NanonisError;
 use crate::nanonis::NanonisClient;
 use crate::types::{
-    AutoApproachResult, DataToGet, MotorGroup, OsciData, Position, PulseMode, ScanDirection, SignalIndex,
-    SignalRegistry, SignalStats, SignalValue, TriggerConfig, ZControllerHold,
+    AutoApproachResult, DataToGet, MotorGroup, OsciData, Position, PulseMode, ScanDirection,
+    SignalIndex, SignalRegistry, SignalStats, SignalValue, TriggerConfig, ZControllerHold,
 };
 use std::collections::HashMap;
 use std::thread;
@@ -179,7 +179,8 @@ impl ActionDriver {
                 position,
                 wait_until_finished,
             } => {
-                self.client.folme_xy_pos_set(position, wait_until_finished)?;
+                self.client
+                    .folme_xy_pos_set(position, wait_until_finished)?;
                 Ok(ActionResult::Success)
             }
 
