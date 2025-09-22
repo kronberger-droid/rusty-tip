@@ -113,45 +113,32 @@ pub enum Action {
     Retrieve { key: String },
 }
 
-/// Enhanced ActionResult with proper typing and units
+/// Simplified ActionResult with clear semantic separation
 #[derive(Debug, Clone)]
 pub enum ActionResult {
-    // === Signal Results ===
-    /// Single signal value
+    /// Single numeric value (signals, bias, etc.)
     Value(f64),
-    /// Multiple signal values
+    
+    /// Multiple numeric values (signal arrays)
     Values(Vec<f64>),
-
-    /// List of available signal names
-    SignalNames(Vec<String>),
-
-    // === Position Results ===
-    /// Piezo position (continuous coordinates)
-    PiezoPosition(Position),
-
-    // === Single Value Results ===
-    /// Bias voltage value
-    BiasVoltage(f32),
-
-    /// Scan status
-    ScanStatus(bool),
-
-    /// Stored value retrieved by key
-    StoredValue(Box<ActionResult>),
-
-    // === Oscilloscope Results ===
-    /// Oscilloscope data with timing and measurement information
-    OscilloscopeData(OsciData),
-
-    // === Status Results ===
-    /// Operation completed successfully (no return value)
+    
+    /// String data (signal names, error messages, etc.)
+    Text(Vec<String>),
+    
+    /// Boolean status (scanning/idle, running/stopped, etc.)
+    Status(bool),
+    
+    /// Position data (meaningful x,y structure)
+    Position(Position),
+    
+    /// Complex oscilloscope data (timing + data + metadata)
+    OsciData(OsciData),
+    
+    /// Operation completed successfully (no data returned)
     Success,
-
-    /// No result (e.g., Wait operations)
+    
+    /// No result/waiting state
     None,
-
-    /// Partial success (some actions in sequence succeeded)
-    PartialSuccess(Vec<ActionResult>),
 }
 
 impl ActionResult {
@@ -159,7 +146,6 @@ impl ActionResult {
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             ActionResult::Value(v) => Some(*v),
-            ActionResult::BiasVoltage(v) => Some(*v as f64),
             ActionResult::Values(values) => {
                 if values.len() == 1 {
                     Some(values[0])
@@ -171,10 +157,18 @@ impl ActionResult {
         }
     }
 
+    /// Convert to bool if possible (for status results)
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            ActionResult::Status(b) => Some(*b),
+            _ => None,
+        }
+    }
+
     /// Convert to Position if possible
     pub fn as_position(&self) -> Option<Position> {
         match self {
-            ActionResult::PiezoPosition(pos) => Some(*pos),
+            ActionResult::Position(pos) => Some(*pos),
             _ => None,
         }
     }
@@ -182,9 +176,193 @@ impl ActionResult {
     /// Convert to OsciData if possible
     pub fn as_osci_data(&self) -> Option<&OsciData> {
         match self {
-            ActionResult::OscilloscopeData(data) => Some(data),
+            ActionResult::OsciData(data) => Some(data),
             _ => None,
         }
+    }
+
+    // === Action-Aware Type Extractors ===
+    // These methods validate that the result type matches what the action should produce
+
+    /// Extract OsciData with action validation (panics on type mismatch)
+    pub fn expect_osci_data(self, action: &Action) -> OsciData {
+        match (action, self) {
+            (Action::ReadOsci { .. }, ActionResult::OsciData(data)) => data,
+            (action, result) => panic!(
+                "Expected OsciData from action {:?}, got {:?}",
+                action, result
+            ),
+        }
+    }
+
+    /// Extract signal value with action validation (panics on type mismatch)
+    pub fn expect_signal_value(self, action: &Action) -> f64 {
+        match (action, self) {
+            (Action::ReadSignal { .. }, ActionResult::Value(v)) => v,
+            (Action::ReadSignal { .. }, ActionResult::Values(mut vs)) if vs.len() == 1 => {
+                vs.pop().unwrap()
+            }
+            (Action::ReadBias, ActionResult::Value(v)) => v,
+            (action, result) => panic!(
+                "Expected signal value from action {:?}, got {:?}",
+                action, result
+            ),
+        }
+    }
+
+    /// Extract multiple values with action validation (panics on type mismatch)
+    pub fn expect_values(self, action: &Action) -> Vec<f64> {
+        match (action, self) {
+            (Action::ReadSignals { .. }, ActionResult::Values(values)) => values,
+            (Action::ReadSignal { .. }, ActionResult::Value(v)) => vec![v],
+            (action, result) => panic!(
+                "Expected values from action {:?}, got {:?}",
+                action, result
+            ),
+        }
+    }
+
+    /// Extract position with action validation (panics on type mismatch)
+    pub fn expect_position(self, action: &Action) -> Position {
+        match (action, self) {
+            (Action::ReadPiezoPosition { .. }, ActionResult::Position(pos)) => pos,
+            (action, result) => panic!(
+                "Expected position from action {:?}, got {:?}",
+                action, result
+            ),
+        }
+    }
+
+    /// Extract bias voltage with action validation (panics on type mismatch)
+    pub fn expect_bias_voltage(self, action: &Action) -> f32 {
+        match (action, self) {
+            (Action::ReadBias, ActionResult::Value(v)) => v as f32,
+            (action, result) => panic!(
+                "Expected bias voltage from action {:?}, got {:?}",
+                action, result
+            ),
+        }
+    }
+
+    /// Extract signal names with action validation (panics on type mismatch)
+    pub fn expect_signal_names(self, action: &Action) -> Vec<String> {
+        match (action, self) {
+            (Action::ReadSignalNames, ActionResult::Text(names)) => names,
+            (action, result) => panic!(
+                "Expected signal names from action {:?}, got {:?}",
+                action, result
+            ),
+        }
+    }
+
+    /// Extract status with action validation (panics on type mismatch)
+    pub fn expect_status(self, action: &Action) -> bool {
+        match (action, self) {
+            (Action::ReadScanStatus, ActionResult::Status(status)) => status,
+            (action, result) => panic!(
+                "Expected status from action {:?}, got {:?}",
+                action, result
+            ),
+        }
+    }
+
+    // === Safe Extraction Methods (non-panicking) ===
+
+    /// Try to extract OsciData with action validation
+    pub fn try_into_osci_data(self, action: &Action) -> Result<OsciData, String> {
+        match (action, self) {
+            (Action::ReadOsci { .. }, ActionResult::OsciData(data)) => Ok(data),
+            (action, result) => Err(format!(
+                "Expected OsciData from action {:?}, got {:?}",
+                action, result
+            )),
+        }
+    }
+
+    /// Try to extract signal value with action validation
+    pub fn try_into_signal_value(self, action: &Action) -> Result<f64, String> {
+        match (action, self) {
+            (Action::ReadSignal { .. }, ActionResult::Value(v)) => Ok(v),
+            (Action::ReadSignal { .. }, ActionResult::Values(mut vs)) if vs.len() == 1 => {
+                Ok(vs.pop().unwrap())
+            }
+            (Action::ReadBias, ActionResult::Value(v)) => Ok(v),
+            (action, result) => Err(format!(
+                "Expected signal value from action {:?}, got {:?}",
+                action, result
+            )),
+        }
+    }
+
+    /// Try to extract position with action validation
+    pub fn try_into_position(self, action: &Action) -> Result<Position, String> {
+        match (action, self) {
+            (Action::ReadPiezoPosition { .. }, ActionResult::Position(pos)) => Ok(pos),
+            (action, result) => Err(format!(
+                "Expected position from action {:?}, got {:?}",
+                action, result
+            )),
+        }
+    }
+
+    /// Try to extract status with action validation
+    pub fn try_into_status(self, action: &Action) -> Result<bool, String> {
+        match (action, self) {
+            (Action::ReadScanStatus, ActionResult::Status(status)) => Ok(status),
+            (action, result) => Err(format!(
+                "Expected status from action {:?}, got {:?}",
+                action, result
+            )),
+        }
+    }
+}
+
+// === Trait for Generic Type Extraction ===
+
+/// Trait for extracting specific types from ActionResult with action validation
+pub trait ExpectFromAction<T> {
+    fn expect_from_action(self, action: &Action) -> T;
+}
+
+impl ExpectFromAction<OsciData> for ActionResult {
+    fn expect_from_action(self, action: &Action) -> OsciData {
+        self.expect_osci_data(action)
+    }
+}
+
+impl ExpectFromAction<f64> for ActionResult {
+    fn expect_from_action(self, action: &Action) -> f64 {
+        self.expect_signal_value(action)
+    }
+}
+
+impl ExpectFromAction<Vec<f64>> for ActionResult {
+    fn expect_from_action(self, action: &Action) -> Vec<f64> {
+        self.expect_values(action)
+    }
+}
+
+impl ExpectFromAction<Position> for ActionResult {
+    fn expect_from_action(self, action: &Action) -> Position {
+        self.expect_position(action)
+    }
+}
+
+impl ExpectFromAction<f32> for ActionResult {
+    fn expect_from_action(self, action: &Action) -> f32 {
+        self.expect_bias_voltage(action)
+    }
+}
+
+impl ExpectFromAction<Vec<String>> for ActionResult {
+    fn expect_from_action(self, action: &Action) -> Vec<String> {
+        self.expect_signal_names(action)
+    }
+}
+
+impl ExpectFromAction<bool> for ActionResult {
+    fn expect_from_action(self, action: &Action) -> bool {
+        self.expect_status(action)
     }
 }
 
@@ -327,10 +505,10 @@ mod tests {
 
     #[test]
     fn test_action_result_extraction() {
-        let bias_result = ActionResult::BiasVoltage(2.5);
+        let bias_result = ActionResult::Value(2.5);
         assert_eq!(bias_result.as_f64(), Some(2.5));
 
-        let position_result = ActionResult::PiezoPosition(Position { x: 1e-9, y: 2e-9 });
+        let position_result = ActionResult::Position(Position { x: 1e-9, y: 2e-9 });
         assert_eq!(
             position_result.as_position(),
             Some(Position { x: 1e-9, y: 2e-9 })
