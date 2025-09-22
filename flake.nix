@@ -61,71 +61,45 @@
           export LD_LIBRARY_PATH="${libPath}:''${LD_LIBRARY_PATH:-}"
           
           mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
-          
-          # Add dev command alias for easy re-entry
-          alias dev="nix develop .#dev --command nu --login"
         '';
 
-        # Create a startup script for better session management
-        startupScript = pkgs.writeShellScript "dev-startup" ''
-          #!/usr/bin/env bash
-          set -e
-          
-          # Function to run app and return to nushell on exit
-          run_with_fallback() {
-            local app="$1"
-            echo "Starting $app..."
-            if ! "$app"; then
-              echo "$app exited, starting nushell..."
-            fi
-            exec nu --login
-          }
-          
-          # Check what to run based on argument
-          case "''${1:-shell}" in
-            hx|helix)
-              run_with_fallback hx
-              ;;
-            claude)
-              run_with_fallback claude
-              ;;
-            shell|*)
-              exec nu --login
-              ;;
-          esac
-        '';
-
-        # Sway window manager setup for development layout
+        # Simple sway development layout setup
         swayDevSetup = ''
-          # Dev setup - creates split terminal layout
-          swaymsg layout splith
+          echo "Setting up development layout..."
           
+          # Create split terminal layout
+          swaymsg layout splith
           swaymsg layout stacking
           
-          swaymsg exec "kitty --working-directory=$(pwd) -e nix develop .#dev --command ${startupScript} shell"
+          # Open shell terminal
+          swaymsg exec "kitty --working-directory=$(pwd) -e nix develop .#default"
           sleep 0.5
           
           swaymsg focus parent
           
-          swaymsg exec "kitty --working-directory=$(pwd) -e nix develop .#dev --command ${startupScript} claude"
+          # Open claude terminal  
+          swaymsg exec "kitty --working-directory=$(pwd) -e claude"
           sleep 0.5
 
           swaymsg layout stacking
-          
           swaymsg focus left
-          # Main terminal with helix
-          nix develop .#dev --command ${startupScript} hx
+          
+          # Start helix in main terminal
+          echo "Starting helix..."
+          exec hx
         '';
       in {
         # Clean development shell without window manager setup
-        devShells.dev = pkgs.mkShell {
+        devShells.default= pkgs.mkShell {
           name = "rust dev shell (clean)";
           buildInputs = allDeps;
-          shellHook = baseShellHook;
+          shellHook = baseShellHook + ''
+            exec nu --login
+          '';
         };
         
         # Default shell with sway integration and window management
-        devShells.default = pkgs.mkShell {
+        devShells.dev= pkgs.mkShell {
           name = "rust dev shell (with sway setup)";
           buildInputs = allDeps;
           shellHook = baseShellHook + swayDevSetup;
