@@ -1124,6 +1124,10 @@ pub struct OsciData {
     pub size: i32,
     pub data: Vec<f64>,
     pub signal_stats: Option<SignalStats>,
+    /// Indicates if this data represents a stable reading (for ReadOsciStable actions)
+    pub is_stable: bool,
+    /// Fallback single value when stable oscilloscope data couldn't be obtained
+    pub fallback_value: Option<f64>,
 }
 
 impl OsciData {
@@ -1134,6 +1138,8 @@ impl OsciData {
             size,
             data,
             signal_stats: None,
+            is_stable: true, // Default to stable for regular osci readings
+            fallback_value: None,
         }
     }
 
@@ -1144,6 +1150,34 @@ impl OsciData {
             size,
             data,
             signal_stats: Some(stats),
+            is_stable: true, // Default to stable for regular osci readings
+            fallback_value: None,
+        }
+    }
+
+    /// Create OsciData for stable readings
+    pub fn new_stable(t0: f64, dt: f64, size: i32, data: Vec<f64>) -> Self {
+        Self {
+            t0,
+            dt,
+            size,
+            data,
+            signal_stats: None,
+            is_stable: true,
+            fallback_value: None,
+        }
+    }
+
+    /// Create OsciData for unstable readings with fallback value
+    pub fn new_unstable_with_fallback(t0: f64, dt: f64, size: i32, data: Vec<f64>, fallback: f64) -> Self {
+        Self {
+            t0,
+            dt,
+            size,
+            data,
+            signal_stats: None,
+            is_stable: false,
+            fallback_value: Some(fallback),
         }
     }
 

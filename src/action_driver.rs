@@ -1,7 +1,7 @@
 use log::info;
 use ndarray::Array1;
 
-use crate::actions::{Action, ActionChain, ActionResult};
+use crate::actions::{Action, ActionChain, ActionResult, ExpectFromAction};
 use crate::error::NanonisError;
 use crate::nanonis::NanonisClient;
 use crate::types::{
@@ -74,13 +74,13 @@ impl ActionDriver {
 
             Action::ReadSignalNames => {
                 let names = self.client.signal_names_get(false)?;
-                Ok(ActionResult::SignalNames(names))
+                Ok(ActionResult::Text(names))
             }
 
             // === Bias Operations ===
             Action::ReadBias => {
                 let bias = self.client.get_bias()?;
-                Ok(ActionResult::BiasVoltage(bias))
+                Ok(ActionResult::Value(bias as f64))
             }
 
             Action::SetBias { voltage } => {
@@ -110,7 +110,7 @@ impl ActionDriver {
 
                 match data_to_get {
                     crate::types::DataToGet::Stable { readings, timeout } => {
-                        match self.find_stable_oscilloscope_data(
+                        let osci_data = self.find_stable_oscilloscope_data_with_fallback(
                             data_to_get,
                             readings,
                             timeout,
@@ -118,10 +118,8 @@ impl ActionDriver {
                             50e-15,
                             0.8,
                             is_stable,
-                        )? {
-                            Some(osci_data) => Ok(ActionResult::OscilloscopeData(osci_data)),
-                            None => Ok(ActionResult::None),
-                        }
+                        )?;
+                        Ok(ActionResult::OsciData(osci_data))
                     }
                     _ => {
                         // Use NextTrigger for actual data reading - Stable is just for our algorithm
@@ -132,8 +130,8 @@ impl ActionDriver {
                             DataToGet::Stable { .. } => 1, // Use NextTrigger for stable
                         };
                         let (t0, dt, size, data) = self.client.osci1t_data_get(data_mode)?;
-                        let osci_data = OsciData::new(t0, dt, size, data);
-                        Ok(ActionResult::OscilloscopeData(osci_data))
+                        let osci_data = OsciData::new_stable(t0, dt, size, data);
+                        Ok(ActionResult::OsciData(osci_data))
                     }
                 }
             }
@@ -143,7 +141,7 @@ impl ActionDriver {
                 wait_for_newest_data,
             } => {
                 let pos = self.client.folme_xy_pos_get(wait_for_newest_data)?;
-                Ok(ActionResult::PiezoPosition(pos))
+                Ok(ActionResult::Position(pos))
             }
 
             Action::SetPiezoPosition {
@@ -232,7 +230,7 @@ impl ActionDriver {
 
             Action::ReadScanStatus => {
                 let is_scanning = self.client.scan_status_get()?;
-                Ok(ActionResult::ScanStatus(is_scanning))
+                Ok(ActionResult::Status(is_scanning))
             }
 
             // === Advanced Operations ===
@@ -278,11 +276,11 @@ impl ActionDriver {
             Action::Store { key, action } => {
                 let result = self.execute(*action)?;
                 self.stored_values.insert(key, result.clone());
-                Ok(ActionResult::StoredValue(Box::new(result)))
+                Ok(result) // Return the original result directly
             }
 
             Action::Retrieve { key } => match self.stored_values.get(&key) {
-                Some(value) => Ok(ActionResult::StoredValue(Box::new(value.clone()))),
+                Some(value) => Ok(value.clone()), // Return the stored result directly
                 None => Err(NanonisError::InvalidCommand(format!(
                     "No stored value found for key: {}",
                     key
@@ -290,6 +288,28 @@ impl ActionDriver {
             },
 
         }
+    }
+
+    /// Execute action and extract specific type with validation
+    /// 
+    /// This is a convenience method that combines execute() with type extraction,
+    /// providing better ergonomics while preserving type safety.
+    /// 
+    /// # Example
+    /// ```rust
+    /// let osci_data: OsciData = driver.execute_expecting(Action::ReadOsci { 
+    ///     signal: SignalIndex(24), 
+    ///     trigger: None,
+    ///     data_to_get: DataToGet::Captured,
+    ///     is_stable: None,
+    /// })?;
+    /// ```
+    pub fn execute_expecting<T>(&mut self, action: Action) -> Result<T, NanonisError> 
+    where 
+        ActionResult: ExpectFromAction<T>
+    {
+        let result = self.execute(action.clone())?;
+        Ok(result.expect_from_action(&action))
     }
 
     /// Find stable oscilloscope data with proper timeout handling
@@ -368,13 +388,14 @@ impl ActionDriver {
                             stability_method,
                         };
 
-                        let osci_data = OsciData::new_with_stats(
+                        let mut osci_data = OsciData::new_with_stats(
                             t0,
                             dt,
                             stable_data.len() as i32,
                             stable_data,
                             stats,
                         );
+                        osci_data.is_stable = true; // Mark as stable since we found stable data
                         return Ok(Some(osci_data));
                     }
 
@@ -393,6 +414,48 @@ impl ActionDriver {
 
         // Timeout reached without finding stable data
         Ok(None)
+    }
+
+    /// Find stable oscilloscope data with fallback to single value
+    /// 
+    /// This method attempts to find stable oscilloscope data. If successful,
+    /// it returns OsciData with is_stable=true. If no stable data is found
+    /// within the timeout, it returns OsciData with is_stable=false and
+    /// a fallback single value reading.
+    fn find_stable_oscilloscope_data_with_fallback(
+        &mut self,
+        data_to_get: DataToGet,
+        readings: u32,
+        timeout: std::time::Duration,
+        relative_threshold: f64,
+        absolute_threshold: f64,
+        min_window_percent: f64,
+        stability_fn: Option<fn(&[f64]) -> bool>,
+    ) -> Result<OsciData, NanonisError> {
+        // First try to find stable data
+        if let Some(stable_osci_data) = self.find_stable_oscilloscope_data(
+            data_to_get,
+            readings,
+            timeout,
+            relative_threshold,
+            absolute_threshold,
+            min_window_percent,
+            stability_fn,
+        )? {
+            return Ok(stable_osci_data);
+        }
+
+        // If no stable data found, get a single reading as fallback
+        let (t0, dt, size, data) = self.client.osci1t_data_get(1)?; // NextTrigger = 1
+        
+        // Calculate fallback value (mean of the data)
+        let fallback_value = if !data.is_empty() {
+            data.iter().map(|&x| x as f64).sum::<f64>() / data.len() as f64
+        } else {
+            0.0
+        };
+
+        Ok(OsciData::new_unstable_with_fallback(t0, dt, size, data, fallback_value))
     }
 
     /// Execute a chain of actions sequentially
@@ -462,7 +525,7 @@ impl ActionDriver {
             data_to_get,
             is_stable: None,
         })? {
-            ActionResult::OscilloscopeData(osci_data) => Ok(Some(osci_data)),
+            ActionResult::OsciData(osci_data) => Ok(Some(osci_data)),
             ActionResult::None => Ok(None),
             _ => Err(NanonisError::InvalidCommand(
                 "Expected oscilloscope data".into(),
@@ -484,7 +547,7 @@ impl ActionDriver {
             data_to_get,
             is_stable: Some(is_stable),
         })? {
-            ActionResult::OscilloscopeData(osci_data) => Ok(Some(osci_data)),
+            ActionResult::OsciData(osci_data) => Ok(Some(osci_data)),
             ActionResult::None => Ok(None),
             _ => Err(NanonisError::InvalidCommand(
                 "Expected oscilloscope data".into(),
