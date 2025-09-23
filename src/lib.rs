@@ -6,6 +6,7 @@ pub mod logger;
 pub mod nanonis;
 pub mod plotting;
 pub mod tip_prep;
+pub mod tui;
 pub mod types;
 
 pub use action_driver::{stability, ActionDriver, ExecutionStats};
@@ -20,6 +21,7 @@ pub use nanonis::{
     ZSpectroscopyResult,
 };
 pub use tip_prep::{LoopType, TipController, TipState};
+pub use tui::{SimpleTui, init_terminal, restore_terminal};
 pub use types::{
     Amplitude, ChannelIndex, Frequency, MotorAxis,
     MotorDirection, MotorGroup, MotorMovement, MovementMode,
