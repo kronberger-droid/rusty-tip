@@ -39,8 +39,7 @@ impl TCPLoggerStream {
             .map_err(|_| NanonisError::InvalidAddress(addr.to_string()))?;
 
         // connect with timeout
-        let stream =
-            TcpStream::connect_timeout(&socket_addr, Duration::from_secs(5))?;
+        let stream = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(5))?;
 
         stream.set_nonblocking(false)?;
 
@@ -54,11 +53,7 @@ impl TCPLoggerStream {
     }
 
     /// Connect with custom timeout.
-    pub fn connect_timeout(
-        addr: &str,
-        port: u16,
-        timeout: Duration,
-    ) -> Result<Self, NanonisError> {
+    pub fn connect_timeout(addr: &str, port: u16, timeout: Duration) -> Result<Self, NanonisError> {
         // create the socket address
         let socket_addr: SocketAddr = format!("{addr}:{port}")
             .parse()
@@ -137,10 +132,7 @@ impl TCPLoggerStream {
     }
 
     /// Set read timeout for the stream.
-    pub fn set_read_timeout(
-        &self,
-        timeout: Option<Duration>,
-    ) -> Result<(), NanonisError> {
+    pub fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<(), NanonisError> {
         self.stream
             .set_read_timeout(timeout)
             .map_err(|e| NanonisError::Io {
@@ -161,5 +153,12 @@ impl TCPLoggerStream {
                 context: "Checking data availability".to_string(),
             }),
         }
+    }
+}
+
+impl Drop for TCPLoggerStream {
+    fn drop(&mut self) {
+        // Attempt to gracefully shutdown the TCP connection
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
     }
 }
