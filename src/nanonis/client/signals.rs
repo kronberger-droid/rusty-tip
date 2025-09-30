@@ -291,6 +291,65 @@ impl NanonisClient {
         }
     }
 
+    /// Assign additional Real-Time (RT) signals to Internal 23 and 24 signals.
+    ///
+    /// Links advanced RT signals to Internal 23 and Internal 24 in the Signals Manager.
+    /// This enables routing of specialized real-time signals through the internal channel system.
+    ///
+    /// **Important Note**: This assignment only links the RT signals to Internal 23/24.
+    /// To make them visible in graphs and available for acquisition in modules, Internal 23 and 24
+    /// must be assigned to one of the 24 display slots using functions like `Signals.InSlotSet`.
+    ///
+    /// # Arguments
+    /// * `additional_rt_signal_1` - Index of the RT signal to assign to Internal 23 (from `signals_add_rt_get()`)
+    /// * `additional_rt_signal_2` - Index of the RT signal to assign to Internal 24 (from `signals_add_rt_get()`)
+    ///
+    /// # Errors
+    /// Returns `NanonisError` if:
+    /// - Invalid RT signal indices provided
+    /// - RT signals are not available or accessible
+    /// - Communication fails or protocol error occurs
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use rusty_tip::NanonisClient;
+    ///
+    /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
+    ///
+    /// // First, get the available RT signals
+    /// let (available_signals, current_23, current_24) = client.signals_add_rt_get()?;
+    ///
+    /// println!("Available RT signals:");
+    /// for (i, signal) in available_signals.iter().enumerate() {
+    ///     println!("  {}: {}", i, signal);
+    /// }
+    ///
+    /// // Assign RT signal index 0 to Internal 23 and index 1 to Internal 24
+    /// client.signals_add_rt_set(0, 1)?;
+    ///
+    /// // Verify the assignment
+    /// let (_, new_23, new_24) = client.signals_add_rt_get()?;
+    /// println!("Internal 23 now assigned to: {}", new_23);
+    /// println!("Internal 24 now assigned to: {}", new_24);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn signals_add_rt_set(
+        &mut self,
+        additional_rt_signal_1: i32,
+        additional_rt_signal_2: i32,
+    ) -> Result<(), NanonisError> {
+        self.quick_send(
+            "Signals.AddRTSet",
+            vec![
+                NanonisValue::I32(additional_rt_signal_1),
+                NanonisValue::I32(additional_rt_signal_2),
+            ],
+            vec!["i", "i"],
+            vec![],
+        )?;
+        Ok(())
+    }
+
     /// Read a signal by name (finds index automatically)
     pub fn read_signal_by_name(
         &mut self,

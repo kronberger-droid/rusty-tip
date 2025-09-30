@@ -13,7 +13,8 @@
       "Bash(/home/kronberger/.cargo/bin/cargo check)",
       "Bash(git add:*)",
       "Bash(rm:*)",
-      "Bash(/nix/store/h1c2imj0dpfyyfrd0i6195xznqxcar8x-rust-stable-2025-08-07/bin/cargo check)"
+      "Bash(/nix/store/h1c2imj0dpfyyfrd0i6195xznqxcar8x-rust-stable-2025-08-07/bin/cargo check)",
+      "Read(//home/kronberger/Programming/python/nanonis_spm/nanonis_spm/**)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits"
