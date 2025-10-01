@@ -65,8 +65,6 @@
 
         # Simple sway development layout setup
         swayDevSetup = ''
-          echo "Setting up development layout..."
-          
           # Create split terminal layout
           swaymsg layout splith
           swaymsg layout stacking
@@ -86,7 +84,10 @@
           
           # Start helix in main terminal
           echo "Starting helix..."
-          exec hx
+          hx .
+
+          # Switch to nushell after helix exits
+          exec nu --login
         '';
       in {
         # Clean development shell without window manager setup

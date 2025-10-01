@@ -1,9 +1,9 @@
 use crate::{
     types::{
-        DataToGet, MovementMode, OsciData, Position, Position3D, ScanAction,
-        SignalIndex, TriggerConfig,
+        DataToGet, MovementMode, OsciData, Position, Position3D, ScanAction, SignalIndex,
+        TriggerConfig,
     },
-    MotorDirection,
+    MotorDirection, TipShaperConfig,
 };
 use std::time::Duration;
 
@@ -101,9 +101,21 @@ pub enum Action {
         pulse_mode: u16,
     },
 
+    /// Full tip shaper control with all parameters
+    TipShaper {
+        config: TipShaperConfig,
+        wait_until_finished: bool,
+        timeout: Duration,
+    },
+
+    /// Simple pulse-retract with predefined safe values
+    PulseRetract {
+        pulse_width: Duration,
+        pulse_height_v: f32,
+    },
+
     /// Wait for a specific duration
     Wait { duration: Duration },
-
 
     // === Data Management ===
     /// Store result value with key for later retrieval
@@ -118,25 +130,25 @@ pub enum Action {
 pub enum ActionResult {
     /// Single numeric value (signals, bias, etc.)
     Value(f64),
-    
+
     /// Multiple numeric values (signal arrays)
     Values(Vec<f64>),
-    
+
     /// String data (signal names, error messages, etc.)
     Text(Vec<String>),
-    
+
     /// Boolean status (scanning/idle, running/stopped, etc.)
     Status(bool),
-    
+
     /// Position data (meaningful x,y structure)
     Position(Position),
-    
+
     /// Complex oscilloscope data (timing + data + metadata)
     OsciData(OsciData),
-    
+
     /// Operation completed successfully (no data returned)
     Success,
-    
+
     /// No result/waiting state
     None,
 }
@@ -215,10 +227,9 @@ impl ActionResult {
         match (action, self) {
             (Action::ReadSignals { .. }, ActionResult::Values(values)) => values,
             (Action::ReadSignal { .. }, ActionResult::Value(v)) => vec![v],
-            (action, result) => panic!(
-                "Expected values from action {:?}, got {:?}",
-                action, result
-            ),
+            (action, result) => {
+                panic!("Expected values from action {:?}, got {:?}", action, result)
+            }
         }
     }
 
@@ -259,10 +270,9 @@ impl ActionResult {
     pub fn expect_status(self, action: &Action) -> bool {
         match (action, self) {
             (Action::ReadScanStatus, ActionResult::Status(status)) => status,
-            (action, result) => panic!(
-                "Expected status from action {:?}, got {:?}",
-                action, result
-            ),
+            (action, result) => {
+                panic!("Expected status from action {:?}, got {:?}", action, result)
+            }
         }
     }
 
@@ -474,6 +484,30 @@ impl Action {
                 pulse_mode: _,
             } => {
                 format!("Bias pulse {:.3}V for {:?}ms", bias_value_v, pulse_width)
+            }
+            Action::TipShaper {
+                config,
+                wait_until_finished,
+                timeout,
+            } => {
+                format!(
+                    "Tip shaper: bias {:.1}V, lift {:.0}nm, times {:.1?}s/{:.1?}s (wait: {}, timeout: {:?}ms)",
+                    config.bias_v,
+                    config.tip_lift_m * 1e9,
+                    config.lift_time_1.as_secs_f32(),
+                    config.lift_time_2.as_secs_f32(),
+                    wait_until_finished,
+                    timeout
+                )
+            }
+            Action::PulseRetract {
+                pulse_width,
+                pulse_height_v,
+            } => {
+                format!(
+                    "Pulse retract {:.1}V for {:.0?}ms",
+                    pulse_height_v, pulse_width
+                )
             }
             Action::ReadOsci {
                 signal,

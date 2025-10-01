@@ -1,25 +1,18 @@
 use std::{thread::sleep, time::Duration};
 
-use rusty_tip::{NanonisClient, TCPLoggerStream};
+use rusty_tip::{NanonisClient, TCPLogStatus, TCPLoggerStream};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut control = NanonisClient::new("127.0.0.1", 6501)?;
+    let mut client = NanonisClient::new("127.0.0.1", 6501)?;
 
     let mut stream = TCPLoggerStream::connect("127.0.0.1", 6590)?;
 
-    sleep(Duration::from_millis(500));
-
-    // control.tcplog_chs_set(vec![0, 8])?;
+    // stream.read_frame()?;
+    // client.tcplog_chs_set(vec![0, 8])?;
 
     // sleep(Duration::from_millis(500));
 
-    match control.tcplog_start() {
-        Ok(_) => {}
-        Err(_) => {
-            control.tcplog_stop()?;
-            control.tcplog_start()?;
-        }
-    }
+    toggle_tcplog(&mut client)?;
 
     sleep(Duration::from_millis(500));
 
@@ -33,7 +26,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     sleep(Duration::from_millis(500));
 
-    control.tcplog_stop()?;
+    toggle_tcplog(&mut client)?;
 
     Ok(())
+}
+
+fn toggle_tcplog(client: &mut NanonisClient) -> Result<TCPLogStatus, Box<dyn std::error::Error>> {
+    let mut status = client.tcplog_status_get()?;
+
+    match status {
+        rusty_tip::TCPLogStatus::Start => {
+            client.tcplog_stop()?;
+        }
+        rusty_tip::TCPLogStatus::Stop => {
+            client.tcplog_start()?;
+        }
+        _ => {}
+    }
+
+    status = client.tcplog_status_get()?;
+
+    Ok(status)
 }

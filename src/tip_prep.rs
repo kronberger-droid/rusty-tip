@@ -3,11 +3,12 @@ use crate::actions::{Action, ActionChain};
 use crate::error::NanonisError;
 use crate::job::Job;
 use crate::types::{DataToGet, MotorDirection, SignalIndex};
+use crate::utils::{poll_with_timeout, PollError};
 use crate::{stability, Logger};
 use log::{debug, info, warn};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Simple tip state - matches original controller
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -327,92 +328,102 @@ impl TipController {
 impl TipController {
     /// Main control loop - with pulse voltage stepping
     pub fn run_loop(&mut self, timeout: Duration) -> Result<TipState, NanonisError> {
-        let start = Instant::now();
-        let mut freq_shift;
-        let mut tip_state;
-
         self.pre_loop_initialization()?;
 
         let z_signal_index = SignalIndex(30);
 
-        while start.elapsed() < timeout {
-            self.cycle_count += 1;
+        match poll_with_timeout(
+            || {
+                // Execute one control cycle
+                self.cycle_count += 1;
 
-            let ampl_setpoint = self.driver.client_mut().pll_amp_ctrl_setpnt_get(1)?;
-            let ampl_current = self.driver.client_mut().signal_val_get(75, true)?;
+                let ampl_setpoint = self.driver.client_mut().pll_amp_ctrl_setpnt_get(1)?;
+                let ampl_current = self.driver.client_mut().signal_val_get(75, true)?;
 
-            if (ampl_setpoint - 5e-12..ampl_setpoint + 5e-12).contains(&ampl_current) {
-                info!("Amplitude reached the target range");
-                self.read_and_track_freq_shift()?;
+                let (freq_shift, tip_state) = if (ampl_setpoint - 5e-12..ampl_setpoint + 5e-12).contains(&ampl_current) {
+                    info!("Amplitude reached the target range");
+                    self.read_and_track_freq_shift()?;
 
-                freq_shift = self
-                    .get_last_signal(self.signal_index)
-                    .expect("Should have failed earlier");
+                    let freq_shift = self
+                        .get_last_signal(self.signal_index)
+                        .expect("Should have failed earlier");
 
-                self.update_pulse_voltage();
+                    self.update_pulse_voltage();
 
-                tip_state = self.classify(freq_shift);
-            } else {
-                info!("Amplitude did not reach the target range");
-                freq_shift = -76.3; // add client call
-                tip_state = TipState::Bad;
+                    let tip_state = self.classify(freq_shift);
+                    (freq_shift, tip_state)
+                } else {
+                    info!("Amplitude did not reach the target range");
+                    let freq_shift = -76.3; // add client call
+                    let tip_state = TipState::Bad;
 
-                self.track_signal(self.signal_index, freq_shift);
+                    self.track_signal(self.signal_index, freq_shift);
+                    self.update_pulse_voltage();
+                    (freq_shift, tip_state)
+                };
 
-                self.update_pulse_voltage();
+                info!("Cycle {}: State = {:?}", self.cycle_count, tip_state);
+
+                self.read_and_track_z_pos(z_signal_index)?;
+
+                info!(
+                    "Cycle {}: Freq Shift = {:.6?}, Pulse = {:.3}V, Cycles w/o change = {}/{}",
+                    self.cycle_count,
+                    freq_shift,
+                    self.pulse_voltage,
+                    self.cycles_without_change,
+                    self.cycles_before_step
+                );
+
+                // Execute based on state
+                match tip_state {
+                    TipState::Bad => {
+                        self.bad_loop(self.cycle_count)?; // Execute full recovery sequence
+                    }
+                    TipState::Good => {
+                        self.good_loop(self.cycle_count)?; // Monitor and count
+                    }
+                    TipState::Stable => {
+                        info!(
+                            "STABLE achieved after {} cycles! Final pulse voltage: {:.3}V",
+                            self.cycle_count, self.pulse_voltage
+                        );
+                        return Ok(Some(TipState::Stable));
+                    }
+                }
+
+                // Add information about this cycle to the logger buffer
+                if self.logger.is_some() {
+                    // Calculate changes before borrowing logger mutably
+                    let freq_shift_change = self.get_signal_change(self.signal_index);
+                    let z_change = self.get_signal_change(z_signal_index);
+
+                    if let Some(ref mut logger) = self.logger {
+                        logger.add(LogLine {
+                            cycle: self.cycle_count,
+                            freq_shift,
+                            tip_state,
+                            pulse_voltage: self.pulse_voltage,
+                            freq_shift_change,
+                            z_change,
+                        })?
+                    }
+                }
+
+                // Continue polling (return None to continue the loop)
+                Ok(None)
+            },
+            timeout,
+            Duration::from_millis(0), // No sleep between cycles in control loop
+        ) {
+            Ok(Some(tip_state)) => Ok(tip_state),
+            Ok(None) => {
+                debug!("Tip control loop reached timeout");
+                Err(NanonisError::InvalidCommand("Loop timeout".to_string()))
             }
-
-            info!("Cycle {}: State = {:?}", self.cycle_count, tip_state);
-
-            self.read_and_track_z_pos(z_signal_index)?;
-
-            info!(
-                "Cycle {}: Freq Shift = {:.6?}, Pulse = {:.3}V, Cycles w/o change = {}/{}",
-                self.cycle_count,
-                freq_shift,
-                self.pulse_voltage,
-                self.cycles_without_change,
-                self.cycles_before_step
-            );
-
-            // Execute based on state
-            match tip_state {
-                TipState::Bad => {
-                    self.bad_loop(self.cycle_count)?; // Execute full recovery sequence
-                }
-                TipState::Good => {
-                    self.good_loop(self.cycle_count)?; // Monitor and count
-                }
-                TipState::Stable => {
-                    info!(
-                        "STABLE achieved after {} cycles! Final pulse voltage: {:.3}V",
-                        self.cycle_count, self.pulse_voltage
-                    );
-                    return Ok(TipState::Stable);
-                }
-            }
-
-            // Add information about this cycle to the logger buffer
-            if self.logger.is_some() {
-                // Calculate changes before borrowing logger mutably
-                let freq_shift_change = self.get_signal_change(self.signal_index);
-                let z_change = self.get_signal_change(z_signal_index);
-
-                if let Some(ref mut logger) = self.logger {
-                    logger.add(LogLine {
-                        cycle: self.cycle_count,
-                        freq_shift,
-                        tip_state,
-                        pulse_voltage: self.pulse_voltage,
-                        freq_shift_change,
-                        z_change,
-                    })?
-                }
-            }
+            Err(PollError::ConditionError(e)) => Err(e),
+            Err(PollError::Timeout) => unreachable!(), // poll_with_timeout returns Ok(None) on timeout
         }
-
-        debug!("Tip control loop reached timeout");
-        Err(NanonisError::InvalidCommand("Loop timeout".to_string()))
     }
 
     /// Bad loop - execute recovery sequence with stable signal monitoring
@@ -503,7 +514,10 @@ impl TipController {
 
         self.driver.client_mut().z_ctrl_setpoint_set(100e-12)?;
 
-        self.driver.client_mut().auto_approach_and_wait()?;
+        self.driver.execute(Action::AutoApproach {
+            wait_until_finished: true,
+            timeout: Duration::from_secs(1),
+        })?;
 
         Ok(())
     }

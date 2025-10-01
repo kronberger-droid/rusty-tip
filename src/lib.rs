@@ -7,6 +7,7 @@ pub mod nanonis;
 pub mod plotting;
 pub mod tip_prep;
 pub mod types;
+pub mod utils;
 
 pub use action_driver::{stability, ActionDriver, ExecutionStats};
 pub use actions::{Action, ActionChain, ActionResult};
@@ -28,3 +29,4 @@ pub use types::{
     StepCount, TCPLogStatus, TCPLoggerData,
     TriggerLevel, TriggerMode, TriggerSlope, ZControllerHold,
 };
+pub use utils::{poll_until, poll_with_timeout, PollError};

@@ -91,10 +91,7 @@ impl NanonisClient {
     /// client.tcplog_chs_set(vec![0])?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn tcplog_chs_set(
-        &mut self,
-        channel_indexes: Vec<i32>,
-    ) -> Result<(), NanonisError> {
+    pub fn tcplog_chs_set(&mut self, channel_indexes: Vec<i32>) -> Result<(), NanonisError> {
         for &index in &channel_indexes {
             if !(0..=23).contains(&index) {
                 return Err(NanonisError::InvalidCommand(
@@ -141,10 +138,7 @@ impl NanonisClient {
     /// client.tcplog_oversampl_set(1000)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn tcplog_oversampl_set(
-        &mut self,
-        oversampling_value: i32,
-    ) -> Result<(), NanonisError> {
+    pub fn tcplog_oversampl_set(&mut self, oversampling_value: i32) -> Result<(), NanonisError> {
         if !(0..=1000).contains(&oversampling_value) {
             return Err(NanonisError::InvalidCommand(format!(
                 "Invalid oversampling value: {}. Must be between 0-1000",
@@ -188,8 +182,7 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn tcplog_status_get(&mut self) -> Result<TCPLogStatus, NanonisError> {
-        let result =
-            self.quick_send("TCPLog.StatusGet", vec![], vec![], vec!["i"])?;
+        let result = self.quick_send("TCPLog.StatusGet", vec![], vec![], vec!["i"])?;
 
         println!("{result:?}");
 
@@ -205,9 +198,7 @@ impl NanonisClient {
                     5 => Ok(TCPLogStatus::TCPConnect),
                     6 => Ok(TCPLogStatus::TCPDisconnect),
                     7 => Ok(TCPLogStatus::BufferOverflow),
-                    _ => Err(NanonisError::Protocol(
-                        "Invalid Status value".to_string(),
-                    )),
+                    _ => Err(NanonisError::Protocol("Invalid Status value".to_string())),
                 }
             }
             None => Err(NanonisError::Protocol(

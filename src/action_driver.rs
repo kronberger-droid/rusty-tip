@@ -5,11 +5,14 @@ use crate::actions::{Action, ActionChain, ActionResult, ExpectFromAction};
 use crate::error::NanonisError;
 use crate::nanonis::NanonisClient;
 use crate::types::{
-    AutoApproachResult, DataToGet, MotorGroup, OsciData, Position, PulseMode, ScanDirection,
-    SignalIndex, SignalStats, TriggerConfig, ZControllerHold,
+    DataToGet, MotorGroup, OsciData, Position, PulseMode, ScanDirection, SignalIndex, SignalStats,
+    TriggerConfig, ZControllerHold,
 };
+use crate::utils::{poll_until, poll_with_timeout, PollError};
+use crate::TipShaperConfig;
 use std::collections::HashMap;
 use std::thread;
+use std::time::Duration;
 
 /// Direct 1:1 translation layer between Actions and NanonisClient calls
 /// No safety checks, no validation - maximum performance and flexibility
@@ -48,7 +51,6 @@ impl ActionDriver {
         &mut self.client
     }
 
-
     /// Execute a single action with direct 1:1 mapping to client methods
     pub fn execute(&mut self, action: Action) -> Result<ActionResult, NanonisError> {
         match action {
@@ -69,7 +71,9 @@ impl ActionDriver {
             } => {
                 let indices: Vec<i32> = signals.iter().map(|s| (*s).into()).collect();
                 let values = self.client.signals_vals_get(indices, wait_for_newest)?;
-                Ok(ActionResult::Values(values.into_iter().map(|v| v as f64).collect()))
+                Ok(ActionResult::Values(
+                    values.into_iter().map(|v| v as f64).collect(),
+                ))
             }
 
             Action::ReadSignalNames => {
@@ -196,16 +200,85 @@ impl ActionDriver {
                 wait_until_finished,
                 timeout,
             } => {
-                let result = self
-                    .client
-                    .auto_approach_with_timeout(wait_until_finished, timeout)?;
-                match result {
-                    AutoApproachResult::Success => Ok(ActionResult::Success),
-                    AutoApproachResult::AlreadyRunning => Ok(ActionResult::Success), // Could be considered success
-                    _ => Err(NanonisError::InvalidCommand(format!(
-                        "Auto-approach failed: {}",
-                        result.error_message().unwrap_or("Unknown error")
-                    ))),
+                log::debug!(
+                    "Starting auto-approach (wait: {}, timeout: {:?})",
+                    wait_until_finished,
+                    timeout
+                );
+
+                // Check if already running
+                match self.client.auto_approach_on_off_get() {
+                    Ok(true) => {
+                        log::warn!("Auto-approach already running");
+                        return Ok(ActionResult::Success); // Consider already running as success
+                    }
+                    Ok(false) => {
+                        log::debug!("Auto-approach is idle, proceeding to start");
+                    }
+                    Err(_) => {
+                        log::warn!("Auto-approach status unknown, attempting to proceed");
+                    }
+                }
+
+                // Open auto-approach module
+                if let Err(e) = self.client.auto_approach_open() {
+                    log::error!("Failed to open auto-approach module: {}", e);
+                    return Err(NanonisError::InvalidCommand(format!(
+                        "Failed to open auto-approach module: {}",
+                        e
+                    )));
+                }
+
+                // Wait for module initialization
+                std::thread::sleep(std::time::Duration::from_millis(500));
+
+                // Start auto-approach
+                if let Err(e) = self.client.auto_approach_on_off_set(true) {
+                    log::error!("Failed to start auto-approach: {}", e);
+                    return Err(NanonisError::InvalidCommand(format!(
+                        "Failed to start auto-approach: {}",
+                        e
+                    )));
+                }
+
+                if !wait_until_finished {
+                    log::debug!("Auto-approach started, not waiting for completion");
+                    return Ok(ActionResult::Success);
+                }
+
+                // Wait for completion with timeout
+                log::debug!("Waiting for auto-approach to complete...");
+                let poll_interval = std::time::Duration::from_millis(100);
+
+                match poll_until(
+                    || {
+                        // Returns Ok(true) when auto-approach is complete (not running)
+                        self.client
+                            .auto_approach_on_off_get()
+                            .map(|running| !running)
+                    },
+                    timeout,
+                    poll_interval,
+                ) {
+                    Ok(()) => {
+                        log::debug!("Auto-approach completed successfully");
+                        Ok(ActionResult::Success)
+                    }
+                    Err(PollError::Timeout) => {
+                        log::warn!("Auto-approach timed out after {:?}", timeout);
+                        // Try to stop the auto-approach
+                        let _ = self.client.auto_approach_on_off_set(false);
+                        Err(NanonisError::InvalidCommand(
+                            "Auto-approach timed out".to_string(),
+                        ))
+                    }
+                    Err(PollError::ConditionError(e)) => {
+                        log::error!("Error checking auto-approach status: {}", e);
+                        Err(NanonisError::InvalidCommand(format!(
+                            "Status check error: {}",
+                            e
+                        )))
+                    }
                 }
             }
 
@@ -267,6 +340,47 @@ impl ActionDriver {
                 Ok(ActionResult::Success)
             }
 
+            Action::TipShaper {
+                config,
+                wait_until_finished,
+                timeout,
+            } => {
+                // Set tip shaper configuration
+                self.client.tip_shaper_props_set(config)?;
+
+                // Start tip shaper
+                self.client.tip_shaper_start(wait_until_finished, timeout)?;
+
+                Ok(ActionResult::Success)
+            }
+
+            Action::PulseRetract {
+                pulse_width,
+                pulse_height_v,
+            } => {
+                let current_bias = self.client_mut().get_bias().unwrap_or(500e-3);
+                let config = TipShaperConfig {
+                    switch_off_delay: std::time::Duration::from_millis(10),
+                    change_bias: true,
+                    bias_v: pulse_height_v,
+                    tip_lift_m: 0.0,
+                    lift_time_1: pulse_width,
+                    bias_lift_v: current_bias,
+                    bias_settling_time: std::time::Duration::from_millis(50),
+                    lift_height_m: 10e-9,
+                    lift_time_2: std::time::Duration::from_millis(100),
+                    end_wait_time: std::time::Duration::from_millis(50),
+                    restore_feedback: false,
+                };
+
+                // Set tip shaper configuration and start
+                self.client_mut().tip_shaper_props_set(config)?;
+                self.client_mut()
+                    .tip_shaper_start(true, Duration::from_secs(5))?;
+
+                Ok(ActionResult::Success)
+            }
+
             Action::Wait { duration } => {
                 thread::sleep(duration);
                 Ok(ActionResult::None)
@@ -286,27 +400,31 @@ impl ActionDriver {
                     key
                 ))),
             },
-
         }
     }
 
     /// Execute action and extract specific type with validation
-    /// 
+    ///
     /// This is a convenience method that combines execute() with type extraction,
     /// providing better ergonomics while preserving type safety.
-    /// 
+    ///
     /// # Example
-    /// ```rust
-    /// let osci_data: OsciData = driver.execute_expecting(Action::ReadOsci { 
-    ///     signal: SignalIndex(24), 
+    /// ```no_run
+    /// use rusty_tip::{ActionDriver, Action, SignalIndex};
+    /// use rusty_tip::types::{DataToGet, OsciData};
+    ///
+    /// let mut driver = ActionDriver::new("127.0.0.1", 6501)?;
+    /// let osci_data: OsciData = driver.execute_expecting(Action::ReadOsci {
+    ///     signal: SignalIndex(24),
     ///     trigger: None,
-    ///     data_to_get: DataToGet::Captured,
+    ///     data_to_get: DataToGet::Current,
     ///     is_stable: None,
     /// })?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn execute_expecting<T>(&mut self, action: Action) -> Result<T, NanonisError> 
-    where 
-        ActionResult: ExpectFromAction<T>
+    pub fn execute_expecting<T>(&mut self, action: Action) -> Result<T, NanonisError>
+    where
+        ActionResult: ExpectFromAction<T>,
     {
         let result = self.execute(action.clone())?;
         Ok(result.expect_from_action(&action))
@@ -327,97 +445,118 @@ impl ActionDriver {
         min_window_percent: f64,
         stability_fn: Option<fn(&[f64]) -> bool>,
     ) -> Result<Option<OsciData>, NanonisError> {
-        let start_time = std::time::Instant::now();
+        match poll_with_timeout(
+            || {
+                // Try to find stable data in a batch of readings
+                for _attempt in 0..readings {
+                    let (t0, dt, size, data) = self.client.osci1t_data_get(2)?; // Wait2Triggers = 2
 
-        while start_time.elapsed() < timeout {
-            for _attempt in 0..readings {
-                // Check timeout before each reading attempt
-                if start_time.elapsed() >= timeout {
-                    return Ok(None);
-                }
-
-                let (t0, dt, size, data) = self.client.osci1t_data_get(2)?; // Wait2Triggers = 2
-
-                let min_window = (size as f64 * min_window_percent) as usize;
-                let mut start = 0;
-                let mut end = size as usize;
-
-                while (end - start) > min_window {
-                    // Check timeout during window analysis
-                    if start_time.elapsed() >= timeout {
-                        return Ok(None);
+                    if let Some(stable_osci_data) = self.analyze_stability_window(
+                        t0,
+                        dt,
+                        size,
+                        data,
+                        relative_threshold,
+                        absolute_threshold,
+                        min_window_percent,
+                        stability_fn,
+                    )? {
+                        return Ok(Some(stable_osci_data));
                     }
 
-                    let window = &data[start..end];
-                    let arr = Array1::from_vec(window.to_vec());
-                    let mean = arr.mean().expect("There must be an non-empty array, osci1t_data_get would have returned early.");
-                    let std_dev = arr.std(0.0);
-                    let relative_std = std_dev / mean.abs();
-
-                    // Use custom stability function if provided, otherwise default dual-threshold
-                    let is_stable = if let Some(stability_fn) = stability_fn {
-                        stability_fn(window)
-                    } else {
-                        // Default dual-threshold approach: relative OR absolute
-                        let is_relative_stable = relative_std < relative_threshold;
-                        let is_absolute_stable = std_dev < absolute_threshold;
-                        is_relative_stable || is_absolute_stable
-                    };
-
-                    if is_stable {
-                        let stable_data = window.to_vec();
-                        let stability_method = if stability_fn.is_some() {
-                            "custom".to_string()
-                        } else {
-                            // Default dual-threshold logic
-                            let is_relative_stable = relative_std < relative_threshold;
-                            let is_absolute_stable = std_dev < absolute_threshold;
-                            match (is_relative_stable, is_absolute_stable) {
-                                (true, true) => "both".to_string(),
-                                (true, false) => "relative".to_string(),
-                                (false, true) => "absolute".to_string(),
-                                (false, false) => unreachable!(),
-                            }
-                        };
-
-                        let stats = SignalStats {
-                            mean,
-                            std_dev,
-                            relative_std,
-                            window_size: stable_data.len(),
-                            stability_method,
-                        };
-
-                        let mut osci_data = OsciData::new_with_stats(
-                            t0,
-                            dt,
-                            stable_data.len() as i32,
-                            stable_data,
-                            stats,
-                        );
-                        osci_data.is_stable = true; // Mark as stable since we found stable data
-                        return Ok(Some(osci_data));
-                    }
-
-                    let shrink = ((end - start) / 10).max(1);
-                    start += shrink;
-                    end -= shrink;
+                    // Small delay between attempts to avoid overwhelming the system
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
 
-                // Small delay between attempts to avoid overwhelming the system
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                // No stable data found in this batch, continue polling
+                Ok(None)
+            },
+            timeout,
+            std::time::Duration::from_millis(50), // Brief pause between reading cycles
+        ) {
+            Ok(Some(result)) => Ok(Some(result)),
+            Ok(None) => Ok(None), // Timeout reached
+            Err(PollError::ConditionError(e)) => Err(e),
+            Err(PollError::Timeout) => unreachable!(), // poll_with_timeout returns Ok(None) on timeout
+        }
+    }
+
+    /// Analyze a single oscilloscope data window for stability
+    fn analyze_stability_window(
+        &self,
+        t0: f64,
+        dt: f64,
+        size: i32,
+        data: Vec<f64>,
+        relative_threshold: f64,
+        absolute_threshold: f64,
+        min_window_percent: f64,
+        stability_fn: Option<fn(&[f64]) -> bool>,
+    ) -> Result<Option<OsciData>, NanonisError> {
+        let min_window = (size as f64 * min_window_percent) as usize;
+        let mut start = 0;
+        let mut end = size as usize;
+
+        while (end - start) > min_window {
+            let window = &data[start..end];
+            let arr = Array1::from_vec(window.to_vec());
+            let mean = arr.mean().expect(
+                "There must be an non-empty array, osci1t_data_get would have returned early.",
+            );
+            let std_dev = arr.std(0.0);
+            let relative_std = std_dev / mean.abs();
+
+            // Use custom stability function if provided, otherwise default dual-threshold
+            let is_stable = if let Some(stability_fn) = stability_fn {
+                stability_fn(window)
+            } else {
+                // Default dual-threshold approach: relative OR absolute
+                let is_relative_stable = relative_std < relative_threshold;
+                let is_absolute_stable = std_dev < absolute_threshold;
+                is_relative_stable || is_absolute_stable
+            };
+
+            if is_stable {
+                let stable_data = window.to_vec();
+                let stability_method = if stability_fn.is_some() {
+                    "custom".to_string()
+                } else {
+                    // Default dual-threshold logic
+                    let is_relative_stable = relative_std < relative_threshold;
+                    let is_absolute_stable = std_dev < absolute_threshold;
+                    match (is_relative_stable, is_absolute_stable) {
+                        (true, true) => "both".to_string(),
+                        (true, false) => "relative".to_string(),
+                        (false, true) => "absolute".to_string(),
+                        (false, false) => unreachable!(),
+                    }
+                };
+
+                let stats = SignalStats {
+                    mean,
+                    std_dev,
+                    relative_std,
+                    window_size: stable_data.len(),
+                    stability_method,
+                };
+
+                let mut osci_data =
+                    OsciData::new_with_stats(t0, dt, stable_data.len() as i32, stable_data, stats);
+                osci_data.is_stable = true; // Mark as stable since we found stable data
+                return Ok(Some(osci_data));
             }
 
-            // Brief pause between reading cycles
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            let shrink = ((end - start) / 10).max(1);
+            start += shrink;
+            end -= shrink;
         }
 
-        // Timeout reached without finding stable data
+        // No stable window found in this data
         Ok(None)
     }
 
     /// Find stable oscilloscope data with fallback to single value
-    /// 
+    ///
     /// This method attempts to find stable oscilloscope data. If successful,
     /// it returns OsciData with is_stable=true. If no stable data is found
     /// within the timeout, it returns OsciData with is_stable=false and
@@ -447,15 +586,21 @@ impl ActionDriver {
 
         // If no stable data found, get a single reading as fallback
         let (t0, dt, size, data) = self.client.osci1t_data_get(1)?; // NextTrigger = 1
-        
+
         // Calculate fallback value (mean of the data)
         let fallback_value = if !data.is_empty() {
-            data.iter().map(|&x| x as f64).sum::<f64>() / data.len() as f64
+            data.iter().sum::<f64>() / data.len() as f64
         } else {
             0.0
         };
 
-        Ok(OsciData::new_unstable_with_fallback(t0, dt, size, data, fallback_value))
+        Ok(OsciData::new_unstable_with_fallback(
+            t0,
+            dt,
+            size,
+            data,
+            fallback_value,
+        ))
     }
 
     /// Execute a chain of actions sequentially
@@ -510,7 +655,6 @@ impl ActionDriver {
     pub fn stored_keys(&self) -> Vec<&String> {
         self.stored_values.keys().collect()
     }
-
 
     /// Convenience method to read oscilloscope data directly
     pub fn read_oscilloscope(
@@ -717,5 +861,4 @@ mod tests {
             }
         }
     }
-
 }
