@@ -99,11 +99,15 @@ impl NanonisClient {
                 ));
             }
         }
+        let num_channels = channel_indexes.len() as i32;
 
         self.quick_send(
             "TCPLog.ChsSet",
-            vec![NanonisValue::ArrayI32(channel_indexes)],
-            vec!["*i"],
+            vec![
+                NanonisValue::I32(num_channels),
+                NanonisValue::ArrayI32(channel_indexes),
+            ],
+            vec!["i", "*i"],
             vec![],
         )?;
         Ok(())
