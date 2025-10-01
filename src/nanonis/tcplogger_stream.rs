@@ -1,5 +1,6 @@
 use crate::error::NanonisError;
 use crate::types::{TCPLogStatus, TCPLoggerData};
+use crate::NanonisClient;
 use byteorder::{BigEndian, ReadBytesExt};
 use std::io::{Cursor, Read};
 use std::net::{SocketAddr, TcpStream};
@@ -19,6 +20,7 @@ use std::time::Duration;
 /// - Data: N × 32-bit floats (N × 4 bytes)
 pub struct TCPLoggerStream {
     stream: TcpStream,
+    control: NanonisClient,
     /// Reusable buffer for frame data - resized as needed to fit frames
     buffer: Vec<u8>,
 }
@@ -32,9 +34,9 @@ impl TCPLoggerStream {
     ///
     /// # Returns
     /// Connected `TCPLoggerStream` ready to read data frames.
-    pub fn connect(addr: &str, port: u16) -> Result<Self, NanonisError> {
+    pub fn connect(addr: &str, stream_port: u16, control_port: u16) -> Result<Self, NanonisError> {
         // create the socket address
-        let socket_addr: SocketAddr = format!("{addr}:{port}")
+        let socket_addr: SocketAddr = format!("{addr}:{stream_port}")
             .parse()
             .map_err(|_| NanonisError::InvalidAddress(addr.to_string()))?;
 
@@ -46,8 +48,11 @@ impl TCPLoggerStream {
         // set stream timeouts for continuous reading
         stream.set_read_timeout(Some(Duration::from_secs(30)))?;
 
+        let control = NanonisClient::new(addr, control_port)?;
+
         Ok(Self {
             stream,
+            control,
             buffer: Vec::with_capacity(1024),
         })
     }
@@ -159,6 +164,7 @@ impl TCPLoggerStream {
 impl Drop for TCPLoggerStream {
     fn drop(&mut self) {
         // Attempt to gracefully shutdown the TCP connection
+        let _ = self.control.tcplog_stop();
         let _ = self.stream.shutdown(std::net::Shutdown::Both);
     }
 }

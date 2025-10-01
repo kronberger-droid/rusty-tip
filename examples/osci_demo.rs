@@ -1,4 +1,4 @@
-use rusty_tip::action_driver::ActionDriver;
+use rusty_tip::{action_driver::ActionDriver, TCPLoggerStream};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
