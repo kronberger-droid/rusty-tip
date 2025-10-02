@@ -5,7 +5,7 @@ use rusty_tip::{NanonisClient, TCPLoggerStream};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = NanonisClient::new("127.0.0.1", 6501)?;
 
-    let mut stream = TCPLoggerStream::connect("127.0.0.1", 6590)?;
+    let mut stream = TCPLoggerStream::connect("127.0.0.1", 6590, 6504)?;
 
     println!("{:?}", client.tcplog_status_get());
 

@@ -2,6 +2,8 @@
 name = "rusty-tip"
 version = "0.2.0"
 edition = "2021"
+description = "Rust library for Nanonis SPM system control via TCP"
+repository = "https://github.com/kronberger-droid/rusty-tip"
 license = "MIT"
 authors = ["Martin Kronberger <kronberger@proton.me"]
 
@@ -20,4 +22,3 @@ chrono = { version = "0.4.42", features = ["serde"] }
 serde_json = "1.0"
 ndarray = "0.16.1"
 ctrlc = "3.4"
-pico-args = "0.5.0"
