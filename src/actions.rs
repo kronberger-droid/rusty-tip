@@ -1,6 +1,6 @@
 use crate::{
     types::{
-        DataToGet, MovementMode, OsciData, Position, Position3D, ScanAction, SignalIndex,
+        DataToGet, MotorDisplacement, MovementMode, OsciData, Position, Position3D, ScanAction, SignalIndex,
         TriggerConfig,
     },
     MotorDirection, TipShaperConfig,
@@ -53,10 +53,17 @@ pub enum Action {
     MovePiezoRelative { delta: Position },
 
     // === Coarse Positioning Operations (Motor) ===
-    /// Move motor in steps (discrete positioning)
-    MoveMotor {
+    /// Move motor along a single axis (discrete positioning)
+    MoveMotorAxis {
         direction: MotorDirection,
         steps: u16,
+        blocking: bool,
+    },
+
+    /// Move motor in 3D space with single displacement vector
+    MoveMotor3D {
+        displacement: MotorDisplacement,
+        blocking: bool,
     },
 
     /// Move motor using closed-loop to target position
@@ -385,7 +392,8 @@ impl Action {
             self,
             Action::SetPiezoPosition { .. }
                 | Action::MovePiezoRelative { .. }
-                | Action::MoveMotor { .. }
+                | Action::MoveMotorAxis { .. }
+                | Action::MoveMotor3D { .. }
                 | Action::MoveMotorClosedLoop { .. }
         )
     }
@@ -424,7 +432,7 @@ impl Action {
     pub fn involves_motor(&self) -> bool {
         matches!(
             self,
-            Action::MoveMotor { .. } | Action::MoveMotorClosedLoop { .. } | Action::StopMotor
+            Action::MoveMotorAxis { .. } | Action::MoveMotor3D { .. } | Action::MoveMotorClosedLoop { .. } | Action::StopMotor
         )
     }
 
@@ -457,8 +465,19 @@ impl Action {
                     position.x, position.y
                 )
             }
-            Action::MoveMotor { direction, steps } => {
-                format!("Move motor {:?} {} steps", direction, steps)
+            Action::MoveMotorAxis {
+                direction,
+                steps,
+                blocking,
+            } => {
+                format!("Move motor {direction:?} {steps} steps with blocking {blocking}")
+            }
+            Action::MoveMotor3D {
+                displacement,
+                blocking,
+            } => {
+                format!("Move motor 3D displacement ({}, {}, {}) with blocking {blocking}", 
+                    displacement.x, displacement.y, displacement.z)
             }
             Action::AutoApproach {
                 wait_until_finished,
@@ -992,9 +1011,10 @@ mod chain_tests {
         let mut chain = ActionChain::empty();
 
         for _ in 0..3 {
-            chain.push(Action::MoveMotor {
+            chain.push(Action::MoveMotorAxis {
                 direction: MotorDirection::XPlus,
                 steps: 10,
+                blocking: true,
             });
             chain.push(Action::Wait {
                 duration: Duration::from_millis(100),
@@ -1028,9 +1048,10 @@ mod chain_tests {
     #[test]
     fn test_chain_analysis() {
         let chain = ActionChain::new(vec![
-            Action::MoveMotor {
+            Action::MoveMotorAxis {
                 direction: MotorDirection::XPlus,
                 steps: 100,
+                blocking: true,
             },
             Action::SetPiezoPosition {
                 position: Position { x: 1e-9, y: 1e-9 },
