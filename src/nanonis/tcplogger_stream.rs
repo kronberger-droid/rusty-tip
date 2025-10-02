@@ -4,7 +4,96 @@ use crate::NanonisClient;
 use byteorder::{BigEndian, ReadBytesExt};
 use std::io::{Cursor, Read};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
+
+/// Builder for configuring and initializing TCPLoggerStream.
+///
+/// Provides a fluent interface for setting up TCP Logger configuration
+/// before connecting and starting data acquisition.
+#[derive(Debug, Clone)]
+pub struct TCPLoggerStreamBuilder {
+    addr: String,
+    stream_port: u16,
+    control_port: u16,
+    channels: Option<Vec<i32>>,
+    oversampling: Option<i32>,
+    timeout: Option<Duration>,
+    auto_start: bool,
+}
+
+impl TCPLoggerStreamBuilder {
+    /// Create a new builder with required connection parameters.
+    pub fn new(addr: &str, stream_port: u16, control_port: u16) -> Self {
+        Self {
+            addr: addr.to_string(),
+            stream_port,
+            control_port,
+            channels: None,
+            oversampling: None,
+            timeout: None,
+            auto_start: true,
+        }
+    }
+
+    /// Set the channels to record (signal slots 0-23).
+    pub fn channels(mut self, channels: Vec<i32>) -> Self {
+        self.channels = Some(channels);
+        self
+    }
+
+    /// Set the oversampling value (0-1000).
+    pub fn oversampling(mut self, oversampling: i32) -> Self {
+        self.oversampling = Some(oversampling);
+        self
+    }
+
+    /// Set connection timeout.
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Configure whether to automatically start logging after setup.
+    pub fn auto_start(mut self, auto_start: bool) -> Self {
+        self.auto_start = auto_start;
+        self
+    }
+
+    /// Build and initialize the TCPLoggerStream.
+    ///
+    /// This will:
+    /// 1. Connect to the stream and control ports
+    /// 2. Configure channels if specified
+    /// 3. Set oversampling if specified
+    /// 4. Start logging if auto_start is true (default)
+    pub fn build(self) -> Result<TCPLoggerStream, NanonisError> {
+        // Connect to the stream
+        let mut stream = if let Some(timeout) = self.timeout {
+            TCPLoggerStream::connect_timeout(&self.addr, self.stream_port, self.control_port, timeout)?
+        } else {
+            TCPLoggerStream::connect(&self.addr, self.stream_port, self.control_port)?
+        };
+
+        // Configure channels if specified
+        if let Some(channels) = self.channels {
+            stream.control.tcplog_chs_set(channels)?;
+        }
+
+        // Set oversampling if specified
+        if let Some(oversampling) = self.oversampling {
+            stream.control.tcplog_oversampl_set(oversampling)?;
+        }
+
+        // Start logging if requested
+        if self.auto_start {
+            stream.control.tcplog_start()?;
+        }
+
+        Ok(stream)
+    }
+}
 
 /// TCP Logger stream client for reading continuous data from Nanonis TCP Logger.
 ///
@@ -26,6 +115,32 @@ pub struct TCPLoggerStream {
 }
 
 impl TCPLoggerStream {
+    /// Create a builder for configuring the TCP Logger stream.
+    ///
+    /// # Arguments
+    /// * `addr` - Server address (e.g., "127.0.0.1")
+    /// * `stream_port` - TCP Logger data stream port (typically 6590)
+    /// * `control_port` - Nanonis control port (typically 6501)
+    ///
+    /// # Returns
+    /// A `TCPLoggerStreamBuilder` for fluent configuration.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use rusty_tip::TCPLoggerStream;
+    /// use std::time::Duration;
+    ///
+    /// let stream = TCPLoggerStream::builder("127.0.0.1", 6590, 6501)
+    ///     .channels(vec![0, 1, 8])  // Record first 2 signals + bias
+    ///     .oversampling(100)
+    ///     .timeout(Duration::from_secs(10))
+    ///     .build()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn builder(addr: &str, stream_port: u16, control_port: u16) -> TCPLoggerStreamBuilder {
+        TCPLoggerStreamBuilder::new(addr, stream_port, control_port)
+    }
+
     /// Connect to the TCP Logger data stream.
     ///
     /// # Arguments
@@ -159,6 +274,60 @@ impl TCPLoggerStream {
                 source: e,
                 context: "Setting read timeout".to_string(),
             })
+    }
+
+    /// Spawn a background thread to continuously read frames.
+    ///
+    /// This method consumes the `TCPLoggerStream` and spawns a background thread
+    /// that continuously reads frames and sends them over an mpsc channel.
+    ///
+    /// # Returns
+    /// A `Receiver<TCPLoggerData>` that can be used to receive frames as they arrive.
+    /// Use `try_recv()` for non-blocking access or `recv()` for blocking access.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use rusty_tip::TCPLoggerStream;
+    /// use std::time::Duration;
+    ///
+    /// let stream = TCPLoggerStream::builder("127.0.0.1", 6590, 6501)
+    ///     .channels(vec![0, 8])
+    ///     .build()?;
+    ///
+    /// let receiver = stream.spawn_background_reader();
+    ///
+    /// // Non-blocking: get latest available frame
+    /// if let Ok(frame) = receiver.try_recv() {
+    ///     println!("Got frame: {:?}", frame);
+    /// }
+    ///
+    /// // Blocking: wait for next frame
+    /// let frame = receiver.recv()?;
+    /// println!("Frame data: {:?}", frame.data);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn spawn_background_reader(mut self) -> mpsc::Receiver<TCPLoggerData> {
+        let (sender, receiver) = mpsc::channel();
+
+        thread::spawn(move || {
+            loop {
+                match self.read_frame() {
+                    Ok(frame) => {
+                        // If receiver is dropped, break the loop
+                        if sender.send(frame).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        // Frame read error - break the loop
+                        // Could also send error over channel if needed
+                        break;
+                    }
+                }
+            }
+        });
+
+        receiver
     }
 
     /// Check if data is available to read without blocking.
