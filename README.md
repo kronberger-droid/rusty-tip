@@ -2,6 +2,11 @@
 
 Rust library for Nanonis SPM (Scanning Probe Microscopy) system control via TCP.
 
+## NOTE
+
+This library is in development and not ready for production use.
+NanonisClient has not implemented all available functions.
+
 ## Installation
 
 ```bash
