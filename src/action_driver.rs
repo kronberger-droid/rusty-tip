@@ -170,13 +170,28 @@ impl ActionDriver {
             }
 
             // === Coarse Positioning Operations (Motor) ===
-            Action::MoveMotor { direction, steps } => {
-                self.client.motor_start_move(
-                    direction,
-                    steps,
-                    MotorGroup::Group1,
-                    true, // wait_until_finished
-                )?;
+            Action::MoveMotorAxis {
+                direction,
+                steps,
+                blocking,
+            } => {
+                self.client
+                    .motor_start_move(direction, steps, MotorGroup::Group1, blocking)?;
+                Ok(ActionResult::Success)
+            }
+
+            Action::MoveMotor3D {
+                displacement,
+                blocking,
+            } => {
+                // Convert 3D displacement to sequence of motor movements
+                let movements = displacement.to_motor_movements();
+                
+                // Execute each movement in sequence
+                for (direction, steps) in movements {
+                    self.client
+                        .motor_start_move(direction, steps, MotorGroup::Group1, blocking)?;
+                }
                 Ok(ActionResult::Success)
             }
 
@@ -818,6 +833,22 @@ impl ActionDriver {
         };
 
         Ok((results, stats))
+    }
+}
+
+impl Drop for ActionDriver {
+    fn drop(&mut self) {
+        let _ = self.execute_chain(vec![
+            Action::Withdraw {
+                wait_until_finished: false,
+                timeout: Duration::from_secs(1),
+            },
+            Action::MoveMotorAxis {
+                direction: crate::MotorDirection::ZPlus,
+                steps: 2,
+                blocking: false,
+            },
+        ]);
     }
 }
 
