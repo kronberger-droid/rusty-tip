@@ -71,7 +71,12 @@ impl TCPLoggerStreamBuilder {
     pub fn build(self) -> Result<TCPLoggerStream, NanonisError> {
         // Connect to the stream
         let mut stream = if let Some(timeout) = self.timeout {
-            TCPLoggerStream::connect_timeout(&self.addr, self.stream_port, self.control_port, timeout)?
+            TCPLoggerStream::connect_timeout(
+                &self.addr,
+                self.stream_port,
+                self.control_port,
+                timeout,
+            )?
         } else {
             TCPLoggerStream::connect(&self.addr, self.stream_port, self.control_port)?
         };
