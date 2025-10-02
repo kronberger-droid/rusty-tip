@@ -58,23 +58,38 @@ impl TCPLoggerStream {
     }
 
     /// Connect with custom timeout.
-    pub fn connect_timeout(addr: &str, port: u16, timeout: Duration) -> Result<Self, NanonisError> {
+    pub fn connect_timeout(
+        addr: &str,
+        stream_port: u16,
+        control_port: u16,
+        timeout: Duration,
+    ) -> Result<Self, NanonisError> {
         // create the socket address
-        let socket_addr: SocketAddr = format!("{addr}:{port}")
+        let socket_addr: SocketAddr = format!("{addr}:{stream_port}")
             .parse()
             .map_err(|_| NanonisError::InvalidAddress(addr.to_string()))?;
 
         // connect with timeout
         let stream = TcpStream::connect_timeout(&socket_addr, timeout)?;
 
+        let control = NanonisClient::new(addr, control_port)?;
+
         // set stream timeouts for continuous reading
         stream.set_read_timeout(Some(Duration::from_secs(30)))?;
 
         Ok(Self {
             stream,
+            control,
             buffer: Vec::with_capacity(1024),
         })
     }
+
+    /// Get nanonis side status
+    pub fn get_status(&mut self) -> Result<TCPLogStatus, NanonisError> {
+        self.control.tcplog_status_get()
+    }
+
+    //
 
     /// Read a single data frame from the stream.
     ///
