@@ -886,6 +886,68 @@ impl MotorMovement {
     }
 }
 
+/// 3D motor displacement for coordinated movement
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MotorDisplacement {
+    pub x: i16,  // Positive = XPlus, Negative = XMinus
+    pub y: i16,  // Positive = YPlus, Negative = YMinus  
+    pub z: i16,  // Positive = ZPlus, Negative = ZMinus
+}
+
+impl MotorDisplacement {
+    pub fn new(x: i16, y: i16, z: i16) -> Self {
+        Self { x, y, z }
+    }
+
+    /// Create displacement with only X movement
+    pub fn x_only(steps: i16) -> Self {
+        Self { x: steps, y: 0, z: 0 }
+    }
+
+    /// Create displacement with only Y movement
+    pub fn y_only(steps: i16) -> Self {
+        Self { x: 0, y: steps, z: 0 }
+    }
+
+    /// Create displacement with only Z movement
+    pub fn z_only(steps: i16) -> Self {
+        Self { x: 0, y: 0, z: steps }
+    }
+
+    /// Check if this displacement has no movement
+    pub fn is_zero(&self) -> bool {
+        self.x == 0 && self.y == 0 && self.z == 0
+    }
+
+    /// Convert to sequence of individual motor directions and steps
+    pub fn to_motor_movements(&self) -> Vec<(MotorDirection, u16)> {
+        let mut movements = Vec::new();
+        
+        // X axis
+        if self.x > 0 {
+            movements.push((MotorDirection::XPlus, self.x as u16));
+        } else if self.x < 0 {
+            movements.push((MotorDirection::XMinus, (-self.x) as u16));
+        }
+        
+        // Y axis
+        if self.y > 0 {
+            movements.push((MotorDirection::YPlus, self.y as u16));
+        } else if self.y < 0 {
+            movements.push((MotorDirection::YMinus, (-self.y) as u16));
+        }
+        
+        // Z axis
+        if self.z > 0 {
+            movements.push((MotorDirection::ZPlus, self.z as u16));
+        } else if self.z < 0 {
+            movements.push((MotorDirection::ZMinus, (-self.z) as u16));
+        }
+        
+        movements
+    }
+}
+
 /// Oscilloscope trigger mode for Osci1T and Osci2T
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OsciTriggerMode {
