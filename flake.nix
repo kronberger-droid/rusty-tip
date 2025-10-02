@@ -14,6 +14,7 @@
         pkgs = import nixpkgs {
           inherit system;
           overlays = [ fenix.overlays.default rust-overlay.overlays.default ];
+          config.allowUnfree = true;
         };
         lib = pkgs.lib;
 
@@ -37,6 +38,7 @@
           rusty-man
           nushell
           pkg-config
+          claude-code
         ];
 
         # Core Rust development dependencies
@@ -76,7 +78,7 @@
           swaymsg focus parent
           
           # Open claude terminal  
-          swaymsg exec "kitty --working-directory=$(pwd) -e claude"
+          swaymsg exec "kitty --working-directory=$(pwd) -e nix develop .#default -c nu --login -c ${pkgs.claude-code}/bin/claude"
           sleep 0.5
 
           swaymsg layout stacking

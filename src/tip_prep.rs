@@ -340,27 +340,28 @@ impl TipController {
                 let ampl_setpoint = self.driver.client_mut().pll_amp_ctrl_setpnt_get(1)?;
                 let ampl_current = self.driver.client_mut().signal_val_get(75, true)?;
 
-                let (freq_shift, tip_state) = if (ampl_setpoint - 5e-12..ampl_setpoint + 5e-12).contains(&ampl_current) {
-                    info!("Amplitude reached the target range");
-                    self.read_and_track_freq_shift()?;
+                let (freq_shift, tip_state) =
+                    if (ampl_setpoint - 5e-12..ampl_setpoint + 5e-12).contains(&ampl_current) {
+                        info!("Amplitude reached the target range");
+                        self.read_and_track_freq_shift()?;
 
-                    let freq_shift = self
-                        .get_last_signal(self.signal_index)
-                        .expect("Should have failed earlier");
+                        let freq_shift = self
+                            .get_last_signal(self.signal_index)
+                            .expect("Should have failed earlier");
 
-                    self.update_pulse_voltage();
+                        self.update_pulse_voltage();
 
-                    let tip_state = self.classify(freq_shift);
-                    (freq_shift, tip_state)
-                } else {
-                    info!("Amplitude did not reach the target range");
-                    let freq_shift = -76.3; // add client call
-                    let tip_state = TipState::Bad;
+                        let tip_state = self.classify(freq_shift);
+                        (freq_shift, tip_state)
+                    } else {
+                        info!("Amplitude did not reach the target range");
+                        let freq_shift = -76.3; // add client call
+                        let tip_state = TipState::Bad;
 
-                    self.track_signal(self.signal_index, freq_shift);
-                    self.update_pulse_voltage();
-                    (freq_shift, tip_state)
-                };
+                        self.track_signal(self.signal_index, freq_shift);
+                        self.update_pulse_voltage();
+                        (freq_shift, tip_state)
+                    };
 
                 info!("Cycle {}: State = {:?}", self.cycle_count, tip_state);
 
@@ -461,17 +462,9 @@ impl TipController {
                 wait_until_finished: true,
                 timeout: Duration::from_secs(5),
             },
-            Action::MoveMotor {
-                direction: MotorDirection::ZMinus,
-                steps: 3,
-            },
-            Action::MoveMotor {
-                direction: MotorDirection::XPlus,
-                steps: 2,
-            },
-            Action::MoveMotor {
-                direction: MotorDirection::YPlus,
-                steps: 2,
+            Action::MoveMotor3D {
+                displacement: crate::types::MotorDisplacement::new(2, 2, -3),
+                blocking: true,
             },
             Action::AutoApproach {
                 wait_until_finished: true,
