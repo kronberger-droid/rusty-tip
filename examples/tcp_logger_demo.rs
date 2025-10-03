@@ -12,13 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for i in 0..20 {
         let frame = receiver.recv()?;
-        println!(
-            "Frame {}: {} channels, data: {:?}, counter: {}",
-            i + 1,
-            frame.num_channels,
-            frame.data,
-            frame.counter
-        );
+        println!("Frame {} - {:?}", i + 1, frame.data,);
     }
 
     Ok(())
