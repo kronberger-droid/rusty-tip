@@ -14,30 +14,110 @@ use std::collections::HashMap;
 use std::thread;
 use std::time::Duration;
 
+/// Configuration for future TCP Logger integration
+#[derive(Debug, Clone)]
+pub struct TCPLoggerConfig {
+    pub stream_port: u16,
+    pub channels: Vec<i32>,
+    pub oversampling: i32,
+    pub auto_start: bool,
+    pub buffer_size: usize,
+}
+
+/// Builder for configuring ActionDriver with optional parameters
+#[derive(Debug, Clone)]
+pub struct ActionDriverBuilder {
+    addr: String,
+    port: u16,
+    connection_timeout: Option<Duration>,
+    initial_storage: HashMap<String, ActionResult>,
+    tcp_logger_config: Option<TCPLoggerConfig>,
+}
+
+impl ActionDriverBuilder {
+    /// Create a new builder with required connection parameters
+    pub fn new(addr: &str, port: u16) -> Self {
+        Self {
+            addr: addr.to_string(),
+            port,
+            connection_timeout: None,
+            initial_storage: HashMap::new(),
+            tcp_logger_config: None,
+        }
+    }
+
+    /// Set connection timeout for the underlying NanonisClient
+    pub fn with_connection_timeout(mut self, timeout: Duration) -> Self {
+        self.connection_timeout = Some(timeout);
+        self
+    }
+
+    /// Initialize with pre-stored values
+    pub fn with_initial_storage(mut self, storage: HashMap<String, ActionResult>) -> Self {
+        self.initial_storage = storage;
+        self
+    }
+
+    /// Add a single pre-stored value
+    pub fn with_stored_value(mut self, key: String, value: ActionResult) -> Self {
+        self.initial_storage.insert(key, value);
+        self
+    }
+
+    /// Configure TCP Logger for future channel-based integration
+    /// This prepares the architecture for streaming data directly into ActionDriver
+    pub fn with_tcp_logger(mut self, config: TCPLoggerConfig) -> Self {
+        self.tcp_logger_config = Some(config);
+        self
+    }
+
+    /// Build the ActionDriver with configured parameters
+    pub fn build(self) -> Result<ActionDriver, NanonisError> {
+        let client = if let Some(timeout) = self.connection_timeout {
+            NanonisClient::builder()
+                .address(&self.addr)
+                .port(self.port)
+                .connect_timeout(timeout)
+                .build()?
+        } else {
+            NanonisClient::new(&self.addr, self.port)?
+        };
+
+        Ok(ActionDriver {
+            client,
+            stored_values: self.initial_storage,
+            tcp_logger_config: self.tcp_logger_config,
+        })
+    }
+}
+
 /// Direct 1:1 translation layer between Actions and NanonisClient calls
 /// No safety checks, no validation - maximum performance and flexibility
 pub struct ActionDriver {
     client: NanonisClient,
     /// Storage for Store/Retrieve actions
     stored_values: HashMap<String, ActionResult>,
+    /// Future: TCP Logger configuration for channel integration
+    tcp_logger_config: Option<TCPLoggerConfig>,
 }
 
 impl ActionDriver {
-    /// Create a new ActionDriver with the given client
-    pub fn new(addr: &str, port: u16) -> Result<Self, NanonisError> {
-        let client = NanonisClient::new(addr, port)?;
-
-        Ok(Self {
-            client,
-            stored_values: HashMap::new(),
-        })
+    /// Create a builder for configuring ActionDriver
+    pub fn builder(addr: &str, port: u16) -> ActionDriverBuilder {
+        ActionDriverBuilder::new(addr, port)
     }
 
-    /// Convenience method to create with NanonisClient
+    /// Create a new ActionDriver with default configuration (backward compatibility)
+    pub fn new(addr: &str, port: u16) -> Result<Self, NanonisError> {
+        Self::builder(addr, port).build()
+    }
+
+    /// Convenience method to create with existing NanonisClient (backward compatibility)
     pub fn with_nanonis_client(client: NanonisClient) -> Self {
         Self {
             client,
             stored_values: HashMap::new(),
+            tcp_logger_config: None,
         }
     }
 
@@ -49,6 +129,11 @@ impl ActionDriver {
     /// Get a mutable reference to the underlying NanonisClient
     pub fn client_mut(&mut self) -> &mut NanonisClient {
         &mut self.client
+    }
+
+    /// Get TCP Logger configuration if set
+    pub fn tcp_logger_config(&self) -> Option<&TCPLoggerConfig> {
+        self.tcp_logger_config.as_ref()
     }
 
     /// Execute a single action with direct 1:1 mapping to client methods
@@ -186,7 +271,7 @@ impl ActionDriver {
             } => {
                 // Convert 3D displacement to sequence of motor movements
                 let movements = displacement.to_motor_movements();
-                
+
                 // Execute each movement in sequence
                 for (direction, steps) in movements {
                     self.client

@@ -9,7 +9,7 @@ pub mod tip_prep;
 pub mod types;
 pub mod utils;
 
-pub use action_driver::{stability, ActionDriver, ExecutionStats};
+pub use action_driver::{stability, ActionDriver, ActionDriverBuilder, ExecutionStats, TCPLoggerConfig};
 pub use actions::{Action, ActionChain, ActionResult};
 pub use error::NanonisError;
 pub use job::Job;
