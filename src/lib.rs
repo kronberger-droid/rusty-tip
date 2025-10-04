@@ -17,7 +17,7 @@ pub use logger::Logger;
 pub use plotting::{plot_values, plot_values_with_range};
 pub use nanonis::{
     ConnectionConfig, NanonisClient, NanonisClientBuilder,
-    TCPLoggerStream, TCPLoggerStreamBuilder, TipShaperConfig, TipShaperProps,
+    TCPLoggerStream, TipShaperConfig, TipShaperProps,
     ZSpectroscopyResult,
 };
 pub use tip_prep::{LoopType, TipController, TipState};

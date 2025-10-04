@@ -3,25 +3,25 @@ use ndarray::Array1;
 
 use crate::actions::{Action, ActionChain, ActionResult, ExpectFromAction};
 use crate::error::NanonisError;
-use crate::nanonis::NanonisClient;
+use crate::nanonis::{NanonisClient, TCPLoggerStream};
 use crate::types::{
     DataToGet, MotorGroup, OsciData, Position, PulseMode, ScanDirection, SignalIndex, SignalStats,
-    TriggerConfig, ZControllerHold,
+    TCPLoggerData, TriggerConfig, ZControllerHold,
 };
 use crate::utils::{poll_until, poll_with_timeout, PollError};
 use crate::TipShaperConfig;
 use std::collections::HashMap;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-/// Configuration for future TCP Logger integration
+/// Configuration for TCP Logger integration
 #[derive(Debug, Clone)]
 pub struct TCPLoggerConfig {
     pub stream_port: u16,
     pub channels: Vec<i32>,
     pub oversampling: i32,
     pub auto_start: bool,
-    pub buffer_size: usize,
 }
 
 /// Builder for configuring ActionDriver with optional parameters
@@ -73,7 +73,8 @@ impl ActionDriverBuilder {
 
     /// Build the ActionDriver with configured parameters
     pub fn build(self) -> Result<ActionDriver, NanonisError> {
-        let client = if let Some(timeout) = self.connection_timeout {
+        // Create ActionDriver's control client
+        let mut client = if let Some(timeout) = self.connection_timeout {
             NanonisClient::builder()
                 .address(&self.addr)
                 .port(self.port)
@@ -83,10 +84,31 @@ impl ActionDriverBuilder {
             NanonisClient::new(&self.addr, self.port)?
         };
 
+        // Initialize TCP logger if configured - ActionDriver handles ALL control
+        let tcp_receiver = if let Some(ref config) = self.tcp_logger_config {
+            // Step 1: Create TCP stream connection FIRST (must be ready to receive data)
+            let stream = TCPLoggerStream::new(&self.addr, config.stream_port)?;
+            let receiver = stream.spawn_background_reader();
+            
+            // Step 2: Configure TCP logger (while stream is ready)
+            client.tcplog_chs_set(config.channels.clone())?;
+            client.tcplog_oversampl_set(config.oversampling)?;
+            
+            // Step 3: Start logger only if requested (stream is already listening)
+            if config.auto_start {
+                client.tcplog_start()?;
+            }
+            
+            Some(receiver)
+        } else {
+            None
+        };
+
         Ok(ActionDriver {
             client,
             stored_values: self.initial_storage,
             tcp_logger_config: self.tcp_logger_config,
+            tcp_receiver,
         })
     }
 }
@@ -97,8 +119,10 @@ pub struct ActionDriver {
     client: NanonisClient,
     /// Storage for Store/Retrieve actions
     stored_values: HashMap<String, ActionResult>,
-    /// Future: TCP Logger configuration for channel integration
+    /// TCP Logger configuration for channel integration
     tcp_logger_config: Option<TCPLoggerConfig>,
+    /// Receiver for TCP Logger data frames from background thread
+    tcp_receiver: Option<mpsc::Receiver<TCPLoggerData>>,
 }
 
 impl ActionDriver {
@@ -118,6 +142,7 @@ impl ActionDriver {
             client,
             stored_values: HashMap::new(),
             tcp_logger_config: None,
+            tcp_receiver: None,
         }
     }
 
@@ -134,6 +159,42 @@ impl ActionDriver {
     /// Get TCP Logger configuration if set
     pub fn tcp_logger_config(&self) -> Option<&TCPLoggerConfig> {
         self.tcp_logger_config.as_ref()
+    }
+
+    /// Get reference to TCP logger data receiver for direct channel access
+    /// This is the primary way to read TCP logger data from the background thread
+    pub fn tcp_logger_receiver(&self) -> Option<&mpsc::Receiver<TCPLoggerData>> {
+        self.tcp_receiver.as_ref()
+    }
+
+    /// Check if TCP logger is configured and available
+    pub fn has_tcp_logger(&self) -> bool {
+        self.tcp_receiver.is_some()
+    }
+
+    /// Start TCP logger
+    pub fn start_tcp_logger(&mut self) -> Result<(), NanonisError> {
+        self.client.tcplog_start()
+    }
+
+    /// Stop TCP logger
+    pub fn stop_tcp_logger(&mut self) -> Result<(), NanonisError> {
+        self.client.tcplog_stop()
+    }
+
+    /// Configure TCP logger channels
+    pub fn set_tcp_logger_channels(&mut self, channels: Vec<i32>) -> Result<(), NanonisError> {
+        self.client.tcplog_chs_set(channels)
+    }
+
+    /// Set TCP logger oversampling
+    pub fn set_tcp_logger_oversampling(&mut self, oversampling: i32) -> Result<(), NanonisError> {
+        self.client.tcplog_oversampl_set(oversampling)
+    }
+
+    /// Get TCP logger status
+    pub fn get_tcp_logger_status(&mut self) -> Result<crate::types::TCPLogStatus, NanonisError> {
+        self.client.tcplog_status_get()
     }
 
     /// Execute a single action with direct 1:1 mapping to client methods
@@ -500,6 +561,34 @@ impl ActionDriver {
                     key
                 ))),
             },
+
+            // === TCP Logger Operations ===
+            Action::StartTCPLogger => {
+                self.start_tcp_logger()?;
+                Ok(ActionResult::Success)
+            }
+
+            Action::StopTCPLogger => {
+                self.stop_tcp_logger()?;
+                Ok(ActionResult::Success)
+            }
+
+            Action::GetTCPLoggerStatus => {
+                let status = self.get_tcp_logger_status()?;
+                let config = self.tcp_logger_config();
+                
+                Ok(ActionResult::TCPLoggerStatus {
+                    status,
+                    channels: config.map(|c| c.channels.clone()).unwrap_or_default(),
+                    oversampling: config.map(|c| c.oversampling).unwrap_or(0),
+                })
+            }
+
+            Action::ConfigureTCPLogger { channels, oversampling } => {
+                self.set_tcp_logger_channels(channels)?;
+                self.set_tcp_logger_oversampling(oversampling)?;
+                Ok(ActionResult::Success)
+            }
         }
     }
 
