@@ -130,6 +130,22 @@ pub enum Action {
 
     /// Retrieve previously stored value
     Retrieve { key: String },
+
+    // === TCP Logger Operations ===
+    /// Start TCP logger (must be configured first)
+    StartTCPLogger,
+
+    /// Stop TCP logger
+    StopTCPLogger,
+
+    /// Get TCP logger status and configuration
+    GetTCPLoggerStatus,
+
+    /// Configure TCP logger channels and oversampling
+    ConfigureTCPLogger {
+        channels: Vec<i32>,
+        oversampling: i32,
+    },
 }
 
 /// Simplified ActionResult with clear semantic separation
@@ -155,6 +171,13 @@ pub enum ActionResult {
 
     /// Operation completed successfully (no data returned)
     Success,
+
+    /// TCP Logger status information
+    TCPLoggerStatus {
+        status: crate::types::TCPLogStatus,
+        channels: Vec<i32>,
+        oversampling: i32,
+    },
 
     /// No result/waiting state
     None,

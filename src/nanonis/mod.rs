@@ -9,4 +9,4 @@ pub use client::{
 };
 // These are now re-exported from types through the main lib.rs
 pub use protocol::Protocol;
-pub use tcplogger_stream::{TCPLoggerStream, TCPLoggerStreamBuilder};
+pub use tcplogger_stream::TCPLoggerStream;
