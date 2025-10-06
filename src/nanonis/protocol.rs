@@ -289,6 +289,22 @@ impl Protocol {
                     }
                 }
 
+                "*+c" => {
+                    let num_strings = if let Some(&prev_val) = result.last() {
+                        prev_val as usize
+                    } else {
+                        return Err(NanonisError::Protocol(
+                            "String count not found for *+c type".to_string(),
+                        ));
+                    };
+
+                    for _ in 0..num_strings {
+                        let string_len = cursor.read_u32::<BigEndian>()? as usize;
+                        let mut string_bytes = vec![0u8; string_len];
+                        cursor.read_exact(&mut string_bytes)?;
+                    }
+                }
+
                 "*-c" => {
                     let string_length = result.last().ok_or_else(|| {
                         NanonisError::Protocol(
@@ -346,6 +362,15 @@ impl Protocol {
                     buffer.write_u32::<BigEndian>(bytes.len() as u32)?;
                 }
                 buffer.extend_from_slice(bytes);
+            }
+
+            (NanonisValue::ArrayString(arr), "*+c") => {
+                // Don't write count - it comes from previous variable
+                for s in arr {
+                    let bytes = s.as_bytes();
+                    buffer.write_u32::<BigEndian>(bytes.len() as u32)?;
+                    buffer.extend_from_slice(bytes);
+                }
             }
 
             (NanonisValue::ArrayI32(arr), t) if t.contains("*i") => {
@@ -502,6 +527,31 @@ impl Protocol {
                         cursor.read_exact(&mut string_bytes)?;
                         let string =
                             String::from_utf8_lossy(&string_bytes).to_string();
+                        strings.push(string);
+                    }
+
+                    NanonisValue::ArrayString(strings)
+                }
+
+                // Handle string arrays with count from previous variable
+                "*+c" => {
+                    // Get string count from previous variable (should be an integer)
+                    let num_strings = match result.last() {
+                        Some(NanonisValue::I32(count)) => *count as usize,
+                        Some(NanonisValue::U32(count)) => *count as usize,
+                        _ => {
+                            return Err(NanonisError::Protocol(
+                                "String count not found for *+c type".to_string(),
+                            ))
+                        }
+                    };
+
+                    let mut strings = Vec::with_capacity(num_strings);
+                    for _ in 0..num_strings {
+                        let string_len = cursor.read_u32::<BigEndian>()? as usize;
+                        let mut string_bytes = vec![0u8; string_len];
+                        cursor.read_exact(&mut string_bytes)?;
+                        let string = String::from_utf8_lossy(&string_bytes).to_string();
                         strings.push(string);
                     }
 

@@ -7,8 +7,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     client.signal_names_get(true)?;
 
     let values = client.signals_vals_get((0..=127).collect::<Vec<i32>>(), true)?;
-
     let names = client.signal_names_get(false)?;
+
+    let measure_signals = client.signals_meas_names_get()?;
+
+    for (index, name) in measure_signals.iter().enumerate() {
+        println!("{index:3}: {name:25}");
+    }
+
+    for (index, name) in measure_signals.iter().enumerate() {
+        println!("{index:3}: {name:25}");
+    }
 
     for (index, (value, name)) in values.iter().zip(names).enumerate() {
         println!("{index:3}: {name:25} - {value:>15?}");
