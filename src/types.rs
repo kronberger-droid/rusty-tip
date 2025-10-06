@@ -1375,6 +1375,25 @@ pub struct ExperimentData {
     pub total_duration: Duration,
 }
 
+/// Experiment data for action chain execution with timing for each action
+#[derive(Debug)]
+pub struct ChainExperimentData {
+    /// Results of each action in the chain
+    pub action_results: Vec<crate::actions::ActionResult>,
+    /// All signal frames collected during the entire chain execution
+    pub signal_frames: Vec<TimestampedSignalFrame>,
+    /// TCP logger configuration for context
+    pub tcp_config: crate::action_driver::TCPLoggerConfig,
+    /// Start and end times for each action in the chain
+    pub action_timings: Vec<(Instant, Instant)>,
+    /// When the entire chain started
+    pub chain_start: Instant,
+    /// When the entire chain ended
+    pub chain_end: Instant,
+    /// Duration of entire chain execution
+    pub total_duration: Duration,
+}
+
 impl ExperimentData {
     /// Get signal data captured during action execution
     pub fn data_during_action(&self) -> Vec<&TimestampedSignalFrame> {
@@ -1421,6 +1440,117 @@ impl ExperimentData {
                 data: frame.signal_frame.data.clone(),
             })
             .collect()
+    }
+}
+
+impl ChainExperimentData {
+    /// Get signal data captured during a specific action in the chain
+    ///
+    /// # Arguments
+    /// * `action_index` - Index of the action in the chain (0-based)
+    ///
+    /// # Returns
+    /// Vector of signal frames collected during the specified action
+    pub fn data_during_action(&self, action_index: usize) -> Vec<&TimestampedSignalFrame> {
+        if let Some((start, end)) = self.action_timings.get(action_index) {
+            self.signal_frames
+                .iter()
+                .filter(|frame| frame.timestamp >= *start && frame.timestamp <= *end)
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Get signal data captured between two actions in the chain
+    ///
+    /// # Arguments
+    /// * `action1_index` - Index of first action (end time)
+    /// * `action2_index` - Index of second action (start time)
+    ///
+    /// # Returns
+    /// Vector of signal frames collected between the two specified actions
+    pub fn data_between_actions(&self, action1_index: usize, action2_index: usize) -> Vec<&TimestampedSignalFrame> {
+        if let (Some((_, end1)), Some((start2, _))) = (
+            self.action_timings.get(action1_index),
+            self.action_timings.get(action2_index),
+        ) {
+            self.signal_frames
+                .iter()
+                .filter(|frame| frame.timestamp > *end1 && frame.timestamp < *start2)
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Get signal data before the chain execution
+    ///
+    /// # Arguments
+    /// * `duration` - How far back from chain start to collect data
+    ///
+    /// # Returns
+    /// Vector of signal frames from before the chain started
+    pub fn data_before_chain(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
+        let cutoff = self.chain_start - duration;
+        self.signal_frames
+            .iter()
+            .filter(|frame| frame.timestamp >= cutoff && frame.timestamp < self.chain_start)
+            .collect()
+    }
+
+    /// Get signal data after the chain execution
+    ///
+    /// # Arguments
+    /// * `duration` - How far forward from chain end to collect data
+    ///
+    /// # Returns
+    /// Vector of signal frames from after the chain ended
+    pub fn data_after_chain(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
+        let cutoff = self.chain_end + duration;
+        self.signal_frames
+            .iter()
+            .filter(|frame| frame.timestamp > self.chain_end && frame.timestamp <= cutoff)
+            .collect()
+    }
+
+    /// Get all signal data for the entire chain execution
+    ///
+    /// # Returns
+    /// Vector of signal frames from chain start to chain end
+    pub fn data_for_entire_chain(&self) -> Vec<&TimestampedSignalFrame> {
+        self.signal_frames
+            .iter()
+            .filter(|frame| frame.timestamp >= self.chain_start && frame.timestamp <= self.chain_end)
+            .collect()
+    }
+
+    /// Get timing information for a specific action
+    ///
+    /// # Arguments
+    /// * `action_index` - Index of the action in the chain
+    ///
+    /// # Returns
+    /// Optional tuple of (start_time, end_time, duration)
+    pub fn action_timing(&self, action_index: usize) -> Option<(Instant, Instant, Duration)> {
+        self.action_timings.get(action_index).map(|(start, end)| {
+            (*start, *end, end.duration_since(*start))
+        })
+    }
+
+    /// Get summary statistics for the chain execution
+    ///
+    /// # Returns
+    /// Tuple of (total_actions, successful_actions, total_frames, chain_duration)
+    pub fn chain_summary(&self) -> (usize, usize, usize, Duration) {
+        let total_actions = self.action_results.len();
+        let successful_actions = self.action_results
+            .iter()
+            .filter(|result| matches!(result, crate::actions::ActionResult::Success))
+            .count();
+        let total_frames = self.signal_frames.len();
+        
+        (total_actions, successful_actions, total_frames, self.total_duration)
     }
 }
 
