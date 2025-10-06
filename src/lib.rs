@@ -23,7 +23,7 @@ pub use nanonis::{
 };
 pub use tip_prep::{LoopType, TipController, TipState};
 pub use types::{
-    Amplitude, ChannelIndex, ExperimentData, Frequency, MotorAxis,
+    Amplitude, ChannelIndex, ChainExperimentData, ExperimentData, Frequency, MotorAxis,
     MotorDirection, MotorGroup, MotorMovement, MovementMode,
     NanonisValue, OscilloscopeIndex, Position, Position3D, PulseMode, SampleCount, ScanAction,
     ScanDirection, ScanFrame, SessionMetadata, SignalFrame, SignalIndex,

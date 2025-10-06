@@ -362,6 +362,74 @@ impl ActionDriver {
         }
     }
 
+    /// Execute action chain with time-windowed data collection
+    ///
+    /// This executes a sequence of actions while continuously collecting signal data,
+    /// providing precise timing information for each action in the chain.
+    ///
+    /// # Arguments
+    /// * `actions` - Vector of actions to execute in sequence
+    /// * `pre_duration` - How much data to collect before chain starts
+    /// * `post_duration` - How much data to collect after chain ends
+    ///
+    /// # Returns
+    /// ChainExperimentData containing results and timing for each action plus synchronized signal data
+    ///
+    /// # Errors
+    /// Returns error if buffering is not active or any action execution fails
+    pub fn execute_chain_with_data_collection(
+        &mut self,
+        actions: Vec<Action>,
+        pre_duration: Duration,
+        post_duration: Duration,
+    ) -> Result<crate::types::ChainExperimentData, NanonisError> {
+        if self.tcp_reader.is_none() {
+            return Err(NanonisError::InvalidCommand(
+                "TCP buffering not active".to_string(),
+            ));
+        }
+
+        let chain_start = Instant::now();
+        let mut action_results = Vec::with_capacity(actions.len());
+        let mut action_timings = Vec::with_capacity(actions.len());
+
+        // Execute each action and track timing
+        for action in actions {
+            let action_start = Instant::now();
+            let action_result = self.execute(action)?;
+            let action_end = Instant::now();
+
+            action_results.push(action_result);
+            action_timings.push((action_start, action_end));
+        }
+
+        let chain_end = Instant::now();
+
+        // Wait for post-chain data to be collected
+        std::thread::sleep(post_duration);
+
+        // Query buffered data for the entire time window
+        let window_start = chain_start - pre_duration;
+        let window_end = chain_end + post_duration;
+
+        let signal_frames = self
+            .tcp_reader
+            .as_ref()
+            .unwrap()
+            .get_data_between(window_start, window_end);
+        let tcp_config = self.tcp_logger_config.as_ref().unwrap().clone();
+
+        Ok(crate::types::ChainExperimentData {
+            action_results,
+            signal_frames,
+            tcp_config,
+            action_timings,
+            chain_start,
+            chain_end,
+            total_duration: chain_end.duration_since(chain_start),
+        })
+    }
+
     /// Start TCP logger
     pub fn start_tcp_logger(&mut self) -> Result<(), NanonisError> {
         self.client.tcplog_start()
