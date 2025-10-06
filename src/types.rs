@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::NanonisError;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub enum NanonisValue {
@@ -889,9 +889,9 @@ impl MotorMovement {
 /// 3D motor displacement for coordinated movement
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MotorDisplacement {
-    pub x: i16,  // Positive = XPlus, Negative = XMinus
-    pub y: i16,  // Positive = YPlus, Negative = YMinus  
-    pub z: i16,  // Positive = ZPlus, Negative = ZMinus
+    pub x: i16, // Positive = XPlus, Negative = XMinus
+    pub y: i16, // Positive = YPlus, Negative = YMinus
+    pub z: i16, // Positive = ZPlus, Negative = ZMinus
 }
 
 impl MotorDisplacement {
@@ -901,17 +901,29 @@ impl MotorDisplacement {
 
     /// Create displacement with only X movement
     pub fn x_only(steps: i16) -> Self {
-        Self { x: steps, y: 0, z: 0 }
+        Self {
+            x: steps,
+            y: 0,
+            z: 0,
+        }
     }
 
     /// Create displacement with only Y movement
     pub fn y_only(steps: i16) -> Self {
-        Self { x: 0, y: steps, z: 0 }
+        Self {
+            x: 0,
+            y: steps,
+            z: 0,
+        }
     }
 
     /// Create displacement with only Z movement
     pub fn z_only(steps: i16) -> Self {
-        Self { x: 0, y: 0, z: steps }
+        Self {
+            x: 0,
+            y: 0,
+            z: steps,
+        }
     }
 
     /// Check if this displacement has no movement
@@ -922,28 +934,28 @@ impl MotorDisplacement {
     /// Convert to sequence of individual motor directions and steps
     pub fn to_motor_movements(&self) -> Vec<(MotorDirection, u16)> {
         let mut movements = Vec::new();
-        
+
         // X axis
         if self.x > 0 {
             movements.push((MotorDirection::XPlus, self.x as u16));
         } else if self.x < 0 {
             movements.push((MotorDirection::XMinus, (-self.x) as u16));
         }
-        
+
         // Y axis
         if self.y > 0 {
             movements.push((MotorDirection::YPlus, self.y as u16));
         } else if self.y < 0 {
             movements.push((MotorDirection::YMinus, (-self.y) as u16));
         }
-        
+
         // Z axis
         if self.z > 0 {
             movements.push((MotorDirection::ZPlus, self.z as u16));
         } else if self.z < 0 {
             movements.push((MotorDirection::ZMinus, (-self.z) as u16));
         }
-        
+
         movements
     }
 }
@@ -1231,7 +1243,13 @@ impl OsciData {
     }
 
     /// Create OsciData for unstable readings with fallback value
-    pub fn new_unstable_with_fallback(t0: f64, dt: f64, size: i32, data: Vec<f64>, fallback: f64) -> Self {
+    pub fn new_unstable_with_fallback(
+        t0: f64,
+        dt: f64,
+        size: i32,
+        data: Vec<f64>,
+        fallback: f64,
+    ) -> Self {
         Self {
             t0,
             dt,
@@ -1299,6 +1317,111 @@ pub struct TCPLoggerData {
     pub state: TCPLogStatus,
     /// Signal data (num_channels × 32-bit floats)
     pub data: Vec<f32>,
+}
+
+// ==================== Lightweight Signal Frame Types ====================
+
+/// Minimal per-frame data (just signals + sequence number)
+/// This is much more memory efficient than storing full TCPLoggerData per frame
+#[derive(Debug, Clone)]
+pub struct SignalFrame {
+    /// Sequence number from TCP logger
+    pub counter: u64,
+    /// Raw signal values only
+    pub data: Vec<f32>,
+}
+
+/// Timestamped version of SignalFrame for efficient buffering
+#[derive(Debug, Clone)]
+pub struct TimestampedSignalFrame {
+    /// The lightweight signal frame
+    pub signal_frame: SignalFrame,
+    /// High-resolution timestamp when frame was received
+    pub timestamp: Instant,
+    /// Time relative to collection start
+    pub relative_time: Duration,
+}
+
+impl TimestampedSignalFrame {
+    /// Create a new timestamped signal frame from lightweight signal frame
+    /// Just adds high-resolution timestamp to existing SignalFrame
+    pub fn new(signal_frame: SignalFrame, start_time: Instant) -> Self {
+        let timestamp = Instant::now();
+        Self {
+            signal_frame,
+            timestamp,
+            relative_time: timestamp.duration_since(start_time),
+        }
+    }
+}
+
+// ==================== Experiment Data with Lightweight Frames ====================
+
+/// Complete experiment result containing action outcome and synchronized signal data
+/// Now uses lightweight SignalFrame structures for better memory efficiency
+#[derive(Debug)]
+pub struct ExperimentData {
+    /// Result of the executed action
+    pub action_result: crate::actions::ActionResult,
+    /// Lightweight signal frames (much more memory efficient)
+    pub signal_frames: Vec<TimestampedSignalFrame>,
+    /// TCP logger configuration for context (stored once, not per frame)
+    pub tcp_config: crate::action_driver::TCPLoggerConfig,
+    /// When the action started
+    pub action_start: Instant,
+    /// When the action ended  
+    pub action_end: Instant,
+    /// Total action duration
+    pub total_duration: Duration,
+}
+
+impl ExperimentData {
+    /// Get signal data captured during action execution
+    pub fn data_during_action(&self) -> Vec<&TimestampedSignalFrame> {
+        self.signal_frames
+            .iter()
+            .filter(|frame| {
+                frame.timestamp >= self.action_start && frame.timestamp <= self.action_end
+            })
+            .collect()
+    }
+
+    /// Get signal data before action execution
+    pub fn data_before_action(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
+        let cutoff = self.action_start - duration;
+        self.signal_frames
+            .iter()
+            .filter(|frame| {
+                frame.timestamp >= cutoff && frame.timestamp < self.action_start
+            })
+            .collect()
+    }
+
+    /// Get signal data after action execution
+    pub fn data_after_action(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
+        let cutoff = self.action_end + duration;
+        self.signal_frames
+            .iter()
+            .filter(|frame| {
+                frame.timestamp > self.action_end && frame.timestamp <= cutoff
+            })
+            .collect()
+    }
+
+    /// Get full TCPLoggerData for compatibility when needed
+    /// This reconstructs the full data structures using stored TCP config
+    pub fn get_tcp_logger_data(&self) -> Vec<TCPLoggerData> {
+        self.signal_frames
+            .iter()
+            .map(|frame| TCPLoggerData {
+                num_channels: self.tcp_config.channels.len() as u32,
+                oversampling: self.tcp_config.oversampling as f32,
+                counter: frame.signal_frame.counter,
+                state: TCPLogStatus::Running,
+                data: frame.signal_frame.data.clone(),
+            })
+            .collect()
+    }
 }
 
 /// Result of an auto-approach operation

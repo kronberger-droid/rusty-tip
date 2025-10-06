@@ -1,5 +1,6 @@
 pub mod action_driver;
 pub mod actions;
+pub mod buffered_tcp_reader;
 pub mod error;
 pub mod job;
 pub mod logger;
@@ -22,11 +23,11 @@ pub use nanonis::{
 };
 pub use tip_prep::{LoopType, TipController, TipState};
 pub use types::{
-    Amplitude, ChannelIndex, Frequency, MotorAxis,
+    Amplitude, ChannelIndex, ExperimentData, Frequency, MotorAxis,
     MotorDirection, MotorGroup, MotorMovement, MovementMode,
     NanonisValue, OscilloscopeIndex, Position, Position3D, PulseMode, SampleCount, ScanAction,
-    ScanDirection, ScanFrame, SessionMetadata, SignalIndex,
-    StepCount, TCPLogStatus, TCPLoggerData,
+    ScanDirection, ScanFrame, SessionMetadata, SignalFrame, SignalIndex,
+    StepCount, TCPLogStatus, TCPLoggerData, TimestampedSignalFrame,
     TriggerLevel, TriggerMode, TriggerSlope, ZControllerHold,
 };
 pub use utils::{poll_until, poll_with_timeout, PollError};
