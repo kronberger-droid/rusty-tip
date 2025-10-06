@@ -3,7 +3,7 @@ use ndarray::Array1;
 
 use crate::actions::{Action, ActionChain, ActionResult, ExpectFromAction};
 use crate::error::NanonisError;
-use crate::nanonis::{NanonisClient, TCPLoggerStream};
+use crate::nanonis::NanonisClient;
 use crate::types::{
     DataToGet, MotorGroup, OsciData, Position, PulseMode, ScanDirection, SignalIndex, SignalStats,
     TCPLoggerData, TriggerConfig, ZControllerHold,
@@ -13,15 +13,22 @@ use crate::TipShaperConfig;
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-/// Configuration for TCP Logger integration
+/// Configuration for TCP Logger integration with always-buffer support
 #[derive(Debug, Clone)]
 pub struct TCPLoggerConfig {
+    /// TCP data stream port (typically 6590)
     pub stream_port: u16,
+    /// Signal channel indices to record (0-127)
     pub channels: Vec<i32>,
+    /// Oversampling rate multiplier (0-1000)
     pub oversampling: i32,
+    /// Whether to start logging automatically on connection
     pub auto_start: bool,
+    /// Buffer size for always-buffer mode (None = no buffering)
+    /// When Some(size), BufferedTCPReader starts automatically
+    pub buffer_size: Option<usize>,
 }
 
 /// Builder for configuring ActionDriver with optional parameters
@@ -64,42 +71,79 @@ impl ActionDriverBuilder {
         self
     }
 
-    /// Configure TCP Logger for future channel-based integration
-    /// This prepares the architecture for streaming data directly into ActionDriver
+    /// Configure TCP Logger for basic integration (no automatic buffering)
+    /// Use this when you want manual control over data collection
     pub fn with_tcp_logger(mut self, config: TCPLoggerConfig) -> Self {
         self.tcp_logger_config = Some(config);
         self
     }
 
-    /// Build the ActionDriver with configured parameters
-    pub fn build(self) -> Result<ActionDriver, NanonisError> {
-        // Create ActionDriver's control client
-        let mut client = if let Some(timeout) = self.connection_timeout {
-            NanonisClient::builder()
-                .address(&self.addr)
-                .port(self.port)
-                .connect_timeout(timeout)
-                .build()?
-        } else {
-            NanonisClient::new(&self.addr, self.port)?
-        };
+    /// Configure TCP Logger with always-buffer mode (recommended)
+    /// This automatically starts BufferedTCPReader when ActionDriver is built
+    ///
+    /// # Arguments
+    /// * `config` - TCP logger configuration with buffer_size set
+    ///
+    /// # Usage
+    /// ```rust,ignore
+    /// let driver = ActionDriver::builder("127.0.0.1", 6501)
+    ///     .with_tcp_logger_buffering(TCPLoggerConfig {
+    ///         stream_port: 6590,
+    ///         channels: vec![0, 8],
+    ///         oversampling: 100,
+    ///         auto_start: true,
+    ///         buffer_size: Some(10_000),
+    ///     })
+    ///     .build()?;
+    /// // Buffering is now active and ready for immediate data queries
+    /// ```
+    pub fn with_tcp_logger_buffering(mut self, config: TCPLoggerConfig) -> Self {
+        if config.buffer_size.is_none() {
+            log::warn!("TCPLoggerConfig buffer_size is None - buffering disabled");
+        }
+        self.tcp_logger_config = Some(config);
+        self
+    }
 
-        // Initialize TCP logger if configured - ActionDriver handles ALL control
-        let tcp_receiver = if let Some(ref config) = self.tcp_logger_config {
-            // Step 1: Create TCP stream connection FIRST (must be ready to receive data)
-            let stream = TCPLoggerStream::new(&self.addr, config.stream_port)?;
-            let receiver = stream.spawn_background_reader();
-            
-            // Step 2: Configure TCP logger (while stream is ready)
-            client.tcplog_chs_set(config.channels.clone())?;
-            client.tcplog_oversampl_set(config.oversampling)?;
-            
-            // Step 3: Start logger only if requested (stream is already listening)
-            if config.auto_start {
-                client.tcplog_start()?;
+    /// Build the ActionDriver with configured parameters and optional automatic buffering
+    pub fn build(self) -> Result<ActionDriver, NanonisError> {
+        let mut client = NanonisClient::new(&self.addr, self.port)?;
+
+        let tcp_reader = if let Some(ref config) = self.tcp_logger_config {
+            if let Some(buffer_size) = config.buffer_size {
+                // 1. Configure TCP logger settings first
+                client.tcplog_chs_set(config.channels.clone())?;
+                client.tcplog_oversampl_set(config.oversampling)?;
+
+                // 2. Connect TCP stream BEFORE starting logger (critical sequence!)
+                let reader = crate::buffered_tcp_reader::BufferedTCPReader::new(
+                    "127.0.0.1",
+                    config.stream_port,
+                    buffer_size,
+                    config.channels.len() as u32,
+                    config.oversampling as f32,
+                )?;
+                log::info!(
+                    "TCP stream connected, buffer capacity: {} frames",
+                    buffer_size
+                );
+
+                // 3. NOW start TCP logger (data flows to connected reader)
+                if config.auto_start {
+                    // Reset TCP logger state first to ensure clean start
+                    log::info!("Stopping TCP logger to ensure clean state");
+                    let _ = client.tcplog_stop(); // Ignore errors - might not be running
+                    std::thread::sleep(std::time::Duration::from_millis(200)); // Give it time to stop
+
+                    // Now start TCP logger
+                    client.tcplog_start()?;
+                    log::info!("TCP logger started, data collection active");
+                }
+
+                Some(reader)
+            } else {
+                None
             }
-            
-            Some(receiver)
         } else {
             None
         };
@@ -108,21 +152,25 @@ impl ActionDriverBuilder {
             client,
             stored_values: self.initial_storage,
             tcp_logger_config: self.tcp_logger_config,
-            tcp_receiver,
+            tcp_receiver: None,
+            tcp_reader,
         })
     }
 }
 
 /// Direct 1:1 translation layer between Actions and NanonisClient calls
-/// No safety checks, no validation - maximum performance and flexibility
+/// Now with integrated always-buffer TCP data collection capability
 pub struct ActionDriver {
+    /// Nanonis control client for sending commands
     client: NanonisClient,
     /// Storage for Store/Retrieve actions
     stored_values: HashMap<String, ActionResult>,
-    /// TCP Logger configuration for channel integration
+    /// TCP Logger configuration for data collection
     tcp_logger_config: Option<TCPLoggerConfig>,
-    /// Receiver for TCP Logger data frames from background thread
+    /// Legacy receiver for backward compatibility (deprecated in favor of tcp_reader)
     tcp_receiver: Option<mpsc::Receiver<TCPLoggerData>>,
+    /// Buffered TCP reader for always-buffer mode (automatically started if configured)
+    tcp_reader: Option<crate::buffered_tcp_reader::BufferedTCPReader>,
 }
 
 impl ActionDriver {
@@ -143,6 +191,7 @@ impl ActionDriver {
             stored_values: HashMap::new(),
             tcp_logger_config: None,
             tcp_receiver: None,
+            tcp_reader: None,
         }
     }
 
@@ -169,7 +218,148 @@ impl ActionDriver {
 
     /// Check if TCP logger is configured and available
     pub fn has_tcp_logger(&self) -> bool {
-        self.tcp_receiver.is_some()
+        self.tcp_receiver.is_some() || self.tcp_reader.is_some()
+    }
+
+    // ==================== Always-Buffer TCP Data Collection Methods ====================
+
+    /// Get recent TCP signal data (always available if buffering enabled)
+    ///
+    /// # Arguments
+    /// * `duration` - How far back to collect data from current time
+    ///
+    /// # Returns
+    /// Vector of recent timestamped signal frames, empty if buffering not active
+    ///
+    /// # Usage
+    /// Perfect for real-time monitoring and checking recent signal trends without
+    /// needing to plan data collection in advance
+    pub fn get_recent_tcp_data(
+        &self,
+        duration: Duration,
+    ) -> Vec<crate::types::TimestampedSignalFrame> {
+        self.tcp_reader
+            .as_ref()
+            .map(|reader| reader.get_recent_data(duration))
+            .unwrap_or_default()
+    }
+
+    /// Execute action with time-windowed data collection
+    ///
+    /// This is the core method for synchronized data collection during SPM operations.
+    /// It captures data before, during, and after action execution using the always-buffer.
+    ///
+    /// # Arguments
+    /// * `action` - The SPM action to execute
+    /// * `pre_duration` - How much data to collect before action starts
+    /// * `post_duration` - How much data to collect after action ends
+    ///
+    /// # Returns
+    /// ExperimentData containing both action result and time-windowed signal data
+    ///
+    /// # Errors
+    /// Returns error if buffering is not active or action execution fails
+    pub fn execute_with_data_collection(
+        &mut self,
+        action: Action,
+        pre_duration: Duration,
+        post_duration: Duration,
+    ) -> Result<crate::types::ExperimentData, NanonisError> {
+        if self.tcp_reader.is_none() {
+            return Err(NanonisError::InvalidCommand(
+                "TCP buffering not active".to_string(),
+            ));
+        }
+
+        let action_start = Instant::now();
+        let action_result = self.execute(action)?;
+        let action_end = Instant::now();
+
+        std::thread::sleep(post_duration);
+
+        let window_start = action_start - pre_duration;
+        let window_end = action_end + post_duration;
+
+        let signal_frames = self
+            .tcp_reader
+            .as_ref()
+            .unwrap()
+            .get_data_between(window_start, window_end);
+        let tcp_config = self.tcp_logger_config.as_ref().unwrap().clone();
+
+        Ok(crate::types::ExperimentData {
+            action_result,
+            signal_frames,
+            tcp_config,
+            action_start,
+            action_end,
+            total_duration: action_end.duration_since(action_start),
+        })
+    }
+
+    /// Convenience method for bias pulse with data collection
+    ///
+    /// # Arguments
+    /// * `pulse_voltage` - Bias voltage for the pulse (V)
+    /// * `pulse_duration` - Duration of the pulse
+    /// * `pre_duration` - Data collection before pulse
+    /// * `post_duration` - Data collection after pulse
+    ///
+    /// # Returns
+    /// ExperimentData with pulse results and synchronized signal data
+    pub fn pulse_with_data_collection(
+        &mut self,
+        pulse_voltage: f32,
+        pulse_duration: Duration,
+        pre_duration: Duration,
+        post_duration: Duration,
+    ) -> Result<crate::types::ExperimentData, NanonisError> {
+        self.execute_with_data_collection(
+            Action::BiasPulse {
+                wait_until_done: true,
+                bias_value_v: pulse_voltage,
+                pulse_width: pulse_duration,
+                z_controller_hold: crate::types::ZControllerHold::Hold as u16,
+                pulse_mode: crate::types::PulseMode::Absolute as u16,
+            },
+            pre_duration,
+            post_duration,
+        )
+    }
+
+    /// Get current buffer statistics if buffering is active
+    ///
+    /// # Returns
+    /// Optional tuple of (current_count, max_capacity, time_span) or None if no buffering
+    ///
+    /// # Usage
+    /// Monitor buffer health, detect overruns, check data collection status
+    pub fn tcp_buffer_stats(&self) -> Option<(usize, usize, Duration)> {
+        self.tcp_reader.as_ref().map(|reader| reader.buffer_stats())
+    }
+
+    /// Stop TCP buffering and return final buffer state
+    ///
+    /// # Returns
+    /// Vector containing all buffered data, or empty if buffering wasn't active
+    ///
+    /// # Usage
+    /// Optional manual cleanup - this happens automatically via Drop trait.
+    /// Call this only if you need to access the final buffered data before ActionDriver is dropped.
+    pub fn stop_tcp_buffering(
+        &mut self,
+    ) -> Result<Vec<crate::types::TimestampedSignalFrame>, NanonisError> {
+        if let Some(mut reader) = self.tcp_reader.take() {
+            let final_data = reader.get_all_data();
+            reader.stop()?;
+            log::info!(
+                "Manually stopped TCP buffering, collected {} frames",
+                final_data.len()
+            );
+            Ok(final_data)
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     /// Start TCP logger
@@ -576,7 +766,7 @@ impl ActionDriver {
             Action::GetTCPLoggerStatus => {
                 let status = self.get_tcp_logger_status()?;
                 let config = self.tcp_logger_config();
-                
+
                 Ok(ActionResult::TCPLoggerStatus {
                     status,
                     channels: config.map(|c| c.channels.clone()).unwrap_or_default(),
@@ -584,7 +774,10 @@ impl ActionDriver {
                 })
             }
 
-            Action::ConfigureTCPLogger { channels, oversampling } => {
+            Action::ConfigureTCPLogger {
+                channels,
+                oversampling,
+            } => {
                 self.set_tcp_logger_channels(channels)?;
                 self.set_tcp_logger_oversampling(oversampling)?;
                 Ok(ActionResult::Success)
@@ -1012,13 +1205,24 @@ impl ActionDriver {
 
 impl Drop for ActionDriver {
     fn drop(&mut self) {
+        // Clean up TCP buffering first
+        if let Some(mut reader) = self.tcp_reader.take() {
+            let final_data = reader.get_all_data();
+            let _ = reader.stop(); // Ignore errors during cleanup
+            log::info!(
+                "ActionDriver cleanup: Stopped TCP buffering, collected {} frames",
+                final_data.len()
+            );
+        }
+
+        // Perform safe shutdown sequence
         let _ = self.execute_chain(vec![
             Action::Withdraw {
                 wait_until_finished: false,
                 timeout: Duration::from_secs(1),
             },
             Action::MoveMotorAxis {
-                direction: crate::MotorDirection::ZPlus,
+                direction: crate::MotorDirection::ZMinus,
                 steps: 2,
                 blocking: false,
             },

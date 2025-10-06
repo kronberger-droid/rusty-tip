@@ -2,7 +2,7 @@ use crate::action_driver::ActionDriver;
 use crate::actions::{Action, ActionChain};
 use crate::error::NanonisError;
 use crate::job::Job;
-use crate::types::{DataToGet, MotorDirection, SignalIndex};
+use crate::types::{DataToGet, SignalIndex};
 use crate::utils::{poll_with_timeout, PollError};
 use crate::{stability, Logger};
 use log::{debug, info, warn};

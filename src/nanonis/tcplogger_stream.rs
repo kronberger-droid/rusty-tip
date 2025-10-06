@@ -1,5 +1,6 @@
 use crate::error::NanonisError;
-use crate::types::{TCPLogStatus, TCPLoggerData};
+use crate::types::TCPLogStatus;
+use crate::SignalFrame;
 use byteorder::{BigEndian, ReadBytesExt};
 use std::io::{Cursor, Read};
 use std::net::{SocketAddr, TcpStream};
@@ -15,7 +16,7 @@ pub struct TCPLoggerStream {
 
 impl TCPLoggerStream {
     /// Connect to TCP Logger data stream only
-    /// 
+    ///
     /// Creates a simple connection to the TCP data stream without any control operations.
     /// All control (start/stop/configure) should be handled externally.
     ///
@@ -30,14 +31,14 @@ impl TCPLoggerStream {
             .parse()
             .map_err(|_| NanonisError::InvalidAddress(addr.to_string()))?;
 
-        let stream = TcpStream::connect(socket_addr)
-            .map_err(|e| NanonisError::Io {
-                source: e,
-                context: format!("Failed to connect to TCP stream at {}", socket_addr),
-            })?;
+        let stream = TcpStream::connect(socket_addr).map_err(|e| NanonisError::Io {
+            source: e,
+            context: format!("Failed to connect to TCP stream at {}", socket_addr),
+        })?;
 
         // Set read timeout for continuous reading
-        stream.set_read_timeout(Some(Duration::from_secs(30)))
+        stream
+            .set_read_timeout(Some(Duration::from_secs(30)))
             .map_err(|e| NanonisError::Io {
                 source: e,
                 context: "Setting TCP stream read timeout".to_string(),
@@ -50,14 +51,14 @@ impl TCPLoggerStream {
     }
 
     /// Spawn background reader thread
-    /// 
+    ///
     /// Creates a background thread that continuously reads TCP Logger data frames
     /// and sends them through a channel. The thread automatically exits when the
     /// receiver is dropped.
     ///
     /// # Returns
     /// A receiver channel for `TCPLoggerData` frames.
-    pub fn spawn_background_reader(mut self) -> mpsc::Receiver<TCPLoggerData> {
+    pub fn spawn_background_reader(mut self) -> mpsc::Receiver<SignalFrame> {
         let (sender, receiver) = mpsc::channel();
 
         thread::spawn(move || {
@@ -87,7 +88,7 @@ impl TCPLoggerStream {
     ///
     /// # Frame Format
     /// Always reads 18 bytes header first, then reads data based on num_channels.
-    pub fn read_frame(&mut self) -> Result<TCPLoggerData, NanonisError> {
+    pub fn read_frame(&mut self) -> Result<SignalFrame, NanonisError> {
         // First read header to determine frame size
         let header_size = 18;
         self.buffer.resize(header_size, 0);
@@ -103,10 +104,10 @@ impl TCPLoggerStream {
         // Parse header from buffer
         let mut cursor = Cursor::new(&self.buffer[..header_size]);
         let num_channels = cursor.read_u32::<BigEndian>()?;
-        let oversampling = cursor.read_f32::<BigEndian>()?;
+        let _oversampling = cursor.read_f32::<BigEndian>()?;
         let counter = cursor.read_u64::<BigEndian>()?;
         let state_val = cursor.read_u16::<BigEndian>()?;
-        let state = TCPLogStatus::try_from(state_val as i32)?;
+        let _state = TCPLogStatus::try_from(state_val as i32)?;
 
         // Calculate total frame size and read data portion
         let data_size = (num_channels * 4) as usize; // 4 bytes per f32
@@ -126,12 +127,6 @@ impl TCPLoggerStream {
             data.push(cursor.read_f32::<BigEndian>()?);
         }
 
-        Ok(TCPLoggerData {
-            num_channels,
-            oversampling,
-            counter,
-            state,
-            data,
-        })
+        Ok(SignalFrame { counter, data })
     }
 }
