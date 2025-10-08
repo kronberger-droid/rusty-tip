@@ -10,8 +10,8 @@ pub mod tip_prep;
 pub mod types;
 pub mod utils;
 
-pub use action_driver::{stability, ActionDriver, ActionDriverBuilder, ExecutionStats, TCPLoggerConfig};
-pub use actions::{Action, ActionChain, ActionResult};
+pub use action_driver::{stability, ActionDriver, ActionDriverBuilder, ExecutionResult, ExecutionStats, TCPLoggerConfig};
+pub use actions::{Action, ActionChain, ActionLogEntry, ActionResult};
 pub use error::NanonisError;
 pub use job::Job;
 pub use logger::Logger;

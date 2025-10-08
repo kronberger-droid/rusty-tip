@@ -7,6 +7,30 @@ use crate::{
 };
 use std::time::Duration;
 
+/// Method for determining tip state
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum TipCheckMethod {
+    /// Check single signal against bounds
+    SignalBounds { 
+        signal: SignalIndex, 
+        bounds: (f32, f32) 
+    },
+    /// Check multiple signals (all must be in bounds)
+    MultiSignalBounds { 
+        signals: Vec<(SignalIndex, (f32, f32))> 
+    },
+    /// Check signal stability over time
+    SignalStability { 
+        signal: SignalIndex, 
+        threshold: f32,      // Max allowed variation
+        history_size: usize  // Number of readings to check
+    },
+    /// Custom method placeholder for future extensions
+    Custom { 
+        method_name: String 
+    },
+}
+
 /// Enhanced Action enum representing all possible SPM operations
 /// Properly separates motor (step-based) and piezo (continuous) movements
 #[derive(Debug, Clone)]
@@ -146,6 +170,12 @@ pub enum Action {
         channels: Vec<i32>,
         oversampling: i32,
     },
+
+    // === Tip State Operations ===
+    /// Check tip state using specified method
+    CheckTipState { 
+        method: TipCheckMethod 
+    },
 }
 
 /// Simplified ActionResult with clear semantic separation
@@ -178,6 +208,9 @@ pub enum ActionResult {
         channels: Vec<i32>,
         oversampling: i32,
     },
+
+    /// Tip state determination result
+    TipState(crate::tip_prep::TipState),
 
     /// No result/waiting state
     None,
@@ -219,6 +252,14 @@ impl ActionResult {
     pub fn as_osci_data(&self) -> Option<&OsciData> {
         match self {
             ActionResult::OsciData(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    /// Convert to TipState if possible
+    pub fn as_tip_state(&self) -> Option<crate::tip_prep::TipState> {
+        match self {
+            ActionResult::TipState(state) => Some(*state),
             _ => None,
         }
     }
@@ -302,6 +343,16 @@ impl ActionResult {
             (Action::ReadScanStatus, ActionResult::Status(status)) => status,
             (action, result) => {
                 panic!("Expected status from action {:?}, got {:?}", action, result)
+            }
+        }
+    }
+
+    /// Extract tip state with action validation (panics on type mismatch)
+    pub fn expect_tip_state(self, action: &Action) -> crate::tip_prep::TipState {
+        match (action, self) {
+            (Action::CheckTipState { .. }, ActionResult::TipState(state)) => state,
+            (action, result) => {
+                panic!("Expected tip state from action {:?}, got {:?}", action, result)
             }
         }
     }
@@ -1154,5 +1205,278 @@ mod chain_tests {
         }
 
         accepts_into_action_chain(vec_actions);
+    }
+}
+
+// ==================== Action Logging Support ====================
+
+/// Log entry for action execution with timing information
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ActionLogEntry {
+    /// The action that was executed
+    pub action: String, // Action description for JSON serialization
+    /// The result of the action execution
+    pub result: ActionLogResult,
+    /// When the action started executing
+    pub start_time: chrono::DateTime<chrono::Utc>,
+    /// How long the action took to execute
+    pub duration_ms: u64,
+    /// Optional metadata for debugging
+    pub metadata: Option<std::collections::HashMap<String, String>>,
+}
+
+/// Comprehensive action result for logging (JSON-serializable)
+/// Captures all possible data types without simplification
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum ActionLogResult {
+    /// Single numeric value
+    Value(f64),
+    /// Multiple numeric values
+    Values(Vec<f64>),
+    /// String data
+    Text(Vec<String>),
+    /// Boolean status
+    Status(bool),
+    /// Position data
+    Position { x: f64, y: f64 },
+    /// Complete oscilloscope data with timing and statistics
+    OsciData {
+        t0: f64,
+        dt: f64,
+        size: i32,
+        data: Vec<f64>,
+        signal_stats: Option<LoggableSignalStats>,
+        is_stable: bool,
+        fallback_value: Option<f64>,
+    },
+    /// Experiment data with action result and TCP signal collection
+    ExperimentData {
+        action_result: Box<ActionLogResult>,
+        signal_frames: Vec<LoggableTimestampedSignalFrame>,
+        tcp_config: LoggableTCPLoggerConfig,
+        action_start_ms: u64, // Timestamp as milliseconds since epoch
+        action_end_ms: u64,
+        total_duration_ms: u64,
+    },
+    /// Chain experiment data with per-action timing and results
+    ChainExperimentData {
+        action_results: Vec<ActionLogResult>,
+        signal_frames: Vec<LoggableTimestampedSignalFrame>,
+        tcp_config: LoggableTCPLoggerConfig,
+        action_timings: Vec<(u64, u64)>, // (start_ms, end_ms) for each action
+        chain_start_ms: u64,
+        chain_end_ms: u64,
+        total_duration_ms: u64,
+    },
+    /// TCP Logger Status
+    TCPLoggerStatus {
+        status: String, // TCPLogStatus serialized as string
+        channels: Vec<i32>,
+        oversampling: i32,
+    },
+    /// Tip state check result
+    TipState(crate::tip_prep::TipState),
+    /// Operation completed successfully
+    Success,
+    /// Operation completed but no data returned
+    None,
+    /// Error occurred during execution
+    Error(String),
+}
+
+/// JSON-serializable version of SignalStats
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LoggableSignalStats {
+    pub mean: f64,
+    pub std_dev: f64,
+    pub relative_std: f64,
+    pub window_size: usize,
+    pub stability_method: String,
+}
+
+/// JSON-serializable version of TimestampedSignalFrame
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LoggableTimestampedSignalFrame {
+    pub signal_frame: LoggableSignalFrame,
+    pub timestamp_ms: u64, // Milliseconds since epoch
+    pub relative_time_ms: u64, // Milliseconds relative to collection start
+}
+
+/// JSON-serializable version of SignalFrame
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LoggableSignalFrame {
+    pub counter: u64,
+    pub data: Vec<f32>,
+}
+
+/// JSON-serializable version of TCPLoggerConfig
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LoggableTCPLoggerConfig {
+    pub stream_port: u16,
+    pub channels: Vec<i32>,
+    pub oversampling: i32,
+    pub auto_start: bool,
+    pub buffer_size: Option<usize>,
+}
+
+impl ActionLogEntry {
+    /// Create a new log entry from action execution
+    pub fn new(
+        action: &Action,
+        result: &ActionResult,
+        start_time: chrono::DateTime<chrono::Utc>,
+        duration: std::time::Duration,
+    ) -> Self {
+        Self {
+            action: action.description(),
+            result: ActionLogResult::from_action_result(result),
+            start_time,
+            duration_ms: duration.as_millis() as u64,
+            metadata: None,
+        }
+    }
+
+    /// Create a new log entry with error
+    pub fn new_error(
+        action: &Action,
+        error: &crate::error::NanonisError,
+        start_time: chrono::DateTime<chrono::Utc>,
+        duration: std::time::Duration,
+    ) -> Self {
+        Self {
+            action: action.description(),
+            result: ActionLogResult::Error(error.to_string()),
+            start_time,
+            duration_ms: duration.as_millis() as u64,
+            metadata: None,
+        }
+    }
+
+    /// Add metadata to this log entry
+    pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        if self.metadata.is_none() {
+            self.metadata = Some(std::collections::HashMap::new());
+        }
+        self.metadata.as_mut().unwrap().insert(key.into(), value.into());
+        self
+    }
+}
+
+impl ActionLogResult {
+    /// Convert ActionResult to ActionLogResult for comprehensive logging
+    /// No data simplification - captures everything in full detail
+    pub fn from_action_result(result: &ActionResult) -> Self {
+        match result {
+            ActionResult::Value(v) => ActionLogResult::Value(*v),
+            ActionResult::Values(values) => ActionLogResult::Values(values.clone()),
+            ActionResult::Text(text) => ActionLogResult::Text(text.clone()),
+            ActionResult::Status(status) => ActionLogResult::Status(*status),
+            ActionResult::Position(pos) => ActionLogResult::Position { x: pos.x, y: pos.y },
+            ActionResult::OsciData(osci_data) => ActionLogResult::OsciData {
+                t0: osci_data.t0,
+                dt: osci_data.dt,
+                size: osci_data.size,
+                data: osci_data.data.clone(),
+                signal_stats: osci_data.signal_stats.as_ref().map(|stats| LoggableSignalStats {
+                    mean: stats.mean,
+                    std_dev: stats.std_dev,
+                    relative_std: stats.relative_std,
+                    window_size: stats.window_size,
+                    stability_method: stats.stability_method.clone(),
+                }),
+                is_stable: osci_data.is_stable,
+                fallback_value: osci_data.fallback_value,
+            },
+            ActionResult::Success => ActionLogResult::Success,
+            ActionResult::None => ActionLogResult::None,
+            ActionResult::TCPLoggerStatus { status, channels, oversampling } => {
+                ActionLogResult::TCPLoggerStatus {
+                    status: format!("{:?}", status), // Serialize enum as string
+                    channels: channels.clone(),
+                    oversampling: *oversampling,
+                }
+            }
+            ActionResult::TipState(tip_state) => ActionLogResult::TipState(*tip_state),
+        }
+    }
+
+    /// Convert ExperimentData to ActionLogResult for comprehensive logging
+    pub fn from_experiment_data(exp_data: &crate::types::ExperimentData) -> Self {
+        let action_result = Box::new(Self::from_action_result(&exp_data.action_result));
+        
+        let signal_frames: Vec<LoggableTimestampedSignalFrame> = exp_data.signal_frames
+            .iter()
+            .map(|frame| LoggableTimestampedSignalFrame {
+                signal_frame: LoggableSignalFrame {
+                    counter: frame.signal_frame.counter,
+                    data: frame.signal_frame.data.clone(),
+                },
+                timestamp_ms: chrono::Utc::now().timestamp_millis() as u64, // Approximate current time
+                relative_time_ms: frame.relative_time.as_millis() as u64,
+            })
+            .collect();
+
+        let tcp_config = LoggableTCPLoggerConfig {
+            stream_port: exp_data.tcp_config.stream_port,
+            channels: exp_data.tcp_config.channels.clone(),
+            oversampling: exp_data.tcp_config.oversampling,
+            auto_start: exp_data.tcp_config.auto_start,
+            buffer_size: exp_data.tcp_config.buffer_size,
+        };
+
+        ActionLogResult::ExperimentData {
+            action_result,
+            signal_frames,
+            tcp_config,
+            action_start_ms: chrono::Utc::now().timestamp_millis() as u64, // Approximate timing
+            action_end_ms: chrono::Utc::now().timestamp_millis() as u64,
+            total_duration_ms: exp_data.total_duration.as_millis() as u64,
+        }
+    }
+
+    /// Convert ChainExperimentData to ActionLogResult for comprehensive logging
+    pub fn from_chain_experiment_data(chain_data: &crate::types::ChainExperimentData) -> Self {
+        let action_results: Vec<ActionLogResult> = chain_data.action_results
+            .iter()
+            .map(|result| Self::from_action_result(result))
+            .collect();
+
+        let signal_frames: Vec<LoggableTimestampedSignalFrame> = chain_data.signal_frames
+            .iter()
+            .map(|frame| LoggableTimestampedSignalFrame {
+                signal_frame: LoggableSignalFrame {
+                    counter: frame.signal_frame.counter,
+                    data: frame.signal_frame.data.clone(),
+                },
+                timestamp_ms: chrono::Utc::now().timestamp_millis() as u64, // Approximate current time
+                relative_time_ms: frame.relative_time.as_millis() as u64,
+            })
+            .collect();
+
+        let tcp_config = LoggableTCPLoggerConfig {
+            stream_port: chain_data.tcp_config.stream_port,
+            channels: chain_data.tcp_config.channels.clone(),
+            oversampling: chain_data.tcp_config.oversampling,
+            auto_start: chain_data.tcp_config.auto_start,
+            buffer_size: chain_data.tcp_config.buffer_size,
+        };
+
+        let action_timings: Vec<(u64, u64)> = chain_data.action_timings
+            .iter()
+            .map(|(_, _)| {
+                let now = chrono::Utc::now().timestamp_millis() as u64;
+                (now, now) // Approximate timing
+            })
+            .collect();
+
+        ActionLogResult::ChainExperimentData {
+            action_results,
+            signal_frames,
+            tcp_config,
+            action_timings,
+            chain_start_ms: chrono::Utc::now().timestamp_millis() as u64, // Approximate timing
+            chain_end_ms: chrono::Utc::now().timestamp_millis() as u64,
+            total_duration_ms: chain_data.total_duration.as_millis() as u64,
+        }
     }
 }
