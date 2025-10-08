@@ -2,7 +2,9 @@
 use log::info;
 use ndarray::Array1;
 
-use crate::actions::{Action, ActionChain, ActionLogEntry, ActionLogResult, ActionResult, ExpectFromAction};
+use crate::actions::{
+    Action, ActionChain, ActionLogEntry, ActionLogResult, ActionResult, ExpectFromAction,
+};
 use crate::error::NanonisError;
 use crate::nanonis::NanonisClient;
 use crate::types::{
@@ -214,7 +216,9 @@ impl ExecutionResult {
     }
 
     /// Extract chain experiment data or error if not chain experiment
-    pub fn into_chain_experiment_data(self) -> Result<crate::types::ChainExperimentData, NanonisError> {
+    pub fn into_chain_experiment_data(
+        self,
+    ) -> Result<crate::types::ChainExperimentData, NanonisError> {
         match self {
             ExecutionResult::ChainExperimentData(data) => Ok(data),
             _ => Err(NanonisError::InvalidCommand(
@@ -255,7 +259,9 @@ impl<'a> ExecutionBuilder<'a> {
 
     /// Enable data collection with specified durations
     pub fn with_data_collection(mut self, pre_duration: Duration, post_duration: Duration) -> Self {
-        self.config = self.config.with_data_collection(pre_duration, post_duration);
+        self.config = self
+            .config
+            .with_data_collection(pre_duration, post_duration);
         self
     }
 
@@ -312,11 +318,9 @@ impl<'a> ExecutionBuilder<'a> {
                 let result = self.driver.run_with_config(self.request, self.config)?;
                 result.into_single()
             }
-            ActionRequest::Chain(_) => {
-                Err(NanonisError::InvalidCommand(
-                    "Use .execute() for chains, .go() is only for single actions".to_string(),
-                ))
-            }
+            ActionRequest::Chain(_) => Err(NanonisError::InvalidCommand(
+                "Use .execute() for chains, .go() is only for single actions".to_string(),
+            )),
         }
     }
 }
@@ -421,7 +425,12 @@ impl ActionDriverBuilder {
     ///     .with_action_logging("experiment_data", 100, true)
     ///     .build()?;
     /// ```
-    pub fn with_action_logging(mut self, file_path: impl Into<std::path::PathBuf>, buffer_size: usize, final_format_json: bool) -> Self {
+    pub fn with_action_logging(
+        mut self,
+        file_path: impl Into<std::path::PathBuf>,
+        buffer_size: usize,
+        final_format_json: bool,
+    ) -> Self {
         self.action_logger_config = Some((file_path.into(), buffer_size, final_format_json));
         self
     }
@@ -470,11 +479,16 @@ impl ActionDriverBuilder {
         };
 
         // Create action logger if configured
-        let action_logger = if let Some((file_path, buffer_size, final_format_json)) = self.action_logger_config {
-            Some(crate::logger::Logger::new(file_path, buffer_size, final_format_json))
-        } else {
-            None
-        };
+        let action_logger =
+            if let Some((file_path, buffer_size, final_format_json)) = self.action_logger_config {
+                Some(crate::logger::Logger::new(
+                    file_path,
+                    buffer_size,
+                    final_format_json,
+                ))
+            } else {
+                None
+            };
 
         Ok(ActionDriver {
             client,
@@ -560,19 +574,19 @@ impl ActionDriver {
     // ==================== Unified Execution API ====================
 
     /// Unified execution method with fluent configuration
-    /// 
+    ///
     /// # Usage
     /// ```rust,ignore
     /// // Simple execution
     /// let result = driver.run(action)?;
     /// let results = driver.run(actions)?;
-    /// 
+    ///
     /// // With data collection
     /// let data = driver.run(action).with_data_collection(pre, post).execute()?;
-    /// 
+    ///
     /// // Type-safe extraction
     /// let signal: f64 = driver.run(read_signal).expecting()?;
-    /// 
+    ///
     /// // Performance modes
     /// let results = driver.run(actions).deferred_logging().execute()?;
     /// let final_result = driver.run(actions).final_only().execute()?;
@@ -585,7 +599,11 @@ impl ActionDriver {
     }
 
     /// Execute with explicit configuration (for advanced use)
-    pub fn run_with_config(&mut self, request: ActionRequest, config: ExecutionConfig) -> Result<ExecutionResult, NanonisError> {
+    pub fn run_with_config(
+        &mut self,
+        request: ActionRequest,
+        config: ExecutionConfig,
+    ) -> Result<ExecutionResult, NanonisError> {
         match (&request, &config.data_collection) {
             // Single action with data collection
             (ActionRequest::Single(action), Some((pre_duration, post_duration))) => {
@@ -638,7 +656,9 @@ impl ActionDriver {
                     }
                     (ChainBehavior::FinalOnly, _) => {
                         let results = match config.logging_behavior {
-                            LoggingBehavior::Deferred => self.execute_chain_deferred(actions.clone())?,
+                            LoggingBehavior::Deferred => {
+                                self.execute_chain_deferred(actions.clone())?
+                            }
                             LoggingBehavior::Disabled => {
                                 let previous_state = self.set_action_logging_enabled(false);
                                 let result = self.execute_chain(actions.clone());
@@ -746,14 +766,27 @@ impl ActionDriver {
                 result: ActionLogResult::from_experiment_data(&experiment_data),
                 start_time: chrono::Utc::now(),
                 duration_ms: experiment_data.total_duration.as_millis() as u64,
-                metadata: Some([
-                    ("type".to_string(), "experiment_data_collection".to_string()),
-                    ("pre_duration_ms".to_string(), pre_duration.as_millis().to_string()),
-                    ("post_duration_ms".to_string(), post_duration.as_millis().to_string()),
-                    ("signal_frame_count".to_string(), experiment_data.signal_frames.len().to_string()),
-                ].into_iter().collect()),
+                metadata: Some(
+                    [
+                        ("type".to_string(), "experiment_data_collection".to_string()),
+                        (
+                            "pre_duration_ms".to_string(),
+                            pre_duration.as_millis().to_string(),
+                        ),
+                        (
+                            "post_duration_ms".to_string(),
+                            post_duration.as_millis().to_string(),
+                        ),
+                        (
+                            "signal_frame_count".to_string(),
+                            experiment_data.signal_frames.len().to_string(),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
             };
-            
+
             if let Err(log_error) = self.action_logger.as_mut().unwrap().add(log_entry) {
                 log::warn!("Failed to log experiment data: {}", log_error);
             }
@@ -897,19 +930,41 @@ impl ActionDriver {
         // Log the complete chain experiment data if logging is enabled
         if self.action_logging_enabled && self.action_logger.is_some() {
             let log_entry = ActionLogEntry {
-                action: format!("Chain Data Collection: {} actions", chain_experiment_data.action_results.len()),
+                action: format!(
+                    "Chain Data Collection: {} actions",
+                    chain_experiment_data.action_results.len()
+                ),
                 result: ActionLogResult::from_chain_experiment_data(&chain_experiment_data),
                 start_time: chrono::Utc::now(),
                 duration_ms: chain_experiment_data.total_duration.as_millis() as u64,
-                metadata: Some([
-                    ("type".to_string(), "chain_experiment_data_collection".to_string()),
-                    ("pre_duration_ms".to_string(), pre_duration.as_millis().to_string()),
-                    ("post_duration_ms".to_string(), post_duration.as_millis().to_string()),
-                    ("action_count".to_string(), chain_experiment_data.action_results.len().to_string()),
-                    ("signal_frame_count".to_string(), chain_experiment_data.signal_frames.len().to_string()),
-                ].into_iter().collect()),
+                metadata: Some(
+                    [
+                        (
+                            "type".to_string(),
+                            "chain_experiment_data_collection".to_string(),
+                        ),
+                        (
+                            "pre_duration_ms".to_string(),
+                            pre_duration.as_millis().to_string(),
+                        ),
+                        (
+                            "post_duration_ms".to_string(),
+                            post_duration.as_millis().to_string(),
+                        ),
+                        (
+                            "action_count".to_string(),
+                            chain_experiment_data.action_results.len().to_string(),
+                        ),
+                        (
+                            "signal_frame_count".to_string(),
+                            chain_experiment_data.signal_frames.len().to_string(),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
             };
-            
+
             if let Err(log_error) = self.action_logger.as_mut().unwrap().add(log_entry) {
                 log::warn!("Failed to log chain experiment data: {}", log_error);
             }
@@ -943,27 +998,29 @@ impl ActionDriver {
         self.client.tcplog_status_get()
     }
 
-    /// Execute a single action with direct 1:1 mapping to client methods
+    /// Execute a single action
     pub fn execute(&mut self, action: Action) -> Result<ActionResult, NanonisError> {
         let start_time = chrono::Utc::now();
         let start_instant = std::time::Instant::now();
-        
+
         let result = self.execute_internal(action.clone());
-        
+
         let duration = start_instant.elapsed();
-        
+
         // Log the action execution if logging is enabled
         if self.action_logging_enabled && self.action_logger.is_some() {
             let log_entry = match &result {
-                Ok(action_result) => ActionLogEntry::new(&action, action_result, start_time, duration),
+                Ok(action_result) => {
+                    ActionLogEntry::new(&action, action_result, start_time, duration)
+                }
                 Err(error) => ActionLogEntry::new_error(&action, error, start_time, duration),
             };
-            
+
             if let Err(log_error) = self.action_logger.as_mut().unwrap().add(log_entry) {
                 log::warn!("Failed to log action: {}", log_error);
             }
         }
-        
+
         result
     }
 
@@ -985,7 +1042,7 @@ impl ActionDriver {
     /// ```rust,ignore
     /// // Normal execution
     /// let result = driver.execute_with_options(action, false, Duration::ZERO, Duration::ZERO)?;
-    /// 
+    ///
     /// // With data collection
     /// let result = driver.execute_with_options(action, true, Duration::from_millis(100), Duration::from_millis(200))?;
     /// ```
@@ -998,7 +1055,8 @@ impl ActionDriver {
     ) -> Result<ActionResult, NanonisError> {
         if data_collection && self.tcp_reader.is_some() {
             // Use data collection execution
-            let _experiment_data = self.execute_with_data_collection(action, pre_duration, post_duration)?;
+            let _experiment_data =
+                self.execute_with_data_collection(action, pre_duration, post_duration)?;
             // Convert ExperimentData to ActionResult for unified return type
             Ok(ActionResult::Success) // For now, return Success - could extend ActionResult to include ExperimentData
         } else {
@@ -1027,9 +1085,9 @@ impl ActionDriver {
         if data_collection && self.tcp_reader.is_some() {
             // Use data collection execution
             let chain_experiment_data = self.execute_chain_with_data_collection(
-                chain.into().into_iter().collect(), 
-                pre_duration, 
-                post_duration
+                chain.into().into_iter().collect(),
+                pre_duration,
+                post_duration,
             )?;
             // Return the action results from the chain
             Ok(chain_experiment_data.action_results)
@@ -1438,7 +1496,7 @@ impl ActionDriver {
             Action::CheckTipState { method } => {
                 use crate::actions::TipCheckMethod;
                 use crate::tip_prep::TipState;
-                
+
                 let tip_state = match method {
                     TipCheckMethod::SignalBounds { signal, bounds } => {
                         let value = self.client.signals_vals_get(vec![signal.into()], true)?[0];
@@ -1448,50 +1506,64 @@ impl ActionDriver {
                             TipState::Bad
                         }
                     }
-                    
+
                     TipCheckMethod::MultiSignalBounds { signals } => {
-                        let indices: Vec<i32> = signals.iter().map(|(signal, _)| (*signal).into()).collect();
+                        let indices: Vec<i32> =
+                            signals.iter().map(|(signal, _)| (*signal).into()).collect();
                         let values = self.client.signals_vals_get(indices, true)?;
-                        
-                        let all_good = signals.iter().zip(values.iter()).all(|((_signal, bounds), value)| {
-                            *value >= bounds.0 && *value <= bounds.1
-                        });
-                        
+
+                        let all_good =
+                            signals
+                                .iter()
+                                .zip(values.iter())
+                                .all(|((_signal, bounds), value)| {
+                                    *value >= bounds.0 && *value <= bounds.1
+                                });
+
                         if all_good {
                             TipState::Good
                         } else {
                             TipState::Bad
                         }
                     }
-                    
-                    TipCheckMethod::SignalStability { signal, threshold, history_size } => {
+
+                    TipCheckMethod::SignalStability {
+                        signal,
+                        threshold,
+                        history_size,
+                    } => {
                         // Read multiple samples for stability analysis
                         let mut samples = Vec::with_capacity(history_size);
                         for _ in 0..history_size {
                             let value = self.client.signals_vals_get(vec![signal.into()], true)?[0];
                             samples.push(value);
-                            std::thread::sleep(std::time::Duration::from_millis(10)); // Small delay between readings
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                            // Small delay between readings
                         }
-                        
+
                         // Calculate standard deviation
                         let mean = samples.iter().sum::<f32>() / samples.len() as f32;
-                        let variance = samples.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / samples.len() as f32;
+                        let variance = samples.iter().map(|v| (v - mean).powi(2)).sum::<f32>()
+                            / samples.len() as f32;
                         let std_dev = variance.sqrt();
-                        
+
                         if std_dev <= threshold {
                             TipState::Stable
                         } else {
                             TipState::Good // Assume signal is in bounds but not stable
                         }
                     }
-                    
+
                     TipCheckMethod::Custom { method_name } => {
                         // For custom methods, return a default state and log the method name
-                        log::warn!("Custom tip check method '{}' not implemented, returning Good", method_name);
+                        log::warn!(
+                            "Custom tip check method '{}' not implemented, returning Good",
+                            method_name
+                        );
                         TipState::Good
                     }
                 };
-                
+
                 Ok(ActionResult::TipState(tip_state))
             }
         }
@@ -1763,24 +1835,26 @@ impl ActionDriver {
         let chain = chain.into();
         let start_time = chrono::Utc::now();
         let start_instant = std::time::Instant::now();
-        
+
         let mut results = Vec::with_capacity(chain.len());
-        
+
         // Execute all actions without per-action logging
         for action in chain.iter() {
             let result = self.execute_internal(action.clone())?;
             results.push(result);
         }
-        
+
         let duration = start_instant.elapsed();
-        
+
         // Log the entire chain as a single entry if logging is enabled
         if self.action_logging_enabled && self.action_logger.is_some() {
             let chain_summary = format!("Chain: {}", chain.summary());
             let final_result = results.last().unwrap_or(&ActionResult::None);
-            
+
             let log_entry = ActionLogEntry::new(
-                &crate::actions::Action::Wait { duration: Duration::from_millis(0) }, // Placeholder action
+                &crate::actions::Action::Wait {
+                    duration: Duration::from_millis(0),
+                }, // Placeholder action
                 final_result,
                 start_time,
                 duration,
@@ -1788,12 +1862,12 @@ impl ActionDriver {
             .with_metadata("type", "chain_execution")
             .with_metadata("chain_summary", chain_summary)
             .with_metadata("action_count", results.len().to_string());
-            
+
             if let Err(log_error) = self.action_logger.as_mut().unwrap().add(log_entry) {
                 log::warn!("Failed to log chain execution: {}", log_error);
             }
         }
-        
+
         Ok(results)
     }
 
@@ -1858,9 +1932,9 @@ impl ActionDriver {
     /// # Usage
     /// Monitor buffer utilization to understand logging overhead and frequency
     pub fn action_log_stats(&self) -> Option<(usize, bool)> {
-        self.action_logger.as_ref().map(|logger| {
-            (logger.len(), self.action_logging_enabled)
-        })
+        self.action_logger
+            .as_ref()
+            .map(|logger| (logger.len(), self.action_logging_enabled))
     }
 
     /// Finalize action log as JSON array (if configured for JSON output)
