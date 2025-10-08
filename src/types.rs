@@ -298,7 +298,7 @@ impl NanonisValue {
 }
 
 /// Signal and Channel Types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SignalIndex(pub i32);
 
 impl SignalIndex {
@@ -932,28 +932,34 @@ impl MotorDisplacement {
     }
 
     /// Convert to sequence of individual motor directions and steps
+    /// SAFETY: Smart Z-axis ordering to prevent tip crashes:
+    /// - ZMinus (away from surface) executes FIRST to safely retract
+    /// - ZPlus (toward surface) executes LAST to only approach after positioning
     pub fn to_motor_movements(&self) -> Vec<(MotorDirection, u16)> {
         let mut movements = Vec::new();
 
-        // X axis
+        // FIRST: ZMinus movements (away from surface) for safety
+        if self.z < 0 {
+            movements.push((MotorDirection::ZMinus, (-self.z) as u16));
+        }
+
+        // SECOND: X axis movements (lateral positioning)
         if self.x > 0 {
             movements.push((MotorDirection::XPlus, self.x as u16));
         } else if self.x < 0 {
             movements.push((MotorDirection::XMinus, (-self.x) as u16));
         }
 
-        // Y axis
+        // THIRD: Y axis movements (lateral positioning)
         if self.y > 0 {
             movements.push((MotorDirection::YPlus, self.y as u16));
         } else if self.y < 0 {
             movements.push((MotorDirection::YMinus, (-self.y) as u16));
         }
 
-        // Z axis
+        // LAST: ZPlus movements (toward surface) only after safe positioning
         if self.z > 0 {
             movements.push((MotorDirection::ZPlus, self.z as u16));
-        } else if self.z < 0 {
-            movements.push((MotorDirection::ZMinus, (-self.z) as u16));
         }
 
         movements

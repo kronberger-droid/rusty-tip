@@ -4,14 +4,14 @@ use crate::error::NanonisError;
 use crate::job::Job;
 use crate::types::{DataToGet, SignalIndex};
 use crate::utils::{poll_with_timeout, PollError};
-use crate::{stability, Logger};
+use crate::stability;
 use log::{debug, info, warn};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
 /// Simple tip state - matches original controller
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum TipState {
     Bad,
     Good,
@@ -26,15 +26,6 @@ pub enum LoopType {
     StableLoop,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-pub struct LogLine {
-    cycle: u32,
-    freq_shift: f32,
-    tip_state: TipState,
-    pulse_voltage: f32,
-    freq_shift_change: Option<f32>,
-    z_change: Option<f32>,
-}
 
 /// Enhanced tip controller with pulse voltage stepping
 pub struct TipController {
@@ -64,8 +55,6 @@ pub struct TipController {
     signal_histories: HashMap<SignalIndex, VecDeque<f32>>,
     max_history_size: usize,
 
-    // Json Logger
-    logger: Option<Logger<LogLine>>,
 }
 
 impl TipController {
@@ -92,7 +81,6 @@ impl TipController {
             cycle_count: 0,
             signal_histories: HashMap::new(),
             max_history_size: 10,
-            logger: None,
         }
     }
 
@@ -128,19 +116,6 @@ impl TipController {
         )
     }
 
-    /// Provide Json File logger for inspecting behavior
-    pub fn with_logger(&mut self, logger: Logger<LogLine>) -> &mut Self {
-        self.logger = Some(logger);
-        self
-    }
-
-    /// Flush the logger (useful for signal handlers)
-    pub fn flush_logger(&mut self) -> Result<(), NanonisError> {
-        if let Some(ref mut logger) = self.logger {
-            logger.flush()?;
-        }
-        Ok(())
-    }
 
     /// Set stability threshold (how many good readings needed for stable)
     pub fn set_stability_threshold(&mut self, threshold: u32) -> &mut Self {
@@ -214,7 +189,7 @@ impl TipController {
         }
     }
 
-    /// Clear all signal histories (useful for logger integration)
+    /// Clear all signal histories
     pub fn clear_all_histories(&mut self) {
         self.signal_histories.clear();
     }
@@ -393,23 +368,6 @@ impl TipController {
                     }
                 }
 
-                // Add information about this cycle to the logger buffer
-                if self.logger.is_some() {
-                    // Calculate changes before borrowing logger mutably
-                    let freq_shift_change = self.get_signal_change(self.signal_index);
-                    let z_change = self.get_signal_change(z_signal_index);
-
-                    if let Some(ref mut logger) = self.logger {
-                        logger.add(LogLine {
-                            cycle: self.cycle_count,
-                            freq_shift,
-                            tip_state,
-                            pulse_voltage: self.pulse_voltage,
-                            freq_shift_change,
-                            z_change,
-                        })?
-                    }
-                }
 
                 // Continue polling (return None to continue the loop)
                 Ok(None)
@@ -491,14 +449,40 @@ impl TipController {
         Ok(())
     }
 
-    /// Simple classification based on bounds
-    fn classify(&mut self, signal: f32) -> TipState {
-        if signal < self.bound.0 || signal > self.bound.1 {
-            TipState::Bad
-        } else if self.good_count >= self.stable_threshold {
-            TipState::Stable
-        } else {
-            TipState::Good
+    /// Simple classification based on bounds using unified action system
+    fn classify(&mut self, _signal: f32) -> TipState {
+        use crate::actions::TipCheckMethod;
+        
+        // Use the unified action system for tip state checking
+        let check_method = TipCheckMethod::SignalBounds {
+            signal: self.signal_index,
+            bounds: self.bound,
+        };
+        
+        let result = self.driver.execute(Action::CheckTipState {
+            method: check_method,
+        });
+        
+        match result {
+            Ok(action_result) => {
+                match action_result.as_tip_state() {
+                    Some(mut tip_state) => {
+                        // Apply stability logic: if signal is good and we have enough good counts, mark as stable
+                        if tip_state == TipState::Good && self.good_count >= self.stable_threshold {
+                            tip_state = TipState::Stable;
+                        }
+                        tip_state
+                    },
+                    None => {
+                        warn!("CheckTipState action did not return TipState, defaulting to Bad");
+                        TipState::Bad
+                    }
+                }
+            },
+            Err(e) => {
+                warn!("Error executing CheckTipState action: {}, defaulting to Bad", e);
+                TipState::Bad
+            }
         }
     }
 
