@@ -161,6 +161,36 @@ impl BufferedTCPReader {
         buffer.len() as f64 / self.max_buffer_size as f64
     }
 
+    /// Get the total uptime of the buffered TCP reader
+    ///
+    /// Returns the duration since the BufferedTCPReader was created and started
+    /// collecting data. This can be useful for monitoring, logging, and understanding
+    /// the data collection timespan.
+    ///
+    /// # Returns
+    /// Duration since the reader was started
+    ///
+    /// # Thread Safety
+    /// This method is very fast as it only reads the start_time field and calculates
+    /// the current duration. No locks are acquired.
+    ///
+    /// # Example
+    /// ```rust
+    /// let tcp_reader = BufferedTCPReader::new("127.0.0.1", 6590, 1000, 24, 100.0)?;
+    ///
+    /// // Later...
+    /// let uptime = tcp_reader.uptime();
+    /// println!("TCP reader has been running for {:.1}s", uptime.as_secs_f64());
+    ///
+    /// // Useful for rate calculations
+    /// let (frame_count, _, _) = tcp_reader.buffer_stats();
+    /// let avg_rate = frame_count as f64 / uptime.as_secs_f64();
+    /// println!("Average data rate: {:.1} frames/sec", avg_rate);
+    /// ```
+    pub fn uptime(&self) -> Duration {
+        self.start_time.elapsed()
+    }
+
     /// Get all signal data since a specific timestamp
     ///
     /// # Arguments
@@ -274,6 +304,114 @@ impl BufferedTCPReader {
             Duration::ZERO
         };
         (count, capacity, time_span)
+    }
+
+    /// Get the most recent N frames from the buffer
+    ///
+    /// Returns frames in reverse chronological order (newest first).
+    /// If fewer than `count` frames are available, returns all available frames.
+    ///
+    /// # Arguments
+    /// * `count` - Maximum number of frames to retrieve
+    ///
+    /// # Returns
+    /// Vector of timestamped signal frames, newest first
+    ///
+    /// # Example
+    /// ```rust
+    /// let recent_100 = tcp_reader.get_recent_frames(100);
+    /// ```
+    pub fn get_recent_frames(&self, count: usize) -> Vec<TimestampedSignalFrame> {
+        let buffer = self.buffer.read();
+        buffer.iter().rev().take(count).cloned().collect()
+    }
+
+    /// Get the oldest N frames from the buffer
+    ///
+    /// Returns frames in chronological order (oldest first).
+    /// If fewer than `count` frames are available, returns all available frames.
+    /// Useful for FIFO processing or getting a stable baseline.
+    ///
+    /// # Arguments
+    /// * `count` - Maximum number of frames to retrieve
+    ///
+    /// # Returns
+    /// Vector of timestamped signal frames, oldest first
+    ///
+    /// # Example
+    /// ```rust
+    /// let baseline = tcp_reader.get_oldest_frames(50);
+    /// ```
+    pub fn get_oldest_frames(&self, count: usize) -> Vec<TimestampedSignalFrame> {
+        let buffer = self.buffer.read();
+        buffer.iter().take(count).cloned().collect()
+    }
+
+    /// Get the current number of frames in the buffer
+    ///
+    /// Returns the total count of frames currently stored in the circular buffer.
+    /// This can be used to check buffer fill level or validate requests.
+    ///
+    /// # Returns
+    /// Number of frames currently buffered
+    ///
+    /// # Example
+    /// ```rust
+    /// let available = tcp_reader.frame_count();
+    /// if available >= 100 {
+    ///     let data = tcp_reader.get_recent_frames(100);
+    /// }
+    /// ```
+    pub fn frame_count(&self) -> usize {
+        let buffer = self.buffer.read();
+        buffer.len()
+    }
+
+    /// Get frames from a specific range in the buffer
+    ///
+    /// Returns frames starting from `start_idx` (0 = oldest frame) for `count` frames.
+    /// If the range extends beyond available data, returns available frames only.
+    /// Useful for windowed analysis or specific time periods.
+    ///
+    /// # Arguments
+    /// * `start_idx` - Starting index (0 = oldest frame in buffer)
+    /// * `count` - Number of frames to retrieve from start_idx
+    ///
+    /// # Returns
+    /// Vector of timestamped signal frames in chronological order
+    ///
+    /// # Example
+    /// ```rust
+    /// // Get frames 50-149 (middle section of buffer)
+    /// let middle_data = tcp_reader.get_frame_range(50, 100);
+    /// ```
+    pub fn get_frame_range(&self, start_idx: usize, count: usize) -> Vec<TimestampedSignalFrame> {
+        let buffer = self.buffer.read();
+
+        buffer.iter().skip(start_idx).take(count).cloned().collect()
+    }
+
+    /// Check if the buffer has at least N frames available
+    ///
+    /// Convenience method to check data availability before requesting frames.
+    /// More efficient than getting frame_count() when you only need a threshold check.
+    ///
+    /// # Arguments
+    /// * `min_count` - Minimum number of frames required
+    ///
+    /// # Returns
+    /// True if buffer contains at least `min_count` frames
+    ///
+    /// # Example
+    /// ```rust
+    /// if tcp_reader.has_frames(100) {
+    ///     let stable_data = tcp_reader.get_recent_frames(100);
+    /// } else {
+    ///     println!("Not enough data yet, only {} frames", tcp_reader.frame_count());
+    /// }
+    /// ```
+    pub fn has_frames(&self, min_count: usize) -> bool {
+        self.frame_count() > min_count
     }
 
     /// Stop background buffering and clean up resources
