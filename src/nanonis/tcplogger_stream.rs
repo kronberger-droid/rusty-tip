@@ -62,18 +62,9 @@ impl TCPLoggerStream {
         let (sender, receiver) = mpsc::channel();
 
         thread::spawn(move || {
-            loop {
-                match self.read_frame() {
-                    Ok(frame) => {
-                        if sender.send(frame).is_err() {
-                            // Receiver dropped, exit thread
-                            break;
-                        }
-                    }
-                    Err(_) => {
-                        // Stream error, exit thread
-                        break;
-                    }
+            while let Ok(frame) = self.read_frame() {
+                if sender.send(frame).is_err() {
+                    break;
                 }
             }
         });

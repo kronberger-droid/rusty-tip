@@ -1,44 +1,50 @@
-use rusty_tip::{stability, ActionDriver};
-use std::{error::Error, time::Duration};
+use rusty_tip::{actions::SignalStabilityMethod, Action, ActionDriver};
+use std::{error::Error, thread::sleep, time::Duration};
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut driver = ActionDriver::new("127.0.0.1", 6501)?;
+    // Initialize logger to see debug output
+    env_logger::init();
+    let mut driver = ActionDriver::builder("127.0.0.1", 6501)
+        .with_tcp_reader(rusty_tip::TCPReaderConfig::default())
+        .build()?;
 
-    let _freq_shift = rusty_tip::SignalIndex(76);
+    // Check if TCP logger is available
+    if !driver.has_tcp_reader() {
+        println!("TCP logger not available");
+        return Ok(());
+    }
 
-    let z_pos = rusty_tip::SignalIndex(30);
+    println!("TCP logger is available, starting data collection...");
 
-    driver.execute(rusty_tip::Action::Withdraw {
-        wait_until_finished: true,
-        timeout: Duration::from_secs(5),
-    })?;
+    // Wait a moment for TCP logger to start collecting data
+    sleep(Duration::from_secs(1));
 
-    driver.execute(rusty_tip::Action::AutoApproach {
-        wait_until_finished: true,
-        timeout: Duration::from_secs(300),
-    })?;
+    let signal = driver
+        .run(Action::ReadStableSignal {
+            signal: rusty_tip::SignalIndex::new(1),
+            data_points: Some(100),
+            use_new_data: false,
+            stability_method: SignalStabilityMethod::RelativeStandardDeviation {
+                threshold_percent: 0.1,
+            },
+            timeout: Duration::from_secs(10),
+        })
+        .go()?;
 
-    if let Some(osci_data) = driver.read_oscilloscope_with_stability(
-        z_pos,
-        // Some(TriggerConfig::new(
-        //     rusty_tip::types::OsciTriggerMode::Level,
-        //     rusty_tip::TriggerSlope::Falling,
-        //     49.0e-12,
-        //     0.0,
-        // )),
-        None,
-        rusty_tip::types::DataToGet::Stable {
-            readings: 1,
-            timeout: Duration::from_secs(2),
-        },
-        stability::trend_analysis_stability,
-    )? {
-        // Use the new plotting function - much cleaner!
-        rusty_tip::plot_values(&osci_data.data, Some("Z-Position Oscilloscope Data"), None, None)?;
+    println!("{signal:?}");
 
-        let is_stable = stability::trend_analysis_stability(&osci_data.data);
-        println!("Stability result: {}", is_stable);
-    };
+    let mut full_data = Vec::new();
+
+    if let Some(reader) = driver.tcp_reader_mut() {
+        full_data = reader.get_all_data();
+    }
+
+    let values: Vec<Vec<f32>> = full_data
+        .iter()
+        .map(|entry| entry.signal_frame.data.clone())
+        .collect();
+
+    println!("{values:?}");
 
     Ok(())
 }

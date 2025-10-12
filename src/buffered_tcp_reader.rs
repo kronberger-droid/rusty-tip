@@ -105,6 +105,12 @@ impl BufferedTCPReader {
             while !shutdown_clone.load(Ordering::Relaxed) {
                 match tcp_receiver.recv_timeout(Duration::from_millis(100)) {
                     Ok(signal_frame) => {
+                        // Skip the first frame (signal indices metadata)
+                        if signal_frame.counter == 0 {
+                            log::debug!("Skipping metadata frame (counter=0) with signal indices");
+                            continue;
+                        }
+
                         let timestamped_frame =
                             TimestampedSignalFrame::new(signal_frame, start_time);
 

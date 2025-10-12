@@ -1,13 +1,9 @@
 # Tip Prep
 
-## Voltage Stepping
-
-1. Make it possible to get information about the frequency shift value from the CheckTipState Action.
-2. Use Signal History of TipController to do stepping like implemented before.
 
 ## Stability Checking through BiasSweep
 
-1. Implement CheckTipState BiasSweep
+1. BiasSweep is broken. implement it yourself
 
 ## Tip Prep Testing
 
@@ -20,3 +16,7 @@
 
 1. Make it possible to inject Action Results without having to run an action for edge cases.
 
+
+## Signal Registry
+
+1. SignalRegistry is very badly used right now. go over and check usage

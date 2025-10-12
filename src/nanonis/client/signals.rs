@@ -4,33 +4,17 @@ use crate::types::{NanonisValue, SignalIndex};
 
 impl NanonisClient {
     /// Get available signal names
-    pub fn signal_names_get(
-        &mut self,
-        print: bool,
-    ) -> Result<Vec<String>, NanonisError> {
-        let result =
-            self.quick_send("Signals.NamesGet", vec![], vec![], vec!["+*c"])?;
+    pub fn signal_names_get(&mut self) -> Result<Vec<String>, NanonisError> {
+        let result = self.quick_send("Signals.NamesGet", vec![], vec![], vec!["+*c"])?;
         match result.first() {
             Some(value) => {
                 let signal_names = value.as_string_array()?.to_vec();
-
-                if print {
-                    Self::print_signal_names(&signal_names);
-                }
 
                 Ok(signal_names)
             }
             None => Err(NanonisError::Protocol(
                 "No signal names returned".to_string(),
             )),
-        }
-    }
-
-    /// Helper function for printing signal names
-    fn print_signal_names(names: &[String]) {
-        log::info!("Available signal names ({} total):", names.len());
-        for (index, name) in names.iter().enumerate() {
-            log::info!("  {index}: {name}");
         }
     }
 
@@ -103,22 +87,6 @@ impl NanonisClient {
                 "Incomplete signal values response".to_string(),
             ))
         }
-    }
-
-    /// Find signal index by name (case-insensitive)
-    pub fn find_signal_index(
-        &mut self,
-        signal_name: &str,
-    ) -> Result<Option<SignalIndex>, NanonisError> {
-        let signals = self.signal_names_get(false)?;
-        let signal_name_lower = signal_name.to_lowercase();
-
-        for (index, name) in signals.iter().enumerate() {
-            if name.to_lowercase().contains(&signal_name_lower) {
-                return Ok(Some(SignalIndex(index as i32)));
-            }
-        }
-        Ok(None)
     }
 
     /// Get the current value of a single selected signal.
@@ -269,9 +237,7 @@ impl NanonisClient {
     /// println!("Internal 24 assigned to: {}", internal_24);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn signals_add_rt_get(
-        &mut self,
-    ) -> Result<(Vec<String>, String, String), NanonisError> {
+    pub fn signals_add_rt_get(&mut self) -> Result<(Vec<String>, String, String), NanonisError> {
         let result = self.quick_send(
             "Signals.AddRTGet",
             vec![],
@@ -348,25 +314,5 @@ impl NanonisClient {
             vec![],
         )?;
         Ok(())
-    }
-
-    /// Read a signal by name (finds index automatically)
-    pub fn read_signal_by_name(
-        &mut self,
-        signal_name: &str,
-        wait_for_newest: bool,
-    ) -> Result<f32, NanonisError> {
-        match self.find_signal_index(signal_name)? {
-            Some(index) => {
-                let values =
-                    self.signals_vals_get(vec![index.into()], wait_for_newest)?;
-                values.first().copied().ok_or_else(|| {
-                    NanonisError::Protocol("No signal value returned".to_string())
-                })
-            }
-            None => Err(NanonisError::InvalidCommand(format!(
-                "Signal '{signal_name}' not found"
-            ))),
-        }
     }
 }

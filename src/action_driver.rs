@@ -5,25 +5,26 @@ use ndarray::Array1;
 use crate::actions::{
     Action, ActionChain, ActionLogEntry, ActionLogResult, ActionResult, ExpectFromAction,
 };
+use crate::buffered_tcp_reader::BufferedTCPReader;
 use crate::error::NanonisError;
 use crate::nanonis::NanonisClient;
+use crate::signal_registry::SignalRegistry;
 use crate::types::{
     DataToGet, MotorGroup, OsciData, Position, PulseMode, ScanDirection, SignalIndex, SignalStats,
-    TCPLoggerData, TriggerConfig, ZControllerHold,
+    TriggerConfig, ZControllerHold,
 };
 use crate::utils::{poll_until, poll_with_timeout, PollError};
 use crate::TipShaperConfig;
 use std::collections::HashMap;
-use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 /// Configuration for TCP Logger integration with always-buffer support
 #[derive(Debug, Clone)]
-pub struct TCPLoggerConfig {
+pub struct TCPReaderConfig {
     /// TCP data stream port (typically 6590)
     pub stream_port: u16,
-    /// Signal channel indices to record (0-127)
+    /// Signal channel indices to record (0-23)
     pub channels: Vec<i32>,
     /// Oversampling rate multiplier (0-1000)
     pub oversampling: i32,
@@ -32,6 +33,18 @@ pub struct TCPLoggerConfig {
     /// Buffer size for always-buffer mode (None = no buffering)
     /// When Some(size), BufferedTCPReader starts automatically
     pub buffer_size: Option<usize>,
+}
+
+impl Default for TCPReaderConfig {
+    fn default() -> Self {
+        Self {
+            stream_port: 6590,
+            channels: (0..=23).collect(),
+            oversampling: 100,
+            auto_start: true,
+            buffer_size: Some(1_000),
+        }
+    }
 }
 
 /// Unified input type for run() method - accepts single actions or chains
@@ -332,7 +345,7 @@ pub struct ActionDriverBuilder {
     port: u16,
     connection_timeout: Option<Duration>,
     initial_storage: HashMap<String, ActionResult>,
-    tcp_logger_config: Option<TCPLoggerConfig>,
+    tcp_reader_config: Option<TCPReaderConfig>,
     action_logger_config: Option<(std::path::PathBuf, usize, bool)>, // (file_path, buffer_size, final_format_json)
 }
 
@@ -344,7 +357,7 @@ impl ActionDriverBuilder {
             port,
             connection_timeout: None,
             initial_storage: HashMap::new(),
-            tcp_logger_config: None,
+            tcp_reader_config: None,
             action_logger_config: None,
         }
     }
@@ -367,13 +380,6 @@ impl ActionDriverBuilder {
         self
     }
 
-    /// Configure TCP Logger for basic integration (no automatic buffering)
-    /// Use this when you want manual control over data collection
-    pub fn with_tcp_logger(mut self, config: TCPLoggerConfig) -> Self {
-        self.tcp_logger_config = Some(config);
-        self
-    }
-
     /// Configure TCP Logger with always-buffer mode (recommended)
     /// This automatically starts BufferedTCPReader when ActionDriver is built
     ///
@@ -383,7 +389,7 @@ impl ActionDriverBuilder {
     /// # Usage
     /// ```rust,ignore
     /// let driver = ActionDriver::builder("127.0.0.1", 6501)
-    ///     .with_tcp_logger_buffering(TCPLoggerConfig {
+    ///     .with_tcp_reader(TCPReaderConfig {
     ///         stream_port: 6590,
     ///         channels: vec![0, 8],
     ///         oversampling: 100,
@@ -393,11 +399,11 @@ impl ActionDriverBuilder {
     ///     .build()?;
     /// // Buffering is now active and ready for immediate data queries
     /// ```
-    pub fn with_tcp_logger_buffering(mut self, config: TCPLoggerConfig) -> Self {
+    pub fn with_tcp_reader(mut self, config: TCPReaderConfig) -> Self {
         if config.buffer_size.is_none() {
             log::warn!("TCPLoggerConfig buffer_size is None - buffering disabled");
         }
-        self.tcp_logger_config = Some(config);
+        self.tcp_reader_config = Some(config);
         self
     }
 
@@ -437,9 +443,17 @@ impl ActionDriverBuilder {
 
     /// Build the ActionDriver with configured parameters and optional automatic buffering
     pub fn build(self) -> Result<ActionDriver, NanonisError> {
-        let mut client = NanonisClient::new(&self.addr, self.port)?;
+        let mut client = {
+            let mut builder = NanonisClient::builder().address(&self.addr).port(self.port);
 
-        let tcp_reader = if let Some(ref config) = self.tcp_logger_config {
+            if let Some(timeout) = self.connection_timeout {
+                builder = builder.connect_timeout(timeout);
+            }
+
+            builder.build()?
+        };
+
+        let tcp_reader = if let Some(ref config) = self.tcp_reader_config {
             if let Some(buffer_size) = config.buffer_size {
                 // 1. Configure TCP logger settings first
                 client.tcplog_chs_set(config.channels.clone())?;
@@ -490,14 +504,18 @@ impl ActionDriverBuilder {
                 None
             };
 
+        // Auto-initialize signal registry
+        let signal_names = client.signal_names_get()?;
+        let signal_registry = SignalRegistry::with_hardcoded_tcp_mapping(&signal_names);
+
         Ok(ActionDriver {
             client,
             stored_values: self.initial_storage,
-            tcp_logger_config: self.tcp_logger_config,
-            tcp_receiver: None,
+            tcp_reader_config: self.tcp_reader_config,
             tcp_reader,
             action_logger,
             action_logging_enabled: true, // Default to enabled if logger is configured
+            signal_registry,
         })
     }
 }
@@ -510,15 +528,15 @@ pub struct ActionDriver {
     /// Storage for Store/Retrieve actions
     stored_values: HashMap<String, ActionResult>,
     /// TCP Logger configuration for data collection
-    tcp_logger_config: Option<TCPLoggerConfig>,
-    /// Legacy receiver for backward compatibility (deprecated in favor of tcp_reader)
-    tcp_receiver: Option<mpsc::Receiver<TCPLoggerData>>,
+    tcp_reader_config: Option<TCPReaderConfig>,
     /// Buffered TCP reader for always-buffer mode (automatically started if configured)
     tcp_reader: Option<crate::buffered_tcp_reader::BufferedTCPReader>,
     /// Action logger for execution tracking
     action_logger: Option<crate::logger::Logger<crate::actions::ActionLogEntry>>,
     /// Enable/disable action logging at runtime
     action_logging_enabled: bool,
+    /// Signal registry for name-based lookup and TCP mapping
+    signal_registry: SignalRegistry,
 }
 
 impl ActionDriver {
@@ -533,15 +551,19 @@ impl ActionDriver {
     }
 
     /// Convenience method to create with existing NanonisClient (backward compatibility)
-    pub fn with_nanonis_client(client: NanonisClient) -> Self {
+    pub fn with_nanonis_client(mut client: NanonisClient) -> Self {
+        // Initialize signal registry even for this convenience method
+        let signal_names = client.signal_names_get().unwrap_or_default();
+        let signal_registry = SignalRegistry::with_hardcoded_tcp_mapping(&signal_names);
+
         Self {
             client,
             stored_values: HashMap::new(),
-            tcp_logger_config: None,
-            tcp_receiver: None,
+            tcp_reader_config: None,
             tcp_reader: None,
             action_logger: None,
             action_logging_enabled: false,
+            signal_registry,
         }
     }
 
@@ -556,19 +578,41 @@ impl ActionDriver {
     }
 
     /// Get TCP Logger configuration if set
-    pub fn tcp_logger_config(&self) -> Option<&TCPLoggerConfig> {
-        self.tcp_logger_config.as_ref()
-    }
-
-    /// Get reference to TCP logger data receiver for direct channel access
-    /// This is the primary way to read TCP logger data from the background thread
-    pub fn tcp_logger_receiver(&self) -> Option<&mpsc::Receiver<TCPLoggerData>> {
-        self.tcp_receiver.as_ref()
+    pub fn tcp_reader_config(&self) -> Option<&TCPReaderConfig> {
+        self.tcp_reader_config.as_ref()
     }
 
     /// Check if TCP logger is configured and available
-    pub fn has_tcp_logger(&self) -> bool {
-        self.tcp_receiver.is_some() || self.tcp_reader.is_some()
+    pub fn has_tcp_reader(&self) -> bool {
+        self.tcp_reader.is_some()
+    }
+
+    pub fn tcp_reader_mut(&mut self) -> Option<&mut BufferedTCPReader> {
+        self.tcp_reader.as_mut()
+    }
+
+    /// Get reference to the signal registry
+    pub fn signal_registry(&self) -> &SignalRegistry {
+        &self.signal_registry
+    }
+
+    /// Validate that a signal is available in TCP logger
+    pub fn validate_tcp_signal(&self, signal: SignalIndex) -> Result<u8, NanonisError> {
+        self.signal_registry
+            .nanonis_to_tcp(signal.0)
+            .map(|ch| ch.get())
+            .map_err(|e| {
+                NanonisError::Protocol(format!(
+                    "Signal {} not available in TCP logger channels. Available TCP signals: {:?}. Error: {}",
+                    signal.0,
+                    self.signal_registry
+                        .tcp_signals()
+                        .iter()
+                        .map(|s| format!("{}({})", s.name, s.nanonis_index))
+                        .collect::<Vec<_>>(),
+                    e
+                ))
+            })
     }
 
     // ==================== Unified Execution API ====================
@@ -748,7 +792,7 @@ impl ActionDriver {
             .as_ref()
             .unwrap()
             .get_data_between(window_start, window_end);
-        let tcp_config = self.tcp_logger_config.as_ref().unwrap().clone();
+        let tcp_config = self.tcp_reader_config.as_ref().unwrap().clone();
 
         let experiment_data = crate::types::ExperimentData {
             action_result,
@@ -915,7 +959,7 @@ impl ActionDriver {
             .as_ref()
             .unwrap()
             .get_data_between(window_start, window_end);
-        let tcp_config = self.tcp_logger_config.as_ref().unwrap().clone();
+        let tcp_config = self.tcp_reader_config.as_ref().unwrap().clone();
 
         let chain_experiment_data = crate::types::ChainExperimentData {
             action_results,
@@ -1123,7 +1167,7 @@ impl ActionDriver {
             }
 
             Action::ReadSignalNames => {
-                let names = self.client.signal_names_get(false)?;
+                let names = self.client.signal_names_get()?;
                 Ok(ActionResult::Text(names))
             }
 
@@ -1147,7 +1191,7 @@ impl ActionDriver {
             } => {
                 self.client.osci1t_run()?;
 
-                self.client.osci1t_ch_set(signal.0)?;
+                self.client.osci1t_ch_set(signal.0.get() as i32)?;
 
                 if let Some(trigger) = trigger {
                     self.client.osci1t_trig_set(
@@ -1351,6 +1395,75 @@ impl ActionDriver {
                 Ok(ActionResult::Success)
             }
 
+            Action::SafeReposition { x_steps, y_steps } => {
+                // Safe repositioning with hardcoded defaults
+                let displacement = crate::types::MotorDisplacement::new(x_steps, y_steps, -2);
+                let withdraw_timeout = Duration::from_secs(2);
+                let approach_timeout = Duration::from_secs(2);
+                let stabilization_wait = Duration::from_millis(500);
+
+                // Execute the safe repositioning sequence
+                // 1. Withdraw
+                self.client.z_ctrl_withdraw(true, withdraw_timeout)?;
+
+                // 2. Move motor 3D (using the same logic as MoveMotor3D)
+                let movements = displacement.to_motor_movements();
+                for (direction, steps) in movements {
+                    self.client
+                        .motor_start_move(direction, steps, MotorGroup::Group1, true)?;
+                }
+
+                // 3. Auto approach (using the same logic as AutoApproach)
+                // Open auto-approach module
+                self.client.auto_approach_open()?;
+                thread::sleep(Duration::from_millis(500)); // Wait for module initialization
+
+                // Start auto-approach
+                self.client.auto_approach_on_off_set(true)?;
+
+                // Wait for completion with timeout
+                let poll_interval = Duration::from_millis(100);
+                match poll_until(
+                    || {
+                        self.client
+                            .auto_approach_on_off_get()
+                            .map(|running| !running)
+                    },
+                    approach_timeout,
+                    poll_interval,
+                ) {
+                    Ok(()) => {
+                        log::debug!("SafeReposition auto-approach completed successfully");
+                    }
+                    Err(PollError::Timeout) => {
+                        log::warn!(
+                            "SafeReposition auto-approach timed out after {:?}",
+                            approach_timeout
+                        );
+                        // Try to stop the auto-approach
+                        let _ = self.client.auto_approach_on_off_set(false);
+                        return Err(NanonisError::InvalidCommand(
+                            "SafeReposition auto-approach timed out".to_string(),
+                        ));
+                    }
+                    Err(PollError::ConditionError(e)) => {
+                        log::error!(
+                            "Error checking auto-approach status in SafeReposition: {}",
+                            e
+                        );
+                        return Err(NanonisError::InvalidCommand(format!(
+                            "SafeReposition status check error: {}",
+                            e
+                        )));
+                    }
+                }
+
+                // 4. Wait for stabilization
+                thread::sleep(stabilization_wait);
+
+                Ok(ActionResult::Success)
+            }
+
             Action::SetZSetpoint { setpoint } => {
                 self.client.z_ctrl_setpoint_set(setpoint)?;
                 Ok(ActionResult::Success)
@@ -1420,6 +1533,7 @@ impl ActionDriver {
                 pulse_height_v,
             } => {
                 let current_bias = self.client_mut().get_bias().unwrap_or(500e-3);
+
                 let config = TipShaperConfig {
                     switch_off_delay: std::time::Duration::from_millis(10),
                     change_bias: true,
@@ -1474,14 +1588,15 @@ impl ActionDriver {
             }
 
             Action::GetTCPLoggerStatus => {
+                use crate::actions::TCPReaderStatus;
                 let status = self.get_tcp_logger_status()?;
-                let config = self.tcp_logger_config();
+                let config = self.tcp_reader_config();
 
-                Ok(ActionResult::TCPLoggerStatus {
+                Ok(ActionResult::TCPReaderStatus(TCPReaderStatus {
                     status,
                     channels: config.map(|c| c.channels.clone()).unwrap_or_default(),
                     oversampling: config.map(|c| c.oversampling).unwrap_or(0),
-                })
+                }))
             }
 
             Action::ConfigureTCPLogger {
@@ -1494,79 +1609,588 @@ impl ActionDriver {
             }
 
             Action::CheckTipState { method } => {
-                use crate::actions::TipCheckMethod;
-                use crate::tip_prep::TipState;
+                use crate::actions::{TipCheckMethod, TipState};
+                use crate::types::TipShape;
+                use std::collections::HashMap;
 
-                let tip_state = match method {
+                let (tip_shape, measured_signals) = match method {
                     TipCheckMethod::SignalBounds { signal, bounds } => {
-                        let value = self.client.signals_vals_get(vec![signal.into()], true)?[0];
-                        if value >= bounds.0 && value <= bounds.1 {
-                            TipState::Good
+                        let value = self.client.signal_val_get(signal.0, true)?;
+                        let mut measured = HashMap::new();
+                        measured.insert(signal, value);
+
+                        let shape = if value >= bounds.0 && value <= bounds.1 {
+                            TipShape::Sharp
                         } else {
-                            TipState::Bad
-                        }
+                            TipShape::Blunt
+                        };
+
+                        (shape, measured)
                     }
 
-                    TipCheckMethod::MultiSignalBounds { signals } => {
+                    TipCheckMethod::MultiSignalBounds { ref signals } => {
                         let indices: Vec<i32> =
                             signals.iter().map(|(signal, _)| (*signal).into()).collect();
                         let values = self.client.signals_vals_get(indices, true)?;
 
-                        let all_good =
-                            signals
-                                .iter()
-                                .zip(values.iter())
-                                .all(|((_signal, bounds), value)| {
-                                    *value >= bounds.0 && *value <= bounds.1
-                                });
+                        let mut measured = HashMap::new();
+                        let mut violations = Vec::new();
+                        let mut all_good = true;
 
-                        if all_good {
-                            TipState::Good
+                        for ((signal, bounds), value) in signals.iter().zip(values.iter()) {
+                            measured.insert(*signal, *value);
+                            if *value < bounds.0 || *value > bounds.1 {
+                                violations.push((*signal, *value, *bounds));
+                                all_good = false;
+                            }
+                        }
+
+                        let shape = if all_good {
+                            TipShape::Sharp
                         } else {
-                            TipState::Bad
-                        }
-                    }
+                            TipShape::Blunt
+                        };
 
-                    TipCheckMethod::SignalStability {
-                        signal,
-                        threshold,
-                        history_size,
-                    } => {
-                        // Read multiple samples for stability analysis
-                        let mut samples = Vec::with_capacity(history_size);
-                        for _ in 0..history_size {
-                            let value = self.client.signals_vals_get(vec![signal.into()], true)?[0];
-                            samples.push(value);
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                            // Small delay between readings
-                        }
-
-                        // Calculate standard deviation
-                        let mean = samples.iter().sum::<f32>() / samples.len() as f32;
-                        let variance = samples.iter().map(|v| (v - mean).powi(2)).sum::<f32>()
-                            / samples.len() as f32;
-                        let std_dev = variance.sqrt();
-
-                        if std_dev <= threshold {
-                            TipState::Stable
-                        } else {
-                            TipState::Good // Assume signal is in bounds but not stable
-                        }
-                    }
-
-                    TipCheckMethod::Custom { method_name } => {
-                        // For custom methods, return a default state and log the method name
-                        log::warn!(
-                            "Custom tip check method '{}' not implemented, returning Good",
-                            method_name
-                        );
-                        TipState::Good
+                        (shape, measured)
                     }
                 };
 
-                Ok(ActionResult::TipState(tip_state))
+                Ok(ActionResult::TipState(TipState {
+                    shape: tip_shape,
+                    confidence: 1.0, // TODO: calculate actual confidence based on bounds check
+                    measured_signals,
+                    metadata: HashMap::new(), // TODO: add relevant metadata
+                }))
+            }
+
+            Action::CheckTipStability {
+                method,
+                max_duration: _,
+                abort_on_damage_signs: _,
+            } => {
+                use crate::actions::{StabilityResult, TipStabilityMethod};
+                use std::collections::HashMap;
+
+                let start_time = std::time::Instant::now();
+                let mut metrics = HashMap::new();
+                let mut recommendations = Vec::new();
+
+                let (is_stable, stability_score, measured_values) = match method {
+                    TipStabilityMethod::ExtendedMonitoring {
+                        signal: _,
+                        duration: _,
+                        sampling_interval: _,
+                        stability_threshold: _,
+                    } => {
+                        todo!("ExtendedMonitoring not yet implemented");
+                    }
+
+                    TipStabilityMethod::BiasSweepResponse {
+                        signal,
+                        bias_range,
+                        sweep_steps,
+                        period,
+                        allowed_signal_change,
+                    } => {
+                        log::warn!(
+                            "Performing bias sweep stability test - this may damage the tip!"
+                        );
+
+                        // Calculate total sweep duration
+                        let sweep_duration =
+                            Duration::from_millis((sweep_steps as u64) * period.as_millis() as u64);
+                        log::info!(
+                            "Bias sweep will take {:.1}s total",
+                            sweep_duration.as_secs_f32()
+                        );
+
+                        // Check TCP reader is available and get signal channel index
+                        let signal_channel_idx = {
+                            let tcp_config = self.tcp_reader_config.as_ref().ok_or_else(|| {
+                                NanonisError::Protocol("TCP logger not configured".to_string())
+                            })?;
+
+                            // Convert Nanonis signal index to TCP channel using registry
+                            let tcp_channel = self
+                                .signal_registry
+                                .nanonis_to_tcp(signal.0)
+                                .map_err(|e| {
+                                    NanonisError::Protocol(format!(
+                                        "Signal {} (Nanonis index) has no TCP channel mapping: {}",
+                                        signal.0, e
+                                    ))
+                                })?;
+
+                            tcp_config
+                                .channels
+                                .iter()
+                                .position(|&ch| ch == tcp_channel.get() as i32)
+                                .ok_or_else(|| {
+                                    NanonisError::Protocol(format!(
+                                        "TCP channel {} for signal {} not found in TCP logger configuration",
+                                        tcp_channel.get(), signal.0
+                                    ))
+                                })?
+                        };
+
+                        // Configure bias sweep
+                        self.client.bias_sweep_open()?;
+                        self.client
+                            .bias_sweep_limits_set(bias_range.0, bias_range.1)?;
+                        self.client.bias_sweep_props_set(
+                            sweep_steps,
+                            period.as_millis() as u16,
+                            1,
+                            2,
+                        )?;
+
+                        // Get initial buffer state for monitoring
+                        let initial_frame_count = {
+                            let tcp_reader = self.tcp_reader_mut().ok_or_else(|| {
+                                NanonisError::Protocol(
+                                    "TCP reader not available for bias sweep monitoring"
+                                        .to_string(),
+                                )
+                            })?;
+                            tcp_reader.frame_count()
+                        };
+
+                        // Start bias sweep (without getting data immediately - we'll monitor via TCP)
+                        let _sweep_result = self.client.bias_sweep_start(
+                            false, // don't get_data immediately
+                            true,  // sweep direction (forward)
+                            1,     // turn off Z-controller
+                            "",    // no save base name
+                            true,  // reset bias after
+                        )?;
+
+                        // Get baseline signal value before starting sweep monitoring
+                        let baseline_value = {
+                            if let Some(tcp_reader) = self.tcp_reader_mut() {
+                                if let Some(recent_frame) = tcp_reader.get_recent_frames(1).first()
+                                {
+                                    if recent_frame.signal_frame.data.len() > signal_channel_idx {
+                                        recent_frame.signal_frame.data[signal_channel_idx]
+                                    } else {
+                                        0.0
+                                    }
+                                } else {
+                                    0.0
+                                }
+                            } else {
+                                0.0
+                            }
+                        };
+
+                        // Calculate allowed bounds based on baseline and allowed change
+                        let max_allowed_change = baseline_value.abs() * allowed_signal_change;
+                        let lower_bound = baseline_value - max_allowed_change;
+                        let upper_bound = baseline_value + max_allowed_change;
+
+                        log::info!(
+                            "Monitoring signal {} during bias sweep (baseline: {:.3}, allowed range: {:.3} to {:.3})...", 
+                            signal.0, baseline_value, lower_bound, upper_bound
+                        );
+
+                        // Monitor signal during sweep using TCP reader
+                        let start_time = std::time::Instant::now();
+                        let mut signal_stayed_in_bounds = true;
+                        let mut frames_checked = 0;
+                        let mut last_value = baseline_value;
+
+                        // Monitor until sweep completes or signal goes out of bounds
+                        while start_time.elapsed() < sweep_duration {
+                            // Check if we have new data
+                            let (current_frame_count, recent_frames) = {
+                                if let Some(tcp_reader) = self.tcp_reader_mut() {
+                                    let count = tcp_reader.frame_count();
+                                    let frames = if count > initial_frame_count + frames_checked {
+                                        tcp_reader.get_recent_frames(10)
+                                    } else {
+                                        Vec::new()
+                                    };
+                                    (count, frames)
+                                } else {
+                                    break; // TCP reader not available, exit monitoring
+                                }
+                            };
+
+                            if current_frame_count > initial_frame_count + frames_checked {
+                                for frame in recent_frames.iter().rev() {
+                                    if frame.signal_frame.data.len() > signal_channel_idx {
+                                        let signal_value =
+                                            frame.signal_frame.data[signal_channel_idx];
+                                        last_value = signal_value;
+
+                                        // Check if signal is within allowed bounds around baseline
+                                        if signal_value < lower_bound || signal_value > upper_bound
+                                        {
+                                            let change_percent = ((signal_value - baseline_value)
+                                                .abs()
+                                                / baseline_value.abs())
+                                                * 100.0;
+                                            log::warn!(
+                                                "Signal {} out of bounds: {:.3} (baseline: {:.3}, change: {:.1}%, allowed: {:.1}%) - tip likely blunt",
+                                                signal.0, signal_value, baseline_value, change_percent, allowed_signal_change * 100.0
+                                            );
+                                            signal_stayed_in_bounds = false;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                frames_checked = current_frame_count - initial_frame_count;
+
+                                if !signal_stayed_in_bounds {
+                                    break;
+                                }
+                            }
+
+                            // Small sleep to avoid busy waiting
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+
+                        // Determine stability based on signal behavior
+                        let (is_stable, stability_score) = if signal_stayed_in_bounds {
+                            log::info!("Signal stayed within bounds during bias sweep - tip appears stable");
+                            (true, 0.8) // Good stability score
+                        } else {
+                            log::warn!("Signal went out of bounds during bias sweep - tip instability detected");
+                            (false, 0.2) // Poor stability score
+                        };
+
+                        // Add metrics
+                        metrics
+                            .insert("sweep_duration_s".to_string(), sweep_duration.as_secs_f32());
+                        metrics.insert("final_signal_value".to_string(), last_value);
+                        metrics.insert("frames_monitored".to_string(), frames_checked as f32);
+                        metrics.insert(
+                            "signal_in_bounds".to_string(),
+                            if signal_stayed_in_bounds { 1.0 } else { 0.0 },
+                        );
+
+                        // Add recommendations
+                        if !signal_stayed_in_bounds {
+                            recommendations
+                                .push("Consider tip conditioning or replacement".to_string());
+                            recommendations
+                                .push("Signal exceeded bounds during bias sweep".to_string());
+                        } else {
+                            recommendations
+                                .push("Tip shows stable response to bias changes".to_string());
+                        }
+
+                        // Create measured values map
+                        let mut measured_values = HashMap::new();
+                        measured_values.insert(signal, vec![last_value]);
+
+                        (is_stable, stability_score, measured_values)
+                    }
+                };
+
+                let analysis_duration = start_time.elapsed();
+                let result = StabilityResult {
+                    is_stable,
+                    stability_score,
+                    method_used: format!("{:?}", method),
+                    measured_values,
+                    analysis_duration,
+                    metrics,
+                    potential_damage_detected: !is_stable
+                        && matches!(method, TipStabilityMethod::BiasSweepResponse { .. }),
+                    recommendations,
+                };
+
+                Ok(ActionResult::StabilityResult(result))
+            }
+
+            Action::ReadStableSignal {
+                signal,
+                data_points,
+                use_new_data,
+                stability_method,
+                timeout,
+            } => {
+                use std::time::Instant;
+
+                let start_time = Instant::now();
+                let data_points = data_points.unwrap_or(50);
+
+                // Validate TCP logger is configured and active
+                let tcp_config = self.tcp_reader_config.as_ref().ok_or_else(|| {
+                    NanonisError::Protocol("TCP logger not configured".to_string())
+                })?;
+
+                // Convert Nanonis signal index to TCP channel using registry
+                let tcp_channel =
+                    self.signal_registry
+                        .nanonis_to_tcp(signal.0)
+                        .map_err(|e| {
+                            NanonisError::Protocol(format!(
+                                "Signal {} (Nanonis index) has no TCP channel mapping: {}",
+                                signal.0, e
+                            ))
+                        })?;
+
+                // Find TCP channel in TCP config channels
+                let signal_channel_idx = tcp_config
+                    .channels
+                    .iter()
+                    .position(|&ch| ch == tcp_channel.get() as i32)
+                    .ok_or_else(|| {
+                        NanonisError::Protocol(format!(
+                            "TCP channel {} for signal {} not found in TCP logger configuration",
+                            tcp_channel.get(), signal.0
+                        ))
+                    })?;
+
+                // Collect signal data based on use_new_data flag
+                let signal_data: Vec<f32> = if use_new_data {
+                    // Wait for new data with timeout
+                    self.collect_new_signal_data(signal_channel_idx, data_points, timeout)?
+                } else {
+                    // Use buffered data
+                    self.extract_buffered_signal_data(signal_channel_idx, data_points)?
+                };
+
+                if signal_data.is_empty() {
+                    return Ok(ActionResult::Values(vec![]));
+                }
+
+                // Analyze stability using the specified method
+                let (is_stable, confidence, metrics) =
+                    Self::analyze_signal_stability(&signal_data, &stability_method);
+
+                let analysis_duration = start_time.elapsed();
+
+                if is_stable {
+                    // Calculate stable value (mean of the data)
+                    let stable_value = signal_data.iter().sum::<f32>() / signal_data.len() as f32;
+
+                    use crate::actions::StableSignal;
+                    Ok(ActionResult::StableSignal(StableSignal {
+                        stable_value,
+                        confidence,
+                        data_points_used: signal_data.len(),
+                        analysis_duration,
+                        stability_metrics: metrics,
+                        raw_data: signal_data,
+                    }))
+                } else {
+                    // Return raw data as fallback when not stable
+                    let values: Vec<f64> = signal_data.iter().map(|&x| x as f64).collect();
+                    Ok(ActionResult::Values(values))
+                }
+            }
+            Action::ReachedTargedAmplitude => {
+                let ampl_setpoint = self.client_mut().pll_amp_ctrl_setpnt_get(1)?;
+
+                let ampl_current = match self
+                    .run(Action::ReadStableSignal {
+                        signal: 75u8.into(),
+                        data_points: Some(50),
+                        use_new_data: false,
+                        stability_method:
+                            crate::actions::SignalStabilityMethod::RelativeStandardDeviation {
+                                threshold_percent: 0.2,
+                            },
+                        timeout: Duration::from_millis(10),
+                    })
+                    .go()? {
+                        ActionResult::Values(values) => values.iter().map(|v| *v as f32).sum::<f32>() / values.len() as f32,
+                        ActionResult::StableSignal(value) => value.stable_value,
+                        _ => panic!("This should not be able to return results other than values or stable signal")
+
+                        
+                    };
+
+                let status = (ampl_setpoint - 5e-12..ampl_setpoint + 5e-12)
+                    .contains(&ampl_current);
+
+                Ok(ActionResult::Status(status))
             }
         }
+    }
+
+    /// Collect new signal data from TCP logger with timeout
+    fn collect_new_signal_data(
+        &self,
+        signal_channel_idx: usize,
+        data_points: usize,
+        timeout: Duration,
+    ) -> Result<Vec<f32>, NanonisError> {
+        use std::time::Instant;
+
+        let tcp_reader = self
+            .tcp_reader
+            .as_ref()
+            .ok_or_else(|| NanonisError::Protocol("TCP reader not available".to_string()))?;
+
+        let start_time = Instant::now();
+        let mut collected_data = Vec::with_capacity(data_points);
+
+        log::info!(
+            "Collecting {} new data points for signal channel {} with timeout {:.1}s",
+            data_points,
+            signal_channel_idx,
+            timeout.as_secs_f32()
+        );
+
+        while collected_data.len() < data_points && start_time.elapsed() < timeout {
+            // Get recent data in small chunks to avoid blocking too long
+            let recent_frames = tcp_reader.get_recent_data(Duration::from_millis(100));
+
+            for frame in recent_frames {
+                if collected_data.len() >= data_points {
+                    break;
+                }
+
+                if let Some(&value) = frame.signal_frame.data.get(signal_channel_idx) {
+                    collected_data.push(value);
+                }
+            }
+
+            if collected_data.len() < data_points {
+                std::thread::sleep(Duration::from_millis(50)); // Small delay before next check
+            }
+        }
+
+        if collected_data.is_empty() {
+            log::warn!("No data collected within timeout");
+        } else {
+            log::info!("Collected {} data points", collected_data.len());
+        }
+
+        Ok(collected_data)
+    }
+
+    /// Extract buffered signal data from TCP logger
+    fn extract_buffered_signal_data(
+        &self,
+        signal_channel_idx: usize,
+        data_points: usize,
+    ) -> Result<Vec<f32>, NanonisError> {
+        let tcp_reader = self
+            .tcp_reader
+            .as_ref()
+            .ok_or_else(|| NanonisError::Protocol("TCP reader not available".to_string()))?;
+
+        // Get recent data based on how many points we need
+        let recent_frames = tcp_reader.get_recent_frames(data_points);
+
+        let mut signal_data = Vec::new();
+        for frame in recent_frames.iter().rev().take(data_points) {
+            // Take most recent data points
+            if let Some(&value) = frame.signal_frame.data.get(signal_channel_idx) {
+                signal_data.push(value);
+            }
+        }
+
+        signal_data.reverse(); // Return in chronological order
+
+        log::info!("Extracted {} buffered data points", signal_data.len());
+        Ok(signal_data)
+    }
+
+    /// Analyze signal stability using the specified method
+    fn analyze_signal_stability(
+        data: &[f32],
+        method: &crate::actions::SignalStabilityMethod,
+    ) -> (bool, f32, std::collections::HashMap<String, f32>) {
+        use crate::actions::SignalStabilityMethod;
+
+        if data.len() < 2 {
+            return (false, 0.0, std::collections::HashMap::new());
+        }
+
+        let mut metrics = std::collections::HashMap::new();
+        let mean = data.iter().sum::<f32>() / data.len() as f32;
+        let variance = data.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / data.len() as f32;
+        let std_dev = variance.sqrt();
+
+        metrics.insert("mean".to_string(), mean);
+        metrics.insert("std_dev".to_string(), std_dev);
+        metrics.insert("variance".to_string(), variance);
+
+        let (is_stable, confidence) = match method {
+            SignalStabilityMethod::StandardDeviation { threshold } => {
+                let is_stable = std_dev <= *threshold;
+                let confidence = (1.0 - (std_dev / threshold).min(1.0)).max(0.0);
+                metrics.insert("threshold".to_string(), *threshold);
+                (is_stable, confidence)
+            }
+
+            SignalStabilityMethod::RelativeStandardDeviation { threshold_percent } => {
+                let relative_std = if mean.abs() > 1e-12 {
+                    (std_dev / mean.abs()) * 100.0
+                } else {
+                    f32::INFINITY
+                };
+                let is_stable = relative_std <= *threshold_percent;
+                let confidence = (1.0 - (relative_std / threshold_percent).min(1.0)).max(0.0);
+                metrics.insert("relative_std_percent".to_string(), relative_std);
+                metrics.insert("threshold_percent".to_string(), *threshold_percent);
+                (is_stable, confidence)
+            }
+
+            SignalStabilityMethod::MovingWindow {
+                window_size,
+                max_variation,
+            } => {
+                if data.len() < *window_size {
+                    return (false, 0.0, metrics);
+                }
+
+                let mut max_window_variation = 0.0f32;
+                for window in data.windows(*window_size) {
+                    let window_min = window.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+                    let window_max = window.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+                    let variation = window_max - window_min;
+                    max_window_variation = max_window_variation.max(variation);
+                }
+
+                let is_stable = max_window_variation <= *max_variation;
+                let confidence = (1.0 - (max_window_variation / max_variation).min(1.0)).max(0.0);
+                metrics.insert("max_window_variation".to_string(), max_window_variation);
+                metrics.insert("window_size".to_string(), *window_size as f32);
+                metrics.insert("max_variation_threshold".to_string(), *max_variation);
+                (is_stable, confidence)
+            }
+
+            SignalStabilityMethod::TrendAnalysis { max_slope } => {
+                // Simple linear regression to detect trend
+                let n = data.len() as f32;
+                let x_mean = (n - 1.0) / 2.0; // indices 0, 1, 2, ... n-1
+                let y_mean = mean;
+
+                let mut numerator = 0.0;
+                let mut denominator = 0.0;
+                for (i, &y) in data.iter().enumerate() {
+                    let x = i as f32;
+                    numerator += (x - x_mean) * (y - y_mean);
+                    denominator += (x - x_mean).powi(2);
+                }
+
+                let slope = if denominator > 1e-12 {
+                    numerator / denominator
+                } else {
+                    0.0
+                };
+                let abs_slope = slope.abs();
+                let is_stable = abs_slope <= *max_slope;
+                let confidence = (1.0 - (abs_slope / max_slope).min(1.0)).max(0.0);
+
+                metrics.insert("slope".to_string(), slope);
+                metrics.insert("abs_slope".to_string(), abs_slope);
+                metrics.insert("max_slope_threshold".to_string(), *max_slope);
+                (is_stable, confidence)
+            }
+        };
+
+        metrics.insert("confidence".to_string(), confidence);
+        metrics.insert("data_points".to_string(), data.len() as f32);
+
+        (is_stable, confidence, metrics)
     }
 
     /// Execute action and extract specific type with validation
@@ -2203,12 +2827,58 @@ impl ExpectFromExecution<OsciData> for ExecutionResult {
     }
 }
 
-impl ExpectFromExecution<crate::tip_prep::TipState> for ExecutionResult {
-    fn expect_from_execution(self) -> Result<crate::tip_prep::TipState, NanonisError> {
+impl ExpectFromExecution<crate::types::TipShape> for ExecutionResult {
+    fn expect_from_execution(self) -> Result<crate::types::TipShape, NanonisError> {
         match self {
-            ExecutionResult::Single(ActionResult::TipState(state)) => Ok(state),
+            ExecutionResult::Single(ActionResult::TipState(tip_state)) => Ok(tip_state.shape),
             _ => Err(NanonisError::InvalidCommand(
                 "Expected tip state".to_string(),
+            )),
+        }
+    }
+}
+
+impl ExpectFromExecution<crate::actions::TipState> for ExecutionResult {
+    fn expect_from_execution(self) -> Result<crate::actions::TipState, NanonisError> {
+        match self {
+            ExecutionResult::Single(ActionResult::TipState(tip_state)) => Ok(tip_state),
+            _ => Err(NanonisError::InvalidCommand(
+                "Expected tip state".to_string(),
+            )),
+        }
+    }
+}
+
+impl ExpectFromExecution<crate::actions::StableSignal> for ExecutionResult {
+    fn expect_from_execution(self) -> Result<crate::actions::StableSignal, NanonisError> {
+        match self {
+            ExecutionResult::Single(ActionResult::StableSignal(stable_signal)) => Ok(stable_signal),
+            _ => Err(NanonisError::InvalidCommand(
+                "Expected stable signal".to_string(),
+            )),
+        }
+    }
+}
+
+impl ExpectFromExecution<crate::actions::TCPReaderStatus> for ExecutionResult {
+    fn expect_from_execution(self) -> Result<crate::actions::TCPReaderStatus, NanonisError> {
+        match self {
+            ExecutionResult::Single(ActionResult::TCPReaderStatus(tcp_status)) => Ok(tcp_status),
+            _ => Err(NanonisError::InvalidCommand(
+                "Expected TCP reader status".to_string(),
+            )),
+        }
+    }
+}
+
+impl ExpectFromExecution<crate::actions::StabilityResult> for ExecutionResult {
+    fn expect_from_execution(self) -> Result<crate::actions::StabilityResult, NanonisError> {
+        match self {
+            ExecutionResult::Single(ActionResult::StabilityResult(stability_result)) => {
+                Ok(stability_result)
+            }
+            _ => Err(NanonisError::InvalidCommand(
+                "Expected stability result".to_string(),
             )),
         }
     }
