@@ -1,34 +1,128 @@
 use crate::{
     types::{
-        DataToGet, MotorDisplacement, MovementMode, OsciData, Position, Position3D, ScanAction, SignalIndex,
-        TriggerConfig,
+        DataToGet, MotorDisplacement, MovementMode, OsciData, Position, Position3D, ScanAction,
+        SignalIndex, TipShape, TriggerConfig,
     },
     MotorDirection, TipShaperConfig,
 };
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 /// Method for determining tip state
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TipCheckMethod {
     /// Check single signal against bounds
-    SignalBounds { 
-        signal: SignalIndex, 
-        bounds: (f32, f32) 
+    SignalBounds {
+        signal: SignalIndex,
+        bounds: (f32, f32),
     },
     /// Check multiple signals (all must be in bounds)
-    MultiSignalBounds { 
-        signals: Vec<(SignalIndex, (f32, f32))> 
+    MultiSignalBounds {
+        signals: Vec<(SignalIndex, (f32, f32))>,
     },
-    /// Check signal stability over time
-    SignalStability { 
-        signal: SignalIndex, 
-        threshold: f32,      // Max allowed variation
-        history_size: usize  // Number of readings to check
+}
+
+/// Method for determining signal stability for GetStableSignal action
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum SignalStabilityMethod {
+    /// Standard deviation threshold
+    StandardDeviation { threshold: f32 },
+    /// Relative standard deviation (coefficient of variation)
+    RelativeStandardDeviation { threshold_percent: f32 },
+    /// Moving window - signal must be stable within sliding window
+    MovingWindow {
+        window_size: usize,
+        max_variation: f32,
     },
-    /// Custom method placeholder for future extensions
-    Custom { 
-        method_name: String 
+    /// Trend analysis - ensure no consistent drift
+    TrendAnalysis { max_slope: f32 },
+}
+
+impl Default for SignalStabilityMethod {
+    fn default() -> Self {
+        Self::RelativeStandardDeviation {
+            threshold_percent: 5.0,
+        } // 5% variation
+    }
+}
+
+/// Method for determining tip stability with potentially invasive operations
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum TipStabilityMethod {
+    /// Extended signal monitoring over time with statistical analysis
+    ExtendedMonitoring {
+        signal: SignalIndex,
+        duration: Duration,
+        sampling_interval: Duration,
+        stability_threshold: f32,
     },
+    /// Bias sweep response analysis (potentially destructive)
+    BiasSweepResponse {
+        signal: SignalIndex,
+        bias_range: (f32, f32),
+        sweep_steps: u16,
+        period: Duration,
+        allowed_signal_change: f32,
+    },
+}
+
+/// Configuration for bias sweep during stability testing
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BiasSweepConfig {
+    pub lower_limit: f32,
+    pub upper_limit: f32,
+    pub steps: u16,
+    pub period_ms: u16,
+    pub reset_bias_after: bool,
+    pub z_controller_behavior: u16, // 0=no change, 1=turn off, 2=don't turn off
+}
+
+/// Information about bounds checking results
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BoundsCheckInfo {
+    pub bounds_used: Vec<(SignalIndex, (f32, f32))>,
+    pub violations: Vec<(SignalIndex, f32, (f32, f32))>, // signal, value, bounds
+    pub all_passed: bool,
+}
+
+/// Detailed stability analysis result
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StabilityResult {
+    pub is_stable: bool,
+    pub stability_score: f32, // 0.0 to 1.0
+    pub method_used: String,
+    pub measured_values: HashMap<SignalIndex, Vec<f32>>, // Time series data
+    pub analysis_duration: Duration,
+    pub metrics: HashMap<String, f32>, // Method-specific metrics
+    pub potential_damage_detected: bool,
+    pub recommendations: Vec<String>,
+}
+
+/// Tip state determination result with measured values
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TipState {
+    pub shape: TipShape, // the enum value
+    pub confidence: f32,
+    pub measured_signals: HashMap<SignalIndex, f32>, // Always populated, empty for simple checks
+    pub metadata: HashMap<String, String>,
+}
+
+/// TCP Logger status information  
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TCPReaderStatus {
+    pub status: crate::types::TCPLogStatus,
+    pub channels: Vec<i32>,
+    pub oversampling: i32,
+}
+
+/// Stable signal analysis result
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StableSignal {
+    pub stable_value: f32,
+    pub confidence: f32,
+    pub data_points_used: usize,
+    pub analysis_duration: Duration,
+    pub stability_metrics: HashMap<String, f32>,
+    pub raw_data: Vec<f32>,
 }
 
 /// Enhanced Action enum representing all possible SPM operations
@@ -112,6 +206,9 @@ pub enum Action {
         timeout: Duration,
     },
 
+    /// Safely reposition tip: withdraw → move → approach → stabilize
+    SafeReposition { x_steps: i16, y_steps: i16 },
+
     /// Set Z-controller setpoint
     SetZSetpoint { setpoint: f32 },
 
@@ -172,10 +269,28 @@ pub enum Action {
     },
 
     // === Tip State Operations ===
-    /// Check tip state using specified method
-    CheckTipState { 
-        method: TipCheckMethod 
+    /// Check tip state using specified method (non-invasive)
+    CheckTipState { method: TipCheckMethod },
+
+    /// Check tip stability using potentially invasive methods
+    /// WARNING: This action may damage the tip through bias sweeps or extended testing
+    CheckTipStability {
+        method: TipStabilityMethod,
+        max_duration: Duration,
+        abort_on_damage_signs: bool,
     },
+
+    /// Get a stable signal value using TCP logger data and stability analysis
+    ReadStableSignal {
+        signal: SignalIndex,
+        data_points: Option<usize>,
+        use_new_data: bool,
+        stability_method: SignalStabilityMethod,
+        timeout: Duration,
+    },
+
+    /// Check if oscillation amplitude is reached
+    ReachedTargedAmplitude,
 }
 
 /// Simplified ActionResult with clear semantic separation
@@ -203,14 +318,16 @@ pub enum ActionResult {
     Success,
 
     /// TCP Logger status information
-    TCPLoggerStatus {
-        status: crate::types::TCPLogStatus,
-        channels: Vec<i32>,
-        oversampling: i32,
-    },
+    TCPReaderStatus(TCPReaderStatus),
 
     /// Tip state determination result
-    TipState(crate::tip_prep::TipState),
+    TipState(TipState),
+
+    /// Detailed stability analysis result
+    StabilityResult(StabilityResult),
+
+    /// Stable signal value with analysis metadata
+    StableSignal(StableSignal),
 
     /// No result/waiting state
     None,
@@ -256,10 +373,42 @@ impl ActionResult {
         }
     }
 
-    /// Convert to TipState if possible
-    pub fn as_tip_state(&self) -> Option<crate::tip_prep::TipState> {
+    /// Convert to TipShape if possible
+    pub fn as_tip_shape(&self) -> Option<TipShape> {
         match self {
-            ActionResult::TipState(state) => Some(*state),
+            ActionResult::TipState(tip_state) => Some(tip_state.shape),
+            _ => None,
+        }
+    }
+
+    /// Convert to full TipState if possible
+    pub fn as_tip_state(&self) -> Option<&TipState> {
+        match self {
+            ActionResult::TipState(tip_state) => Some(tip_state),
+            _ => None,
+        }
+    }
+
+    /// Convert to StabilityResult if possible
+    pub fn as_stability_result(&self) -> Option<&StabilityResult> {
+        match self {
+            ActionResult::StabilityResult(result) => Some(result),
+            _ => None,
+        }
+    }
+
+    /// Convert to stable signal value if possible
+    pub fn as_stable_signal_value(&self) -> Option<f32> {
+        match self {
+            ActionResult::StableSignal(stable) => Some(stable.stable_value),
+            _ => None,
+        }
+    }
+
+    /// Convert to full StableSignal if possible
+    pub fn as_stable_signal(&self) -> Option<&StableSignal> {
+        match self {
+            ActionResult::StableSignal(stable) => Some(stable),
             _ => None,
         }
     }
@@ -347,12 +496,82 @@ impl ActionResult {
         }
     }
 
-    /// Extract tip state with action validation (panics on type mismatch)
-    pub fn expect_tip_state(self, action: &Action) -> crate::tip_prep::TipState {
+    /// Extract tip shape enum with action validation (panics on type mismatch)
+    pub fn expect_tip_shape(self, action: &Action) -> TipShape {
         match (action, self) {
-            (Action::CheckTipState { .. }, ActionResult::TipState(state)) => state,
+            (Action::CheckTipState { .. }, ActionResult::TipState(tip_state)) => tip_state.shape,
             (action, result) => {
-                panic!("Expected tip state from action {:?}, got {:?}", action, result)
+                panic!(
+                    "Expected tip state from action {:?}, got {:?}",
+                    action, result
+                )
+            }
+        }
+    }
+
+    /// Extract full tip state result with action validation (panics on type mismatch)
+    pub fn expect_tip_state(self, action: &Action) -> TipState {
+        match (action, self) {
+            (Action::CheckTipState { .. }, ActionResult::TipState(tip_state)) => tip_state,
+            (action, result) => {
+                panic!(
+                    "Expected tip state from action {:?}, got {:?}",
+                    action, result
+                )
+            }
+        }
+    }
+
+    /// Extract stability result (panics on type mismatch)
+    pub fn expect_stability_result(self, action: &Action) -> StabilityResult {
+        match (action, self) {
+            (Action::CheckTipStability { .. }, ActionResult::StabilityResult(result)) => result,
+            (action, result) => {
+                panic!(
+                    "Expected stability result from action {:?}, got {:?}",
+                    action, result
+                )
+            }
+        }
+    }
+
+    /// Extract stable signal value (panics on type mismatch)
+    pub fn expect_stable_signal_value(self, action: &Action) -> f32 {
+        match (action, self) {
+            (Action::ReadStableSignal { .. }, ActionResult::StableSignal(stable)) => {
+                stable.stable_value
+            }
+            (action, result) => {
+                panic!(
+                    "Expected stable signal from action {:?}, got {:?}",
+                    action, result
+                )
+            }
+        }
+    }
+
+    /// Extract full stable signal result with action validation (panics on type mismatch)
+    pub fn expect_stable_signal(self, action: &Action) -> StableSignal {
+        match (action, self) {
+            (Action::ReadStableSignal { .. }, ActionResult::StableSignal(stable)) => stable,
+            (action, result) => {
+                panic!(
+                    "Expected stable signal from action {:?}, got {:?}",
+                    action, result
+                )
+            }
+        }
+    }
+
+    /// Extract TCP reader status with action validation (panics on type mismatch)
+    pub fn expect_tcp_reader_status(self, action: &Action) -> TCPReaderStatus {
+        match (action, self) {
+            (Action::GetTCPLoggerStatus, ActionResult::TCPReaderStatus(status)) => status,
+            (action, result) => {
+                panic!(
+                    "Expected TCP reader status from action {:?}, got {:?}",
+                    action, result
+                )
             }
         }
     }
@@ -406,6 +625,30 @@ impl ActionResult {
             )),
         }
     }
+
+    /// Try to extract stability result with action validation
+    pub fn try_into_stability_result(self, action: &Action) -> Result<StabilityResult, String> {
+        match (action, self) {
+            (Action::CheckTipStability { .. }, ActionResult::StabilityResult(result)) => Ok(result),
+            (action, result) => Err(format!(
+                "Expected stability result from action {:?}, got {:?}",
+                action, result
+            )),
+        }
+    }
+
+    /// Try to extract stable signal value with action validation
+    pub fn try_into_stable_signal_value(self, action: &Action) -> Result<f32, String> {
+        match (action, self) {
+            (Action::ReadStableSignal { .. }, ActionResult::StableSignal(stable)) => {
+                Ok(stable.stable_value)
+            }
+            (action, result) => Err(format!(
+                "Expected stable signal from action {:?}, got {:?}",
+                action, result
+            )),
+        }
+    }
 }
 
 // === Trait for Generic Type Extraction ===
@@ -439,12 +682,6 @@ impl ExpectFromAction<Position> for ActionResult {
     }
 }
 
-impl ExpectFromAction<f32> for ActionResult {
-    fn expect_from_action(self, action: &Action) -> f32 {
-        self.expect_bias_voltage(action)
-    }
-}
-
 impl ExpectFromAction<Vec<String>> for ActionResult {
     fn expect_from_action(self, action: &Action) -> Vec<String> {
         self.expect_signal_names(action)
@@ -454,6 +691,21 @@ impl ExpectFromAction<Vec<String>> for ActionResult {
 impl ExpectFromAction<bool> for ActionResult {
     fn expect_from_action(self, action: &Action) -> bool {
         self.expect_status(action)
+    }
+}
+
+impl ExpectFromAction<StabilityResult> for ActionResult {
+    fn expect_from_action(self, action: &Action) -> StabilityResult {
+        self.expect_stability_result(action)
+    }
+}
+
+impl ExpectFromAction<f32> for ActionResult {
+    fn expect_from_action(self, action: &Action) -> f32 {
+        match action {
+            Action::ReadStableSignal { .. } => self.expect_stable_signal_value(action),
+            _ => self.expect_bias_voltage(action),
+        }
     }
 }
 
@@ -492,6 +744,7 @@ impl Action {
             self,
             Action::AutoApproach { .. }
                 | Action::Withdraw { .. }
+                | Action::SafeReposition { .. }
                 | Action::ScanControl { .. }
                 | Action::StopMotor
         )
@@ -506,7 +759,11 @@ impl Action {
     pub fn involves_motor(&self) -> bool {
         matches!(
             self,
-            Action::MoveMotorAxis { .. } | Action::MoveMotor3D { .. } | Action::MoveMotorClosedLoop { .. } | Action::StopMotor
+            Action::MoveMotorAxis { .. }
+                | Action::MoveMotor3D { .. }
+                | Action::MoveMotorClosedLoop { .. }
+                | Action::SafeReposition { .. }
+                | Action::StopMotor
         )
     }
 
@@ -527,7 +784,7 @@ impl Action {
                 format!("Read signal {}", signal.0)
             }
             Action::ReadSignals { signals, .. } => {
-                let indices: Vec<i32> = signals.iter().map(|s| s.0).collect();
+                let indices: Vec<i32> = signals.iter().map(|s| s.0.get() as i32).collect();
                 format!("Read signals: {:?}", indices)
             }
             Action::SetBias { voltage } => {
@@ -550,8 +807,10 @@ impl Action {
                 displacement,
                 blocking,
             } => {
-                format!("Move motor 3D displacement ({}, {}, {}) with blocking {blocking}", 
-                    displacement.x, displacement.y, displacement.z)
+                format!(
+                    "Move motor 3D displacement ({}, {}, {}) with blocking {blocking}",
+                    displacement.x, displacement.y, displacement.z
+                )
             }
             Action::AutoApproach {
                 wait_until_finished,
@@ -562,6 +821,9 @@ impl Action {
             ),
             Action::Withdraw { timeout, .. } => {
                 format!("Withdraw tip (timeout: {}ms)", timeout.as_micros())
+            }
+            Action::SafeReposition { x_steps, y_steps } => {
+                format!("Safe reposition: move ({}, {}) steps", x_steps, y_steps)
             }
             Action::SetZSetpoint { setpoint } => {
                 format!("Set Z setpoint: {:.3e}", setpoint)
@@ -619,6 +881,87 @@ impl Action {
                 format!(
                     "Read oscilloscope signal {} with {} (mode: {:?}){}",
                     signal.0, trigger_desc, data_to_get, stability_desc
+                )
+            }
+            Action::CheckTipState { method } => match method {
+                TipCheckMethod::SignalBounds { signal, bounds } => {
+                    format!(
+                        "Check tip state: signal {} bounds ({:.3e}, {:.3e})",
+                        signal.0, bounds.0, bounds.1
+                    )
+                }
+                TipCheckMethod::MultiSignalBounds { signals } => {
+                    format!("Check tip state: {} signal bounds", signals.len())
+                }
+            },
+            Action::CheckTipStability {
+                method,
+                max_duration,
+                abort_on_damage_signs,
+            } => {
+                let duration_desc = format!("{:.1}s", max_duration.as_secs_f32());
+                let abort_desc = if *abort_on_damage_signs {
+                    "abort on damage"
+                } else {
+                    "no abort"
+                };
+                match method {
+                    TipStabilityMethod::ExtendedMonitoring {
+                        signal, duration, ..
+                    } => {
+                        format!("Check tip stability: extended monitoring signal {} for {:.1}s (max: {}, {})", 
+                               signal.0, duration.as_secs_f32(), duration_desc, abort_desc)
+                    }
+                    TipStabilityMethod::BiasSweepResponse {
+                        signal,
+                        bias_range,
+                        sweep_steps,
+                        period,
+                        allowed_signal_change,
+                        ..
+                    } => {
+                        format!("Check tip stability: bias sweep signal {} from {:.2}V to {:.2}V ({} steps, {:.1}ms period, {:.1}% change allowed, max: {}, {})", 
+                               signal.0, bias_range.0, bias_range.1, sweep_steps, period.as_millis(), allowed_signal_change * 100.0, duration_desc, abort_desc)
+                    }
+                }
+            }
+            Action::ReadStableSignal {
+                signal,
+                data_points,
+                use_new_data,
+                stability_method,
+                timeout,
+            } => {
+                let points_desc = data_points.map_or("default".to_string(), |p| p.to_string());
+                let data_desc = if *use_new_data {
+                    "new data"
+                } else {
+                    "buffered data"
+                };
+                let method_desc = match stability_method {
+                    SignalStabilityMethod::StandardDeviation { threshold } => {
+                        format!("std dev {:.3e}", threshold)
+                    }
+                    SignalStabilityMethod::RelativeStandardDeviation { threshold_percent } => {
+                        format!("rel std {:.1}%", threshold_percent)
+                    }
+                    SignalStabilityMethod::MovingWindow {
+                        window_size,
+                        max_variation,
+                    } => {
+                        format!("window {}pts, max var {:.3e}", window_size, max_variation)
+                    }
+                    SignalStabilityMethod::TrendAnalysis { max_slope } => {
+                        format!("trend analysis, max slope {:.3e}", max_slope)
+                    }
+                };
+                format!(
+                    "Get stable signal {} ({} points, {}, {}, timeout {:.1}s)",
+                    signal.0,
+                    points_desc,
+                    data_desc,
+                    method_desc,
+                    timeout.as_secs_f32()
                 )
             }
             _ => format!("{:?}", self),
@@ -892,11 +1235,11 @@ impl ActionChain {
                     duration: Duration::from_millis(500),
                 },
                 Action::ReadSignal {
-                    signal: SignalIndex(24),
+                    signal: SignalIndex::new(24),
                     wait_for_newest: true,
                 }, // Typical bias voltage
                 Action::ReadSignal {
-                    signal: SignalIndex(0),
+                    signal: SignalIndex::new(0),
                     wait_for_newest: true,
                 }, // Typical current
             ],
@@ -920,7 +1263,7 @@ impl ActionChain {
                     timeout: Duration::from_secs(300),
                 },
                 Action::ReadSignal {
-                    signal: SignalIndex(24),
+                    signal: SignalIndex::new(24),
                     wait_for_newest: true,
                 },
             ],
@@ -965,11 +1308,11 @@ impl ActionChain {
                     timeout: Duration::from_secs(300),
                 },
                 Action::ReadSignal {
-                    signal: SignalIndex(24),
+                    signal: SignalIndex::new(24),
                     wait_for_newest: true,
                 }, // Bias voltage
                 Action::ReadSignal {
-                    signal: SignalIndex(0),
+                    signal: SignalIndex::new(0),
                     wait_for_newest: true,
                 }, // Current
                 Action::Withdraw {
@@ -1004,7 +1347,7 @@ impl ActionChain {
                     timeout: Duration::from_secs(300),
                 },
                 Action::ReadSignal {
-                    signal: SignalIndex(24),
+                    signal: SignalIndex::new(24),
                     wait_for_newest: true,
                 },
             ],
@@ -1275,7 +1618,7 @@ pub enum ActionLogResult {
         oversampling: i32,
     },
     /// Tip state check result
-    TipState(crate::tip_prep::TipState),
+    TipState(TipShape),
     /// Operation completed successfully
     Success,
     /// Operation completed but no data returned
@@ -1298,7 +1641,7 @@ pub struct LoggableSignalStats {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LoggableTimestampedSignalFrame {
     pub signal_frame: LoggableSignalFrame,
-    pub timestamp_ms: u64, // Milliseconds since epoch
+    pub timestamp_ms: u64,     // Milliseconds since epoch
     pub relative_time_ms: u64, // Milliseconds relative to collection start
 }
 
@@ -1357,7 +1700,10 @@ impl ActionLogEntry {
         if self.metadata.is_none() {
             self.metadata = Some(std::collections::HashMap::new());
         }
-        self.metadata.as_mut().unwrap().insert(key.into(), value.into());
+        self.metadata
+            .as_mut()
+            .unwrap()
+            .insert(key.into(), value.into());
         self
     }
 }
@@ -1377,34 +1723,51 @@ impl ActionLogResult {
                 dt: osci_data.dt,
                 size: osci_data.size,
                 data: osci_data.data.clone(),
-                signal_stats: osci_data.signal_stats.as_ref().map(|stats| LoggableSignalStats {
-                    mean: stats.mean,
-                    std_dev: stats.std_dev,
-                    relative_std: stats.relative_std,
-                    window_size: stats.window_size,
-                    stability_method: stats.stability_method.clone(),
-                }),
+                signal_stats: osci_data
+                    .signal_stats
+                    .as_ref()
+                    .map(|stats| LoggableSignalStats {
+                        mean: stats.mean,
+                        std_dev: stats.std_dev,
+                        relative_std: stats.relative_std,
+                        window_size: stats.window_size,
+                        stability_method: stats.stability_method.clone(),
+                    }),
                 is_stable: osci_data.is_stable,
                 fallback_value: osci_data.fallback_value,
             },
             ActionResult::Success => ActionLogResult::Success,
             ActionResult::None => ActionLogResult::None,
-            ActionResult::TCPLoggerStatus { status, channels, oversampling } => {
+            ActionResult::TCPReaderStatus(tcp_status) => {
                 ActionLogResult::TCPLoggerStatus {
-                    status: format!("{:?}", status), // Serialize enum as string
-                    channels: channels.clone(),
-                    oversampling: *oversampling,
+                    status: format!("{:?}", tcp_status.status), // Serialize enum as string
+                    channels: tcp_status.channels.clone(),
+                    oversampling: tcp_status.oversampling,
                 }
             }
-            ActionResult::TipState(tip_state) => ActionLogResult::TipState(*tip_state),
+            ActionResult::TipState(tip_state) => ActionLogResult::TipState(tip_state.shape),
+            ActionResult::StabilityResult(result) => {
+                // Convert stability result to a simple TipShape for logging compatibility
+                let tip_shape = if result.is_stable {
+                    TipShape::Stable
+                } else {
+                    TipShape::Blunt
+                };
+                ActionLogResult::TipState(tip_shape)
+            }
+            ActionResult::StableSignal(stable) => {
+                // Convert stable signal to a single value for logging
+                ActionLogResult::Value(stable.stable_value as f64)
+            }
         }
     }
 
     /// Convert ExperimentData to ActionLogResult for comprehensive logging
     pub fn from_experiment_data(exp_data: &crate::types::ExperimentData) -> Self {
         let action_result = Box::new(Self::from_action_result(&exp_data.action_result));
-        
-        let signal_frames: Vec<LoggableTimestampedSignalFrame> = exp_data.signal_frames
+
+        let signal_frames: Vec<LoggableTimestampedSignalFrame> = exp_data
+            .signal_frames
             .iter()
             .map(|frame| LoggableTimestampedSignalFrame {
                 signal_frame: LoggableSignalFrame {
@@ -1436,12 +1799,14 @@ impl ActionLogResult {
 
     /// Convert ChainExperimentData to ActionLogResult for comprehensive logging
     pub fn from_chain_experiment_data(chain_data: &crate::types::ChainExperimentData) -> Self {
-        let action_results: Vec<ActionLogResult> = chain_data.action_results
+        let action_results: Vec<ActionLogResult> = chain_data
+            .action_results
             .iter()
-            .map(|result| Self::from_action_result(result))
+            .map(Self::from_action_result)
             .collect();
 
-        let signal_frames: Vec<LoggableTimestampedSignalFrame> = chain_data.signal_frames
+        let signal_frames: Vec<LoggableTimestampedSignalFrame> = chain_data
+            .signal_frames
             .iter()
             .map(|frame| LoggableTimestampedSignalFrame {
                 signal_frame: LoggableSignalFrame {
@@ -1461,7 +1826,8 @@ impl ActionLogResult {
             buffer_size: chain_data.tcp_config.buffer_size,
         };
 
-        let action_timings: Vec<(u64, u64)> = chain_data.action_timings
+        let action_timings: Vec<(u64, u64)> = chain_data
+            .action_timings
             .iter()
             .map(|(_, _)| {
                 let now = chrono::Utc::now().timestamp_millis() as u64;

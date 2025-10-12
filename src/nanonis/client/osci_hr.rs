@@ -36,7 +36,7 @@ impl NanonisClient {
             vec!["i"],
         )?;
         match result.first() {
-            Some(value) => Ok(SignalIndex(value.as_i32()?)),
+            Some(value) => Ok(SignalIndex::new(value.as_i32()? as u8)),
             None => Err(NanonisError::Protocol(
                 "No signal index returned".to_string(),
             )),

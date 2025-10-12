@@ -3,6 +3,14 @@ use serde::{Deserialize, Serialize};
 use crate::error::NanonisError;
 use std::time::{Duration, Instant};
 
+/// Simple tip shape - matches original controller
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum TipShape {
+    Blunt,
+    Sharp,
+    Stable,
+}
+
 #[derive(Debug, Clone)]
 pub enum NanonisValue {
     U16(u16),
@@ -298,73 +306,218 @@ impl NanonisValue {
 }
 
 /// Signal and Channel Types
+
+/// Nanonis signal index (0-127)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct SignalIndex(pub i32);
+pub struct NanonisIndex(pub u8);
+
+impl NanonisIndex {
+    /// Create a new NanonisIndex with range validation
+    pub fn new(index: u8) -> Result<Self, String> {
+        if index <= 127 {
+            Ok(Self(index))
+        } else {
+            Err(format!("Nanonis index {} out of range (0-127)", index))
+        }
+    }
+
+    /// Create without validation (for internal use)
+    pub const fn new_unchecked(index: u8) -> Self {
+        Self(index)
+    }
+
+    /// Get the raw index value
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+
+    /// Convert to TCP channel using registry
+    pub fn to_channel_index(
+        &self,
+        registry: &crate::signal_registry::SignalRegistry,
+    ) -> Result<ChannelIndex, String> {
+        registry.nanonis_to_tcp(*self)
+    }
+}
+
+impl std::fmt::Display for NanonisIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<u8> for NanonisIndex {
+    fn from(index: u8) -> Self {
+        Self::new(index).unwrap_or_else(|_| {
+            log::warn!(
+                "Creating NanonisIndex from out-of-range value {}, clamping to 127",
+                index
+            );
+            Self(127.min(index))
+        })
+    }
+}
+
+/// TCP channel index (0-23)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct ChannelIndex(pub u8);
+
+impl ChannelIndex {
+    /// Create a new ChannelIndex with range validation
+    pub fn new(index: u8) -> Result<Self, String> {
+        if index <= 23 {
+            Ok(Self(index))
+        } else {
+            Err(format!("Channel index {} out of range (0-23)", index))
+        }
+    }
+
+    /// Create without validation (for internal use)
+    pub const fn new_unchecked(index: u8) -> Self {
+        Self(index)
+    }
+
+    /// Get the raw index value
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+
+    /// Convert to Nanonis index using registry
+    pub fn to_nanonis_index(
+        &self,
+        registry: &crate::signal_registry::SignalRegistry,
+    ) -> Result<NanonisIndex, String> {
+        registry.tcp_to_nanonis(*self)
+    }
+}
+
+impl std::fmt::Display for ChannelIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<u8> for ChannelIndex {
+    fn from(index: u8) -> Self {
+        Self::new(index).unwrap_or_else(|_| {
+            log::warn!(
+                "Creating ChannelIndex from out-of-range value {}, clamping to 23",
+                index
+            );
+            Self(23.min(index))
+        })
+    }
+}
+
+/// Signal index wrapping a Nanonis index
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct SignalIndex(pub NanonisIndex);
 
 impl SignalIndex {
-    pub fn new(index: i32) -> Result<Self, crate::error::NanonisError> {
-        if (0..=127).contains(&index) {
-            Ok(SignalIndex(index))
-        } else {
-            Err(crate::error::NanonisError::InvalidCommand(format!(
-                "Signal index must be 0-127, got {}",
-                index
-            )))
-        }
+    /// Create a new SignalIndex (0-127 range)
+    pub const fn new(index: u8) -> Self {
+        Self(NanonisIndex::new_unchecked(index))
+    }
+
+    /// Create from validated NanonisIndex
+    pub const fn from_nanonis_index(index: NanonisIndex) -> Self {
+        Self(index)
+    }
+
+    /// Get the underlying NanonisIndex
+    pub const fn nanonis_index(self) -> NanonisIndex {
+        self.0
+    }
+
+    /// Get the raw index value  
+    pub const fn get(self) -> u8 {
+        self.0.get()
+    }
+
+    /// Create SignalIndex from signal name using registry lookup
+    pub fn from_name(
+        name: &str,
+        driver: &crate::action_driver::ActionDriver,
+    ) -> Result<Self, String> {
+        driver
+            .signal_registry()
+            .get_by_name(name)
+            .map(|info| Self(NanonisIndex::new_unchecked(info.nanonis_index)))
+            .ok_or_else(|| {
+                // Provide suggestions for typos
+                let suggestions = driver.signal_registry().find_signals_like(name);
+                if suggestions.is_empty() {
+                    format!("Signal '{}' not found", name)
+                } else {
+                    let names: Vec<String> =
+                        suggestions.iter().take(3).map(|s| s.name.clone()).collect();
+                    format!(
+                        "Signal '{}' not found. Did you mean: {}?",
+                        name,
+                        names.join(", ")
+                    )
+                }
+            })
+    }
+
+    /// Get TCP channel for this signal (if available)
+    pub fn tcp_channel(&self, driver: &crate::action_driver::ActionDriver) -> Option<ChannelIndex> {
+        driver.signal_registry().nanonis_to_tcp(self.0).ok()
+    }
+
+    /// Get TCP channel as raw u8 (deprecated - use tcp_channel)
+    pub fn tcp_channel_raw(&self, driver: &crate::action_driver::ActionDriver) -> Option<u8> {
+        self.tcp_channel(driver).map(|ch| ch.get())
+    }
+
+    /// Get human-readable name for this signal
+    pub fn name(&self, driver: &crate::action_driver::ActionDriver) -> Option<String> {
+        driver
+            .signal_registry()
+            .get_by_nanonis_index(self.0.get())
+            .map(|info| info.name.clone())
+    }
+
+    /// Check if this signal is available in TCP logger
+    pub fn has_tcp_channel(&self, driver: &crate::action_driver::ActionDriver) -> bool {
+        driver
+            .signal_registry()
+            .has_tcp_channel(self.0)
+            .unwrap_or(false)
+    }
+}
+
+impl From<SignalIndex> for u8 {
+    fn from(signal: SignalIndex) -> Self {
+        signal.0.get()
     }
 }
 
 impl From<SignalIndex> for i32 {
     fn from(signal: SignalIndex) -> Self {
-        signal.0
+        signal.0.get() as i32
     }
 }
 
-impl From<i32> for SignalIndex {
-    fn from(index: i32) -> Self {
-        SignalIndex(index)
+impl From<u8> for SignalIndex {
+    fn from(index: u8) -> Self {
+        Self(NanonisIndex::from(index))
     }
 }
 
 impl From<usize> for SignalIndex {
     fn from(index: usize) -> Self {
-        SignalIndex(index as i32)
+        Self(NanonisIndex::from(index as u8))
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChannelIndex(pub i32);
-
-impl ChannelIndex {
-    pub fn new(index: i32) -> Result<Self, crate::error::NanonisError> {
-        if (0..=23).contains(&index) {
-            Ok(ChannelIndex(index))
-        } else {
-            Err(crate::error::NanonisError::InvalidCommand(format!(
-                "Channel index must be 0-23, got {}",
-                index
-            )))
-        }
+impl From<NanonisIndex> for SignalIndex {
+    fn from(index: NanonisIndex) -> Self {
+        Self(index)
     }
 }
 
-impl From<ChannelIndex> for i32 {
-    fn from(channel: ChannelIndex) -> Self {
-        channel.0
-    }
-}
-
-impl From<i32> for ChannelIndex {
-    fn from(index: i32) -> Self {
-        ChannelIndex(index)
-    }
-}
-
-impl From<usize> for ChannelIndex {
-    fn from(index: usize) -> Self {
-        ChannelIndex(index as i32)
-    }
-}
+// Removed old ChannelIndex definition - now using typed ChannelIndex with u8
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OscilloscopeIndex(pub i32);
@@ -1083,7 +1236,7 @@ pub enum DataToGet {
 
 /// TCP Logger status enumeration
 /// Represents the different states of the TCP Logger module in Nanonis
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TCPLogStatus {
     Disconnected = 0,
     Idle = 1,
@@ -1372,7 +1525,7 @@ pub struct ExperimentData {
     /// Lightweight signal frames (much more memory efficient)
     pub signal_frames: Vec<TimestampedSignalFrame>,
     /// TCP logger configuration for context (stored once, not per frame)
-    pub tcp_config: crate::action_driver::TCPLoggerConfig,
+    pub tcp_config: crate::action_driver::TCPReaderConfig,
     /// When the action started
     pub action_start: Instant,
     /// When the action ended  
@@ -1389,7 +1542,7 @@ pub struct ChainExperimentData {
     /// All signal frames collected during the entire chain execution
     pub signal_frames: Vec<TimestampedSignalFrame>,
     /// TCP logger configuration for context
-    pub tcp_config: crate::action_driver::TCPLoggerConfig,
+    pub tcp_config: crate::action_driver::TCPReaderConfig,
     /// Start and end times for each action in the chain
     pub action_timings: Vec<(Instant, Instant)>,
     /// When the entire chain started
@@ -1416,9 +1569,7 @@ impl ExperimentData {
         let cutoff = self.action_start - duration;
         self.signal_frames
             .iter()
-            .filter(|frame| {
-                frame.timestamp >= cutoff && frame.timestamp < self.action_start
-            })
+            .filter(|frame| frame.timestamp >= cutoff && frame.timestamp < self.action_start)
             .collect()
     }
 
@@ -1427,9 +1578,7 @@ impl ExperimentData {
         let cutoff = self.action_end + duration;
         self.signal_frames
             .iter()
-            .filter(|frame| {
-                frame.timestamp > self.action_end && frame.timestamp <= cutoff
-            })
+            .filter(|frame| frame.timestamp > self.action_end && frame.timestamp <= cutoff)
             .collect()
     }
 
@@ -1476,7 +1625,11 @@ impl ChainExperimentData {
     ///
     /// # Returns
     /// Vector of signal frames collected between the two specified actions
-    pub fn data_between_actions(&self, action1_index: usize, action2_index: usize) -> Vec<&TimestampedSignalFrame> {
+    pub fn data_between_actions(
+        &self,
+        action1_index: usize,
+        action2_index: usize,
+    ) -> Vec<&TimestampedSignalFrame> {
         if let (Some((_, end1)), Some((start2, _))) = (
             self.action_timings.get(action1_index),
             self.action_timings.get(action2_index),
@@ -1527,7 +1680,9 @@ impl ChainExperimentData {
     pub fn data_for_entire_chain(&self) -> Vec<&TimestampedSignalFrame> {
         self.signal_frames
             .iter()
-            .filter(|frame| frame.timestamp >= self.chain_start && frame.timestamp <= self.chain_end)
+            .filter(|frame| {
+                frame.timestamp >= self.chain_start && frame.timestamp <= self.chain_end
+            })
             .collect()
     }
 
@@ -1539,9 +1694,9 @@ impl ChainExperimentData {
     /// # Returns
     /// Optional tuple of (start_time, end_time, duration)
     pub fn action_timing(&self, action_index: usize) -> Option<(Instant, Instant, Duration)> {
-        self.action_timings.get(action_index).map(|(start, end)| {
-            (*start, *end, end.duration_since(*start))
-        })
+        self.action_timings
+            .get(action_index)
+            .map(|(start, end)| (*start, *end, end.duration_since(*start)))
     }
 
     /// Get summary statistics for the chain execution
@@ -1550,13 +1705,19 @@ impl ChainExperimentData {
     /// Tuple of (total_actions, successful_actions, total_frames, chain_duration)
     pub fn chain_summary(&self) -> (usize, usize, usize, Duration) {
         let total_actions = self.action_results.len();
-        let successful_actions = self.action_results
+        let successful_actions = self
+            .action_results
             .iter()
             .filter(|result| matches!(result, crate::actions::ActionResult::Success))
             .count();
         let total_frames = self.signal_frames.len();
-        
-        (total_actions, successful_actions, total_frames, self.total_duration)
+
+        (
+            total_actions,
+            successful_actions,
+            total_frames,
+            self.total_duration,
+        )
     }
 }
 

@@ -1,21 +1,12 @@
 use crate::action_driver::ActionDriver;
-use crate::actions::{Action, ActionChain, TipCheckMethod};
+use crate::actions::{Action, TipCheckMethod, TipState};
 use crate::error::NanonisError;
-use crate::types::SignalIndex;
-use log::{debug, info, warn};
-use serde::{Deserialize, Serialize};
+use crate::types::{SignalIndex, TipShape};
+use log::info;
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
-/// Simple tip state - matches original controller
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum TipState {
-    Bad,
-    Good,
-    Stable,
-}
-
-/// Loop types based on tip state - simple and direct
+/// Loop types based on tip shape - simple and direct
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LoopType {
     BadLoop,
@@ -51,10 +42,21 @@ impl PulseMethod {
 }
 
 pub struct TipControllerConfig {
-    freq_shift_index: SignalIndex,
-    sharp_tip_bounds: (f32, f32),
-    pulse_method: PulseMethod,
-    stable_tip_bounds: (f32, f32),
+    pub freq_shift_index: SignalIndex,
+    pub sharp_tip_bounds: (f32, f32),
+    pub pulse_method: PulseMethod,
+    pub allowed_change_for_stable: f32,
+}
+
+impl Default for TipControllerConfig {
+    fn default() -> Self {
+        Self {
+            freq_shift_index: 76u8.into(),
+            sharp_tip_bounds: (-2.0, 0.0),
+            pulse_method: PulseMethod::Fixed(4.0),
+            allowed_change_for_stable: 0.2,
+        }
+    }
 }
 
 /// Enhanced tip controller with pulse voltage stepping
@@ -64,9 +66,8 @@ pub struct TipController {
 
     // State tracking
     current_pulse_voltage: f32,
-    current_tip_state: TipState,
+    current_tip_shape: TipShape,
     cycles_without_change: u32,
-    good_count: u32,
     cycle_count: u32,
 
     // Multi-signal history for bias adjustment and analysis
@@ -77,17 +78,16 @@ pub struct TipController {
 impl TipController {
     /// Create new tip controller with basic signal bounds
     pub fn new(driver: ActionDriver, config: TipControllerConfig) -> Self {
-        let intial_voltage = match config.pulse_method {
+        let initial_voltage = match config.pulse_method {
             PulseMethod::Fixed(value) => value,
             PulseMethod::Stepping { voltage_bounds, .. } => voltage_bounds.0,
         };
         Self {
             driver,
             config,
-            current_pulse_voltage: intial_voltage,
-            current_tip_state: TipState::Bad,
+            current_pulse_voltage: initial_voltage,
+            current_tip_shape: TipShape::Blunt,
             cycles_without_change: 0,
-            good_count: 0,
             cycle_count: 0,
             signal_histories: HashMap::new(),
             max_history_size: 100,
@@ -142,105 +142,143 @@ impl TipController {
         self.signal_histories.remove(&signal_index);
     }
 
-    // /// Check if current signal represents a significant change from recent stable period
-    // fn has_significant_change(&self, signal_index: SignalIndex) -> (bool, f32) {
-    //     if let Some(history) = self.signal_histories.get(&signal_index) {
-    //         if history.len() < 2 {
-    //             // First signal - consider it a significant change to initialize properly
-    //             (true, 0.0)
-    //         } else {
-    //             // Compare only against signals from the current stable period
-    //             // cycles_without_change tells us how many recent signals were stable
-    //             let stable_period_size =
-    //                 (self.cycles_without_change as usize).min(history.len() - 1);
+    /// Check if current signal represents a significant change from recent stable period
+    fn has_significant_change(&self, signal_index: SignalIndex) -> (bool, f32) {
+        // Only check for stepping if PulseMethod is Stepping
+        let threshold_fn = match &self.config.pulse_method {
+            PulseMethod::Stepping { threshold, .. } => threshold,
+            PulseMethod::Fixed(_) => return (false, 0.0), // No stepping for fixed method
+        };
 
-    //             if stable_period_size == 0 {
-    //                 // No stable period yet, compare against last signal
-    //                 let signal = history[0];
-    //                 let last_signal = history[1];
-    //                 info!(
-    //                     "Last signal: {} | Current threshold: {}",
-    //                     last_signal,
-    //                     (self.change_threshold)(signal)
-    //                 );
-    //                 let has_change =
-    //                     (signal - last_signal).abs() >= (self.change_threshold)(signal);
+        if let Some(history) = self.signal_histories.get(&signal_index) {
+            if history.len() < 2 {
+                // First signal - consider it a significant change to initialize properly
+                (true, 0.0)
+            } else {
+                // Compare only against signals from the current stable period
+                // cycles_without_change tells us how many recent signals were stable
+                let stable_period_size =
+                    (self.cycles_without_change as usize).min(history.len() - 1);
 
-    //                 (has_change, (signal - last_signal))
-    //             } else {
-    //                 // Compare against mean of current stable period (skip current signal at index 0)
-    //                 let signal = history[0];
-    //                 let stable_signals: Vec<f32> = history
-    //                     .iter()
-    //                     .skip(1)
-    //                     .take(stable_period_size)
-    //                     .cloned()
-    //                     .collect();
-    //                 let stable_mean =
-    //                     stable_signals.iter().sum::<f32>() / stable_signals.len() as f32;
+                if stable_period_size == 0 {
+                    // No stable period yet, compare against last signal
+                    let current_signal = history[0];
+                    let last_signal = history[1];
+                    let threshold = threshold_fn(current_signal);
 
-    //                 info!(
-    //                     "Stable mean: {} | Current threshold: {}",
-    //                     stable_mean,
-    //                     (self.change_threshold)(signal)
-    //                 );
-    //                 let has_change =
-    //                     (signal - stable_mean).abs() >= (self.change_threshold)(signal);
-    //                 (has_change, (signal - stable_mean))
-    //             }
-    //         }
-    //     } else {
-    //         // No history yet - consider it a significant change
-    //         (true, 0.0)
-    //     }
-    // }
+                    log::info!(
+                        "Last signal: {:.3e} | Current threshold: {:.3e}",
+                        last_signal,
+                        threshold
+                    );
 
-    // /// Step up the pulse voltage if possible
-    // fn step_pulse_voltage(&mut self) -> bool {
-    //     let new_pulse = (self.pulse_voltage + self.pulse_voltage_step).min(self.max_pulse_voltage);
-    //     if new_pulse > self.pulse_voltage {
-    //         info!(
-    //             "Stepping pulse voltage: {:.3}V -> {:.3}V",
-    //             self.pulse_voltage, new_pulse
-    //         );
-    //         self.pulse_voltage = new_pulse;
-    //         self.cycles_without_change = 0; // Reset counter after stepping
-    //         true
-    //     } else {
-    //         debug!(
-    //             "Pulse voltage already at maximum: {:.3}V",
-    //             self.max_pulse_voltage
-    //         );
-    //         self.cycles_without_change = 0; // Reset counter even if at max
-    //         false
-    //     }
-    // }
+                    let change = current_signal - last_signal;
+                    let has_change = change.abs() >= threshold;
 
-    // /// Update signal history and step pulse voltage if needed
-    // fn update_pulse_voltage(&mut self) {
-    //     let (is_significant, change) = self.has_significant_change(self.signal_index);
+                    (has_change, change)
+                } else {
+                    // Compare against mean of current stable period (skip current signal at index 0)
+                    let current_signal = history[0];
+                    let stable_signals: Vec<f32> = history
+                        .iter()
+                        .skip(1)
+                        .take(stable_period_size)
+                        .cloned()
+                        .collect();
+                    let stable_mean =
+                        stable_signals.iter().sum::<f32>() / stable_signals.len() as f32;
 
-    //     // 2. Check for significant change and respond accordingly
-    //     if is_significant && change >= 0.0 {
-    //         self.cycles_without_change = 0;
-    //         self.pulse_voltage = self.min_pulse_voltage;
-    //     } else if is_significant {
-    //         warn!("Positive change significant change!");
-    //         self.cycles_without_change += 1;
+                    let threshold = threshold_fn(current_signal);
+                    log::info!(
+                        "Current: {:.3e} | Stable mean: {:.3e} | Threshold: {:.3e}",
+                        current_signal,
+                        stable_mean,
+                        threshold
+                    );
 
-    //         // Check if we need to step the pulse voltage
-    //         if self.cycles_without_change >= self.cycles_before_step {
-    //             self.step_pulse_voltage();
-    //         }
-    //     } else {
-    //         self.cycles_without_change += 1;
+                    let change = current_signal - stable_mean;
+                    let has_change = change.abs() >= threshold;
+                    (has_change, change)
+                }
+            }
+        } else {
+            // No history yet - consider it a significant change
+            (true, 0.0)
+        }
+    }
 
-    //         // Check if we need to step the pulse voltage
-    //         if self.cycles_without_change >= self.cycles_before_step {
-    //             self.step_pulse_voltage();
-    //         }
-    //     }
-    // }
+    /// Step up the pulse voltage if possible
+    fn step_pulse_voltage(&mut self) -> bool {
+        // Only step if using stepping method
+        let (voltage_bounds, voltage_steps) = match &self.config.pulse_method {
+            PulseMethod::Stepping {
+                voltage_bounds,
+                voltage_steps,
+                ..
+            } => (*voltage_bounds, *voltage_steps),
+            PulseMethod::Fixed(_) => return false, // No stepping for fixed method
+        };
+
+        // Calculate step size
+        let step_size = (voltage_bounds.1 - voltage_bounds.0) / voltage_steps as f32;
+        let new_pulse = (self.current_pulse_voltage + step_size).min(voltage_bounds.1);
+
+        if new_pulse > self.current_pulse_voltage {
+            info!(
+                "Stepping pulse voltage: {:.3}V -> {:.3}V",
+                self.current_pulse_voltage, new_pulse
+            );
+            self.current_pulse_voltage = new_pulse;
+            self.cycles_without_change = 0; // Reset counter after stepping
+            true
+        } else {
+            log::debug!("Pulse voltage already at maximum: {:.3}V", voltage_bounds.1);
+            self.cycles_without_change = 0; // Reset counter even if at max
+            false
+        }
+    }
+
+    /// Update signal history and step pulse voltage if needed
+    fn update_pulse_voltage(&mut self) {
+        let (is_significant, change) = self.has_significant_change(self.config.freq_shift_index);
+
+        // Get cycles_before_step from config, or use 0 for Fixed method
+        let cycles_before_step = match &self.config.pulse_method {
+            PulseMethod::Stepping {
+                cycles_before_step,
+                voltage_bounds,
+                ..
+            } => (*cycles_before_step, *voltage_bounds),
+            PulseMethod::Fixed(_) => return, // No stepping for fixed method
+        };
+
+        // Check for significant change and respond accordingly
+        if is_significant && change >= 0.0 {
+            // Positive significant change - reset to minimum voltage
+            self.cycles_without_change = 0;
+            self.current_pulse_voltage = cycles_before_step.1 .0; // voltage_bounds.0 (min)
+            log::info!(
+                "Positive significant change detected, resetting pulse voltage to minimum: {:.3}V",
+                self.current_pulse_voltage
+            );
+        } else if is_significant {
+            log::warn!("Negative significant change detected!");
+            self.cycles_without_change += 1;
+
+            // Check if we need to step the pulse voltage
+            if self.cycles_without_change >= cycles_before_step.0 as u32 {
+                self.step_pulse_voltage();
+            }
+        } else {
+            // No significant change
+            self.cycles_without_change += 1;
+
+            // Check if we need to step the pulse voltage
+            if self.cycles_without_change >= cycles_before_step.0 as u32 {
+                self.step_pulse_voltage();
+            }
+        }
+    }
 }
 
 impl TipController {
@@ -248,21 +286,21 @@ impl TipController {
     pub fn run(&mut self) -> Result<(), NanonisError> {
         self.pre_loop_initialization()?;
 
-        while self.current_tip_state != TipState::Stable {
+        while self.current_tip_shape != TipShape::Stable {
             // Execute one control cycle
             self.cycle_count += 1;
 
             // Execute based on state
-            match self.current_tip_state {
-                TipState::Bad => {
+            match self.current_tip_shape {
+                TipShape::Blunt => {
                     self.bad_loop()?;
                     continue;
                 }
-                TipState::Good => {
+                TipShape::Sharp => {
                     self.good_loop()?;
                     continue;
                 }
-                TipState::Stable => {
+                TipShape::Stable => {
                     info!(
                         "STABLE achieved after {} cycles! Final pulse voltage: {:.3}V",
                         self.cycle_count, self.current_pulse_voltage
@@ -277,72 +315,131 @@ impl TipController {
     /// Bad loop - execute recovery sequence with stable signal monitoring
     /// Sequence: capture_stable_before → pulse → capture_stable_after → withdraw → move → approach → check
     fn bad_loop(&mut self) -> Result<(), NanonisError> {
-        // Reset good count
-        self.good_count = 0;
-
-        self.driver.execute(Action::BiasPulse {
-            wait_until_done: true,
-            pulse_width: Duration::from_millis(50),
-            bias_value_v: self.current_pulse_voltage,
-            z_controller_hold: 1,
-            pulse_mode: 2,
-        })?;
-
-        self.driver.execute_chain(ActionChain::new(vec![
-            Action::Withdraw {
-                wait_until_finished: true,
-                timeout: Duration::from_secs(5),
-            },
-            Action::MoveMotor3D {
-                displacement: crate::types::MotorDisplacement::new(2, 2, -3),
-                blocking: true,
-            },
-            Action::AutoApproach {
-                wait_until_finished: true,
-                timeout: Duration::from_secs(5),
-            },
-            Action::Wait {
-                duration: Duration::from_secs(1),
-            },
-        ]))?;
-
-        let ampl_setpoint = self.driver.client_mut().pll_amp_ctrl_setpnt_get(1)?;
-        let ampl_current = self.driver.client_mut().signal_val_get(75, true)?;
-
-        if !(ampl_setpoint - 5e-12..ampl_setpoint + 5e-12).contains(&ampl_current) {
-            self.current_tip_state = TipState::Bad;
-        };
-        let check_method = TipCheckMethod::SignalBounds {
-            signal: self.config.freq_shift_index,
-            bounds: self.config.sharp_tip_bounds,
-        };
-
-        self.current_tip_state = self
-            .driver
-            .run(Action::CheckTipState {
-                method: check_method,
+        self.driver
+            .run(Action::PulseRetract {
+                pulse_width: Duration::from_millis(500),
+                pulse_height_v: self.current_pulse_voltage,
             })
+            .with_data_collection(Duration::from_millis(50), Duration::from_millis(50))
+            .execute()?;
+
+        self.driver
+            .run(Action::SafeReposition {
+                x_steps: 2,
+                y_steps: 2,
+            })
+            .go()?;
+
+        let amplitude_reached: bool = self
+            .driver
+            .run(Action::ReachedTargedAmplitude)
             .expecting()?;
+
+        if amplitude_reached {
+            let tip_state: TipState = self
+                .driver
+                .run(Action::CheckTipState {
+                    method: TipCheckMethod::SignalBounds {
+                        signal: self.config.freq_shift_index,
+                        bounds: self.config.sharp_tip_bounds,
+                    },
+                })
+                .expecting()?;
+
+            self.current_tip_shape = tip_state.shape;
+
+            self.track_signal(
+                self.config.freq_shift_index,
+                tip_state
+                    .measured_signals
+                    .get(&self.config.freq_shift_index)
+                    .copied()
+                    .expect("Calling Check should definitly return a measured value"),
+            );
+
+            // Update pulse voltage based on signal changes (stepping logic)
+            self.update_pulse_voltage();
+        } else {
+            self.current_tip_shape = TipShape::Blunt;
+        }
 
         Ok(())
     }
 
     /// Good loop - monitoring, increment good count
     fn good_loop(&mut self) -> Result<(), NanonisError> {
-        self.good_count += 1;
+        let stability_result: crate::actions::StabilityResult = self
+            .driver
+            .run(Action::CheckTipStability {
+                method: crate::actions::TipStabilityMethod::BiasSweepResponse {
+                    signal: self.config.freq_shift_index,
+                    bias_range: (-2.0, 2.0),
+                    sweep_steps: 1000,
+                    period: Duration::from_millis(200),
+                    allowed_signal_change: self.config.allowed_change_for_stable,
+                },
+                max_duration: Duration::from_secs(100),
+                abort_on_damage_signs: false,
+            })
+            .expecting()?;
+
+        // Track signal values from stability monitoring (use last measured value)
+        if let Some(signal_values) = stability_result
+            .measured_values
+            .get(&self.config.freq_shift_index)
+        {
+            if let Some(&last_value) = signal_values.last() {
+                self.track_signal(self.config.freq_shift_index, last_value);
+            }
+        }
+
+        // Update tip shape based on stability result
+        self.current_tip_shape = if stability_result.is_stable {
+            TipShape::Stable
+        } else {
+            self.driver
+                .run(Action::SafeReposition {
+                    x_steps: 2,
+                    y_steps: 2,
+                })
+                .go()?;
+
+            self.driver
+                .run(Action::CheckTipState {
+                    method: TipCheckMethod::SignalBounds {
+                        signal: self.config.freq_shift_index,
+                        bounds: self.config.sharp_tip_bounds,
+                    },
+                })
+                .expecting()?
+        };
 
         Ok(())
     }
 
     fn pre_loop_initialization(&mut self) -> Result<(), NanonisError> {
-        self.driver.client_mut().set_bias(-500e-3)?;
+        // self.driver.client_mut().set_bias(-500e-3)?;
 
         self.driver.client_mut().z_ctrl_setpoint_set(100e-12)?;
 
-        self.driver.execute(Action::AutoApproach {
-            wait_until_finished: true,
-            timeout: Duration::from_secs(1),
-        })?;
+        self.driver
+            .run(Action::AutoApproach {
+                wait_until_finished: true,
+                timeout: Duration::from_secs(10),
+            })
+            .go()?;
+
+        let initial_tip_state: TipState = self
+            .driver
+            .run(Action::CheckTipState {
+                method: TipCheckMethod::SignalBounds {
+                    signal: self.config.freq_shift_index,
+                    bounds: self.config.sharp_tip_bounds,
+                },
+            })
+            .expecting()?;
+
+        self.current_tip_shape = initial_tip_state.shape;
 
         Ok(())
     }
