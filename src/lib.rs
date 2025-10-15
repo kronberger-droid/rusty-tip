@@ -23,7 +23,7 @@ pub use nanonis::{
     TipShaperProps, ZSpectroscopyResult,
 };
 pub use plotting::{plot_values, plot_values_with_range};
-pub use signal_registry::{SignalInfo, SignalRegistry};
+pub use signal_registry::SignalRegistry;
 pub use tip_prep::{LoopType, TipController};
 pub use types::{
     Amplitude, ChainExperimentData, ChannelIndex, ExperimentData, Frequency, MotorAxis,

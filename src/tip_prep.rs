@@ -418,6 +418,7 @@ impl TipController {
     }
 
     fn pre_loop_initialization(&mut self) -> Result<(), NanonisError> {
+        info!("Running pre loop initialization");
         // self.driver.client_mut().set_bias(-500e-3)?;
 
         self.driver.client_mut().z_ctrl_setpoint_set(100e-12)?;
@@ -438,6 +439,8 @@ impl TipController {
                 },
             })
             .expecting()?;
+
+        info!("Current tip shape: {initial_tip_state:?}");
 
         self.current_tip_shape = initial_tip_state.shape;
 
