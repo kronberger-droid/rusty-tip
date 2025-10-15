@@ -1,5 +1,5 @@
 // chrono import removed - now using Utc::now() directly in actions.rs
-use log::info;
+use log::{debug, info};
 use ndarray::Array1;
 
 use crate::actions::{
@@ -1326,12 +1326,9 @@ impl ActionDriver {
                 }
 
                 // Open auto-approach module
-                if let Err(e) = self.client.auto_approach_open() {
-                    log::error!("Failed to open auto-approach module: {}", e);
-                    return Err(NanonisError::InvalidCommand(format!(
-                        "Failed to open auto-approach module: {}",
-                        e
-                    )));
+                match self.client.auto_approach_open() {
+                    Ok(_) => debug!("Opened the auto-approach module"),
+                    Err(_) => debug!("Failed to open auto-approach module, already open"),
                 }
 
                 // Wait for module initialization

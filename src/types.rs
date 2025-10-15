@@ -483,7 +483,6 @@ impl SignalIndex {
         driver
             .signal_registry()
             .has_tcp_channel(self.0)
-            .unwrap_or(false)
     }
 }
 

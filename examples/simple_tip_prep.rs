@@ -1,4 +1,5 @@
 use chrono::Utc;
+use log::{error, info};
 use rusty_tip::{
     tip_prep::TipControllerConfig, ActionDriver, SignalIndex, TCPReaderConfig, TipController,
 };
@@ -14,41 +15,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_action_logging(create_log_file_path()?, 1000, true)
         .build()?;
 
-    // Demonstrate registry-based signal lookup
-    println!("📊 Signal Registry Demo:");
-    println!("Available TCP signals: {}", driver.signal_registry().tcp_signals().len());
-    println!("Total signals: {}", driver.signal_registry().all_names().len());
-    
-    // Debug: Show signals containing "freq" or "oc"
-    println!("\n🔍 Signals containing 'freq':");
-    for signal in driver.signal_registry().find_signals_like("freq") {
-        println!("  [{}] {} -> TCP: {:?}", signal.nanonis_index, signal.name, signal.tcp_channel);
-    }
-    
-    println!("\n🔍 Signals containing 'oc':");
-    for signal in driver.signal_registry().find_signals_like("oc") {
-        println!("  [{}] {} -> TCP: {:?}", signal.nanonis_index, signal.name, signal.tcp_channel);
-    }
-    
-    // Show signal at index 76 specifically
-    if let Some(signal_76) = driver.signal_registry().get_by_nanonis_index(76) {
-        println!("\n📍 Signal at index 76: {} -> TCP: {:?}", signal_76.name, signal_76.tcp_channel);
-    }
-    
-    // Find frequency shift signal by name (case-insensitive)
     // Try different variations of the name
-    let freq_shift_signal = match SignalIndex::from_name("oc m1 freq. shift", &driver) {
-        Ok(signal) => {
-            println!("\n✅ Found frequency shift signal: {} (index {})", 
-                signal.name(&driver).unwrap_or("Unknown".to_string()), signal.get());
-            signal
-        }
-        Err(e) => {
-            println!("\n❌ {}", e);
-            println!("Using default signal index 76");
-            SignalIndex::new(76)
-        }
-    };
+    let freq_shift_signal = SignalIndex::from_name("bias", &driver)?;
 
     // Create tip controller configuration with registry-based signal
     let config = TipControllerConfig {
@@ -61,10 +29,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match controller.run() {
         Ok(()) => {
-            println!("Tip preparation completed successfully!");
+            info!("Tip preparation completed successfully!");
         }
         Err(e) => {
-            println!("Tip preparation failed: {}", e);
+            error!("Tip preparation failed: {}", e);
         }
     }
 
