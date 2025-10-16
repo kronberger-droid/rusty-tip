@@ -315,6 +315,11 @@ impl TipController {
     /// Bad loop - execute recovery sequence with stable signal monitoring
     /// Sequence: capture_stable_before → pulse → capture_stable_after → withdraw → move → approach → check
     fn bad_loop(&mut self) -> Result<(), NanonisError> {
+        info!(
+            "Executing PulseRetract Sequence with pulse = {} V",
+            self.current_pulse_voltage
+        );
+
         self.driver
             .run(Action::PulseRetract {
                 pulse_width: Duration::from_millis(500),
@@ -322,6 +327,8 @@ impl TipController {
             })
             .with_data_collection(Duration::from_millis(50), Duration::from_millis(50))
             .execute()?;
+
+        info!("Repositioning...");
 
         self.driver
             .run(Action::SafeReposition {
@@ -360,6 +367,7 @@ impl TipController {
             // Update pulse voltage based on signal changes (stepping logic)
             self.update_pulse_voltage();
         } else {
+            info!("Amplitude not reached. Assuming blunt tip");
             self.current_tip_shape = TipShape::Blunt;
         }
 
@@ -422,6 +430,8 @@ impl TipController {
         // self.driver.client_mut().set_bias(-500e-3)?;
 
         self.driver.client_mut().z_ctrl_setpoint_set(100e-12)?;
+
+        info!("Executing Initial Approach");
 
         self.driver
             .run(Action::AutoApproach {

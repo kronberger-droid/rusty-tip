@@ -28,6 +28,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 threshold_percent: 0.1,
             },
             timeout: Duration::from_secs(10),
+            retry_count: Some(5), // Allow 5 retries for stable signal acquisition
         })
         .go()?;
 

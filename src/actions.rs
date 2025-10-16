@@ -287,6 +287,7 @@ pub enum Action {
         use_new_data: bool,
         stability_method: SignalStabilityMethod,
         timeout: Duration,
+        retry_count: Option<u32>,
     },
 
     /// Check if oscillation amplitude is reached
@@ -931,6 +932,7 @@ impl Action {
                 use_new_data,
                 stability_method,
                 timeout,
+                retry_count,
             } => {
                 let points_desc = data_points.map_or("default".to_string(), |p| p.to_string());
                 let data_desc = if *use_new_data {
@@ -955,13 +957,15 @@ impl Action {
                         format!("trend analysis, max slope {:.3e}", max_slope)
                     }
                 };
+                let retry_desc = retry_count.map_or("no retry".to_string(), |r| format!("{} retries", r));
                 format!(
-                    "Get stable signal {} ({} points, {}, {}, timeout {:.1}s)",
+                    "Get stable signal {} ({} points, {}, {}, timeout {:.1}s, {})",
                     signal.0,
                     points_desc,
                     data_desc,
                     method_desc,
-                    timeout.as_secs_f32()
+                    timeout.as_secs_f32(),
+                    retry_desc
                 )
             }
             _ => format!("{:?}", self),
