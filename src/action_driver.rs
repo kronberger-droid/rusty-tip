@@ -516,6 +516,7 @@ impl ActionDriverBuilder {
             action_logger,
             action_logging_enabled: true, // Default to enabled if logger is configured
             signal_registry,
+            recent_stable_signals: std::collections::VecDeque::new(),
         })
     }
 }
@@ -537,6 +538,8 @@ pub struct ActionDriver {
     action_logging_enabled: bool,
     /// Signal registry for name-based lookup and TCP mapping
     signal_registry: SignalRegistry,
+    /// Recent ReadStableSignal results for correlation with CheckTipState
+    recent_stable_signals: std::collections::VecDeque<(crate::actions::StableSignal, std::time::Instant)>,
 }
 
 impl ActionDriver {
@@ -564,6 +567,7 @@ impl ActionDriver {
             action_logger: None,
             action_logging_enabled: false,
             signal_registry,
+            recent_stable_signals: std::collections::VecDeque::new(),
         }
     }
 
@@ -1830,6 +1834,42 @@ impl ActionDriver {
                     }
                 }
 
+                // Add recent ReadStableSignal data for correlation and debugging
+                let now = std::time::Instant::now();
+                let recent_signals: Vec<_> = self.recent_stable_signals
+                    .iter()
+                    .filter(|(_, timestamp)| now.duration_since(*timestamp) < std::time::Duration::from_secs(300)) // Last 5 minutes
+                    .collect();
+                
+                if !recent_signals.is_empty() {
+                    metadata.insert("recent_stable_signals_count".to_string(), recent_signals.len().to_string());
+                    
+                    // Add details of the most recent ReadStableSignal for debugging
+                    if let Some((most_recent_signal, timestamp)) = recent_signals.last() {
+                        let age_ms = now.duration_since(*timestamp).as_millis();
+                        metadata.insert("most_recent_stable_signal_age_ms".to_string(), age_ms.to_string());
+                        metadata.insert("most_recent_stable_value".to_string(), format!("{:.6e}", most_recent_signal.stable_value));
+                        metadata.insert("most_recent_stable_confidence".to_string(), format!("{:.3}", most_recent_signal.confidence));
+                        metadata.insert("most_recent_data_points".to_string(), most_recent_signal.data_points_used.to_string());
+                        metadata.insert("most_recent_analysis_duration_ms".to_string(), most_recent_signal.analysis_duration.as_millis().to_string());
+                        
+                        // Include the raw data for debugging stability measures
+                        let raw_data_str = most_recent_signal.raw_data.iter()
+                            .map(|x| format!("{:.6e}", x))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        metadata.insert("most_recent_raw_data".to_string(), format!("[{}]", raw_data_str));
+                        
+                        // Include stability metrics
+                        for (metric_name, metric_value) in &most_recent_signal.stability_metrics {
+                            metadata.insert(
+                                format!("most_recent_metric_{}", metric_name), 
+                                format!("{:.6e}", metric_value)
+                            );
+                        }
+                    }
+                }
+
                 // Add execution timestamp
                 metadata.insert("execution_timestamp".to_string(), chrono::Utc::now().to_rfc3339());
 
@@ -1840,8 +1880,14 @@ impl ActionDriver {
                     .collect::<Vec<_>>()
                     .join(", ");
                 
-                log::info!("CheckTipState result: shape={:?}, confidence={:.3}, measured_signals=[{}]", 
-                    tip_shape, confidence, signal_values_str);
+                let stable_signal_info = if !recent_signals.is_empty() {
+                    format!(", with_recent_stable_data=true (count={})", recent_signals.len())
+                } else {
+                    ", with_recent_stable_data=false".to_string()
+                };
+                
+                log::info!("CheckTipState result: shape={:?}, confidence={:.3}, measured_signals=[{}]{}",
+                    tip_shape, confidence, signal_values_str, stable_signal_info);
 
                 Ok(ActionResult::TipState(TipState {
                     shape: tip_shape,
@@ -2154,14 +2200,24 @@ impl ActionDriver {
 
                                 use crate::actions::StableSignal;
                                 log::info!("Stable signal acquired on attempt {} (retries: {})", attempt + 1, attempt);
-                                return Ok(ActionResult::StableSignal(StableSignal {
+                                
+                                let stable_signal = StableSignal {
                                     stable_value,
                                     confidence,
                                     data_points_used: signal_data.len(),
                                     analysis_duration,
                                     stability_metrics: metrics,
                                     raw_data: signal_data,
-                                }));
+                                };
+                                
+                                // Store for correlation with future CheckTipState calls
+                                self.recent_stable_signals.push_back((stable_signal.clone(), std::time::Instant::now()));
+                                // Keep only last 10 stable signal results
+                                while self.recent_stable_signals.len() > 10 {
+                                    self.recent_stable_signals.pop_front();
+                                }
+                                
+                                return Ok(ActionResult::StableSignal(stable_signal));
                             } else if attempt >= max_retries {
                                 // No more retries, return raw data as fallback
                                 log::warn!("Signal not stable after {} attempts, returning raw data", attempt + 1);
