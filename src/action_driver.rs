@@ -1907,11 +1907,13 @@ impl ActionDriver {
                 use_new_data,
                 stability_method,
                 timeout,
+                retry_count,
             } => {
                 use std::time::Instant;
 
                 let start_time = Instant::now();
                 let data_points = data_points.unwrap_or(50);
+                let max_retries = retry_count.unwrap_or(0);
 
                 // Validate TCP logger is configured and active
                 let tcp_config = self.tcp_reader_config.as_ref().ok_or_else(|| {
@@ -1941,42 +1943,68 @@ impl ActionDriver {
                         ))
                     })?;
 
-                // Collect signal data based on use_new_data flag
-                let signal_data: Vec<f32> = if use_new_data {
-                    // Wait for new data with timeout
-                    self.collect_new_signal_data(signal_channel_idx, data_points, timeout)?
-                } else {
-                    // Use buffered data
-                    self.extract_buffered_signal_data(signal_channel_idx, data_points)?
-                };
+                // Retry loop for data collection and stability analysis
+                let mut last_error = None;
+                let mut attempt = 0;
+                
+                loop {
+                    match self.attempt_stable_signal_read(
+                        signal_channel_idx,
+                        data_points,
+                        use_new_data,
+                        timeout,
+                        &stability_method,
+                    ) {
+                        Ok((signal_data, is_stable, confidence, metrics)) => {
+                            let analysis_duration = start_time.elapsed();
+                            
+                            if is_stable {
+                                // Calculate stable value (mean of the data)
+                                let stable_value = signal_data.iter().sum::<f32>() / signal_data.len() as f32;
 
-                if signal_data.is_empty() {
-                    return Ok(ActionResult::Values(vec![]));
-                }
-
-                // Analyze stability using the specified method
-                let (is_stable, confidence, metrics) =
-                    Self::analyze_signal_stability(&signal_data, &stability_method);
-
-                let analysis_duration = start_time.elapsed();
-
-                if is_stable {
-                    // Calculate stable value (mean of the data)
-                    let stable_value = signal_data.iter().sum::<f32>() / signal_data.len() as f32;
-
-                    use crate::actions::StableSignal;
-                    Ok(ActionResult::StableSignal(StableSignal {
-                        stable_value,
-                        confidence,
-                        data_points_used: signal_data.len(),
-                        analysis_duration,
-                        stability_metrics: metrics,
-                        raw_data: signal_data,
-                    }))
-                } else {
-                    // Return raw data as fallback when not stable
-                    let values: Vec<f64> = signal_data.iter().map(|&x| x as f64).collect();
-                    Ok(ActionResult::Values(values))
+                                use crate::actions::StableSignal;
+                                log::info!("Stable signal acquired on attempt {} (retries: {})", attempt + 1, attempt);
+                                return Ok(ActionResult::StableSignal(StableSignal {
+                                    stable_value,
+                                    confidence,
+                                    data_points_used: signal_data.len(),
+                                    analysis_duration,
+                                    stability_metrics: metrics,
+                                    raw_data: signal_data,
+                                }));
+                            } else if attempt >= max_retries {
+                                // No more retries, return raw data as fallback
+                                log::warn!("Signal not stable after {} attempts, returning raw data", attempt + 1);
+                                let values: Vec<f64> = signal_data.iter().map(|&x| x as f64).collect();
+                                return Ok(ActionResult::Values(values));
+                            } else {
+                                // Signal not stable, but we can retry
+                                log::debug!("Signal not stable on attempt {}, retrying...", attempt + 1);
+                                last_error = Some(NanonisError::Protocol(format!(
+                                    "Signal not stable (confidence: {:.2})", confidence
+                                )));
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Data collection failed on attempt {}: {}", attempt + 1, e);
+                            last_error = Some(e);
+                            
+                            if attempt >= max_retries {
+                                return Err(last_error.unwrap_or_else(|| {
+                                    NanonisError::Protocol("Stable signal read failed after retries".to_string())
+                                }));
+                            }
+                        }
+                    }
+                    
+                    attempt += 1;
+                    
+                    // Add delay between retries (exponential backoff)
+                    if attempt <= max_retries {
+                        let delay_ms = 100 * (1 << (attempt - 1).min(4)); // Cap at 1.6s delay
+                        log::debug!("Waiting {}ms before retry attempt {}", delay_ms, attempt + 1);
+                        std::thread::sleep(Duration::from_millis(delay_ms));
+                    }
                 }
             }
             Action::ReachedTargedAmplitude => {
@@ -1992,6 +2020,7 @@ impl ActionDriver {
                                 threshold_percent: 0.2,
                             },
                         timeout: Duration::from_millis(10),
+                        retry_count: Some(3), // 3 retries for amplitude check
                     })
                     .go()? {
                         ActionResult::Values(values) => values.iter().map(|v| *v as f32).sum::<f32>() / values.len() as f32,
@@ -2007,6 +2036,35 @@ impl ActionDriver {
                 Ok(ActionResult::Status(status))
             }
         }
+    }
+
+    /// Attempt a single stable signal read (used by retry logic)
+    fn attempt_stable_signal_read(
+        &self,
+        signal_channel_idx: usize,
+        data_points: usize,
+        use_new_data: bool,
+        timeout: Duration,
+        stability_method: &crate::actions::SignalStabilityMethod,
+    ) -> Result<(Vec<f32>, bool, f32, std::collections::HashMap<String, f32>), NanonisError> {
+        // Collect signal data based on use_new_data flag
+        let signal_data: Vec<f32> = if use_new_data {
+            // Wait for new data with timeout
+            self.collect_new_signal_data(signal_channel_idx, data_points, timeout)?
+        } else {
+            // Use buffered data
+            self.extract_buffered_signal_data(signal_channel_idx, data_points)?
+        };
+
+        if signal_data.is_empty() {
+            return Err(NanonisError::Protocol("No signal data available".to_string()));
+        }
+
+        // Analyze stability using the specified method
+        let (is_stable, confidence, metrics) =
+            Self::analyze_signal_stability(&signal_data, stability_method);
+
+        Ok((signal_data, is_stable, confidence, metrics))
     }
 
     /// Collect new signal data from TCP logger with timeout
