@@ -1616,7 +1616,43 @@ impl ActionDriver {
 
                 let (tip_shape, measured_signals, confidence, mut metadata) = match method {
                     TipCheckMethod::SignalBounds { signal, bounds } => {
-                        let value = self.client.signal_val_get(signal.0, true)?;
+                        // Use ReadStableSignal instead of single instantaneous read
+                        let stable_result = self.run(Action::ReadStableSignal {
+                            signal: signal,
+                            data_points: Some(50),
+                            use_new_data: false,
+                            stability_method: crate::actions::SignalStabilityMethod::RelativeStandardDeviation {
+                                threshold_percent: 5.0,
+                            },
+                            timeout: Duration::from_secs(10),
+                            retry_count: Some(3),
+                        }).execute();
+
+                        let (value, raw_data, read_method) = match stable_result {
+                            Ok(exec_result) => match exec_result {
+                                ExecutionResult::Single(ActionResult::StableSignal(stable_signal)) => {
+                                    // Use stable value from ReadStableSignal
+                                    (stable_signal.stable_value, stable_signal.raw_data, "stable_signal")
+                                }
+                                ExecutionResult::Single(ActionResult::Values(values)) => {
+                                    // ReadStableSignal failed but returned raw data, use minimum as fallback
+                                    let raw_data: Vec<f32> = values.iter().map(|&v| v as f32).collect();
+                                    let min_value = raw_data.iter().cloned().fold(f32::INFINITY, f32::min);
+                                    (min_value, raw_data, "fallback_minimum")
+                                }
+                                _ => {
+                                    // Unexpected result type, fallback to single read
+                                    let single_value = self.client.signal_val_get(signal.0, true)?;
+                                    (single_value, vec![single_value], "single_read_fallback")
+                                }
+                            }
+                            Err(_) => {
+                                // Complete fallback to single read
+                                let single_value = self.client.signal_val_get(signal.0, true)?;
+                                (single_value, vec![single_value], "single_read_fallback")
+                            }
+                        };
+
                         let mut measured = HashMap::new();
                         measured.insert(signal, value);
 
@@ -1649,7 +1685,7 @@ impl ActionDriver {
                             (1.0 / (1.0 + margin_violation)).max(0.05) // Lower confidence for violations
                         };
 
-                        // Populate metadata with analysis context
+                        // Populate metadata with analysis context and dataset
                         let mut metadata = HashMap::new();
                         metadata.insert("method".to_string(), "signal_bounds".to_string());
                         metadata.insert("signal_index".to_string(), signal.0.0.to_string());
@@ -1661,6 +1697,18 @@ impl ActionDriver {
                         metadata.insert("distance_from_center".to_string(), format!("{:.6e}", distance_from_center));
                         metadata.insert("relative_distance".to_string(), format!("{:.3}", relative_distance));
                         metadata.insert("within_bounds".to_string(), (shape == TipShape::Sharp).to_string());
+                        metadata.insert("read_method".to_string(), read_method.to_string());
+                        metadata.insert("dataset_size".to_string(), raw_data.len().to_string());
+                        
+                        // Store raw dataset for debugging stability measures
+                        let raw_data_summary = if raw_data.len() <= 10 {
+                            raw_data.iter().map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",")
+                        } else {
+                            let first_5: String = raw_data.iter().take(5).map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",");
+                            let last_5: String = raw_data.iter().rev().take(5).rev().map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",");
+                            format!("{},...,{}", first_5, last_5)
+                        };
+                        metadata.insert("raw_dataset_summary".to_string(), format!("[{}]", raw_data_summary));
                         
                         if shape == TipShape::Blunt {
                             let margin_violation = if value < bounds.0 {
@@ -1678,28 +1726,61 @@ impl ActionDriver {
                     }
 
                     TipCheckMethod::MultiSignalBounds { ref signals } => {
-                        let indices: Vec<i32> =
-                            signals.iter().map(|(signal, _)| (*signal).into()).collect();
-                        let values = self.client.signals_vals_get(indices, true)?;
-
                         let mut measured = HashMap::new();
                         let mut violations = Vec::new();
                         let mut all_good = true;
                         let mut confidence_scores = Vec::new();
+                        let mut all_datasets = Vec::new();
+                        let mut read_methods = Vec::new();
 
-                        for ((signal, bounds), value) in signals.iter().zip(values.iter()) {
-                            measured.insert(*signal, *value);
+                        // Read each signal using ReadStableSignal
+                        for (signal, bounds) in signals.iter() {
+                            let stable_result = self.run(Action::ReadStableSignal {
+                                signal: *signal,
+                                data_points: Some(50),
+                                use_new_data: false,
+                                stability_method: crate::actions::SignalStabilityMethod::RelativeStandardDeviation {
+                                    threshold_percent: 5.0,
+                                },
+                                timeout: Duration::from_secs(10),
+                                retry_count: Some(3),
+                            }).execute();
+
+                            let (value, raw_data, read_method) = match stable_result {
+                                Ok(exec_result) => match exec_result {
+                                    ExecutionResult::Single(ActionResult::StableSignal(stable_signal)) => {
+                                        (stable_signal.stable_value, stable_signal.raw_data, "stable_signal")
+                                    }
+                                    ExecutionResult::Single(ActionResult::Values(values)) => {
+                                        let raw_data: Vec<f32> = values.iter().map(|&v| v as f32).collect();
+                                        let min_value = raw_data.iter().cloned().fold(f32::INFINITY, f32::min);
+                                        (min_value, raw_data, "fallback_minimum")
+                                    }
+                                    _ => {
+                                        let single_value = self.client.signal_val_get(signal.0, true)?;
+                                        (single_value, vec![single_value], "single_read_fallback")
+                                    }
+                                }
+                                Err(_) => {
+                                    let single_value = self.client.signal_val_get(signal.0, true)?;
+                                    (single_value, vec![single_value], "single_read_fallback")
+                                }
+                            };
+
+                            measured.insert(*signal, value);
+                            all_datasets.push(raw_data);
+                            read_methods.push(read_method);
                             
-                            let in_bounds = *value >= bounds.0 && *value <= bounds.1;
+                            let in_bounds = value >= bounds.0 && value <= bounds.1;
                             if !in_bounds {
-                                violations.push((*signal, *value, *bounds));
+                                violations.push((*signal, value, *bounds));
                                 all_good = false;
                             }
 
                             // Calculate per-signal confidence
                             let bounds_center = (bounds.0 + bounds.1) / 2.0;
                             let bounds_width = (bounds.1 - bounds.0).abs();
-                            let distance_from_center = (*value - bounds_center).abs();
+                            let distance_from_center = (value - bounds_center).abs();
                             let relative_distance = if bounds_width > 0.0 {
                                 distance_from_center / (bounds_width / 2.0)
                             } else {
@@ -1709,10 +1790,10 @@ impl ActionDriver {
                             let signal_confidence = if in_bounds {
                                 (1.0 - relative_distance).max(0.1)
                             } else {
-                                let margin_violation = if *value < bounds.0 {
-                                    (bounds.0 - *value) / bounds_width.abs()
+                                let margin_violation = if value < bounds.0 {
+                                    (bounds.0 - value) / bounds_width.abs()
                                 } else {
-                                    (*value - bounds.1) / bounds_width.abs()
+                                    (value - bounds.1) / bounds_width.abs()
                                 };
                                 (1.0 / (1.0 + margin_violation)).max(0.05)
                             };
@@ -1728,7 +1809,7 @@ impl ActionDriver {
                         // Overall confidence is the minimum of all signal confidences
                         let confidence = confidence_scores.iter().fold(1.0f32, |acc, &x| acc.min(x));
 
-                        // Populate metadata with multi-signal analysis
+                        // Populate metadata with multi-signal analysis and datasets
                         let mut metadata = HashMap::new();
                         metadata.insert("method".to_string(), "multi_signal_bounds".to_string());
                         metadata.insert("signal_count".to_string(), signals.len().to_string());
@@ -1736,14 +1817,28 @@ impl ActionDriver {
                         metadata.insert("violation_count".to_string(), violations.len().to_string());
                         metadata.insert("overall_pass".to_string(), all_good.to_string());
                         
-                        // Add individual signal details
-                        for (i, ((signal, bounds), value)) in signals.iter().zip(values.iter()).enumerate() {
+                        // Add individual signal details with datasets
+                        for (i, ((signal, bounds), dataset)) in signals.iter().zip(all_datasets.iter()).enumerate() {
                             let prefix = format!("signal_{}", i);
+                            let value = measured[signal];
+                            
                             metadata.insert(format!("{}_index", prefix), signal.0.0.to_string());
                             metadata.insert(format!("{}_value", prefix), format!("{:.6e}", value));
                             metadata.insert(format!("{}_bounds", prefix), format!("[{:.3e}, {:.3e}]", bounds.0, bounds.1));
-                            metadata.insert(format!("{}_in_bounds", prefix), (*value >= bounds.0 && *value <= bounds.1).to_string());
+                            metadata.insert(format!("{}_in_bounds", prefix), (value >= bounds.0 && value <= bounds.1).to_string());
                             metadata.insert(format!("{}_confidence", prefix), format!("{:.3}", confidence_scores[i]));
+                            metadata.insert(format!("{}_read_method", prefix), read_methods[i].to_string());
+                            metadata.insert(format!("{}_dataset_size", prefix), dataset.len().to_string());
+                            
+                            // Store dataset summary for debugging
+                            let dataset_summary = if dataset.len() <= 10 {
+                                dataset.iter().map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",")
+                            } else {
+                                let first_3: String = dataset.iter().take(3).map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",");
+                                let last_3: String = dataset.iter().rev().take(3).rev().map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",");
+                                format!("{},...,{}", first_3, last_3)
+                            };
+                            metadata.insert(format!("{}_dataset_summary", prefix), format!("[{}]", dataset_summary));
                         }
 
                         (shape, measured, confidence, metadata)
