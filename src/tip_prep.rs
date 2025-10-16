@@ -451,7 +451,7 @@ impl TipController {
             })
             .expecting()?;
 
-        info!("Current tip shape: {} (confidence: {:.3})", initial_tip_state.shape, initial_tip_state.confidence);
+        info!("Current tip shape: {:?} (confidence: {:.3})", initial_tip_state.shape, initial_tip_state.confidence);
 
         self.current_tip_shape = initial_tip_state.shape;
 
