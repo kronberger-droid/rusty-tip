@@ -1,7 +1,8 @@
 use chrono::Utc;
 use log::{error, info};
 use rusty_tip::{
-    tip_prep::TipControllerConfig, ActionDriver, SignalIndex, TCPReaderConfig, TipController,
+    tip_prep::{PulseMethod, TipControllerConfig},
+    ActionDriver, SignalIndex, TCPReaderConfig, TipController,
 };
 use std::{fs, path::PathBuf};
 
@@ -18,10 +19,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Try different variations of the name
     let freq_shift_signal = SignalIndex::from_name("bias", &driver)?;
 
+    let pulse_method = PulseMethod::stepping_fixed_threshold((2.0, 6.0), 4, 2, 1.0);
+
     // Create tip controller configuration with registry-based signal
     let config = TipControllerConfig {
         freq_shift_index: freq_shift_signal,
-        ..TipControllerConfig::default()
+        sharp_tip_bounds: (-2.0, 0.0),
+        pulse_method,
+        ..Default::default()
     };
 
     // Create controller
