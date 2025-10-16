@@ -1853,12 +1853,19 @@ impl ActionDriver {
                         metadata.insert("most_recent_data_points".to_string(), most_recent_signal.data_points_used.to_string());
                         metadata.insert("most_recent_analysis_duration_ms".to_string(), most_recent_signal.analysis_duration.as_millis().to_string());
                         
-                        // Include the raw data for debugging stability measures
-                        let raw_data_str = most_recent_signal.raw_data.iter()
-                            .map(|x| format!("{:.6e}", x))
-                            .collect::<Vec<_>>()
-                            .join(",");
-                        metadata.insert("most_recent_raw_data".to_string(), format!("[{}]", raw_data_str));
+                        // Include raw data summary for debugging (first 5, last 5 values to avoid huge logs)
+                        let raw_data = &most_recent_signal.raw_data;
+                        let raw_data_summary = if raw_data.len() <= 10 {
+                            // Small dataset, include all
+                            raw_data.iter().map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",")
+                        } else {
+                            // Large dataset, show first 5 and last 5
+                            let first_5: String = raw_data.iter().take(5).map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",");
+                            let last_5: String = raw_data.iter().rev().take(5).rev().map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",");
+                            format!("{},...,{}", first_5, last_5)
+                        };
+                        metadata.insert("most_recent_raw_data_summary".to_string(), format!("[{}]", raw_data_summary));
+                        metadata.insert("most_recent_raw_data_full_count".to_string(), raw_data.len().to_string());
                         
                         // Include stability metrics
                         for (metric_name, metric_value) in &most_recent_signal.stability_metrics {
