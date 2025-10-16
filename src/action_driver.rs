@@ -1833,6 +1833,16 @@ impl ActionDriver {
                 // Add execution timestamp
                 metadata.insert("execution_timestamp".to_string(), chrono::Utc::now().to_rfc3339());
 
+                // Log measured signal values for analysis
+                let signal_values_str = measured_signals
+                    .iter()
+                    .map(|(signal_idx, value)| format!("signal_{}={:.6e}", signal_idx.0.0, value))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                
+                log::info!("CheckTipState result: shape={:?}, confidence={:.3}, measured_signals=[{}]", 
+                    tip_shape, confidence, signal_values_str);
+
                 Ok(ActionResult::TipState(TipState {
                     shape: tip_shape,
                     confidence,
