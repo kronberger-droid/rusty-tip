@@ -1616,7 +1616,17 @@ impl ActionDriver {
 
                 let (tip_shape, measured_signals, confidence, mut metadata) = match method {
                     TipCheckMethod::SignalBounds { signal, bounds } => {
+                        // Debug TCP logger status before calling ReadStableSignal
+                        if let Some(ref tcp_reader) = self.tcp_reader {
+                            let (frame_count, _max_capacity, time_span) = tcp_reader.buffer_stats();
+                            log::debug!("CheckTipState: TCP reader available with {} frames, timespan: {}ms", 
+                                frame_count, time_span.as_millis());
+                        } else {
+                            log::warn!("CheckTipState: No TCP reader available for signal {}", signal.0.0);
+                        }
+
                         // Use ReadStableSignal instead of single instantaneous read
+                        log::debug!("CheckTipState: Calling ReadStableSignal for signal {}", signal.0.0);
                         let stable_result = self.run(Action::ReadStableSignal {
                             signal: signal,
                             data_points: Some(100),
@@ -2268,27 +2278,36 @@ impl ActionDriver {
                 })?;
 
                 // Convert Nanonis signal index to TCP channel using registry
+                log::debug!("ReadStableSignal: Looking up signal {} in signal registry", signal.0);
                 let tcp_channel =
                     self.signal_registry
                         .nanonis_to_tcp(signal.0)
                         .map_err(|e| {
+                            log::error!("ReadStableSignal: Signal {} (Nanonis index) has no TCP channel mapping: {}", signal.0, e);
                             NanonisError::Protocol(format!(
                                 "Signal {} (Nanonis index) has no TCP channel mapping: {}",
                                 signal.0, e
                             ))
                         })?;
 
+                log::debug!("ReadStableSignal: Signal {} mapped to TCP channel {}", signal.0, tcp_channel.get());
+
                 // Find TCP channel in TCP config channels
+                log::debug!("ReadStableSignal: Available TCP channels: {:?}", tcp_config.channels);
                 let signal_channel_idx = tcp_config
                     .channels
                     .iter()
                     .position(|&ch| ch == tcp_channel.get() as i32)
                     .ok_or_else(|| {
+                        log::error!("ReadStableSignal: TCP channel {} for signal {} not found in TCP logger configuration. Available channels: {:?}", 
+                            tcp_channel.get(), signal.0, tcp_config.channels);
                         NanonisError::Protocol(format!(
                             "TCP channel {} for signal {} not found in TCP logger configuration",
                             tcp_channel.get(), signal.0
                         ))
                     })?;
+
+                log::debug!("ReadStableSignal: Using TCP channel index {} for signal {}", signal_channel_idx, signal.0);
 
                 // Retry loop for data collection and stability analysis
                 let mut attempt = 0;
