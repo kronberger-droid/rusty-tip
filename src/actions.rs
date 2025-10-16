@@ -1621,8 +1621,13 @@ pub enum ActionLogResult {
         channels: Vec<i32>,
         oversampling: i32,
     },
-    /// Tip state check result
-    TipState(TipShape),
+    /// Comprehensive tip state check result
+    TipState {
+        shape: TipShape,
+        confidence: f32,
+        measured_signals: std::collections::HashMap<u8, f32>, // SignalIndex as u8 for JSON serialization
+        bounds_info: Option<std::collections::HashMap<String, String>>, // Bounds and margins for analysis
+    },
     /// Operation completed successfully
     Success,
     /// Operation completed but no data returned
@@ -1749,15 +1754,58 @@ impl ActionLogResult {
                     oversampling: tcp_status.oversampling,
                 }
             }
-            ActionResult::TipState(tip_state) => ActionLogResult::TipState(tip_state.shape),
+            ActionResult::TipState(tip_state) => {
+                // Convert SignalIndex to u8 for JSON serialization
+                let measured_signals = tip_state
+                    .measured_signals
+                    .iter()
+                    .map(|(signal_idx, value)| (signal_idx.0.0, *value))
+                    .collect();
+
+                // Extract bounds information from metadata if available
+                let bounds_info = if !tip_state.metadata.is_empty() {
+                    Some(tip_state.metadata.clone())
+                } else {
+                    None
+                };
+
+                ActionLogResult::TipState {
+                    shape: tip_state.shape,
+                    confidence: tip_state.confidence,
+                    measured_signals,
+                    bounds_info,
+                }
+            }
             ActionResult::StabilityResult(result) => {
-                // Convert stability result to a simple TipShape for logging compatibility
+                // Convert stability result to comprehensive TipState for logging
                 let tip_shape = if result.is_stable {
                     TipShape::Stable
                 } else {
                     TipShape::Blunt
                 };
-                ActionLogResult::TipState(tip_shape)
+                
+                // Convert measured values from stability check
+                let measured_signals = result
+                    .measured_values
+                    .iter()
+                    .flat_map(|(signal_idx, values)| {
+                        // Use the last (most recent) measured value for each signal
+                        values.last().map(|&value| (signal_idx.0.0, value))
+                    })
+                    .collect();
+
+                // Create bounds info with stability metrics
+                let mut bounds_info = std::collections::HashMap::new();
+                bounds_info.insert("stability_score".to_string(), result.stability_score.to_string());
+                bounds_info.insert("is_stable".to_string(), result.is_stable.to_string());
+                bounds_info.insert("method".to_string(), "stability_check".to_string());
+
+                ActionLogResult::TipState {
+                    shape: tip_shape,
+                    confidence: result.stability_score,
+                    measured_signals,
+                    bounds_info: Some(bounds_info),
+                }
             }
             ActionResult::StableSignal(stable) => {
                 // Convert stable signal to a single value for logging
