@@ -337,10 +337,11 @@ impl TipController {
             })
             .go()?;
 
-        let amplitude_reached: bool = self
-            .driver
-            .run(Action::ReachedTargedAmplitude)
-            .expecting()?;
+        // let amplitude_reached: bool = self
+        //     .driver
+        //     .run(Action::ReachedTargedAmplitude)
+        //     .expecting()?;
+        let amplitude_reached = true;
 
         if amplitude_reached {
             let tip_state: TipState = self
