@@ -1610,7 +1610,7 @@ impl ActionDriver {
                 use crate::types::TipShape;
                 use std::collections::HashMap;
 
-                let (tip_shape, measured_signals) = match method {
+                let (tip_shape, measured_signals, confidence, mut metadata) = match method {
                     TipCheckMethod::SignalBounds { signal, bounds } => {
                         let value = self.client.signal_val_get(signal.0, true)?;
                         let mut measured = HashMap::new();
@@ -1622,7 +1622,55 @@ impl ActionDriver {
                             TipShape::Blunt
                         };
 
-                        (shape, measured)
+                        // Calculate confidence based on distance from bounds
+                        let bounds_center = (bounds.0 + bounds.1) / 2.0;
+                        let bounds_width = (bounds.1 - bounds.0).abs();
+                        let distance_from_center = (value - bounds_center).abs();
+                        let relative_distance = if bounds_width > 0.0 {
+                            distance_from_center / (bounds_width / 2.0)
+                        } else {
+                            0.0
+                        };
+                        
+                        let confidence = if shape == TipShape::Sharp {
+                            // Within bounds: confidence decreases as we approach the edges
+                            (1.0 - relative_distance).max(0.1) // Minimum confidence 0.1
+                        } else {
+                            // Outside bounds: confidence based on how far outside we are
+                            let margin_violation = if value < bounds.0 {
+                                (bounds.0 - value) / bounds_width.abs()
+                            } else {
+                                (value - bounds.1) / bounds_width.abs()
+                            };
+                            (1.0 / (1.0 + margin_violation)).max(0.05) // Lower confidence for violations
+                        };
+
+                        // Populate metadata with analysis context
+                        let mut metadata = HashMap::new();
+                        metadata.insert("method".to_string(), "signal_bounds".to_string());
+                        metadata.insert("signal_index".to_string(), signal.0.0.to_string());
+                        metadata.insert("measured_value".to_string(), format!("{:.6e}", value));
+                        metadata.insert("bounds_lower".to_string(), format!("{:.6e}", bounds.0));
+                        metadata.insert("bounds_upper".to_string(), format!("{:.6e}", bounds.1));
+                        metadata.insert("bounds_center".to_string(), format!("{:.6e}", bounds_center));
+                        metadata.insert("bounds_width".to_string(), format!("{:.6e}", bounds_width));
+                        metadata.insert("distance_from_center".to_string(), format!("{:.6e}", distance_from_center));
+                        metadata.insert("relative_distance".to_string(), format!("{:.3}", relative_distance));
+                        metadata.insert("within_bounds".to_string(), (shape == TipShape::Sharp).to_string());
+                        
+                        if shape == TipShape::Blunt {
+                            let margin_violation = if value < bounds.0 {
+                                bounds.0 - value
+                            } else {
+                                value - bounds.1
+                            };
+                            metadata.insert("margin_violation".to_string(), format!("{:.6e}", margin_violation));
+                            metadata.insert("violation_direction".to_string(), 
+                                if value < bounds.0 { "below_lower_bound".to_string() } 
+                                else { "above_upper_bound".to_string() });
+                        }
+
+                        (shape, measured, confidence, metadata)
                     }
 
                     TipCheckMethod::MultiSignalBounds { ref signals } => {
@@ -1633,13 +1681,38 @@ impl ActionDriver {
                         let mut measured = HashMap::new();
                         let mut violations = Vec::new();
                         let mut all_good = true;
+                        let mut confidence_scores = Vec::new();
 
                         for ((signal, bounds), value) in signals.iter().zip(values.iter()) {
                             measured.insert(*signal, *value);
-                            if *value < bounds.0 || *value > bounds.1 {
+                            
+                            let in_bounds = *value >= bounds.0 && *value <= bounds.1;
+                            if !in_bounds {
                                 violations.push((*signal, *value, *bounds));
                                 all_good = false;
                             }
+
+                            // Calculate per-signal confidence
+                            let bounds_center = (bounds.0 + bounds.1) / 2.0;
+                            let bounds_width = (bounds.1 - bounds.0).abs();
+                            let distance_from_center = (*value - bounds_center).abs();
+                            let relative_distance = if bounds_width > 0.0 {
+                                distance_from_center / (bounds_width / 2.0)
+                            } else {
+                                0.0
+                            };
+                            
+                            let signal_confidence = if in_bounds {
+                                (1.0 - relative_distance).max(0.1)
+                            } else {
+                                let margin_violation = if *value < bounds.0 {
+                                    (bounds.0 - *value) / bounds_width.abs()
+                                } else {
+                                    (*value - bounds.1) / bounds_width.abs()
+                                };
+                                (1.0 / (1.0 + margin_violation)).max(0.05)
+                            };
+                            confidence_scores.push(signal_confidence);
                         }
 
                         let shape = if all_good {
@@ -1648,15 +1721,123 @@ impl ActionDriver {
                             TipShape::Blunt
                         };
 
-                        (shape, measured)
+                        // Overall confidence is the minimum of all signal confidences
+                        let confidence = confidence_scores.iter().fold(1.0f32, |acc, &x| acc.min(x));
+
+                        // Populate metadata with multi-signal analysis
+                        let mut metadata = HashMap::new();
+                        metadata.insert("method".to_string(), "multi_signal_bounds".to_string());
+                        metadata.insert("signal_count".to_string(), signals.len().to_string());
+                        metadata.insert("signals_in_bounds".to_string(), (signals.len() - violations.len()).to_string());
+                        metadata.insert("violation_count".to_string(), violations.len().to_string());
+                        metadata.insert("overall_pass".to_string(), all_good.to_string());
+                        
+                        // Add individual signal details
+                        for (i, ((signal, bounds), value)) in signals.iter().zip(values.iter()).enumerate() {
+                            let prefix = format!("signal_{}", i);
+                            metadata.insert(format!("{}_index", prefix), signal.0.0.to_string());
+                            metadata.insert(format!("{}_value", prefix), format!("{:.6e}", value));
+                            metadata.insert(format!("{}_bounds", prefix), format!("[{:.3e}, {:.3e}]", bounds.0, bounds.1));
+                            metadata.insert(format!("{}_in_bounds", prefix), (*value >= bounds.0 && *value <= bounds.1).to_string());
+                            metadata.insert(format!("{}_confidence", prefix), format!("{:.3}", confidence_scores[i]));
+                        }
+
+                        (shape, measured, confidence, metadata)
                     }
                 };
 
+                // Add TCP buffer context and recent signal trends if available
+                if let Some(ref tcp_reader) = self.tcp_reader {
+                    let (frame_count, _max_capacity, time_span) = tcp_reader.buffer_stats();
+                    metadata.insert("tcp_buffer_frames".to_string(), frame_count.to_string());
+                    metadata.insert("tcp_buffer_utilization".to_string(), 
+                        format!("{:.2}", tcp_reader.buffer_utilization()));
+                    metadata.insert("tcp_data_timespan_ms".to_string(), time_span.as_millis().to_string());
+                    metadata.insert("tcp_uptime_ms".to_string(), tcp_reader.uptime().as_millis().to_string());
+
+                    // Add recent signal trend analysis for correlation with stable signal data
+                    for signal_idx in measured_signals.keys() {
+                        if tcp_reader.frame_count() >= 20 { // Need minimum data for trend analysis
+                            let recent_frames = tcp_reader.get_recent_frames(50); // Last 50 data points
+                            
+                            // Extract signal values for this specific signal from recent TCP data
+                            let signal_values: Vec<f32> = recent_frames
+                                .iter()
+                                .filter_map(|frame| {
+                                    // Find the signal in the frame data (assuming signal index maps to data array position)
+                                    let idx = signal_idx.0.0 as usize;
+                                    if idx < frame.signal_frame.data.len() {
+                                        Some(frame.signal_frame.data[idx])
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+
+                            if signal_values.len() >= 10 { // Minimum for meaningful statistics
+                                let mean = signal_values.iter().sum::<f32>() / signal_values.len() as f32;
+                                let variance = signal_values.iter()
+                                    .map(|x| (x - mean).powi(2))
+                                    .sum::<f32>() / signal_values.len() as f32;
+                                let std_dev = variance.sqrt();
+                                let relative_std = if mean.abs() > 1e-15 { 
+                                    (std_dev / mean.abs()) * 100.0 
+                                } else { 
+                                    0.0 
+                                };
+
+                                // Calculate trend (simple linear regression slope)
+                                let x_values: Vec<f32> = (0..signal_values.len()).map(|i| i as f32).collect();
+                                let x_mean = x_values.iter().sum::<f32>() / x_values.len() as f32;
+                                let y_mean = mean;
+                                
+                                let numerator: f32 = x_values.iter().zip(signal_values.iter())
+                                    .map(|(x, y)| (x - x_mean) * (y - y_mean))
+                                    .sum();
+                                let denominator: f32 = x_values.iter()
+                                    .map(|x| (x - x_mean).powi(2))
+                                    .sum();
+                                
+                                let trend_slope = if denominator.abs() > 1e-15 {
+                                    numerator / denominator
+                                } else {
+                                    0.0
+                                };
+
+                                let signal_prefix = format!("tcp_signal_{}", signal_idx.0.0);
+                                metadata.insert(format!("{}_recent_samples", signal_prefix), signal_values.len().to_string());
+                                metadata.insert(format!("{}_recent_mean", signal_prefix), format!("{:.6e}", mean));
+                                metadata.insert(format!("{}_recent_std", signal_prefix), format!("{:.6e}", std_dev));
+                                metadata.insert(format!("{}_recent_relative_std_pct", signal_prefix), format!("{:.3}", relative_std));
+                                metadata.insert(format!("{}_trend_slope", signal_prefix), format!("{:.6e}", trend_slope));
+                                metadata.insert(format!("{}_current_vs_recent_mean", signal_prefix), 
+                                    format!("{:.6e}", measured_signals[signal_idx] - mean));
+                                
+                                // Classify signal stability based on recent data
+                                let is_stable_signal = relative_std < 5.0 && trend_slope.abs() < (std_dev * 0.1);
+                                metadata.insert(format!("{}_appears_stable", signal_prefix), is_stable_signal.to_string());
+                                
+                                // Check if current measurement is within recent range
+                                let min_recent = signal_values.iter().cloned().fold(f32::INFINITY, f32::min);
+                                let max_recent = signal_values.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                                let current_in_recent_range = measured_signals[signal_idx] >= min_recent && 
+                                                             measured_signals[signal_idx] <= max_recent;
+                                metadata.insert(format!("{}_current_in_recent_range", signal_prefix), current_in_recent_range.to_string());
+                                metadata.insert(format!("{}_recent_range", signal_prefix), 
+                                    format!("[{:.6e}, {:.6e}]", min_recent, max_recent));
+                            }
+                        }
+                    }
+                }
+
+                // Add execution timestamp
+                metadata.insert("execution_timestamp".to_string(), chrono::Utc::now().to_rfc3339());
+
                 Ok(ActionResult::TipState(TipState {
                     shape: tip_shape,
-                    confidence: 1.0, // TODO: calculate actual confidence based on bounds check
+                    confidence,
                     measured_signals,
-                    metadata: HashMap::new(), // TODO: add relevant metadata
+                    metadata,
                 }))
             }
 
@@ -1944,7 +2125,6 @@ impl ActionDriver {
                     })?;
 
                 // Retry loop for data collection and stability analysis
-                let mut last_error = None;
                 let mut attempt = 0;
                 
                 loop {
@@ -1980,19 +2160,13 @@ impl ActionDriver {
                             } else {
                                 // Signal not stable, but we can retry
                                 log::debug!("Signal not stable on attempt {}, retrying...", attempt + 1);
-                                last_error = Some(NanonisError::Protocol(format!(
-                                    "Signal not stable (confidence: {:.2})", confidence
-                                )));
                             }
                         }
                         Err(e) => {
                             log::warn!("Data collection failed on attempt {}: {}", attempt + 1, e);
-                            last_error = Some(e);
                             
                             if attempt >= max_retries {
-                                return Err(last_error.unwrap_or_else(|| {
-                                    NanonisError::Protocol("Stable signal read failed after retries".to_string())
-                                }));
+                                return Err(e);
                             }
                         }
                     }
