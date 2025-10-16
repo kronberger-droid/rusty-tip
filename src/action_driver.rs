@@ -40,9 +40,9 @@ impl Default for TCPReaderConfig {
         Self {
             stream_port: 6590,
             channels: (0..=23).collect(),
-            oversampling: 100,
+            oversampling: 20,
             auto_start: true,
-            buffer_size: Some(1_000),
+            buffer_size: Some(10_000),
         }
     }
 }
@@ -1395,8 +1395,8 @@ impl ActionDriver {
             Action::SafeReposition { x_steps, y_steps } => {
                 // Safe repositioning with hardcoded defaults
                 let displacement = crate::types::MotorDisplacement::new(x_steps, y_steps, -2);
-                let withdraw_timeout = Duration::from_secs(2);
-                let approach_timeout = Duration::from_secs(2);
+                let withdraw_timeout = Duration::from_secs(5);
+                let approach_timeout = Duration::from_secs(5);
                 let stabilization_wait = Duration::from_millis(500);
 
                 // Execute the safe repositioning sequence

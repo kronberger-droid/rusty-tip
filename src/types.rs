@@ -480,9 +480,7 @@ impl SignalIndex {
 
     /// Check if this signal is available in TCP logger
     pub fn has_tcp_channel(&self, driver: &crate::action_driver::ActionDriver) -> bool {
-        driver
-            .signal_registry()
-            .has_tcp_channel(self.0)
+        driver.signal_registry().has_tcp_channel(self.0)
     }
 }
 
