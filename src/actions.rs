@@ -1628,6 +1628,15 @@ pub enum ActionLogResult {
         measured_signals: std::collections::HashMap<u8, f32>, // SignalIndex as u8 for JSON serialization
         bounds_info: Option<std::collections::HashMap<String, String>>, // Bounds and margins for analysis
     },
+    /// Comprehensive stable signal result with full TCP dataset for debugging
+    StableSignal {
+        stable_value: f32,
+        confidence: f32,
+        data_points_used: usize,
+        analysis_duration_ms: u64,
+        stability_metrics: std::collections::HashMap<String, f32>,
+        raw_data: Vec<f32>, // Full TCP dataset for debugging stability measures
+    },
     /// Operation completed successfully
     Success,
     /// Operation completed but no data returned
@@ -1808,8 +1817,15 @@ impl ActionLogResult {
                 }
             }
             ActionResult::StableSignal(stable) => {
-                // Convert stable signal to a single value for logging
-                ActionLogResult::Value(stable.stable_value as f64)
+                // Convert stable signal with full dataset for debugging stability measures
+                ActionLogResult::StableSignal {
+                    stable_value: stable.stable_value,
+                    confidence: stable.confidence,
+                    data_points_used: stable.data_points_used,
+                    analysis_duration_ms: stable.analysis_duration.as_millis() as u64,
+                    stability_metrics: stable.stability_metrics.clone(),
+                    raw_data: stable.raw_data.clone(), // Full TCP dataset for debugging
+                }
             }
         }
     }
