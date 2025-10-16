@@ -1622,9 +1622,9 @@ impl ActionDriver {
                             data_points: Some(100),
                             use_new_data: true, // Get fresh data for tip state checking
                             stability_method: crate::actions::SignalStabilityMethod::RelativeStandardDeviation {
-                                threshold_percent: 5.0,
+                                threshold_percent: 10.0, // More lenient threshold
                             },
-                            timeout: Duration::from_secs(10),
+                            timeout: Duration::from_secs(15), // Longer timeout
                             retry_count: Some(3),
                         }).execute();
 
@@ -1632,22 +1632,26 @@ impl ActionDriver {
                             Ok(exec_result) => match exec_result {
                                 ExecutionResult::Single(ActionResult::StableSignal(stable_signal)) => {
                                     // Use stable value from ReadStableSignal
+                                    log::debug!("CheckTipState: ReadStableSignal succeeded with {} data points", stable_signal.raw_data.len());
                                     (stable_signal.stable_value, stable_signal.raw_data, "stable_signal")
                                 }
                                 ExecutionResult::Single(ActionResult::Values(values)) => {
                                     // ReadStableSignal failed but returned raw data, use minimum as fallback
+                                    log::warn!("CheckTipState: ReadStableSignal failed but returned {} raw values, using minimum as fallback", values.len());
                                     let raw_data: Vec<f32> = values.iter().map(|&v| v as f32).collect();
                                     let min_value = raw_data.iter().cloned().fold(f32::INFINITY, f32::min);
                                     (min_value, raw_data, "fallback_minimum")
                                 }
                                 _ => {
                                     // Unexpected result type, fallback to single read
+                                    log::warn!("CheckTipState: ReadStableSignal returned unexpected result type, falling back to single read");
                                     let single_value = self.client.signal_val_get(signal.0, true)?;
                                     (single_value, vec![single_value], "single_read_fallback")
                                 }
                             }
-                            Err(_) => {
+                            Err(e) => {
                                 // Complete fallback to single read
+                                log::warn!("CheckTipState: ReadStableSignal failed with error: {}, falling back to single read", e);
                                 let single_value = self.client.signal_val_get(signal.0, true)?;
                                 (single_value, vec![single_value], "single_read_fallback")
                             }
@@ -1740,9 +1744,9 @@ impl ActionDriver {
                                 data_points: Some(100),
                                 use_new_data: true, // Get fresh data for tip state checking
                                 stability_method: crate::actions::SignalStabilityMethod::RelativeStandardDeviation {
-                                    threshold_percent: 5.0,
+                                    threshold_percent: 10.0, // More lenient threshold
                                 },
-                                timeout: Duration::from_secs(10),
+                                timeout: Duration::from_secs(15), // Longer timeout
                                 retry_count: Some(3),
                             }).execute();
 
@@ -1982,14 +1986,18 @@ impl ActionDriver {
                     .collect::<Vec<_>>()
                     .join(", ");
                 
+                // Extract read method and dataset info from metadata for environment log
+                let read_method = metadata.get("read_method").cloned().unwrap_or_else(|| "unknown".to_string());
+                let dataset_size = metadata.get("dataset_size").cloned().unwrap_or_else(|| "unknown".to_string());
+                
                 let stable_signal_info = if !recent_signals.is_empty() {
-                    format!(", with_recent_stable_data=true (count={})", recent_signals.len())
+                    format!(", recent_stable_data=true (count={})", recent_signals.len())
                 } else {
-                    ", with_recent_stable_data=false".to_string()
+                    ", recent_stable_data=false".to_string()
                 };
                 
-                log::info!("CheckTipState result: shape={:?}, confidence={:.3}, measured_signals=[{}]{}",
-                    tip_shape, confidence, signal_values_str, stable_signal_info);
+                log::info!("CheckTipState result: shape={:?}, confidence={:.3}, read_method={}, dataset_size={}, measured_signals=[{}]{}",
+                    tip_shape, confidence, read_method, dataset_size, signal_values_str, stable_signal_info);
 
                 Ok(ActionResult::TipState(TipState {
                     shape: tip_shape,
