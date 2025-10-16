@@ -1619,8 +1619,8 @@ impl ActionDriver {
                         // Use ReadStableSignal instead of single instantaneous read
                         let stable_result = self.run(Action::ReadStableSignal {
                             signal: signal,
-                            data_points: Some(50),
-                            use_new_data: false,
+                            data_points: Some(100),
+                            use_new_data: true, // Get fresh data for tip state checking
                             stability_method: crate::actions::SignalStabilityMethod::RelativeStandardDeviation {
                                 threshold_percent: 5.0,
                             },
@@ -1737,8 +1737,8 @@ impl ActionDriver {
                         for (signal, bounds) in signals.iter() {
                             let stable_result = self.run(Action::ReadStableSignal {
                                 signal: *signal,
-                                data_points: Some(50),
-                                use_new_data: false,
+                                data_points: Some(100),
+                                use_new_data: true, // Get fresh data for tip state checking
                                 stability_method: crate::actions::SignalStabilityMethod::RelativeStandardDeviation {
                                     threshold_percent: 5.0,
                                 },
