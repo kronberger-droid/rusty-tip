@@ -1,6 +1,7 @@
 pub mod action_driver;
 pub mod actions;
 pub mod buffered_tcp_reader;
+pub mod config;
 pub mod error;
 pub mod job;
 pub mod logger;
@@ -15,6 +16,7 @@ pub use action_driver::{
     stability, ActionDriver, ActionDriverBuilder, ExecutionResult, ExecutionStats, TCPReaderConfig,
 };
 pub use actions::{Action, ActionChain, ActionLogEntry, ActionResult};
+pub use config::{AppConfig, load_config, load_config_or_default};
 pub use error::NanonisError;
 pub use job::Job;
 pub use logger::Logger;
