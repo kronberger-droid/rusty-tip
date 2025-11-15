@@ -5,8 +5,9 @@ use std::path::Path;
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AppConfig {
     pub nanonis: NanonisConfig,
-    pub data_logger: DataLoggerConfig,
-    pub logging: LoggingConfig,
+    pub data_acquisition: DataAcquisitionConfig,
+    pub experiment_logging: ExperimentLoggingConfig,
+    pub console: ConsoleConfig,
     pub tip_prep: TipPrepConfig,
     pub pulse_method: PulseMethodConfig,
 }
@@ -18,16 +19,20 @@ pub struct NanonisConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct DataLoggerConfig {
+pub struct DataAcquisitionConfig {
     pub data_port: u16,
     pub sample_rate: u32,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct LoggingConfig {
-    pub action_logging: bool,
-    pub log_path: String,
-    pub log_level: String,
+pub struct ExperimentLoggingConfig {
+    pub enabled: bool,
+    pub output_path: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ConsoleConfig {
+    pub verbosity: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -53,8 +58,9 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             nanonis: NanonisConfig::default(),
-            data_logger: DataLoggerConfig::default(),
-            logging: LoggingConfig::default(),
+            data_acquisition: DataAcquisitionConfig::default(),
+            experiment_logging: ExperimentLoggingConfig::default(),
+            console: ConsoleConfig::default(),
             tip_prep: TipPrepConfig::default(),
             pulse_method: PulseMethodConfig::default(),
         }
@@ -70,7 +76,7 @@ impl Default for NanonisConfig {
     }
 }
 
-impl Default for DataLoggerConfig {
+impl Default for DataAcquisitionConfig {
     fn default() -> Self {
         Self {
             data_port: 6590,
@@ -79,12 +85,19 @@ impl Default for DataLoggerConfig {
     }
 }
 
-impl Default for LoggingConfig {
+impl Default for ExperimentLoggingConfig {
     fn default() -> Self {
         Self {
-            action_logging: true,
-            log_path: "./logs".to_string(),
-            log_level: "info".to_string(),
+            enabled: true,
+            output_path: "./experiments".to_string(),
+        }
+    }
+}
+
+impl Default for ConsoleConfig {
+    fn default() -> Self {
+        Self {
+            verbosity: "info".to_string(),
         }
     }
 }
