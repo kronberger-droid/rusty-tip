@@ -20,7 +20,10 @@
 
         # Rust toolchain configuration
         rustTools = {
-          stable = fenix.packages.${system}.stable.toolchain;
+          stable = fenix.packages.${system}.combine [
+            fenix.packages.${system}.stable.toolchain
+            fenix.packages.${system}.targets.x86_64-pc-windows-gnu.stable.rust-std
+          ];
           analyzer = fenix.packages.${system}.latest.rust-analyzer;
         };
 
@@ -30,7 +33,14 @@
           rusty-man
           nushell
           pkg-config
-          claude-code
+          rustup
+          gcc
+        ];
+
+        # Windows cross-compilation tools
+        windowsTools = with pkgs; [
+          pkgsCross.mingwW64.stdenv.cc
+          pkgsCross.mingwW64.windows.pthreads
         ];
 
         # Core Rust development dependencies
@@ -49,11 +59,21 @@
           mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
         '';
       in {
-        # Clean development shell without window manager setup
-        devShells.default= pkgs.mkShell {
-          name = "rust dev shell (clean)";
+        # Clean development shell for Linux development
+        devShells.default = pkgs.mkShell {
+          name = "rust dev shell (Linux)";
           buildInputs = rustDeps;
           shellHook = baseShellHook;
+        };
+
+        # Windows cross-compilation shell
+        devShells.windows = pkgs.mkShell {
+          name = "rust dev shell (Windows cross-compile)";
+          buildInputs = rustDeps ++ windowsTools;
+          shellHook = baseShellHook + ''
+            echo "Windows cross-compilation enabled"
+            echo "Build with: cargo build --target x86_64-pc-windows-gnu"
+          '';
         };
       }
     );

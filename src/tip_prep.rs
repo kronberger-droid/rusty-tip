@@ -46,6 +46,7 @@ pub struct TipControllerConfig {
     pub sharp_tip_bounds: (f32, f32),
     pub pulse_method: PulseMethod,
     pub allowed_change_for_stable: f32,
+    pub check_stability: bool,
 }
 
 impl Default for TipControllerConfig {
@@ -55,6 +56,7 @@ impl Default for TipControllerConfig {
             sharp_tip_bounds: (-2.0, 0.0),
             pulse_method: PulseMethod::Fixed(4.0),
             allowed_change_for_stable: 0.2,
+            check_stability: true,
         }
     }
 }
@@ -437,7 +439,7 @@ impl TipController {
         self.driver
             .run(Action::AutoApproach {
                 wait_until_finished: true,
-                timeout: Duration::from_secs(10),
+                timeout: Duration::from_secs(120),
             })
             .go()?;
 
@@ -451,7 +453,10 @@ impl TipController {
             })
             .expecting()?;
 
-        info!("Current tip shape: {:?} (confidence: {:.3})", initial_tip_state.shape, initial_tip_state.confidence);
+        info!(
+            "Current tip shape: {:?} (confidence: {:.3})",
+            initial_tip_state.shape, initial_tip_state.confidence
+        );
 
         self.current_tip_shape = initial_tip_state.shape;
 

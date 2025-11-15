@@ -2,8 +2,9 @@ use chrono::Utc;
 use env_logger::Env;
 use log::{error, info, LevelFilter};
 use rusty_tip::{
+    load_config_or_default,
     tip_prep::{PulseMethod, TipControllerConfig},
-    ActionDriver, SignalIndex, TCPReaderConfig, TipController, load_config_or_default,
+    ActionDriver, SignalIndex, TCPReaderConfig, TipController,
 };
 use std::{env, fs, path::PathBuf};
 
@@ -13,15 +14,15 @@ use std::io;
 #[cfg(windows)]
 use std::ffi::OsString;
 #[cfg(windows)]
-use std::os::windows::ffi::OsStringExt;
+use std::os::windows::ffi::OsStrExt;
 
 /// Simple tip preparation demo - minimal configuration and straightforward execution
-/// 
+///
 /// Usage:
 ///   cargo run --example simple_tip_prep
 ///   cargo run --example simple_tip_prep -- --config path/to/config.toml
 ///   cargo run --example simple_tip_prep -- --config path/to/config.toml --log-level debug
-/// 
+///
 /// Build as executable:
 ///   cargo build --example simple_tip_prep --release
 ///   # Windows: target/release/examples/simple_tip_prep.exe
@@ -37,40 +38,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load configuration (with fallback to defaults)
     let app_config = load_config_or_default(config_path.as_deref());
-    
+
     // Initialize logging with configurable level
-    let log_level = log_level_override.unwrap_or(app_config.logging.log_level.clone());
-    initialize_logging(&log_level)?;
+    let verbosity = log_level_override.unwrap_or(app_config.console.verbosity.clone());
+    initialize_logging(&verbosity)?;
 
     info!("=== Rusty Tip Preparation Tool ===");
-    info!("Configuration loaded from: {:?}", 
-          config_path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "defaults".to_string()));
-    info!("Log level: {}", log_level);
-    info!("Nanonis host: {}:{}", app_config.nanonis.host_ip, app_config.nanonis.control_ports[0]);
-    
+    info!(
+        "Configuration loaded from: {:?}",
+        config_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "defaults".to_string())
+    );
+    info!("Console verbosity: {}", verbosity);
+    info!(
+        "Nanonis host: {}:{}",
+        app_config.nanonis.host_ip, app_config.nanonis.control_ports[0]
+    );
+
     // Create driver from config
-    let driver = ActionDriver::builder(&app_config.nanonis.host_ip, app_config.nanonis.control_ports[0])
-        .with_tcp_reader(TCPReaderConfig {
-            stream_port: app_config.data_logger.data_port,
-            oversampling: app_config.data_logger.sample_rate as i32,
-            ..Default::default()
-        })
-        .with_action_logging(
-            create_log_file_path(&app_config.logging.log_path)?, 
-            1000, 
-            app_config.logging.action_logging
-        )
-        .build()?;
+    let driver = ActionDriver::builder(
+        &app_config.nanonis.host_ip,
+        app_config.nanonis.control_ports[0],
+    )
+    .with_tcp_reader(TCPReaderConfig {
+        stream_port: app_config.data_acquisition.data_port,
+        oversampling: (2000 / app_config.data_acquisition.sample_rate) as i32,
+        ..Default::default()
+    })
+    .with_action_logging(
+        create_log_file_path(&app_config.experiment_logging.output_path)?,
+        1000,
+        app_config.experiment_logging.enabled,
+    )
+    .build()?;
 
     info!("Connected to Nanonis system");
 
     // Try different variations of the name
-    let freq_shift_signal = SignalIndex::from_name("bias", &driver)?;
+    let freq_shift_signal = SignalIndex::from_name("freq shift", &driver)?;
     info!("Using signal index: {}", freq_shift_signal.0);
 
     // Create pulse method from config
     let pulse_method = match app_config.pulse_method {
-        rusty_tip::config::PulseMethodConfig::Fixed { pulse_voltage } => {
+        rusty_tip::config::PulseMethodConfig::Fixed { ref pulse_voltage } => {
             let voltage = pulse_voltage.get(0).copied().unwrap_or(4.0);
             info!("Using fixed pulse method with voltage: {:.2}V", voltage);
             PulseMethod::Fixed(voltage)
@@ -82,8 +94,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             threshold_value,
             ..
         } => {
-            info!("Using stepping pulse method: {:.2}V to {:.2}V in {} steps", 
-                  voltage_bounds[0], voltage_bounds[1], voltage_steps);
+            info!(
+                "Using stepping pulse method: {:.2}V to {:.2}V in {} steps",
+                voltage_bounds[0], voltage_bounds[1], voltage_steps
+            );
             PulseMethod::stepping_fixed_threshold(
                 (voltage_bounds[0], voltage_bounds[1]),
                 voltage_steps,
@@ -96,13 +110,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create tip controller configuration from app config
     let tip_config = TipControllerConfig {
         freq_shift_index: freq_shift_signal,
-        sharp_tip_bounds: (app_config.tip_prep.sharp_tip_bounds[0], app_config.tip_prep.sharp_tip_bounds[1]),
+        sharp_tip_bounds: (
+            app_config.tip_prep.sharp_tip_bounds[0],
+            app_config.tip_prep.sharp_tip_bounds[1],
+        ),
         pulse_method,
         allowed_change_for_stable: app_config.tip_prep.stable_tip_allowed_change,
+        check_stability: true,
     };
 
-    info!("Sharp tip bounds: {:.2} to {:.2}", tip_config.sharp_tip_bounds.0, tip_config.sharp_tip_bounds.1);
-    info!("Stable tip allowed change: {:.3}", tip_config.allowed_change_for_stable);
+    info!(
+        "Sharp tip bounds: {:.2} to {:.2}",
+        tip_config.sharp_tip_bounds.0, tip_config.sharp_tip_bounds.1
+    );
+    info!(
+        "Stable tip allowed change: {:.3}",
+        tip_config.allowed_change_for_stable
+    );
+
+    // Windows: Wait for user confirmation before proceeding
+    #[cfg(windows)]
+    {
+        println!();
+        println!("Press Enter to start tip preparation (or Ctrl+C to cancel)...");
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+    }
 
     // Create and run controller
     let mut controller = TipController::new(driver, tip_config);
@@ -111,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match controller.run() {
         Ok(()) => {
             info!("✓ Tip preparation completed successfully!");
-            
+
             #[cfg(windows)]
             {
                 info!("Press Enter to exit...");
@@ -121,14 +154,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(e) => {
             error!("✗ Tip preparation failed: {}", e);
-            
+
             #[cfg(windows)]
             {
                 error!("Press Enter to exit...");
                 let mut input = String::new();
                 io::stdin().read_line(&mut input)?;
             }
-            
+
             return Err(e.into());
         }
     }
@@ -158,7 +191,9 @@ fn parse_args(args: &[String]) -> (Option<PathBuf>, Option<String>) {
                     log_level = Some(args[i + 1].clone());
                     i += 2;
                 } else {
-                    eprintln!("Error: --log-level requires a level (trace, debug, info, warn, error)");
+                    eprintln!(
+                        "Error: --log-level requires a level (trace, debug, info, warn, error)"
+                    );
                     std::process::exit(1);
                 }
             }
@@ -237,24 +272,25 @@ fn create_log_file_path(log_path: &str) -> Result<PathBuf, Box<dyn std::error::E
 /// Windows-specific: Allocate console if running from GUI
 #[cfg(windows)]
 fn ensure_console_allocated() {
-    use std::ptr;
-    
     unsafe {
         // Try to allocate a new console
         if winapi::um::consoleapi::AllocConsole() != 0 {
             // Successfully allocated new console
             println!("Console allocated for tip preparation tool");
         }
-        
+
         // Set console title
-        let title = "Rusty Tip Preparation Tool\0";
+        let title = "Rusty Tip Preparation Tool";
         let wide_title: Vec<u16> = OsString::from(title)
+            .as_os_str()
             .encode_wide()
+            .chain(std::iter::once(0))
             .collect();
         winapi::um::wincon::SetConsoleTitleW(wide_title.as_ptr());
-        
+
         // Enable ANSI escape sequences for colored output (Windows 10+)
-        let stdout_handle = winapi::um::processenv::GetStdHandle(winapi::um::winbase::STD_OUTPUT_HANDLE);
+        let stdout_handle =
+            winapi::um::processenv::GetStdHandle(winapi::um::winbase::STD_OUTPUT_HANDLE);
         if stdout_handle != winapi::um::handleapi::INVALID_HANDLE_VALUE {
             let mut mode: u32 = 0;
             if winapi::um::consoleapi::GetConsoleMode(stdout_handle, &mut mode) != 0 {
