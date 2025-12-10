@@ -13,6 +13,12 @@ pub enum NanonisError {
     #[error("Connection timeout")]
     Timeout,
 
+    #[error("Operation timed out: {context}")]
+    TimeoutWithContext { context: String },
+
+    #[error("Shutdown requested")]
+    Shutdown,
+
     #[error("Protocol error: {0}")]
     Protocol(String),
 
@@ -58,6 +64,11 @@ impl NanonisError {
             NanonisError::ServerError { code, .. } => Some(*code),
             _ => None,
         }
+    }
+
+    /// Check if this is a shutdown request
+    pub fn is_shutdown(&self) -> bool {
+        matches!(self, NanonisError::Shutdown)
     }
 }
 
