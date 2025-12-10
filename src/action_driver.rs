@@ -2394,9 +2394,12 @@ impl ActionDriver {
                     .go()? {
                         ActionResult::Values(values) => values.iter().map(|v| *v as f32).sum::<f32>() / values.len() as f32,
                         ActionResult::StableSignal(value) => value.stable_value,
-                        _ => panic!("This should not be able to return results other than values or stable signal")
-
-                        
+                        other => {
+                            return Err(NanonisError::Type(format!(
+                                "CheckAmplitudeStability returned unexpected result type. Expected Values or StableSignal, got {:?}",
+                                std::mem::discriminant(&other)
+                            )))
+                        }
                     };
 
                 let status = (ampl_setpoint - 5e-12..ampl_setpoint + 5e-12)

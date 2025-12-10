@@ -15,6 +15,8 @@ where
     buffer_size: usize,
     file_path: PathBuf,
     final_format_json: bool, // If true, convert to JSON on final flush
+    flush_failures: usize,
+    max_flush_failures: usize,
 }
 
 impl<T> Logger<T>
@@ -42,6 +44,8 @@ where
             buffer_size,
             file_path: path,
             final_format_json,
+            flush_failures: 0,
+            max_flush_failures: 10,
         }
     }
 
@@ -61,29 +65,97 @@ where
         }
 
         // Always write JSONL for intermediate flushes (efficient)
-        let file = std::fs::OpenOptions::new()
+        let file_result = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&self.file_path)
-            .map_err(|source| NanonisError::Io {
-                source,
-                context: format!(
-                    "Logger could not create file at {:?}",
-                    self.file_path
-                ),
-            })?;
+            .open(&self.file_path);
+
+        let file = match file_result {
+            Ok(f) => f,
+            Err(e) => {
+                self.flush_failures += 1;
+                log::error!(
+                    "Flush failure {}/{}: Failed to open log file: {}",
+                    self.flush_failures,
+                    self.max_flush_failures,
+                    e
+                );
+
+                // Periodic warning
+                if self.flush_failures > 0 && self.flush_failures % 3 == 0 {
+                    log::warn!(
+                        "Experiencing intermittent flush failures ({}/{})",
+                        self.flush_failures,
+                        self.max_flush_failures
+                    );
+                }
+
+                if self.flush_failures >= self.max_flush_failures {
+                    return Err(NanonisError::Io {
+                        source: e,
+                        context: format!(
+                            "Too many consecutive flush failures ({}) for {:?}",
+                            self.max_flush_failures, self.file_path
+                        ),
+                    });
+                }
+
+                // Don't fail the experiment for transient flush errors
+                return Ok(());
+            }
+        };
 
         let mut writer = std::io::BufWriter::new(file);
 
-        for data in &self.buffer {
-            let json_line = serde_json::to_string(data)?;
-            writeln!(writer, "{}", json_line)?;
-        }
+        // Write data
+        let write_result = (|| {
+            for data in &self.buffer {
+                let json_line = serde_json::to_string(data)?;
+                writeln!(writer, "{}", json_line)?;
+            }
+            writer.flush()?;
+            Ok::<(), NanonisError>(())
+        })();
 
-        writer.flush()?;
-        self.buffer.clear();
-        info!("Logger flushed successfully to file");
-        Ok(())
+        match write_result {
+            Ok(_) => {
+                self.flush_failures = 0;  // Reset on success
+                self.buffer.clear();
+                info!("Logger flushed successfully to file");
+                Ok(())
+            }
+            Err(e) => {
+                self.flush_failures += 1;
+                log::error!(
+                    "Flush failure {}/{}: Write error: {}",
+                    self.flush_failures,
+                    self.max_flush_failures,
+                    e
+                );
+
+                // Periodic warning
+                if self.flush_failures > 0 && self.flush_failures % 3 == 0 {
+                    log::warn!(
+                        "Experiencing intermittent flush failures ({}/{})",
+                        self.flush_failures,
+                        self.max_flush_failures
+                    );
+                }
+
+                if self.flush_failures >= self.max_flush_failures {
+                    return Err(NanonisError::Io {
+                        source: std::io::Error::other(e.to_string()),
+                        context: format!(
+                            "Too many consecutive flush failures ({}) for {:?}",
+                            self.max_flush_failures, self.file_path
+                        ),
+                    });
+                }
+
+                // Don't fail the experiment for transient flush errors
+                Ok(())
+            }
+        }
     }
 
     /// Convert JSONL file to JSON array format (for final post-experiment analysis)

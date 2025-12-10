@@ -4,3 +4,4 @@ examples/history
 */.obsidian/workspace.json
 *.png
 .claude
+.direnv

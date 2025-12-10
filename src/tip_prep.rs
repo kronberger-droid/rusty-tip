@@ -4,7 +4,12 @@ use crate::error::NanonisError;
 use crate::types::{SignalIndex, TipShape};
 use log::info;
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
+
+/// Report progress every N cycles
+const STATUS_INTERVAL: usize = 10;
 
 /// Loop types based on tip shape - simple and direct
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -46,6 +51,8 @@ pub struct TipControllerConfig {
     pub sharp_tip_bounds: (f32, f32),
     pub pulse_method: PulseMethod,
     pub allowed_change_for_stable: f32,
+    pub max_cycles: Option<usize>,
+    pub max_duration: Option<Duration>,
 }
 
 impl Default for TipControllerConfig {
@@ -55,6 +62,8 @@ impl Default for TipControllerConfig {
             sharp_tip_bounds: (-2.0, 0.0),
             pulse_method: PulseMethod::Fixed(4.0),
             allowed_change_for_stable: 0.2,
+            max_cycles: Some(1000),
+            max_duration: Some(Duration::from_secs(3600)), // 1 hour
         }
     }
 }
@@ -73,6 +82,14 @@ pub struct TipController {
     // Multi-signal history for bias adjustment and analysis
     signal_histories: HashMap<SignalIndex, VecDeque<f32>>,
     max_history_size: usize,
+
+    // Loop termination safeguards
+    max_cycles: Option<usize>,
+    max_duration: Option<Duration>,
+    loop_start_time: Option<std::time::Instant>,
+
+    // Graceful shutdown support
+    shutdown_requested: Option<Arc<AtomicBool>>,
 }
 
 impl TipController {
@@ -82,6 +99,8 @@ impl TipController {
             PulseMethod::Fixed(value) => value,
             PulseMethod::Stepping { voltage_bounds, .. } => voltage_bounds.0,
         };
+        let max_cycles = config.max_cycles;
+        let max_duration = config.max_duration;
         Self {
             driver,
             config,
@@ -91,7 +110,16 @@ impl TipController {
             cycle_count: 0,
             signal_histories: HashMap::new(),
             max_history_size: 100,
+            max_cycles,
+            max_duration,
+            loop_start_time: None,
+            shutdown_requested: None,
         }
+    }
+
+    /// Set shutdown flag for graceful termination
+    pub fn set_shutdown_flag(&mut self, flag: Arc<AtomicBool>) {
+        self.shutdown_requested = Some(flag);
     }
 
     /// Track a signal value in history
@@ -285,10 +313,53 @@ impl TipController {
     /// Main control loop - with pulse voltage stepping
     pub fn run(&mut self) -> Result<(), NanonisError> {
         self.pre_loop_initialization()?;
+        self.loop_start_time = Some(std::time::Instant::now());
 
         while self.current_tip_shape != TipShape::Stable {
+            // Check cycle limit
+            if let Some(max) = self.max_cycles {
+                if self.cycle_count >= max as u32 {
+                    return Err(NanonisError::TimeoutWithContext {
+                        context: format!("Max cycles ({}) exceeded", max),
+                    });
+                }
+            }
+
+            // Check wall-clock timeout
+            if let Some(max_dur) = self.max_duration {
+                if let Some(start_time) = self.loop_start_time {
+                    if start_time.elapsed() > max_dur {
+                        return Err(NanonisError::TimeoutWithContext {
+                            context: format!("Max duration ({:?}) exceeded", max_dur),
+                        });
+                    }
+                }
+            }
+
+            // Check shutdown flag
+            if let Some(flag) = &self.shutdown_requested {
+                if !flag.load(Ordering::SeqCst) {
+                    info!("Shutdown requested at cycle {}", self.cycle_count);
+                    return Err(NanonisError::Shutdown);
+                }
+            }
+
             // Execute one control cycle
             self.cycle_count += 1;
+
+            // Periodic status report
+            if self.cycle_count % STATUS_INTERVAL as u32 == 0 {
+                if let Some(start_time) = self.loop_start_time {
+                    let elapsed = start_time.elapsed();
+                    info!(
+                        "Status: cycle={}, state={:?}, pulse_v={:.2}V, elapsed={:.1}s",
+                        self.cycle_count,
+                        self.current_tip_shape,
+                        self.current_pulse_voltage,
+                        elapsed.as_secs_f32()
+                    );
+                }
+            }
 
             // Execute based on state
             match self.current_tip_shape {
@@ -356,14 +427,12 @@ impl TipController {
 
             self.current_tip_shape = tip_state.shape;
 
-            self.track_signal(
-                self.config.freq_shift_index,
-                tip_state
-                    .measured_signals
-                    .get(&self.config.freq_shift_index)
-                    .copied()
-                    .expect("Calling Check should definitly return a measured value"),
-            );
+            // Track the frequency shift signal if available
+            if let Some(freq_shift_value) = tip_state.measured_signals.get(&self.config.freq_shift_index).copied() {
+                self.track_signal(self.config.freq_shift_index, freq_shift_value);
+            } else {
+                log::warn!("CheckTipState did not return frequency shift signal (index: {})", self.config.freq_shift_index.0.0);
+            }
 
             // Update pulse voltage based on signal changes (stepping logic)
             self.update_pulse_voltage();
