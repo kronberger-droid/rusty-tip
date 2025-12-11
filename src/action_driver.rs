@@ -3420,28 +3420,39 @@ impl ExpectFromExecution<Vec<String>> for ExecutionResult {
 
 impl Drop for ActionDriver {
     fn drop(&mut self) {
+        log::info!("ActionDriver cleanup starting...");
+
         // Clean up TCP buffering first
         if let Some(mut reader) = self.tcp_reader.take() {
             let final_data = reader.get_all_data();
             let _ = reader.stop(); // Ignore errors during cleanup
             log::info!(
-                "ActionDriver cleanup: Stopped TCP buffering, collected {} frames",
+                "Stopped TCP buffering, collected {} frames",
                 final_data.len()
             );
         }
 
-        // Perform safe shutdown sequence
-        let _ = self.execute_chain(vec![
+        // Perform safe shutdown sequence with blocking operations
+        log::info!("Performing safe withdrawal...");
+        let withdraw_result = self.execute_chain(vec![
             Action::Withdraw {
-                wait_until_finished: false,
-                timeout: Duration::from_secs(1),
+                wait_until_finished: true, // Make it blocking
+                timeout: Duration::from_secs(5),
             },
             Action::MoveMotorAxis {
                 direction: crate::MotorDirection::ZMinus,
                 steps: 2,
-                blocking: false,
+                blocking: true, // Make it blocking
             },
         ]);
+
+        if let Err(e) = withdraw_result {
+            log::warn!("Cleanup withdrawal failed: {}", e);
+        } else {
+            log::info!("Safe withdrawal completed");
+        }
+
+        log::info!("ActionDriver cleanup complete");
     }
 }
 

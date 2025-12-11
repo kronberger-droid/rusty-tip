@@ -175,17 +175,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut controller = TipController::new(driver, tip_config);
 
     info!("Starting tip preparation process...");
-    match controller.run() {
+    let result = match controller.run() {
         Ok(()) => {
             info!("✓ Tip preparation completed successfully!");
+            Ok(())
         }
         Err(e) => {
             error!("✗ Tip preparation failed: {}", e);
-            return Err(e.into());
+            Err(e.into())
         }
-    }
+    };
 
-    Ok(())
+    // Explicitly clean up - ensures ActionDriver Drop is called properly
+    info!("Cleaning up and shutting down...");
+    drop(controller); // This will drop the TipController, which contains the ActionDriver
+    info!("Cleanup complete");
+
+    result
 }
 
 /// Parse command line arguments
