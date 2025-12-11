@@ -340,7 +340,7 @@ impl TipController {
 
             // Check shutdown flag
             if let Some(flag) = &self.shutdown_requested {
-                if !flag.load(Ordering::SeqCst) {
+                if flag.load(Ordering::SeqCst) {
                     info!("Shutdown requested at cycle {}", self.cycle_count);
                     return Err(NanonisError::Shutdown);
                 }
