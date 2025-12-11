@@ -455,6 +455,14 @@ impl TipController {
 
     /// Good loop - monitoring, increment good count
     fn good_loop(&mut self) -> Result<(), NanonisError> {
+        // If stability checking is disabled, mark tip as stable immediately
+        if !self.config.check_stability {
+            info!("Stability checking disabled - marking tip as stable");
+            self.current_tip_shape = TipShape::Stable;
+            return Ok(());
+        }
+
+        // Otherwise, perform bias sweep to check stability
         let stability_result: crate::actions::StabilityResult = self
             .driver
             .run(Action::CheckTipStability {
