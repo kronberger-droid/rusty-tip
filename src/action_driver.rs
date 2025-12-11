@@ -595,6 +595,19 @@ impl ActionDriver {
         self.tcp_reader.as_mut()
     }
 
+    /// Clear the TCP reader buffer
+    ///
+    /// This removes all buffered data, which is useful to discard stale values
+    /// before starting a new measurement or tip preparation sequence.
+    pub fn clear_tcp_buffer(&self) {
+        if let Some(ref tcp_reader) = self.tcp_reader {
+            tcp_reader.clear_buffer();
+            info!("TCP reader buffer cleared");
+        } else {
+            log::warn!("No TCP reader available to clear");
+        }
+    }
+
     /// Get reference to the signal registry
     pub fn signal_registry(&self) -> &SignalRegistry {
         &self.signal_registry

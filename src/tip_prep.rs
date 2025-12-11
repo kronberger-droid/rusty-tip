@@ -527,6 +527,13 @@ impl TipController {
             })
             .go()?;
 
+        // Clear TCP buffer to discard any stale data from before approach
+        info!("Clearing TCP buffer to get fresh frequency shift data");
+        self.driver.clear_tcp_buffer();
+
+        // Wait briefly for fresh data to accumulate
+        std::thread::sleep(Duration::from_millis(500));
+
         let initial_tip_state: TipState = self
             .driver
             .run(Action::CheckTipState {

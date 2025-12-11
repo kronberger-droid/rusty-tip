@@ -420,6 +420,25 @@ impl BufferedTCPReader {
         self.frame_count() > min_count
     }
 
+    /// Clear all buffered data
+    ///
+    /// This removes all frames from the buffer, effectively resetting it to an empty state.
+    /// The background thread continues to run and will start filling the buffer again.
+    /// This is useful when you want to discard old data and start fresh.
+    ///
+    /// # Example
+    /// ```rust
+    /// // Clear any stale data before starting a new measurement
+    /// tcp_reader.clear_buffer();
+    /// thread::sleep(Duration::from_millis(500)); // Wait for fresh data
+    /// let fresh_data = tcp_reader.get_recent_data(Duration::from_millis(100));
+    /// ```
+    pub fn clear_buffer(&self) {
+        let mut buffer = self.buffer.write();
+        buffer.clear();
+        log::debug!("Cleared TCP reader buffer");
+    }
+
     /// Stop background buffering and clean up resources
     ///
     /// # Returns
