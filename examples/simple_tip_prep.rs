@@ -78,7 +78,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Get frequency shift signal from Nanonis system
     let freq_shift_signal = SignalIndex::from_name("freq shift", &driver)?;
-    info!("Using signal index: {}", freq_shift_signal.0);
+    info!("Using signal index: {} (Nanonis index)", freq_shift_signal.0.0);
+
+    // Validate TCP mapping for frequency shift
+    match driver.validate_tcp_signal(freq_shift_signal) {
+        Ok(tcp_ch) => info!("Frequency shift signal maps to TCP channel: {}", tcp_ch),
+        Err(e) => error!("WARNING: Frequency shift signal has no TCP mapping: {}", e),
+    }
 
     // Create pulse method from config
     let pulse_method = match app_config.pulse_method {

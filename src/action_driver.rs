@@ -2306,21 +2306,23 @@ impl ActionDriver {
                 log::debug!("ReadStableSignal: Signal {} mapped to TCP channel {}", signal.0, tcp_channel.get());
 
                 // Find TCP channel in TCP config channels
-                log::debug!("ReadStableSignal: Available TCP channels: {:?}", tcp_config.channels);
+                log::info!("ReadStableSignal: Signal {} (Nanonis) maps to TCP channel {}", signal.0, tcp_channel.get());
+                log::info!("ReadStableSignal: Available TCP channels: {:?}", tcp_config.channels);
                 let signal_channel_idx = tcp_config
                     .channels
                     .iter()
                     .position(|&ch| ch == tcp_channel.get() as i32)
                     .ok_or_else(|| {
-                        log::error!("ReadStableSignal: TCP channel {} for signal {} not found in TCP logger configuration. Available channels: {:?}", 
+                        log::error!("ReadStableSignal: TCP channel {} for signal {} (Nanonis) not found in TCP logger configuration. Available channels: {:?}",
                             tcp_channel.get(), signal.0, tcp_config.channels);
                         NanonisError::Protocol(format!(
-                            "TCP channel {} for signal {} not found in TCP logger configuration",
-                            tcp_channel.get(), signal.0
+                            "TCP channel {} for signal {} (Nanonis) not found in TCP logger configuration. Available: {:?}",
+                            tcp_channel.get(), signal.0, tcp_config.channels
                         ))
                     })?;
 
-                log::debug!("ReadStableSignal: Using TCP channel index {} for signal {}", signal_channel_idx, signal.0);
+                log::info!("ReadStableSignal: Signal {} uses position {} in TCP data array (channel {} in Nanonis TCP stream)",
+                    signal.0, signal_channel_idx, tcp_config.channels[signal_channel_idx]);
 
                 // Retry loop for data collection and stability analysis
                 let mut attempt = 0;
