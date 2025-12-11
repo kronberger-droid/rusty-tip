@@ -196,7 +196,7 @@ impl TipController {
                     let last_signal = history[1];
                     let threshold = threshold_fn(current_signal);
 
-                    log::info!(
+                    log::debug!(
                         "Last signal: {:.3e} | Current threshold: {:.3e}",
                         last_signal,
                         threshold
@@ -219,7 +219,7 @@ impl TipController {
                         stable_signals.iter().sum::<f32>() / stable_signals.len() as f32;
 
                     let threshold = threshold_fn(current_signal);
-                    log::info!(
+                    log::debug!(
                         "Current: {:.3e} | Stable mean: {:.3e} | Threshold: {:.3e}",
                         current_signal,
                         stable_mean,
@@ -287,7 +287,7 @@ impl TipController {
             // Positive significant change - reset to minimum voltage
             self.cycles_without_change = 0;
             self.current_pulse_voltage = cycles_before_step.1 .0; // voltage_bounds.0 (min)
-            log::info!(
+            log::debug!(
                 "Positive significant change detected, resetting pulse voltage to minimum: {:.3}V",
                 self.current_pulse_voltage
             );
@@ -388,7 +388,7 @@ impl TipController {
     /// Bad loop - execute recovery sequence with stable signal monitoring
     /// Sequence: capture_stable_before → pulse → capture_stable_after → withdraw → move → approach → check
     fn bad_loop(&mut self) -> Result<(), NanonisError> {
-        info!(
+        log::debug!(
             "Executing PulseRetract Sequence with pulse = {} V",
             self.current_pulse_voltage
         );
@@ -401,7 +401,7 @@ impl TipController {
             .with_data_collection(Duration::from_millis(50), Duration::from_millis(50))
             .execute()?;
 
-        info!("Repositioning...");
+        log::debug!("Repositioning...");
 
         self.driver
             .run(Action::SafeReposition {
@@ -446,7 +446,7 @@ impl TipController {
             // Update pulse voltage based on signal changes (stepping logic)
             self.update_pulse_voltage();
         } else {
-            info!("Amplitude not reached. Assuming blunt tip");
+            log::debug!("Amplitude not reached. Assuming blunt tip");
             self.current_tip_shape = TipShape::Blunt;
         }
 
@@ -513,7 +513,7 @@ impl TipController {
     }
 
     fn pre_loop_initialization(&mut self) -> Result<(), NanonisError> {
-        info!("Running pre loop initialization");
+        log::debug!("Running pre loop initialization");
 
         self.driver.client_mut().set_bias(-500e-3)?;
         self.driver.client_mut().z_ctrl_setpoint_set(100e-12)?;
@@ -523,12 +523,12 @@ impl TipController {
         self.driver
             .run(Action::AutoApproach {
                 wait_until_finished: true,
-                timeout: Duration::from_secs(120),
+                timeout: Duration::from_secs(600), // 10 minutes timeout for approach
             })
             .go()?;
 
         // Clear TCP buffer to discard any stale data from before approach
-        info!("Clearing TCP buffer to get fresh frequency shift data");
+        log::debug!("Clearing TCP buffer to get fresh frequency shift data");
         self.driver.clear_tcp_buffer();
 
         // Wait briefly for fresh data to accumulate

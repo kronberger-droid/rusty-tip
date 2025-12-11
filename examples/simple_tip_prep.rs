@@ -167,24 +167,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match controller.run() {
         Ok(()) => {
             info!("✓ Tip preparation completed successfully!");
-
-            #[cfg(windows)]
-            {
-                info!("Press Enter to exit...");
-                let mut input = String::new();
-                io::stdin().read_line(&mut input)?;
-            }
         }
         Err(e) => {
             error!("✗ Tip preparation failed: {}", e);
-
-            #[cfg(windows)]
-            {
-                error!("Press Enter to exit...");
-                let mut input = String::new();
-                io::stdin().read_line(&mut input)?;
-            }
-
             return Err(e.into());
         }
     }
