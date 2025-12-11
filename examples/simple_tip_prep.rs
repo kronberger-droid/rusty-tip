@@ -18,10 +18,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Try different variations of the name
     let freq_shift_signal = SignalIndex::from_name("freq shift", &driver)?;
+<<<<<<< Updated upstream
 
     // let pulse_method = PulseMethod::stepping_fixed_threshold((2.0, 6.0), 4, 2, 1.0);
     let pulse_method = PulseMethod::Fixed(6.0);
 
+=======
+    
+>>>>>>> Stashed changes
     // Create tip controller configuration with registry-based signal
     let config = TipControllerConfig {
         freq_shift_index: freq_shift_signal,
