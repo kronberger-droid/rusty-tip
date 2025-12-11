@@ -17,9 +17,13 @@ thiserror = "1.0"
 log = "0.4"
 env_logger = "0.10"
 textplots = "0.8"
-serde = { version = "1.0", features = ["derive"] }
-chrono = { version = "0.4.42", features = ["serde"] }
+serde = { version = "1.0", features = [ "derive" ] }
+chrono = { version = "0.4.42", features = [ "serde" ] }
 serde_json = "1.0"
 ndarray = "0.16.1"
 ctrlc = "3.4"
 parking_lot = "0.12"
+config = { version = "0.15.18", features = [ "toml" ] }
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["consoleapi", "processenv", "wincon", "handleapi", "winbase"] }

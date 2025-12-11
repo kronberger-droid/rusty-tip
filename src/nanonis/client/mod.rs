@@ -454,7 +454,7 @@ impl NanonisClient {
 
 impl Drop for NanonisClient {
     fn drop(&mut self) {
-        let _ = self.z_ctrl_withdraw(false, Duration::from_secs(1));
-        let _ = self.motor_start_move(MotorDirection::ZPlus, 2u16, MotorGroup::Group1, false);
+        let _ = self.z_ctrl_withdraw(false, Duration::from_secs(2));
+        let _ = self.motor_start_move(MotorDirection::ZPlus, 15u16, MotorGroup::Group1, false);
     }
 }
