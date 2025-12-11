@@ -1,0 +1,27 @@
+[nanonis]
+host_ip = "127.0.0.1"
+control_ports = [ 6501, 6502, 6503, 6504 ]
+
+[data_logger]
+data_port = 6590
+sample_rate = 2000
+
+[logging]
+action_logging = true
+log_path = "./some"
+log_level = "info"  # trace, debug, info, warn, error
+
+[tip_prep]
+sharp_tip_bounds = [ -2.0,  0.0 ]
+stable_tip_allowed_change = 0.2
+
+[pulse_method.fixed]
+pulse_voltage = [ 2.0 ]
+
+[pulse_method.stepping]
+voltage_bounds = [ 2.0, 6.0 ]
+voltage_steps = 4
+cycles_before_step = 2
+threshold_type = "absolute" # or relative
+threshold_value = 0.1 
+

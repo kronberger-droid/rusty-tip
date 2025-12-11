@@ -1,10 +1,20 @@
 use chrono::Utc;
 use rusty_tip::{tip_prep::TipControllerConfig, ActionDriver, TCPReaderConfig, TipController};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::{fs, path::PathBuf};
 
 /// Tip control demo with pulse voltage stepping
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
+
+    // Setup shutdown signal
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        println!("\nReceived shutdown signal, cleaning up...");
+        r.store(false, Ordering::SeqCst);
+    })?;
 
     // Create ActionDriver
     let driver = ActionDriver::builder("127.0.0.1", 6501)
@@ -15,7 +25,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create controller with custom pulse stepping parameters
     let mut custom_controller = TipController::new(driver, TipControllerConfig::default());
 
-    custom_controller.run()?;
+    // Pass shutdown signal to controller
+    custom_controller.set_shutdown_flag(running);
+
+    match custom_controller.run() {
+        Ok(_) => println!("Tip preparation completed successfully"),
+        Err(e) if e.is_shutdown() => {
+            println!("Shutdown requested, exiting gracefully");
+        }
+        Err(e) => return Err(e.into()),
+    }
 
     Ok(())
 }
