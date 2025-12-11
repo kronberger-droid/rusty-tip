@@ -1,0 +1,42 @@
+# Rusty Tip Configuration Example
+# Shows all available configuration options
+
+[nanonis]
+host_ip = "127.0.0.1"
+control_ports = [6501, 6502, 6503, 6504]
+
+[data_acquisition]
+data_port = 6590
+# Sample rate in Hz (gets converted to oversampling = 2000 / sample_rate)
+# 2000 Hz = fastest, 2 Hz = slowest/most stable
+sample_rate = 2000
+
+[experiment_logging]
+enabled = true
+output_path = "./experiments"
+
+[console]
+# Console output verbosity: "trace", "debug", "info", "warn", "error"
+verbosity = "info"
+
+[tip_prep]
+# Frequency shift bounds for sharp tip detection [lower, upper] in Hz
+sharp_tip_bounds = [-2.0, 0.0]
+# Max allowed change for stability (smaller = stricter)
+stable_tip_allowed_change = 0.2
+
+# Option 1: Fixed pulse voltage (ACTIVE)
+[pulse_method]
+type = "fixed"
+pulse_voltage = [4.0]
+
+# Option 2: Stepping pulse method (COMMENTED OUT)
+# Uncomment below and comment out fixed method above to use:
+#
+# [pulse_method]
+# type = "stepping"
+# voltage_bounds = [2.0, 6.0]    # Start and end voltages
+# voltage_steps = 4              # Number of steps
+# cycles_before_step = 2         # Cycles before stepping up
+# threshold_type = "absolute"    # "absolute", "relative", "adaptive"
+# threshold_value = 0.1          # Minimum improvement to avoid stepping

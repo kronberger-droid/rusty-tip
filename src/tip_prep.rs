@@ -53,6 +53,7 @@ pub struct TipControllerConfig {
     pub allowed_change_for_stable: f32,
     pub max_cycles: Option<usize>,
     pub max_duration: Option<Duration>,
+    pub check_stability: bool,
 }
 
 impl Default for TipControllerConfig {
@@ -64,6 +65,7 @@ impl Default for TipControllerConfig {
             allowed_change_for_stable: 0.2,
             max_cycles: Some(1000),
             max_duration: Some(Duration::from_secs(3600)), // 1 hour
+            check_stability: true,
         }
     }
 }
@@ -428,10 +430,17 @@ impl TipController {
             self.current_tip_shape = tip_state.shape;
 
             // Track the frequency shift signal if available
-            if let Some(freq_shift_value) = tip_state.measured_signals.get(&self.config.freq_shift_index).copied() {
+            if let Some(freq_shift_value) = tip_state
+                .measured_signals
+                .get(&self.config.freq_shift_index)
+                .copied()
+            {
                 self.track_signal(self.config.freq_shift_index, freq_shift_value);
             } else {
-                log::warn!("CheckTipState did not return frequency shift signal (index: {})", self.config.freq_shift_index.0.0);
+                log::warn!(
+                    "CheckTipState did not return frequency shift signal (index: {})",
+                    self.config.freq_shift_index.0 .0
+                );
             }
 
             // Update pulse voltage based on signal changes (stepping logic)
@@ -506,7 +515,7 @@ impl TipController {
         self.driver
             .run(Action::AutoApproach {
                 wait_until_finished: true,
-                timeout: Duration::from_secs(10),
+                timeout: Duration::from_secs(120),
             })
             .go()?;
 
@@ -520,7 +529,10 @@ impl TipController {
             })
             .expecting()?;
 
-        info!("Current tip shape: {:?} (confidence: {:.3})", initial_tip_state.shape, initial_tip_state.confidence);
+        info!(
+            "Current tip shape: {:?} (confidence: {:.3})",
+            initial_tip_state.shape, initial_tip_state.confidence
+        );
 
         self.current_tip_shape = initial_tip_state.shape;
 
