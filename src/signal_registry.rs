@@ -4,53 +4,51 @@ use std::{collections::HashMap, ops::Deref};
 fn generate_signal_aliases(name: &str) -> Vec<String> {
     let mut aliases = Vec::new();
     let name_lower = name.to_lowercase();
-    
+
     // Common signal name patterns and their aliases
     let alias_patterns = [
         // Current signal variations
         ("current", vec!["i", "cur", "amp"]),
         ("bias", vec!["u", "voltage", "v"]),
-        
         // Position signals
         ("x", vec!["x pos", "x position", "xpos"]),
         ("y", vec!["y pos", "y position", "ypos"]),
         ("z", vec!["z pos", "z position", "zpos", "height"]),
-        
         // Frequency shift signals (common in AFM)
-        ("oc m1 freq. shift", vec!["freq shift", "frequency shift", "df", "oc freq shift"]),
+        (
+            "oc m1 freq. shift",
+            vec!["freq shift", "frequency shift", "df", "oc freq shift"],
+        ),
         ("oc m1 amplitude", vec!["amplitude", "amp", "oc amp"]),
         ("oc m1 phase", vec!["phase", "oc phase"]),
-        
         // Lock-in amplifier signals
         ("li demod 1 x", vec!["li1x", "demod1x", "x1"]),
         ("li demod 1 y", vec!["li1y", "demod1y", "y1"]),
         ("li demod 2 x", vec!["li2x", "demod2x", "x2"]),
         ("li demod 2 y", vec!["li2y", "demod2y", "y2"]),
-        
         // Z controller
         ("z ctrl shift", vec!["z shift", "zshift"]),
-        
         // Generic patterns
         ("frequency", vec!["freq", "f"]),
         ("amplitude", vec!["amp", "a"]),
         ("phase", vec!["ph"]),
         ("shift", vec!["sh"]),
     ];
-    
+
     // Check for exact matches and add their aliases
     for (pattern, pattern_aliases) in &alias_patterns {
         if name_lower == *pattern {
             aliases.extend(pattern_aliases.iter().map(|s| s.to_string()));
         }
     }
-    
+
     // Check for partial matches and create shortened versions
     for (pattern, pattern_aliases) in &alias_patterns {
         if name_lower.contains(pattern) {
             aliases.extend(pattern_aliases.iter().map(|s| s.to_string()));
         }
     }
-    
+
     // Create abbreviated versions by removing common words
     let words_to_remove = ["the", "signal", "channel", "ch", "ctrl", "control"];
     let mut abbreviated = name_lower.clone();
@@ -60,21 +58,24 @@ fn generate_signal_aliases(name: &str) -> Vec<String> {
     if abbreviated != name_lower && !abbreviated.is_empty() {
         aliases.push(abbreviated);
     }
-    
+
     // Create initials-based aliases for multi-word signals
     let words: Vec<&str> = name_lower.split_whitespace().collect();
     if words.len() > 1 {
-        let initials: String = words.iter().map(|w| w.chars().next().unwrap_or('_')).collect();
+        let initials: String = words
+            .iter()
+            .map(|w| w.chars().next().unwrap_or('_'))
+            .collect();
         if initials.len() > 1 {
             aliases.push(initials);
         }
     }
-    
+
     // Remove duplicates and empty strings
     aliases.retain(|s| !s.is_empty());
     aliases.sort();
     aliases.dedup();
-    
+
     aliases
 }
 
@@ -131,9 +132,9 @@ impl SignalRegistryBuilder {
     }
 
     pub fn add_tcp_map(mut self, nanonis_to_tcp: &[(u8, u8)]) -> Self {
-        nanonis_to_tcp
-            .iter()
-            .for_each(|(n, t)| { self.nanonis_to_tcp.insert(*n, *t); });
+        nanonis_to_tcp.iter().for_each(|(n, t)| {
+            self.nanonis_to_tcp.insert(*n, *t);
+        });
 
         self
     }
@@ -156,14 +157,14 @@ impl SignalRegistryBuilder {
             (29, 13),
             (30, 14),
             (31, 15),
-            (72, 16),
-            (74, 17),
-            (75, 18),
-            (76, 19),
-            (77, 20),
-            (78, 21),
-            (79, 22),
-            (80, 23),
+            (74, 16),
+            (75, 17),
+            (76, 18),
+            (77, 19),
+            (78, 20),
+            (79, 21),
+            (80, 22),
+            (81, 23),
         ]
         .iter()
         .cloned()
@@ -225,15 +226,15 @@ impl SignalRegistryBuilder {
 
     pub fn create_aliases(mut self) -> Self {
         let mut new_aliases = Vec::new();
-        
+
         // Create aliases for existing signals
         for (existing_key, signal) in &self.signals {
             let name = &signal.name;
             let clean_name = name.split('(').next().unwrap_or(name).trim();
-            
+
             // Create common aliases based on signal patterns
             let aliases = generate_signal_aliases(clean_name);
-            
+
             for alias in aliases {
                 let alias_key = alias.to_lowercase();
                 // Only add if it doesn't already exist
@@ -242,12 +243,12 @@ impl SignalRegistryBuilder {
                 }
             }
         }
-        
+
         // Insert all new aliases
         for (alias_key, signal) in new_aliases {
             self.signals.insert(alias_key, signal);
         }
-        
+
         self
     }
 
@@ -278,7 +279,8 @@ impl SignalRegistry {
     }
 
     pub fn all_names(&self) -> Vec<String> {
-        self.0.values()
+        self.0
+            .values()
             .map(|s| s.name.clone())
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
@@ -286,35 +288,46 @@ impl SignalRegistry {
     }
 
     pub fn tcp_signals(&self) -> Vec<&Signal> {
-        self.0.values()
+        self.0
+            .values()
             .filter(|s| s.tcp_channel.is_some())
             .collect()
     }
 
     pub fn find_signals_like(&self, query: &str) -> Vec<&Signal> {
         let query_lower = query.to_lowercase();
-        self.0.values()
+        self.0
+            .values()
             .filter(|s| s.name.to_lowercase().contains(&query_lower))
             .collect()
     }
 
-    pub fn nanonis_to_tcp(&self, nanonis_index: crate::NanonisIndex) -> Result<crate::ChannelIndex, String> {
-        self.0.values()
+    pub fn nanonis_to_tcp(
+        &self,
+        nanonis_index: crate::NanonisIndex,
+    ) -> Result<crate::ChannelIndex, String> {
+        self.0
+            .values()
             .find(|s| s.nanonis_index == nanonis_index.get())
             .and_then(|s| s.tcp_channel)
             .map(|ch| crate::ChannelIndex::new_unchecked(ch))
             .ok_or_else(|| format!("No TCP channel for Nanonis index {}", nanonis_index.get()))
     }
 
-    pub fn tcp_to_nanonis(&self, tcp_channel: crate::ChannelIndex) -> Result<crate::NanonisIndex, String> {
-        self.0.values()
+    pub fn tcp_to_nanonis(
+        &self,
+        tcp_channel: crate::ChannelIndex,
+    ) -> Result<crate::NanonisIndex, String> {
+        self.0
+            .values()
             .find(|s| s.tcp_channel == Some(tcp_channel.get()))
             .map(|s| crate::NanonisIndex::new_unchecked(s.nanonis_index))
             .ok_or_else(|| format!("No Nanonis index for TCP channel {}", tcp_channel.get()))
     }
 
     pub fn has_tcp_channel(&self, nanonis_index: crate::NanonisIndex) -> bool {
-        self.0.values()
+        self.0
+            .values()
             .any(|s| s.nanonis_index == nanonis_index.get() && s.tcp_channel.is_some())
     }
 }
