@@ -40,7 +40,7 @@ pub struct TipPrepConfig {
     pub sharp_tip_bounds: [f32; 2],
     pub stable_tip_allowed_change: f32,
     pub check_stability: bool,
-    pub max_cycles: Option<u32>,
+    pub max_cycles: Option<usize>,
     pub max_duration_secs: Option<u64>,
 }
 
