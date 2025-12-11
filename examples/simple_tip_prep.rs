@@ -6,7 +6,7 @@ use rusty_tip::{
     tip_prep::{PulseMethod, TipControllerConfig},
     ActionDriver, SignalIndex, TCPReaderConfig, TipController,
 };
-use std::{env, fs, path::PathBuf};
+use std::{env, fs, path::PathBuf, time::Duration};
 
 #[cfg(windows)]
 use std::io;
@@ -126,6 +126,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         pulse_method,
         allowed_change_for_stable: app_config.tip_prep.stable_tip_allowed_change,
         check_stability: true,
+        max_cycles: Some(10000),
+        max_duration: Some(Duration::from_secs(12000)),
     };
 
     info!(
