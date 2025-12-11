@@ -1,11 +1,10 @@
 {
-  description = "Rust development shell with GUI support";
+  description = "Rust development Shell";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     fenix.url = "github:nix-community/fenix";
-    rust-overlay.url = "github:oxalica/rust-overlay";
   };
 
   outputs = {
@@ -13,14 +12,13 @@
     nixpkgs,
     flake-utils,
     fenix,
-    rust-overlay,
     ...
   }:
     flake-utils.lib.eachDefaultSystem (
       system: let
         pkgs = import nixpkgs {
           inherit system;
-          overlays = [fenix.overlays.default rust-overlay.overlays.default];
+          overlays = [fenix.overlays.default];
         };
 
         # Rust toolchain configuration
