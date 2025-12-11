@@ -78,14 +78,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Try different variations of the name
     let freq_shift_signal = SignalIndex::from_name("freq shift", &driver)?;
-    // let pulse_method = PulseMethod::stepping_fixed_threshold((2.0, 6.0), 4, 2, 1.0);
-    let pulse_method = PulseMethod::Fixed;
+    let pulse_method = PulseMethod::stepping_fixed_threshold((2.0, 6.0), 4, 2, 1.0);
     // Create tip controller configuration with registry-based signal
     let config = TipControllerConfig {
         freq_shift_index: freq_shift_signal,
         sharp_tip_bounds: (-2.0, 0.0),
         pulse_method,
         ..Default::default()
+    };
 		
     info!("Using signal index: {}", freq_shift_signal.0);
 
