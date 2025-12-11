@@ -1,0 +1,52 @@
+# Tip Preparation Configuration
+# This config uses stepping pulse method without stability checking
+
+[nanonis]
+host_ip = "127.0.0.1"
+control_ports = [6501, 6502, 6503, 6504]
+
+[data_acquisition]
+data_port = 6590
+sample_rate = 2000
+
+[experiment_logging]
+enabled = true
+output_path = "./experiments"
+
+[console]
+verbosity = "info"
+
+[tip_prep]
+# Frequency shift bounds for determining if tip is sharp
+sharp_tip_bounds = [-2.0, 0.0]
+
+# Maximum allowed change in frequency shift for tip to be considered stable
+stable_tip_allowed_change = 0.2
+
+# Whether to check for tip stability (disabled for faster runs)
+check_stability = false
+
+# Maximum number of pulse cycles (unlimited if not set)
+max_cycles = 10000
+
+# Maximum duration in seconds (unlimited if not set)
+max_duration_secs = 12000
+
+[pulse_method]
+# Use stepping pulse method
+type = "stepping"
+
+# Voltage range: start at 2.0V and step up to 6.0V
+voltage_bounds = [2.0, 6.0]
+
+# Number of voltage steps between min and max
+voltage_steps = 4
+
+# Number of cycles to perform at each voltage level before stepping up
+cycles_before_step = 2
+
+# Threshold type: "absolute" or "relative"
+threshold_type = "absolute"
+
+# Threshold value for determining if tip is sharp enough
+threshold_value = 1.0

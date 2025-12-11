@@ -76,17 +76,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Connected to Nanonis system");
 
-    // Try different variations of the name
+    // Get frequency shift signal from Nanonis system
     let freq_shift_signal = SignalIndex::from_name("freq shift", &driver)?;
-    let pulse_method = PulseMethod::stepping_fixed_threshold((2.0, 6.0), 4, 2, 1.0);
-    // Create tip controller configuration with registry-based signal
-    let config = TipControllerConfig {
-        freq_shift_index: freq_shift_signal,
-        sharp_tip_bounds: (-2.0, 0.0),
-        pulse_method,
-        ..Default::default()
-    };
-		
     info!("Using signal index: {}", freq_shift_signal.0);
 
     // Create pulse method from config
@@ -125,9 +116,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         pulse_method,
         allowed_change_for_stable: app_config.tip_prep.stable_tip_allowed_change,
-        check_stability: true,
-        max_cycles: Some(10000),
-        max_duration: Some(Duration::from_secs(12000)),
+        check_stability: app_config.tip_prep.check_stability,
+        max_cycles: app_config.tip_prep.max_cycles,
+        max_duration: app_config.tip_prep.max_duration_secs.map(Duration::from_secs),
     };
 
     info!(
@@ -137,6 +128,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(
         "Stable tip allowed change: {:.3}",
         tip_config.allowed_change_for_stable
+    );
+    info!("Check stability: {}", tip_config.check_stability);
+    info!(
+        "Max cycles: {}",
+        tip_config
+            .max_cycles
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "unlimited".to_string())
+    );
+    info!(
+        "Max duration: {}",
+        tip_config
+            .max_duration
+            .map(|d| format!("{} seconds", d.as_secs()))
+            .unwrap_or_else(|| "unlimited".to_string())
     );
 
     // Windows: Wait for user confirmation before proceeding

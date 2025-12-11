@@ -39,6 +39,9 @@ pub struct ConsoleConfig {
 pub struct TipPrepConfig {
     pub sharp_tip_bounds: [f32; 2],
     pub stable_tip_allowed_change: f32,
+    pub check_stability: bool,
+    pub max_cycles: Option<u32>,
+    pub max_duration_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -107,6 +110,9 @@ impl Default for TipPrepConfig {
         Self {
             sharp_tip_bounds: [-2.0, 0.0],
             stable_tip_allowed_change: 0.2,
+            check_stability: true,
+            max_cycles: Some(10000),
+            max_duration_secs: Some(12000),
         }
     }
 }
