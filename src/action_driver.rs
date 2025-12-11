@@ -1413,7 +1413,7 @@ impl ActionDriver {
                 // Safe repositioning with hardcoded defaults
                 let displacement = crate::types::MotorDisplacement::new(x_steps, y_steps, -2);
                 let withdraw_timeout = Duration::from_secs(5);
-                let approach_timeout = Duration::from_secs(5);
+                let approach_timeout = Duration::from_secs(20); // 20 seconds timeout for approach after reposition
                 let stabilization_wait = Duration::from_millis(500);
 
                 // Execute the safe repositioning sequence
@@ -2306,8 +2306,8 @@ impl ActionDriver {
                 log::debug!("ReadStableSignal: Signal {} mapped to TCP channel {}", signal.0, tcp_channel.get());
 
                 // Find TCP channel in TCP config channels
-                log::info!("ReadStableSignal: Signal {} (Nanonis) maps to TCP channel {}", signal.0, tcp_channel.get());
-                log::info!("ReadStableSignal: Available TCP channels: {:?}", tcp_config.channels);
+                log::debug!("ReadStableSignal: Signal {} (Nanonis) maps to TCP channel {}", signal.0, tcp_channel.get());
+                log::debug!("ReadStableSignal: Available TCP channels: {:?}", tcp_config.channels);
                 let signal_channel_idx = tcp_config
                     .channels
                     .iter()
@@ -2321,7 +2321,7 @@ impl ActionDriver {
                         ))
                     })?;
 
-                log::info!("ReadStableSignal: Signal {} uses position {} in TCP data array (channel {} in Nanonis TCP stream)",
+                log::debug!("ReadStableSignal: Signal {} uses position {} in TCP data array (channel {} in Nanonis TCP stream)",
                     signal.0, signal_channel_idx, tcp_config.channels[signal_channel_idx]);
 
                 // Retry loop for data collection and stability analysis
@@ -2500,7 +2500,7 @@ impl ActionDriver {
         if collected_data.is_empty() {
             log::warn!("No data collected within timeout");
         } else {
-            log::info!("Collected {} data points", collected_data.len());
+            log::debug!("Collected {} data points", collected_data.len());
         }
 
         Ok(collected_data)
