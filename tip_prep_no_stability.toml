@@ -54,14 +54,6 @@ threshold_value = 1.0
 # Optional: Custom TCP channel mapping
 # Uncomment and modify if your Nanonis signal indices differ from the defaults
 # Format: { nanonis_index = X, tcp_channel = Y }
-# [[tcp_channel_mapping]]
-# nanonis_index = 76  # Frequency shift
-# tcp_channel = 18
-#
-# [[tcp_channel_mapping]]
-# nanonis_index = 0   # Current
-# tcp_channel = 0
-#
-# [[tcp_channel_mapping]]
-# nanonis_index = 24  # Bias
-# tcp_channel = 8
+ [[tcp_channel_mapping]]
+ nanonis_index = 76  # Frequency shift
+ tcp_channel = 19
