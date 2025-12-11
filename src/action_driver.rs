@@ -669,6 +669,41 @@ impl ActionDriver {
             })
     }
 
+    /// Calculate number of data points needed for a target duration
+    ///
+    /// Based on the TCP reader configuration (oversampling), calculates how many
+    /// samples are needed to cover the specified duration.
+    ///
+    /// # Arguments
+    /// * `target_duration` - Desired time window for data collection
+    ///
+    /// # Returns
+    /// Number of samples, or None if TCP reader is not configured
+    ///
+    /// # Example
+    /// For 500ms at 2000 Hz effective rate: returns 1000 samples
+    fn calculate_samples_for_duration(&self, target_duration: Duration) -> Option<usize> {
+        if let Some(ref config) = self.tcp_reader_config {
+            // Effective sample rate = base_rate / oversampling
+            // For oversampling=1 at 2kHz base: 2000 samples/sec
+            // For 500ms: 2000 * 0.5 = 1000 samples
+            let base_rate = 2000.0; // Typical Nanonis base rate in Hz
+            let effective_rate = base_rate / config.oversampling as f64;
+            let samples = (effective_rate * target_duration.as_secs_f64()).ceil() as usize;
+            log::debug!(
+                "Calculated {} samples for {:.0}ms (base: {}Hz, oversampling: {}, effective: {:.1}Hz)",
+                samples,
+                target_duration.as_millis(),
+                base_rate,
+                config.oversampling,
+                effective_rate
+            );
+            Some(samples.max(50)) // Minimum 50 samples
+        } else {
+            None
+        }
+    }
+
     // ==================== Unified Execution API ====================
 
     /// Unified execution method with fluent configuration
@@ -1677,9 +1712,14 @@ impl ActionDriver {
 
                         // Use ReadStableSignal instead of single instantaneous read
                         log::debug!("CheckTipState: Calling ReadStableSignal for signal {}", signal.0.0);
+
+                        // Calculate samples needed for 500ms of data
+                        let data_points = self.calculate_samples_for_duration(Duration::from_millis(500))
+                            .unwrap_or(100); // Fallback to 100 if TCP not configured
+
                         let stable_result = self.run(Action::ReadStableSignal {
                             signal,
-                            data_points: Some(100),
+                            data_points: Some(data_points),
                             use_new_data: true, // Get fresh data for tip state checking
                             stability_method: crate::actions::SignalStabilityMethod::RelativeStandardDeviation {
                                 threshold_percent: 10.0, // More lenient threshold
@@ -1797,11 +1837,15 @@ impl ActionDriver {
                         let mut all_datasets = Vec::new();
                         let mut read_methods = Vec::new();
 
+                        // Calculate samples needed for 500ms of data
+                        let data_points = self.calculate_samples_for_duration(Duration::from_millis(500))
+                            .unwrap_or(100); // Fallback to 100 if TCP not configured
+
                         // Read each signal using ReadStableSignal
                         for (signal, bounds) in signals.iter() {
                             let stable_result = self.run(Action::ReadStableSignal {
                                 signal: *signal,
-                                data_points: Some(100),
+                                data_points: Some(data_points),
                                 use_new_data: true, // Get fresh data for tip state checking
                                 stability_method: crate::actions::SignalStabilityMethod::RelativeStandardDeviation {
                                     threshold_percent: 10.0, // More lenient threshold
