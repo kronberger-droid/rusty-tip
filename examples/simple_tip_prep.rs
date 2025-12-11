@@ -6,7 +6,15 @@ use rusty_tip::{
     tip_prep::{PulseMethod, TipControllerConfig},
     ActionDriver, SignalIndex, TCPReaderConfig, TipController,
 };
-use std::{env, fs, path::PathBuf, time::Duration};
+use std::{
+    env, fs,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 #[cfg(windows)]
 use std::io;
@@ -171,13 +179,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         io::stdin().read_line(&mut input)?;
     }
 
+    // Set up Ctrl+C handler for graceful shutdown
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+    let shutdown_flag_clone = shutdown_flag.clone();
+
+    ctrlc::set_handler(move || {
+        info!("Ctrl+C received - initiating graceful shutdown...");
+        shutdown_flag_clone.store(true, Ordering::SeqCst);
+    })
+    .expect("Error setting Ctrl+C handler");
+
     // Create and run controller
     let mut controller = TipController::new(driver, tip_config);
+    controller.set_shutdown_flag(shutdown_flag.clone());
 
     info!("Starting tip preparation process...");
     let result = match controller.run() {
         Ok(()) => {
-            info!("✓ Tip preparation completed successfully!");
+            if shutdown_flag.load(Ordering::SeqCst) {
+                info!("✓ Tip preparation stopped by user");
+            } else {
+                info!("✓ Tip preparation completed successfully!");
+            }
             Ok(())
         }
         Err(e) => {
