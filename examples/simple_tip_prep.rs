@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Create driver from config
-    let driver = ActionDriver::builder(
+    let mut builder = ActionDriver::builder(
         &app_config.nanonis.host_ip,
         app_config.nanonis.control_ports[0],
     )
@@ -71,8 +71,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         create_log_file_path(&app_config.experiment_logging.output_path)?,
         1000,
         app_config.experiment_logging.enabled,
-    )
-    .build()?;
+    );
+
+    // Apply custom TCP channel mapping from config if provided
+    if let Some(ref tcp_mapping) = app_config.tcp_channel_mapping {
+        let mapping: Vec<(u8, u8)> = tcp_mapping
+            .iter()
+            .map(|m| (m.nanonis_index, m.tcp_channel))
+            .collect();
+        info!("Using custom TCP channel mapping from config with {} entries", mapping.len());
+        builder = builder.with_custom_tcp_mapping(&mapping);
+    }
+
+    let driver = builder.build()?;
 
     info!("Connected to Nanonis system");
 

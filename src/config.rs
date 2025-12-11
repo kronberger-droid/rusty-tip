@@ -3,6 +3,12 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TcpChannelMapping {
+    pub nanonis_index: u8,
+    pub tcp_channel: u8,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AppConfig {
     pub nanonis: NanonisConfig,
     pub data_acquisition: DataAcquisitionConfig,
@@ -10,6 +16,8 @@ pub struct AppConfig {
     pub console: ConsoleConfig,
     pub tip_prep: TipPrepConfig,
     pub pulse_method: PulseMethodConfig,
+    #[serde(default)]
+    pub tcp_channel_mapping: Option<Vec<TcpChannelMapping>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -66,6 +74,7 @@ impl Default for AppConfig {
             console: ConsoleConfig::default(),
             tip_prep: TipPrepConfig::default(),
             pulse_method: PulseMethodConfig::default(),
+            tcp_channel_mapping: None,
         }
     }
 }

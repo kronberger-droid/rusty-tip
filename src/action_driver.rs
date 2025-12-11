@@ -347,6 +347,7 @@ pub struct ActionDriverBuilder {
     initial_storage: HashMap<String, ActionResult>,
     tcp_reader_config: Option<TCPReaderConfig>,
     action_logger_config: Option<(std::path::PathBuf, usize, bool)>, // (file_path, buffer_size, final_format_json)
+    custom_tcp_mapping: Option<Vec<(u8, u8)>>, // Custom Nanonis to TCP channel mapping
 }
 
 impl ActionDriverBuilder {
@@ -359,6 +360,7 @@ impl ActionDriverBuilder {
             initial_storage: HashMap::new(),
             tcp_reader_config: None,
             action_logger_config: None,
+            custom_tcp_mapping: None,
         }
     }
 
@@ -441,6 +443,31 @@ impl ActionDriverBuilder {
         self
     }
 
+    /// Provide custom Nanonis to TCP channel mapping
+    ///
+    /// Override the default hardcoded mappings with your own. This is useful when
+    /// your Nanonis configuration has different signal indices.
+    ///
+    /// # Arguments
+    /// * `mapping` - Array of (nanonis_index, tcp_channel) tuples
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let custom_map = [
+    ///     (76, 18),  // Frequency shift
+    ///     (0, 0),    // Current
+    ///     (24, 8),   // Bias
+    /// ];
+    ///
+    /// let driver = ActionDriver::builder("127.0.0.1", 6501)
+    ///     .with_custom_tcp_mapping(&custom_map)
+    ///     .build()?;
+    /// ```
+    pub fn with_custom_tcp_mapping(mut self, mapping: &[(u8, u8)]) -> Self {
+        self.custom_tcp_mapping = Some(mapping.to_vec());
+        self
+    }
+
     /// Build the ActionDriver with configured parameters and optional automatic buffering
     pub fn build(self) -> Result<ActionDriver, NanonisError> {
         let mut client = {
@@ -504,9 +531,19 @@ impl ActionDriverBuilder {
                 None
             };
 
-        // Auto-initialize signal registry
+        // Auto-initialize signal registry with custom or hardcoded mapping
         let signal_names = client.signal_names_get()?;
-        let signal_registry = SignalRegistry::with_hardcoded_tcp_mapping(&signal_names);
+        let signal_registry = if let Some(ref custom_map) = self.custom_tcp_mapping {
+            log::info!("Using custom TCP channel mapping with {} entries", custom_map.len());
+            SignalRegistry::builder()
+                .with_standard_map()
+                .add_tcp_map(custom_map)
+                .from_signal_names(&signal_names)
+                .create_aliases()
+                .build()
+        } else {
+            SignalRegistry::with_hardcoded_tcp_mapping(&signal_names)
+        };
 
         Ok(ActionDriver {
             client,
