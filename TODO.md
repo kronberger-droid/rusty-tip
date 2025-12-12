@@ -1,15 +1,17 @@
 # Tip Prep
 
+## Tip Prep
+1. Implement script for multiple different tip prep cycle testing
 
-## Stability Checking through BiasSweep
-
-1. BiasSweep is broken -> implement it yourself
-
-## Tip Prep Testing
-
-1. Implement script for single tip prep cycle testing
-2. Implement script for multiple different tip prep cycle testing
   1. Create Action Destroy Tip to be able to run 
+
+2. Change behavior when freq shift is positive. Recovery only works by pulsing a lot and hard usually
+
+3. BiasSweep is broken -> implement it yourself
+
+## Testing
+
+1. Implement scripts to interpret experiment logs
 
 ## Logger Injection
 
@@ -22,4 +24,4 @@
 ## Clean Up
 
 1. Separate Nanonis client from action driver
-2. Clean up the action driver.
+2. Clean up the action driver and think about improvements in architecture
