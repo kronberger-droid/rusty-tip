@@ -52,16 +52,45 @@ pub struct TipPrepConfig {
     pub max_duration_secs: Option<u64>,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum PolaritySign {
+    Positive,
+    Negative,
+}
+
+impl Default for PolaritySign {
+    fn default() -> Self {
+        PolaritySign::Positive
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct RandomPolaritySwitchConfig {
+    pub enabled: bool,
+    pub switch_every_n_pulses: u32,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum PulseMethodConfig {
-    Fixed { pulse_voltage: Vec<f32> },
+    Fixed {
+        pulse_voltage: Vec<f32>,
+        #[serde(default)]
+        polarity: PolaritySign,
+        #[serde(default)]
+        random_polarity_switch: Option<RandomPolaritySwitchConfig>,
+    },
     Stepping {
         voltage_bounds: [f32; 2],
         voltage_steps: u16,
         cycles_before_step: u16,
         threshold_type: String,
         threshold_value: f32,
+        #[serde(default)]
+        polarity: PolaritySign,
+        #[serde(default)]
+        random_polarity_switch: Option<RandomPolaritySwitchConfig>,
     },
 }
 
@@ -134,6 +163,8 @@ impl Default for PulseMethodConfig {
             cycles_before_step: 2,
             threshold_type: "absolute".to_string(),
             threshold_value: 0.1,
+            polarity: PolaritySign::Positive,
+            random_polarity_switch: None,
         }
     }
 }
