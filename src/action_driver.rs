@@ -25,13 +25,15 @@ use std::time::{Duration, Instant};
 /// Maximum standard deviation for stable signal (Hz)
 /// This checks the noise level in the signal
 /// Typical values: 0.3-0.5 for frequency shift signals with moderate noise
-const TIP_STATE_MAX_STD_DEV: f32 = 0.5;
+/// Increased to 1.0 for noisy signals - adjust based on your actual noise level
+const TIP_STATE_MAX_STD_DEV: f32 = 1.0;
 
 /// Maximum slope for stable signal (Hz per sample)
 /// This checks for drift/trend in the signal
 /// Slope is calculated via linear regression over the data window
 /// Typical values: 0.001-0.01 depending on your signal drift rate
-const TIP_STATE_MAX_SLOPE: f32 = 0.005;
+/// Increased to 0.01 for drifting signals - adjust based on your actual drift
+const TIP_STATE_MAX_SLOPE: f32 = 0.01;
 
 /// Duration of data collection for tip state checking (milliseconds)
 const TIP_STATE_DATA_COLLECTION_DURATION_MS: u64 = 500;
