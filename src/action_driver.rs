@@ -22,12 +22,16 @@ use std::time::{Duration, Instant};
 // TIP STATE CHECKING CONSTANTS
 // ========================================================================
 
-/// Absolute standard deviation threshold for signal stability check
-/// This is the maximum allowed standard deviation in your signal units (e.g., Hz for frequency shift)
-/// Using absolute threshold instead of relative because relative fails near zero
-/// Typical values: 0.1-0.3 for frequency shift signals
-/// If your signal has more noise, increase this value
-const TIP_STATE_STABILITY_THRESHOLD_ABSOLUTE: f32 = 0.2;
+/// Maximum standard deviation for stable signal (Hz)
+/// This checks the noise level in the signal
+/// Typical values: 0.3-0.5 for frequency shift signals with moderate noise
+const TIP_STATE_MAX_STD_DEV: f32 = 0.5;
+
+/// Maximum slope for stable signal (Hz per sample)
+/// This checks for drift/trend in the signal
+/// Slope is calculated via linear regression over the data window
+/// Typical values: 0.001-0.01 depending on your signal drift rate
+const TIP_STATE_MAX_SLOPE: f32 = 0.005;
 
 /// Duration of data collection for tip state checking (milliseconds)
 const TIP_STATE_DATA_COLLECTION_DURATION_MS: u64 = 500;
@@ -1753,8 +1757,9 @@ impl ActionDriver {
                             signal,
                             data_points: Some(data_points),
                             use_new_data: true, // Get fresh data for tip state checking
-                            stability_method: crate::actions::SignalStabilityMethod::StandardDeviation {
-                                threshold: TIP_STATE_STABILITY_THRESHOLD_ABSOLUTE,
+                            stability_method: crate::actions::SignalStabilityMethod::Combined {
+                                max_std_dev: TIP_STATE_MAX_STD_DEV,
+                                max_slope: TIP_STATE_MAX_SLOPE,
                             },
                             timeout: Duration::from_secs(TIP_STATE_READ_TIMEOUT_SECS),
                             retry_count: Some(TIP_STATE_READ_RETRY_COUNT),
@@ -1931,8 +1936,9 @@ impl ActionDriver {
                                 signal: *signal,
                                 data_points: Some(data_points),
                                 use_new_data: true, // Get fresh data for tip state checking
-                                stability_method: crate::actions::SignalStabilityMethod::StandardDeviation {
-                                    threshold: TIP_STATE_STABILITY_THRESHOLD_ABSOLUTE,
+                                stability_method: crate::actions::SignalStabilityMethod::Combined {
+                                    max_std_dev: TIP_STATE_MAX_STD_DEV,
+                                    max_slope: TIP_STATE_MAX_SLOPE,
                                 },
                                 timeout: Duration::from_secs(TIP_STATE_READ_TIMEOUT_SECS),
                                 retry_count: Some(TIP_STATE_READ_RETRY_COUNT),
@@ -2967,6 +2973,48 @@ impl ActionDriver {
                 metrics.insert("slope".to_string(), slope);
                 metrics.insert("abs_slope".to_string(), abs_slope);
                 metrics.insert("max_slope_threshold".to_string(), *max_slope);
+                (is_stable, confidence)
+            }
+
+            SignalStabilityMethod::Combined { max_std_dev, max_slope } => {
+                // Calculate slope via linear regression
+                let n = data.len() as f32;
+                let x_mean = (n - 1.0) / 2.0;
+                let y_mean = mean;
+
+                let mut numerator = 0.0;
+                let mut denominator = 0.0;
+                for (i, &y) in data.iter().enumerate() {
+                    let x = i as f32;
+                    numerator += (x - x_mean) * (y - y_mean);
+                    denominator += (x - x_mean).powi(2);
+                }
+
+                let slope = if denominator > 1e-12 {
+                    numerator / denominator
+                } else {
+                    0.0
+                };
+                let abs_slope = slope.abs();
+
+                // Check both conditions: noise AND drift
+                let noise_ok = std_dev <= *max_std_dev;
+                let drift_ok = abs_slope <= *max_slope;
+                let is_stable = noise_ok && drift_ok;
+
+                // Confidence is the minimum of both checks
+                let noise_confidence = (1.0 - (std_dev / max_std_dev).min(1.0)).max(0.0);
+                let drift_confidence = (1.0 - (abs_slope / max_slope).min(1.0)).max(0.0);
+                let confidence = noise_confidence.min(drift_confidence);
+
+                metrics.insert("slope".to_string(), slope);
+                metrics.insert("abs_slope".to_string(), abs_slope);
+                metrics.insert("max_slope_threshold".to_string(), *max_slope);
+                metrics.insert("max_std_dev_threshold".to_string(), *max_std_dev);
+                metrics.insert("noise_ok".to_string(), if noise_ok { 1.0 } else { 0.0 });
+                metrics.insert("drift_ok".to_string(), if drift_ok { 1.0 } else { 0.0 });
+                metrics.insert("noise_confidence".to_string(), noise_confidence);
+                metrics.insert("drift_confidence".to_string(), drift_confidence);
                 (is_stable, confidence)
             }
         };
