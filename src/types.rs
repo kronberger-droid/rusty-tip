@@ -306,7 +306,6 @@ impl NanonisValue {
 }
 
 /// Signal and Channel Types
-
 /// Nanonis signal index (0-127)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct NanonisIndex(pub u8);

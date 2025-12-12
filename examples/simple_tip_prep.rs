@@ -87,7 +87,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .iter()
             .map(|m| (m.nanonis_index, m.tcp_channel))
             .collect();
-        info!("Using custom TCP channel mapping from config with {} entries", mapping.len());
+        info!(
+            "Using custom TCP channel mapping from config with {} entries",
+            mapping.len()
+        );
         builder = builder.with_custom_tcp_mapping(&mapping);
     }
 
@@ -97,7 +100,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Get frequency shift signal from Nanonis system
     let freq_shift_signal = SignalIndex::from_name("freq shift", &driver)?;
-    info!("Using signal index: {} (Nanonis index)", freq_shift_signal.0.0);
+    info!(
+        "Using signal index: {} (Nanonis index)",
+        freq_shift_signal.0 .0
+    );
 
     // Validate TCP mapping for frequency shift
     match driver.validate_tcp_signal(freq_shift_signal) {
@@ -112,7 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             polarity,
             ref random_polarity_switch,
         } => {
-            let voltage = pulse_voltage.get(0).copied().unwrap_or(4.0);
+            let voltage = pulse_voltage.first().copied().unwrap_or(4.0);
             let random_switch = random_polarity_switch.as_ref().and_then(|rps| {
                 if rps.enabled {
                     Some(rusty_tip::tip_prep::RandomPolaritySwitch {
@@ -206,7 +212,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         allowed_change_for_stable: app_config.tip_prep.stable_tip_allowed_change,
         check_stability: app_config.tip_prep.check_stability,
         max_cycles: app_config.tip_prep.max_cycles,
-        max_duration: app_config.tip_prep.max_duration_secs.map(Duration::from_secs),
+        max_duration: app_config
+            .tip_prep
+            .max_duration_secs
+            .map(Duration::from_secs),
     };
 
     info!(
