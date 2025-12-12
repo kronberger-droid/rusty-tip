@@ -37,10 +37,10 @@ max_duration_secs = 12000
 type = "stepping"
 
 # Voltage range: start at 2.0V and step up to 6.0V
-voltage_bounds = [2.0, 6.0]
+voltage_bounds = [4.0, 6.0]
 
 # Number of voltage steps between min and max
-voltage_steps = 4
+voltage_steps = 2
 
 # Number of cycles to perform at each voltage level before stepping up
 cycles_before_step = 2
@@ -54,13 +54,13 @@ threshold_value = 1.0
 # Polarity of the pulse voltage: "positive" or "negative"
 # positive: pulses from 2.0V to 6.0V
 # negative: pulses from -2.0V to -6.0V
-polarity = "positive"
+polarity = "negative"
 
 # Optional: Random polarity switching
 # When enabled, every Nth pulse will use the opposite polarity
-# [pulse_method.random_polarity_switch]
-# enabled = true
-# switch_every_n_pulses = 5  # Every 5th pulse uses opposite polarity
+[pulse_method.random_polarity_switch]
+enabled = true
+switch_every_n_pulses = 5  # Every 5th pulse uses opposite polarity
 
 # Optional: Custom TCP channel mapping
 # Uncomment and modify if your Nanonis signal indices differ from the defaults
