@@ -8,8 +8,36 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+// ============================================================================
+// TIP PREPARATION CONSTANTS
+// ============================================================================
+
 /// Report progress every N cycles
 const STATUS_INTERVAL: usize = 10;
+
+/// Pulse width for tip pulsing during bad_loop (ms)
+const PULSE_WIDTH_MS: u64 = 500;
+
+/// Data collection duration before pulse (ms)
+const PRE_PULSE_DATA_COLLECTION_MS: u64 = 50;
+
+/// Data collection duration after pulse (ms)
+const POST_PULSE_DATA_COLLECTION_MS: u64 = 50;
+
+/// Wait time after clearing TCP buffer to accumulate fresh data (ms)
+const BUFFER_CLEAR_WAIT_MS: u64 = 500;
+
+/// Bias sweep range for stability checking (V)
+const STABILITY_BIAS_SWEEP_RANGE: (f32, f32) = (-2.0, 2.0);
+
+/// Number of steps in bias sweep for stability checking
+const STABILITY_BIAS_SWEEP_STEPS: u16 = 1000;
+
+/// Period per step in bias sweep for stability checking (ms)
+const STABILITY_BIAS_SWEEP_PERIOD_MS: u64 = 200;
+
+/// Maximum duration for stability check (seconds)
+const STABILITY_CHECK_MAX_DURATION_SECS: u64 = 100;
 
 /// Loop types based on tip shape - simple and direct
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -482,10 +510,13 @@ impl TipController {
 
         self.driver
             .run(Action::PulseRetract {
-                pulse_width: Duration::from_millis(500),
+                pulse_width: Duration::from_millis(PULSE_WIDTH_MS),
                 pulse_height_v: signed_voltage,
             })
-            .with_data_collection(Duration::from_millis(50), Duration::from_millis(50))
+            .with_data_collection(
+                Duration::from_millis(PRE_PULSE_DATA_COLLECTION_MS),
+                Duration::from_millis(POST_PULSE_DATA_COLLECTION_MS),
+            )
             .execute()?;
 
         // Increment pulse counter for random switching
@@ -558,12 +589,12 @@ impl TipController {
             .run(Action::CheckTipStability {
                 method: crate::actions::TipStabilityMethod::BiasSweepResponse {
                     signal: self.config.freq_shift_index,
-                    bias_range: (-2.0, 2.0),
-                    sweep_steps: 1000,
-                    period: Duration::from_millis(200),
+                    bias_range: STABILITY_BIAS_SWEEP_RANGE,
+                    sweep_steps: STABILITY_BIAS_SWEEP_STEPS,
+                    period: Duration::from_millis(STABILITY_BIAS_SWEEP_PERIOD_MS),
                     allowed_signal_change: self.config.allowed_change_for_stable,
                 },
-                max_duration: Duration::from_secs(100),
+                max_duration: Duration::from_secs(STABILITY_CHECK_MAX_DURATION_SECS),
                 abort_on_damage_signs: false,
             })
             .expecting()?;
@@ -622,7 +653,7 @@ impl TipController {
         self.driver.clear_tcp_buffer();
 
         // Wait briefly for fresh data to accumulate
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(BUFFER_CLEAR_WAIT_MS));
 
         let initial_tip_state: TipState = self
             .driver

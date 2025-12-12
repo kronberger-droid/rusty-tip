@@ -19,6 +19,24 @@ use std::collections::HashMap;
 use std::thread;
 use std::time::{Duration, Instant};
 
+// ============================================================================
+// TIP STATE CHECKING CONSTANTS
+// ============================================================================
+
+/// Relative standard deviation threshold for signal stability check (in percent)
+/// Lower values = stricter stability requirements
+/// If your signal has noise and CheckTipState fails often, increase this value
+const TIP_STATE_STABILITY_THRESHOLD_PERCENT: f32 = 10.0;
+
+/// Duration of data collection for tip state checking (milliseconds)
+const TIP_STATE_DATA_COLLECTION_DURATION_MS: u64 = 500;
+
+/// Timeout for stable signal reading during tip state check (seconds)
+const TIP_STATE_READ_TIMEOUT_SECS: u64 = 15;
+
+/// Number of retries for stable signal reading during tip state check
+const TIP_STATE_READ_RETRY_COUNT: u32 = 3;
+
 /// Configuration for TCP Logger integration with always-buffer support
 #[derive(Debug, Clone)]
 pub struct TCPReaderConfig {
@@ -1713,8 +1731,9 @@ impl ActionDriver {
                         // Use ReadStableSignal instead of single instantaneous read
                         log::debug!("CheckTipState: Calling ReadStableSignal for signal {}", signal.0.0);
 
-                        // Calculate samples needed for 500ms of data
-                        let data_points = self.calculate_samples_for_duration(Duration::from_millis(500))
+                        // Calculate samples needed for configured data collection duration
+                        let data_points = self.calculate_samples_for_duration(
+                            Duration::from_millis(TIP_STATE_DATA_COLLECTION_DURATION_MS))
                             .unwrap_or(100); // Fallback to 100 if TCP not configured
 
                         let stable_result = self.run(Action::ReadStableSignal {
@@ -1722,10 +1741,10 @@ impl ActionDriver {
                             data_points: Some(data_points),
                             use_new_data: true, // Get fresh data for tip state checking
                             stability_method: crate::actions::SignalStabilityMethod::RelativeStandardDeviation {
-                                threshold_percent: 10.0, // More lenient threshold
+                                threshold_percent: TIP_STATE_STABILITY_THRESHOLD_PERCENT,
                             },
-                            timeout: Duration::from_secs(15), // Longer timeout
-                            retry_count: Some(3),
+                            timeout: Duration::from_secs(TIP_STATE_READ_TIMEOUT_SECS),
+                            retry_count: Some(TIP_STATE_READ_RETRY_COUNT),
                         }).execute();
 
                         let (value, raw_data, read_method) = match stable_result {
@@ -1837,8 +1856,9 @@ impl ActionDriver {
                         let mut all_datasets = Vec::new();
                         let mut read_methods = Vec::new();
 
-                        // Calculate samples needed for 500ms of data
-                        let data_points = self.calculate_samples_for_duration(Duration::from_millis(500))
+                        // Calculate samples needed for configured data collection duration
+                        let data_points = self.calculate_samples_for_duration(
+                            Duration::from_millis(TIP_STATE_DATA_COLLECTION_DURATION_MS))
                             .unwrap_or(100); // Fallback to 100 if TCP not configured
 
                         // Read each signal using ReadStableSignal
@@ -1848,10 +1868,10 @@ impl ActionDriver {
                                 data_points: Some(data_points),
                                 use_new_data: true, // Get fresh data for tip state checking
                                 stability_method: crate::actions::SignalStabilityMethod::RelativeStandardDeviation {
-                                    threshold_percent: 10.0, // More lenient threshold
+                                    threshold_percent: TIP_STATE_STABILITY_THRESHOLD_PERCENT,
                                 },
-                                timeout: Duration::from_secs(15), // Longer timeout
-                                retry_count: Some(3),
+                                timeout: Duration::from_secs(TIP_STATE_READ_TIMEOUT_SECS),
+                                retry_count: Some(TIP_STATE_READ_RETRY_COUNT),
                             }).execute();
 
                             let (value, raw_data, read_method) = match stable_result {
