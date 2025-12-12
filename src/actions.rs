@@ -35,6 +35,12 @@ pub enum SignalStabilityMethod {
     },
     /// Trend analysis - ensure no consistent drift
     TrendAnalysis { max_slope: f32 },
+    /// Combined: checks both noise (std dev) AND drift (slope)
+    /// Both conditions must be satisfied for signal to be stable
+    Combined {
+        max_std_dev: f32,
+        max_slope: f32,
+    },
 }
 
 impl Default for SignalStabilityMethod {
@@ -955,6 +961,9 @@ impl Action {
                     }
                     SignalStabilityMethod::TrendAnalysis { max_slope } => {
                         format!("trend analysis, max slope {:.3e}", max_slope)
+                    }
+                    SignalStabilityMethod::Combined { max_std_dev, max_slope } => {
+                        format!("combined: std dev {:.3e}, slope {:.3e}", max_std_dev, max_slope)
                     }
                 };
                 let retry_desc = retry_count.map_or("no retry".to_string(), |r| format!("{} retries", r));
