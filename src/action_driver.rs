@@ -22,10 +22,12 @@ use std::time::{Duration, Instant};
 // TIP STATE CHECKING CONSTANTS
 // ========================================================================
 
-/// Relative standard deviation threshold for signal stability check (in percent)
-/// Lower values = stricter stability requirements
-/// If your signal has noise and CheckTipState fails often, increase this value
-const TIP_STATE_STABILITY_THRESHOLD_PERCENT: f32 = 20.0;
+/// Absolute standard deviation threshold for signal stability check
+/// This is the maximum allowed standard deviation in your signal units (e.g., Hz for frequency shift)
+/// Using absolute threshold instead of relative because relative fails near zero
+/// Typical values: 0.1-0.3 for frequency shift signals
+/// If your signal has more noise, increase this value
+const TIP_STATE_STABILITY_THRESHOLD_ABSOLUTE: f32 = 0.2;
 
 /// Duration of data collection for tip state checking (milliseconds)
 const TIP_STATE_DATA_COLLECTION_DURATION_MS: u64 = 500;
@@ -1751,8 +1753,8 @@ impl ActionDriver {
                             signal,
                             data_points: Some(data_points),
                             use_new_data: true, // Get fresh data for tip state checking
-                            stability_method: crate::actions::SignalStabilityMethod::RelativeStandardDeviation {
-                                threshold_percent: TIP_STATE_STABILITY_THRESHOLD_PERCENT,
+                            stability_method: crate::actions::SignalStabilityMethod::StandardDeviation {
+                                threshold: TIP_STATE_STABILITY_THRESHOLD_ABSOLUTE,
                             },
                             timeout: Duration::from_secs(TIP_STATE_READ_TIMEOUT_SECS),
                             retry_count: Some(TIP_STATE_READ_RETRY_COUNT),
@@ -1929,8 +1931,8 @@ impl ActionDriver {
                                 signal: *signal,
                                 data_points: Some(data_points),
                                 use_new_data: true, // Get fresh data for tip state checking
-                                stability_method: crate::actions::SignalStabilityMethod::RelativeStandardDeviation {
-                                    threshold_percent: TIP_STATE_STABILITY_THRESHOLD_PERCENT,
+                                stability_method: crate::actions::SignalStabilityMethod::StandardDeviation {
+                                    threshold: TIP_STATE_STABILITY_THRESHOLD_ABSOLUTE,
                                 },
                                 timeout: Duration::from_secs(TIP_STATE_READ_TIMEOUT_SECS),
                                 retry_count: Some(TIP_STATE_READ_RETRY_COUNT),
