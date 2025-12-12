@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 /// Relative standard deviation threshold for signal stability check (in percent)
 /// Lower values = stricter stability requirements
 /// If your signal has noise and CheckTipState fails often, increase this value
-const TIP_STATE_STABILITY_THRESHOLD_PERCENT: f32 = 10.0;
+const TIP_STATE_STABILITY_THRESHOLD_PERCENT: f32 = 20.0;
 
 /// Duration of data collection for tip state checking (milliseconds)
 const TIP_STATE_DATA_COLLECTION_DURATION_MS: u64 = 500;
@@ -552,7 +552,10 @@ impl ActionDriverBuilder {
         // Auto-initialize signal registry with custom or hardcoded mapping
         let signal_names = client.signal_names_get()?;
         let signal_registry = if let Some(ref custom_map) = self.custom_tcp_mapping {
-            log::info!("Using custom TCP channel mapping with {} entries", custom_map.len());
+            log::info!(
+                "Using custom TCP channel mapping with {} entries",
+                custom_map.len()
+            );
             SignalRegistry::builder()
                 .with_standard_map()
                 .add_tcp_map(custom_map)
@@ -594,7 +597,8 @@ pub struct ActionDriver {
     /// Signal registry for name-based lookup and TCP mapping
     signal_registry: SignalRegistry,
     /// Recent ReadStableSignal results for correlation with CheckTipState
-    recent_stable_signals: std::collections::VecDeque<(crate::actions::StableSignal, std::time::Instant)>,
+    recent_stable_signals:
+        std::collections::VecDeque<(crate::actions::StableSignal, std::time::Instant)>,
 }
 
 impl ActionDriver {
@@ -1725,15 +1729,23 @@ impl ActionDriver {
                             log::debug!("CheckTipState: TCP reader available with {} frames, timespan: {}ms", 
                                 frame_count, time_span.as_millis());
                         } else {
-                            log::warn!("CheckTipState: No TCP reader available for signal {}", signal.0.0);
+                            log::warn!(
+                                "CheckTipState: No TCP reader available for signal {}",
+                                signal.0 .0
+                            );
                         }
 
                         // Use ReadStableSignal instead of single instantaneous read
-                        log::debug!("CheckTipState: Calling ReadStableSignal for signal {}", signal.0.0);
+                        log::debug!(
+                            "CheckTipState: Calling ReadStableSignal for signal {}",
+                            signal.0 .0
+                        );
 
                         // Calculate samples needed for configured data collection duration
-                        let data_points = self.calculate_samples_for_duration(
-                            Duration::from_millis(TIP_STATE_DATA_COLLECTION_DURATION_MS))
+                        let data_points = self
+                            .calculate_samples_for_duration(Duration::from_millis(
+                                TIP_STATE_DATA_COLLECTION_DURATION_MS,
+                            ))
                             .unwrap_or(100); // Fallback to 100 if TCP not configured
 
                         let stable_result = self.run(Action::ReadStableSignal {
@@ -1749,25 +1761,34 @@ impl ActionDriver {
 
                         let (value, raw_data, read_method) = match stable_result {
                             Ok(exec_result) => match exec_result {
-                                ExecutionResult::Single(ActionResult::StableSignal(stable_signal)) => {
+                                ExecutionResult::Single(ActionResult::StableSignal(
+                                    stable_signal,
+                                )) => {
                                     // Use stable value from ReadStableSignal
                                     log::debug!("CheckTipState: ReadStableSignal succeeded with {} data points", stable_signal.raw_data.len());
-                                    (stable_signal.stable_value, stable_signal.raw_data, "stable_signal")
+                                    (
+                                        stable_signal.stable_value,
+                                        stable_signal.raw_data,
+                                        "stable_signal",
+                                    )
                                 }
                                 ExecutionResult::Single(ActionResult::Values(values)) => {
                                     // ReadStableSignal failed but returned raw data, use minimum as fallback
                                     log::warn!("CheckTipState: ReadStableSignal failed but returned {} raw values, using minimum as fallback", values.len());
-                                    let raw_data: Vec<f32> = values.iter().map(|&v| v as f32).collect();
-                                    let min_value = raw_data.iter().cloned().fold(f32::INFINITY, f32::min);
+                                    let raw_data: Vec<f32> =
+                                        values.iter().map(|&v| v as f32).collect();
+                                    let min_value =
+                                        raw_data.iter().cloned().fold(f32::INFINITY, f32::min);
                                     (min_value, raw_data, "fallback_minimum")
                                 }
                                 _ => {
                                     // Unexpected result type, fallback to single read
                                     log::warn!("CheckTipState: ReadStableSignal returned unexpected result type, falling back to single read");
-                                    let single_value = self.client.signal_val_get(signal.0, true)?;
+                                    let single_value =
+                                        self.client.signal_val_get(signal.0, true)?;
                                     (single_value, vec![single_value], "single_read_fallback")
                                 }
-                            }
+                            },
                             Err(e) => {
                                 // Complete fallback to single read
                                 log::warn!("CheckTipState: ReadStableSignal failed with error: {}, falling back to single read", e);
@@ -1794,7 +1815,7 @@ impl ActionDriver {
                         } else {
                             0.0
                         };
-                        
+
                         let confidence = if shape == TipShape::Sharp {
                             // Within bounds: confidence decreases as we approach the edges
                             (1.0 - relative_distance).max(0.1) // Minimum confidence 0.1
@@ -1811,38 +1832,78 @@ impl ActionDriver {
                         // Populate metadata with analysis context and dataset
                         let mut metadata = HashMap::new();
                         metadata.insert("method".to_string(), "signal_bounds".to_string());
-                        metadata.insert("signal_index".to_string(), signal.0.0.to_string());
+                        metadata.insert("signal_index".to_string(), signal.0 .0.to_string());
                         metadata.insert("measured_value".to_string(), format!("{:.6e}", value));
                         metadata.insert("bounds_lower".to_string(), format!("{:.6e}", bounds.0));
                         metadata.insert("bounds_upper".to_string(), format!("{:.6e}", bounds.1));
-                        metadata.insert("bounds_center".to_string(), format!("{:.6e}", bounds_center));
-                        metadata.insert("bounds_width".to_string(), format!("{:.6e}", bounds_width));
-                        metadata.insert("distance_from_center".to_string(), format!("{:.6e}", distance_from_center));
-                        metadata.insert("relative_distance".to_string(), format!("{:.3}", relative_distance));
-                        metadata.insert("within_bounds".to_string(), (shape == TipShape::Sharp).to_string());
+                        metadata.insert(
+                            "bounds_center".to_string(),
+                            format!("{:.6e}", bounds_center),
+                        );
+                        metadata
+                            .insert("bounds_width".to_string(), format!("{:.6e}", bounds_width));
+                        metadata.insert(
+                            "distance_from_center".to_string(),
+                            format!("{:.6e}", distance_from_center),
+                        );
+                        metadata.insert(
+                            "relative_distance".to_string(),
+                            format!("{:.3}", relative_distance),
+                        );
+                        metadata.insert(
+                            "within_bounds".to_string(),
+                            (shape == TipShape::Sharp).to_string(),
+                        );
                         metadata.insert("read_method".to_string(), read_method.to_string());
                         metadata.insert("dataset_size".to_string(), raw_data.len().to_string());
-                        
+
                         // Store raw dataset for debugging stability measures
                         let raw_data_summary = if raw_data.len() <= 10 {
-                            raw_data.iter().map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",")
+                            raw_data
+                                .iter()
+                                .map(|x| format!("{:.3e}", x))
+                                .collect::<Vec<_>>()
+                                .join(",")
                         } else {
-                            let first_5: String = raw_data.iter().take(5).map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",");
-                            let last_5: String = raw_data.iter().rev().take(5).rev().map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",");
+                            let first_5: String = raw_data
+                                .iter()
+                                .take(5)
+                                .map(|x| format!("{:.3e}", x))
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            let last_5: String = raw_data
+                                .iter()
+                                .rev()
+                                .take(5)
+                                .rev()
+                                .map(|x| format!("{:.3e}", x))
+                                .collect::<Vec<_>>()
+                                .join(",");
                             format!("{},...,{}", first_5, last_5)
                         };
-                        metadata.insert("raw_dataset_summary".to_string(), format!("[{}]", raw_data_summary));
-                        
+                        metadata.insert(
+                            "raw_dataset_summary".to_string(),
+                            format!("[{}]", raw_data_summary),
+                        );
+
                         if shape == TipShape::Blunt {
                             let margin_violation = if value < bounds.0 {
                                 bounds.0 - value
                             } else {
                                 value - bounds.1
                             };
-                            metadata.insert("margin_violation".to_string(), format!("{:.6e}", margin_violation));
-                            metadata.insert("violation_direction".to_string(), 
-                                if value < bounds.0 { "below_lower_bound".to_string() } 
-                                else { "above_upper_bound".to_string() });
+                            metadata.insert(
+                                "margin_violation".to_string(),
+                                format!("{:.6e}", margin_violation),
+                            );
+                            metadata.insert(
+                                "violation_direction".to_string(),
+                                if value < bounds.0 {
+                                    "below_lower_bound".to_string()
+                                } else {
+                                    "above_upper_bound".to_string()
+                                },
+                            );
                         }
 
                         (shape, measured, confidence, metadata)
@@ -1857,8 +1918,10 @@ impl ActionDriver {
                         let mut read_methods = Vec::new();
 
                         // Calculate samples needed for configured data collection duration
-                        let data_points = self.calculate_samples_for_duration(
-                            Duration::from_millis(TIP_STATE_DATA_COLLECTION_DURATION_MS))
+                        let data_points = self
+                            .calculate_samples_for_duration(Duration::from_millis(
+                                TIP_STATE_DATA_COLLECTION_DURATION_MS,
+                            ))
                             .unwrap_or(100); // Fallback to 100 if TCP not configured
 
                         // Read each signal using ReadStableSignal
@@ -1876,21 +1939,29 @@ impl ActionDriver {
 
                             let (value, raw_data, read_method) = match stable_result {
                                 Ok(exec_result) => match exec_result {
-                                    ExecutionResult::Single(ActionResult::StableSignal(stable_signal)) => {
-                                        (stable_signal.stable_value, stable_signal.raw_data, "stable_signal")
-                                    }
+                                    ExecutionResult::Single(ActionResult::StableSignal(
+                                        stable_signal,
+                                    )) => (
+                                        stable_signal.stable_value,
+                                        stable_signal.raw_data,
+                                        "stable_signal",
+                                    ),
                                     ExecutionResult::Single(ActionResult::Values(values)) => {
-                                        let raw_data: Vec<f32> = values.iter().map(|&v| v as f32).collect();
-                                        let min_value = raw_data.iter().cloned().fold(f32::INFINITY, f32::min);
+                                        let raw_data: Vec<f32> =
+                                            values.iter().map(|&v| v as f32).collect();
+                                        let min_value =
+                                            raw_data.iter().cloned().fold(f32::INFINITY, f32::min);
                                         (min_value, raw_data, "fallback_minimum")
                                     }
                                     _ => {
-                                        let single_value = self.client.signal_val_get(signal.0, true)?;
+                                        let single_value =
+                                            self.client.signal_val_get(signal.0, true)?;
                                         (single_value, vec![single_value], "single_read_fallback")
                                     }
-                                }
+                                },
                                 Err(_) => {
-                                    let single_value = self.client.signal_val_get(signal.0, true)?;
+                                    let single_value =
+                                        self.client.signal_val_get(signal.0, true)?;
                                     (single_value, vec![single_value], "single_read_fallback")
                                 }
                             };
@@ -1898,7 +1969,7 @@ impl ActionDriver {
                             measured.insert(*signal, value);
                             all_datasets.push(raw_data);
                             read_methods.push(read_method);
-                            
+
                             let in_bounds = value >= bounds.0 && value <= bounds.1;
                             if !in_bounds {
                                 violations.push((*signal, value, *bounds));
@@ -1914,7 +1985,7 @@ impl ActionDriver {
                             } else {
                                 0.0
                             };
-                            
+
                             let signal_confidence = if in_bounds {
                                 (1.0 - relative_distance).max(0.1)
                             } else {
@@ -1935,38 +2006,79 @@ impl ActionDriver {
                         };
 
                         // Overall confidence is the minimum of all signal confidences
-                        let confidence = confidence_scores.iter().fold(1.0f32, |acc, &x| acc.min(x));
+                        let confidence =
+                            confidence_scores.iter().fold(1.0f32, |acc, &x| acc.min(x));
 
                         // Populate metadata with multi-signal analysis and datasets
                         let mut metadata = HashMap::new();
                         metadata.insert("method".to_string(), "multi_signal_bounds".to_string());
                         metadata.insert("signal_count".to_string(), signals.len().to_string());
-                        metadata.insert("signals_in_bounds".to_string(), (signals.len() - violations.len()).to_string());
-                        metadata.insert("violation_count".to_string(), violations.len().to_string());
+                        metadata.insert(
+                            "signals_in_bounds".to_string(),
+                            (signals.len() - violations.len()).to_string(),
+                        );
+                        metadata
+                            .insert("violation_count".to_string(), violations.len().to_string());
                         metadata.insert("overall_pass".to_string(), all_good.to_string());
-                        
+
                         // Add individual signal details with datasets
-                        for (i, ((signal, bounds), dataset)) in signals.iter().zip(all_datasets.iter()).enumerate() {
+                        for (i, ((signal, bounds), dataset)) in
+                            signals.iter().zip(all_datasets.iter()).enumerate()
+                        {
                             let prefix = format!("signal_{}", i);
                             let value = measured[signal];
-                            
-                            metadata.insert(format!("{}_index", prefix), signal.0.0.to_string());
+
+                            metadata.insert(format!("{}_index", prefix), signal.0 .0.to_string());
                             metadata.insert(format!("{}_value", prefix), format!("{:.6e}", value));
-                            metadata.insert(format!("{}_bounds", prefix), format!("[{:.3e}, {:.3e}]", bounds.0, bounds.1));
-                            metadata.insert(format!("{}_in_bounds", prefix), (value >= bounds.0 && value <= bounds.1).to_string());
-                            metadata.insert(format!("{}_confidence", prefix), format!("{:.3}", confidence_scores[i]));
-                            metadata.insert(format!("{}_read_method", prefix), read_methods[i].to_string());
-                            metadata.insert(format!("{}_dataset_size", prefix), dataset.len().to_string());
-                            
+                            metadata.insert(
+                                format!("{}_bounds", prefix),
+                                format!("[{:.3e}, {:.3e}]", bounds.0, bounds.1),
+                            );
+                            metadata.insert(
+                                format!("{}_in_bounds", prefix),
+                                (value >= bounds.0 && value <= bounds.1).to_string(),
+                            );
+                            metadata.insert(
+                                format!("{}_confidence", prefix),
+                                format!("{:.3}", confidence_scores[i]),
+                            );
+                            metadata.insert(
+                                format!("{}_read_method", prefix),
+                                read_methods[i].to_string(),
+                            );
+                            metadata.insert(
+                                format!("{}_dataset_size", prefix),
+                                dataset.len().to_string(),
+                            );
+
                             // Store dataset summary for debugging
                             let dataset_summary = if dataset.len() <= 10 {
-                                dataset.iter().map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",")
+                                dataset
+                                    .iter()
+                                    .map(|x| format!("{:.3e}", x))
+                                    .collect::<Vec<_>>()
+                                    .join(",")
                             } else {
-                                let first_3: String = dataset.iter().take(3).map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",");
-                                let last_3: String = dataset.iter().rev().take(3).rev().map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",");
+                                let first_3: String = dataset
+                                    .iter()
+                                    .take(3)
+                                    .map(|x| format!("{:.3e}", x))
+                                    .collect::<Vec<_>>()
+                                    .join(",");
+                                let last_3: String = dataset
+                                    .iter()
+                                    .rev()
+                                    .take(3)
+                                    .rev()
+                                    .map(|x| format!("{:.3e}", x))
+                                    .collect::<Vec<_>>()
+                                    .join(",");
                                 format!("{},...,{}", first_3, last_3)
                             };
-                            metadata.insert(format!("{}_dataset_summary", prefix), format!("[{}]", dataset_summary));
+                            metadata.insert(
+                                format!("{}_dataset_summary", prefix),
+                                format!("[{}]", dataset_summary),
+                            );
                         }
 
                         (shape, measured, confidence, metadata)
@@ -1977,22 +2089,31 @@ impl ActionDriver {
                 if let Some(ref tcp_reader) = self.tcp_reader {
                     let (frame_count, _max_capacity, time_span) = tcp_reader.buffer_stats();
                     metadata.insert("tcp_buffer_frames".to_string(), frame_count.to_string());
-                    metadata.insert("tcp_buffer_utilization".to_string(), 
-                        format!("{:.2}", tcp_reader.buffer_utilization()));
-                    metadata.insert("tcp_data_timespan_ms".to_string(), time_span.as_millis().to_string());
-                    metadata.insert("tcp_uptime_ms".to_string(), tcp_reader.uptime().as_millis().to_string());
+                    metadata.insert(
+                        "tcp_buffer_utilization".to_string(),
+                        format!("{:.2}", tcp_reader.buffer_utilization()),
+                    );
+                    metadata.insert(
+                        "tcp_data_timespan_ms".to_string(),
+                        time_span.as_millis().to_string(),
+                    );
+                    metadata.insert(
+                        "tcp_uptime_ms".to_string(),
+                        tcp_reader.uptime().as_millis().to_string(),
+                    );
 
                     // Add recent signal trend analysis for correlation with stable signal data
                     for signal_idx in measured_signals.keys() {
-                        if tcp_reader.frame_count() >= 20 { // Need minimum data for trend analysis
+                        if tcp_reader.frame_count() >= 20 {
+                            // Need minimum data for trend analysis
                             let recent_frames = tcp_reader.get_recent_frames(50); // Last 50 data points
-                            
+
                             // Extract signal values for this specific signal from recent TCP data
                             let signal_values: Vec<f32> = recent_frames
                                 .iter()
                                 .filter_map(|frame| {
                                     // Find the signal in the frame data (assuming signal index maps to data array position)
-                                    let idx = signal_idx.0.0 as usize;
+                                    let idx = signal_idx.0 .0 as usize;
                                     if idx < frame.signal_frame.data.len() {
                                         Some(frame.signal_frame.data[idx])
                                     } else {
@@ -2001,57 +2122,94 @@ impl ActionDriver {
                                 })
                                 .collect();
 
-                            if signal_values.len() >= 10 { // Minimum for meaningful statistics
-                                let mean = signal_values.iter().sum::<f32>() / signal_values.len() as f32;
-                                let variance = signal_values.iter()
+                            if signal_values.len() >= 10 {
+                                // Minimum for meaningful statistics
+                                let mean =
+                                    signal_values.iter().sum::<f32>() / signal_values.len() as f32;
+                                let variance = signal_values
+                                    .iter()
                                     .map(|x| (x - mean).powi(2))
-                                    .sum::<f32>() / signal_values.len() as f32;
+                                    .sum::<f32>()
+                                    / signal_values.len() as f32;
                                 let std_dev = variance.sqrt();
-                                let relative_std = if mean.abs() > 1e-15 { 
-                                    (std_dev / mean.abs()) * 100.0 
-                                } else { 
-                                    0.0 
+                                let relative_std = if mean.abs() > 1e-15 {
+                                    (std_dev / mean.abs()) * 100.0
+                                } else {
+                                    0.0
                                 };
 
                                 // Calculate trend (simple linear regression slope)
-                                let x_values: Vec<f32> = (0..signal_values.len()).map(|i| i as f32).collect();
+                                let x_values: Vec<f32> =
+                                    (0..signal_values.len()).map(|i| i as f32).collect();
                                 let x_mean = x_values.iter().sum::<f32>() / x_values.len() as f32;
                                 let y_mean = mean;
-                                
-                                let numerator: f32 = x_values.iter().zip(signal_values.iter())
+
+                                let numerator: f32 = x_values
+                                    .iter()
+                                    .zip(signal_values.iter())
                                     .map(|(x, y)| (x - x_mean) * (y - y_mean))
                                     .sum();
-                                let denominator: f32 = x_values.iter()
-                                    .map(|x| (x - x_mean).powi(2))
-                                    .sum();
-                                
+                                let denominator: f32 =
+                                    x_values.iter().map(|x| (x - x_mean).powi(2)).sum();
+
                                 let trend_slope = if denominator.abs() > 1e-15 {
                                     numerator / denominator
                                 } else {
                                     0.0
                                 };
 
-                                let signal_prefix = format!("tcp_signal_{}", signal_idx.0.0);
-                                metadata.insert(format!("{}_recent_samples", signal_prefix), signal_values.len().to_string());
-                                metadata.insert(format!("{}_recent_mean", signal_prefix), format!("{:.6e}", mean));
-                                metadata.insert(format!("{}_recent_std", signal_prefix), format!("{:.6e}", std_dev));
-                                metadata.insert(format!("{}_recent_relative_std_pct", signal_prefix), format!("{:.3}", relative_std));
-                                metadata.insert(format!("{}_trend_slope", signal_prefix), format!("{:.6e}", trend_slope));
-                                metadata.insert(format!("{}_current_vs_recent_mean", signal_prefix), 
-                                    format!("{:.6e}", measured_signals[signal_idx] - mean));
-                                
+                                let signal_prefix = format!("tcp_signal_{}", signal_idx.0 .0);
+                                metadata.insert(
+                                    format!("{}_recent_samples", signal_prefix),
+                                    signal_values.len().to_string(),
+                                );
+                                metadata.insert(
+                                    format!("{}_recent_mean", signal_prefix),
+                                    format!("{:.6e}", mean),
+                                );
+                                metadata.insert(
+                                    format!("{}_recent_std", signal_prefix),
+                                    format!("{:.6e}", std_dev),
+                                );
+                                metadata.insert(
+                                    format!("{}_recent_relative_std_pct", signal_prefix),
+                                    format!("{:.3}", relative_std),
+                                );
+                                metadata.insert(
+                                    format!("{}_trend_slope", signal_prefix),
+                                    format!("{:.6e}", trend_slope),
+                                );
+                                metadata.insert(
+                                    format!("{}_current_vs_recent_mean", signal_prefix),
+                                    format!("{:.6e}", measured_signals[signal_idx] - mean),
+                                );
+
                                 // Classify signal stability based on recent data
-                                let is_stable_signal = relative_std < 5.0 && trend_slope.abs() < (std_dev * 0.1);
-                                metadata.insert(format!("{}_appears_stable", signal_prefix), is_stable_signal.to_string());
-                                
+                                let is_stable_signal =
+                                    relative_std < 5.0 && trend_slope.abs() < (std_dev * 0.1);
+                                metadata.insert(
+                                    format!("{}_appears_stable", signal_prefix),
+                                    is_stable_signal.to_string(),
+                                );
+
                                 // Check if current measurement is within recent range
-                                let min_recent = signal_values.iter().cloned().fold(f32::INFINITY, f32::min);
-                                let max_recent = signal_values.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-                                let current_in_recent_range = measured_signals[signal_idx] >= min_recent && 
-                                                             measured_signals[signal_idx] <= max_recent;
-                                metadata.insert(format!("{}_current_in_recent_range", signal_prefix), current_in_recent_range.to_string());
-                                metadata.insert(format!("{}_recent_range", signal_prefix), 
-                                    format!("[{:.6e}, {:.6e}]", min_recent, max_recent));
+                                let min_recent =
+                                    signal_values.iter().cloned().fold(f32::INFINITY, f32::min);
+                                let max_recent = signal_values
+                                    .iter()
+                                    .cloned()
+                                    .fold(f32::NEG_INFINITY, f32::max);
+                                let current_in_recent_range = measured_signals[signal_idx]
+                                    >= min_recent
+                                    && measured_signals[signal_idx] <= max_recent;
+                                metadata.insert(
+                                    format!("{}_current_in_recent_range", signal_prefix),
+                                    current_in_recent_range.to_string(),
+                                );
+                                metadata.insert(
+                                    format!("{}_recent_range", signal_prefix),
+                                    format!("[{:.6e}, {:.6e}]", min_recent, max_recent),
+                                );
                             }
                         }
                     }
@@ -2059,67 +2217,119 @@ impl ActionDriver {
 
                 // Add recent ReadStableSignal data for correlation and debugging
                 let now = std::time::Instant::now();
-                let recent_signals: Vec<_> = self.recent_stable_signals
+                let recent_signals: Vec<_> = self
+                    .recent_stable_signals
                     .iter()
-                    .filter(|(_, timestamp)| now.duration_since(*timestamp) < std::time::Duration::from_secs(300)) // Last 5 minutes
+                    .filter(|(_, timestamp)| {
+                        now.duration_since(*timestamp) < std::time::Duration::from_secs(300)
+                    }) // Last 5 minutes
                     .collect();
-                
+
                 if !recent_signals.is_empty() {
-                    metadata.insert("recent_stable_signals_count".to_string(), recent_signals.len().to_string());
-                    
+                    metadata.insert(
+                        "recent_stable_signals_count".to_string(),
+                        recent_signals.len().to_string(),
+                    );
+
                     // Add details of the most recent ReadStableSignal for debugging
                     if let Some((most_recent_signal, timestamp)) = recent_signals.last() {
                         let age_ms = now.duration_since(*timestamp).as_millis();
-                        metadata.insert("most_recent_stable_signal_age_ms".to_string(), age_ms.to_string());
-                        metadata.insert("most_recent_stable_value".to_string(), format!("{:.6e}", most_recent_signal.stable_value));
-                        metadata.insert("most_recent_stable_confidence".to_string(), format!("{:.3}", most_recent_signal.confidence));
-                        metadata.insert("most_recent_data_points".to_string(), most_recent_signal.data_points_used.to_string());
-                        metadata.insert("most_recent_analysis_duration_ms".to_string(), most_recent_signal.analysis_duration.as_millis().to_string());
-                        
+                        metadata.insert(
+                            "most_recent_stable_signal_age_ms".to_string(),
+                            age_ms.to_string(),
+                        );
+                        metadata.insert(
+                            "most_recent_stable_value".to_string(),
+                            format!("{:.6e}", most_recent_signal.stable_value),
+                        );
+                        metadata.insert(
+                            "most_recent_stable_confidence".to_string(),
+                            format!("{:.3}", most_recent_signal.confidence),
+                        );
+                        metadata.insert(
+                            "most_recent_data_points".to_string(),
+                            most_recent_signal.data_points_used.to_string(),
+                        );
+                        metadata.insert(
+                            "most_recent_analysis_duration_ms".to_string(),
+                            most_recent_signal.analysis_duration.as_millis().to_string(),
+                        );
+
                         // Include raw data summary for debugging (first 5, last 5 values to avoid huge logs)
                         let raw_data = &most_recent_signal.raw_data;
                         let raw_data_summary = if raw_data.len() <= 10 {
                             // Small dataset, include all
-                            raw_data.iter().map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",")
+                            raw_data
+                                .iter()
+                                .map(|x| format!("{:.3e}", x))
+                                .collect::<Vec<_>>()
+                                .join(",")
                         } else {
                             // Large dataset, show first 5 and last 5
-                            let first_5: String = raw_data.iter().take(5).map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",");
-                            let last_5: String = raw_data.iter().rev().take(5).rev().map(|x| format!("{:.3e}", x)).collect::<Vec<_>>().join(",");
+                            let first_5: String = raw_data
+                                .iter()
+                                .take(5)
+                                .map(|x| format!("{:.3e}", x))
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            let last_5: String = raw_data
+                                .iter()
+                                .rev()
+                                .take(5)
+                                .rev()
+                                .map(|x| format!("{:.3e}", x))
+                                .collect::<Vec<_>>()
+                                .join(",");
                             format!("{},...,{}", first_5, last_5)
                         };
-                        metadata.insert("most_recent_raw_data_summary".to_string(), format!("[{}]", raw_data_summary));
-                        metadata.insert("most_recent_raw_data_full_count".to_string(), raw_data.len().to_string());
-                        
+                        metadata.insert(
+                            "most_recent_raw_data_summary".to_string(),
+                            format!("[{}]", raw_data_summary),
+                        );
+                        metadata.insert(
+                            "most_recent_raw_data_full_count".to_string(),
+                            raw_data.len().to_string(),
+                        );
+
                         // Include stability metrics
                         for (metric_name, metric_value) in &most_recent_signal.stability_metrics {
                             metadata.insert(
-                                format!("most_recent_metric_{}", metric_name), 
-                                format!("{:.6e}", metric_value)
+                                format!("most_recent_metric_{}", metric_name),
+                                format!("{:.6e}", metric_value),
                             );
                         }
                     }
                 }
 
                 // Add execution timestamp
-                metadata.insert("execution_timestamp".to_string(), chrono::Utc::now().to_rfc3339());
+                metadata.insert(
+                    "execution_timestamp".to_string(),
+                    chrono::Utc::now().to_rfc3339(),
+                );
 
                 // Log measured signal values for analysis
                 let signal_values_str = measured_signals
                     .iter()
-                    .map(|(signal_idx, value)| format!("signal_{}={:.6e}", signal_idx.0.0, value))
+                    .map(|(signal_idx, value)| format!("signal_{}={:.6e}", signal_idx.0 .0, value))
                     .collect::<Vec<_>>()
                     .join(", ");
-                
+
                 // Extract read method and dataset info from metadata for environment log
-                let read_method = metadata.get("read_method").cloned().unwrap_or_else(|| "unknown".to_string());
-                let dataset_size = metadata.get("dataset_size").cloned().unwrap_or_else(|| "unknown".to_string());
-                
+                let read_method = metadata
+                    .get("read_method")
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
+                let dataset_size = metadata
+                    .get("dataset_size")
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
+
                 let stable_signal_info = if !recent_signals.is_empty() {
                     format!(", recent_stable_data=true (count={})", recent_signals.len())
                 } else {
                     ", recent_stable_data=false".to_string()
                 };
-                
+
                 log::info!("CheckTipState result: shape={:?}, confidence={:.3}, read_method={}, dataset_size={}, measured_signals=[{}]{}",
                     tip_shape, confidence, read_method, dataset_size, signal_values_str, stable_signal_info);
 
@@ -2179,10 +2389,8 @@ impl ActionDriver {
                             })?;
 
                             // Convert Nanonis signal index to TCP channel using registry
-                            let tcp_channel = self
-                                .signal_registry
-                                .nanonis_to_tcp(signal.0)
-                                .map_err(|e| {
+                            let tcp_channel =
+                                self.signal_registry.nanonis_to_tcp(signal.0).map_err(|e| {
                                     NanonisError::Protocol(format!(
                                         "Signal {} (Nanonis index) has no TCP channel mapping: {}",
                                         signal.0, e
@@ -2392,7 +2600,10 @@ impl ActionDriver {
                 })?;
 
                 // Convert Nanonis signal index to TCP channel using registry
-                log::debug!("ReadStableSignal: Looking up signal {} in signal registry", signal.0);
+                log::debug!(
+                    "ReadStableSignal: Looking up signal {} in signal registry",
+                    signal.0
+                );
                 let tcp_channel =
                     self.signal_registry
                         .nanonis_to_tcp(signal.0)
@@ -2404,11 +2615,22 @@ impl ActionDriver {
                             ))
                         })?;
 
-                log::debug!("ReadStableSignal: Signal {} mapped to TCP channel {}", signal.0, tcp_channel.get());
+                log::debug!(
+                    "ReadStableSignal: Signal {} mapped to TCP channel {}",
+                    signal.0,
+                    tcp_channel.get()
+                );
 
                 // Find TCP channel in TCP config channels
-                log::debug!("ReadStableSignal: Signal {} (Nanonis) maps to TCP channel {}", signal.0, tcp_channel.get());
-                log::debug!("ReadStableSignal: Available TCP channels: {:?}", tcp_config.channels);
+                log::debug!(
+                    "ReadStableSignal: Signal {} (Nanonis) maps to TCP channel {}",
+                    signal.0,
+                    tcp_channel.get()
+                );
+                log::debug!(
+                    "ReadStableSignal: Available TCP channels: {:?}",
+                    tcp_config.channels
+                );
                 let signal_channel_idx = tcp_config
                     .channels
                     .iter()
@@ -2427,7 +2649,7 @@ impl ActionDriver {
 
                 // Retry loop for data collection and stability analysis
                 let mut attempt = 0;
-                
+
                 loop {
                     match self.attempt_stable_signal_read(
                         signal_channel_idx,
@@ -2438,14 +2660,19 @@ impl ActionDriver {
                     ) {
                         Ok((signal_data, is_stable, confidence, metrics)) => {
                             let analysis_duration = start_time.elapsed();
-                            
+
                             if is_stable {
                                 // Calculate stable value (mean of the data)
-                                let stable_value = signal_data.iter().sum::<f32>() / signal_data.len() as f32;
+                                let stable_value =
+                                    signal_data.iter().sum::<f32>() / signal_data.len() as f32;
 
                                 use crate::actions::StableSignal;
-                                log::info!("Stable signal acquired on attempt {} (retries: {})", attempt + 1, attempt);
-                                
+                                log::info!(
+                                    "Stable signal acquired on attempt {} (retries: {})",
+                                    attempt + 1,
+                                    attempt
+                                );
+
                                 let stable_signal = StableSignal {
                                     stable_value,
                                     confidence,
@@ -2454,40 +2681,52 @@ impl ActionDriver {
                                     stability_metrics: metrics,
                                     raw_data: signal_data,
                                 };
-                                
+
                                 // Store for correlation with future CheckTipState calls
-                                self.recent_stable_signals.push_back((stable_signal.clone(), std::time::Instant::now()));
+                                self.recent_stable_signals
+                                    .push_back((stable_signal.clone(), std::time::Instant::now()));
                                 // Keep only last 10 stable signal results
                                 while self.recent_stable_signals.len() > 10 {
                                     self.recent_stable_signals.pop_front();
                                 }
-                                
+
                                 return Ok(ActionResult::StableSignal(stable_signal));
                             } else if attempt >= max_retries {
                                 // No more retries, return raw data as fallback
-                                log::warn!("Signal not stable after {} attempts, returning raw data", attempt + 1);
-                                let values: Vec<f64> = signal_data.iter().map(|&x| x as f64).collect();
+                                log::warn!(
+                                    "Signal not stable after {} attempts, returning raw data",
+                                    attempt + 1
+                                );
+                                let values: Vec<f64> =
+                                    signal_data.iter().map(|&x| x as f64).collect();
                                 return Ok(ActionResult::Values(values));
                             } else {
                                 // Signal not stable, but we can retry
-                                log::debug!("Signal not stable on attempt {}, retrying...", attempt + 1);
+                                log::debug!(
+                                    "Signal not stable on attempt {}, retrying...",
+                                    attempt + 1
+                                );
                             }
                         }
                         Err(e) => {
                             log::warn!("Data collection failed on attempt {}: {}", attempt + 1, e);
-                            
+
                             if attempt >= max_retries {
                                 return Err(e);
                             }
                         }
                     }
-                    
+
                     attempt += 1;
-                    
+
                     // Add delay between retries (exponential backoff)
                     if attempt <= max_retries {
                         let delay_ms = 100 * (1 << (attempt - 1).min(4)); // Cap at 1.6s delay
-                        log::debug!("Waiting {}ms before retry attempt {}", delay_ms, attempt + 1);
+                        log::debug!(
+                            "Waiting {}ms before retry attempt {}",
+                            delay_ms,
+                            attempt + 1
+                        );
                         std::thread::sleep(Duration::from_millis(delay_ms));
                     }
                 }
@@ -2518,8 +2757,7 @@ impl ActionDriver {
                         }
                     };
 
-                let status = (ampl_setpoint - 5e-12..ampl_setpoint + 5e-12)
-                    .contains(&ampl_current);
+                let status = (ampl_setpoint - 5e-12..ampl_setpoint + 5e-12).contains(&ampl_current);
 
                 Ok(ActionResult::Status(status))
             }
@@ -2545,7 +2783,9 @@ impl ActionDriver {
         };
 
         if signal_data.is_empty() {
-            return Err(NanonisError::Protocol("No signal data available".to_string()));
+            return Err(NanonisError::Protocol(
+                "No signal data available".to_string(),
+            ));
         }
 
         // Analyze stability using the specified method
