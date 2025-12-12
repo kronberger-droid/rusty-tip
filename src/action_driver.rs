@@ -2651,8 +2651,9 @@ impl ActionDriver {
                         ))
                     })?;
 
-                log::debug!("ReadStableSignal: Signal {} uses position {} in TCP data array (channel {} in Nanonis TCP stream)",
-                    signal.0, signal_channel_idx, tcp_config.channels[signal_channel_idx]);
+                log::info!("ReadStableSignal: Signal {} (Nanonis) -> TCP channel {} -> Array position {}",
+                    signal.0, tcp_channel.get(), signal_channel_idx);
+                log::info!("ReadStableSignal: Full TCP channel list: {:?}", tcp_config.channels);
 
                 // Retry loop for data collection and stability analysis
                 let mut attempt = 0;
