@@ -27,6 +27,16 @@ const POST_PULSE_DATA_COLLECTION_MS: u64 = 50;
 /// Wait time after clearing TCP buffer to accumulate fresh data (ms)
 const BUFFER_CLEAR_WAIT_MS: u64 = 500;
 
+/// Wait time after approach for signal to stabilize before first measurement (ms)
+/// After approach, the tip needs time to settle and the signal to stabilize
+/// Increase this if you get incorrect initial tip state readings
+const POST_APPROACH_SETTLE_TIME_MS: u64 = 2000;
+
+/// Wait time after reposition (during pulse cycles) for signal to stabilize (ms)
+/// After repositioning and approach in bad_loop, signal needs time to settle
+/// Shorter than initial approach since it's a smaller movement
+const POST_REPOSITION_SETTLE_TIME_MS: u64 = 1000;
+
 /// Bias sweep range for stability checking (V)
 const STABILITY_BIAS_SWEEP_RANGE: (f32, f32) = (-2.0, 2.0);
 
@@ -531,6 +541,13 @@ impl TipController {
             })
             .go()?;
 
+        // Wait for signal to stabilize after reposition/approach
+        log::debug!(
+            "Waiting {}ms for signal to stabilize after reposition...",
+            POST_REPOSITION_SETTLE_TIME_MS
+        );
+        std::thread::sleep(Duration::from_millis(POST_REPOSITION_SETTLE_TIME_MS));
+
         // let amplitude_reached: bool = self
         //     .driver
         //     .run(Action::ReachedTargedAmplitude)
@@ -652,8 +669,15 @@ impl TipController {
         log::debug!("Clearing TCP buffer to get fresh frequency shift data");
         self.driver.clear_tcp_buffer();
 
-        // Wait briefly for fresh data to accumulate
+        // Wait briefly for fresh data to accumulate in buffer
         std::thread::sleep(Duration::from_millis(BUFFER_CLEAR_WAIT_MS));
+
+        // Wait for signal to stabilize after approach
+        info!(
+            "Waiting {}s for signal to stabilize after approach...",
+            POST_APPROACH_SETTLE_TIME_MS as f32 / 1000.0
+        );
+        std::thread::sleep(Duration::from_millis(POST_APPROACH_SETTLE_TIME_MS));
 
         let initial_tip_state: TipState = self
             .driver
