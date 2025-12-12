@@ -593,6 +593,14 @@ impl TipController {
 
     /// Good loop - monitoring, increment good count
     fn good_loop(&mut self) -> Result<(), NanonisError> {
+        let confident_tip_shape = self.pre_good_loop_check()?;
+
+        if matches!(confident_tip_shape, TipShape::Blunt) {
+            info!("Tip Shape was wrongly measured as good");
+            self.current_tip_shape = TipShape::Blunt;
+            return Ok(());
+        }
+
         // If stability checking is disabled, mark tip as stable immediately
         if !self.config.check_stability {
             info!("Stability checking disabled - marking tip as stable");
@@ -648,6 +656,35 @@ impl TipController {
         };
 
         Ok(())
+    }
+
+    fn pre_good_loop_check(&mut self) -> Result<TipShape, NanonisError> {
+        log::info!("Checking reliability of tip state result");
+
+        for _ in 0..3 {
+            self.driver
+                .run(Action::SafeReposition {
+                    x_steps: 3,
+                    y_steps: 3,
+                })
+                .go()?;
+
+            let tip_state: TipState = self
+                .driver
+                .run(Action::CheckTipState {
+                    method: TipCheckMethod::SignalBounds {
+                        signal: self.config.freq_shift_index,
+                        bounds: self.config.sharp_tip_bounds,
+                    },
+                })
+                .expecting()?;
+
+            if matches!(tip_state.shape, TipShape::Blunt) {
+                return Ok(tip_state.shape);
+            }
+        }
+
+        Ok(TipShape::Sharp)
     }
 
     fn pre_loop_initialization(&mut self) -> Result<(), NanonisError> {
