@@ -19,13 +19,38 @@ pub enum LoopType {
     StableLoop,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PolaritySign {
+    Positive,
+    Negative,
+}
+
+impl PolaritySign {
+    pub fn opposite(&self) -> Self {
+        match self {
+            PolaritySign::Positive => PolaritySign::Negative,
+            PolaritySign::Negative => PolaritySign::Positive,
+        }
+    }
+}
+
+pub struct RandomPolaritySwitch {
+    pub switch_every_n_pulses: u32,
+}
+
 pub enum PulseMethod {
-    Fixed(f32),
+    Fixed {
+        voltage: f32,
+        polarity: PolaritySign,
+        random_switch: Option<RandomPolaritySwitch>,
+    },
     Stepping {
         voltage_bounds: (f32, f32),
         voltage_steps: u16,
         cycles_before_step: u16,
         threshold: Box<dyn Fn(f32) -> f32 + Send + Sync>,
+        polarity: PolaritySign,
+        random_switch: Option<RandomPolaritySwitch>,
     },
 }
 
@@ -35,6 +60,8 @@ impl PulseMethod {
         voltage_steps: u16,
         cycles_before_step: u16,
         threshold: f32,
+        polarity: PolaritySign,
+        random_switch: Option<RandomPolaritySwitch>,
     ) -> PulseMethod {
         let threshold = threshold.abs();
         PulseMethod::Stepping {
@@ -42,6 +69,8 @@ impl PulseMethod {
             voltage_steps,
             cycles_before_step,
             threshold: Box::new(move |_| threshold),
+            polarity,
+            random_switch,
         }
     }
 }
@@ -61,7 +90,11 @@ impl Default for TipControllerConfig {
         Self {
             freq_shift_index: 76u8.into(),
             sharp_tip_bounds: (-2.0, 0.0),
-            pulse_method: PulseMethod::Fixed(4.0),
+            pulse_method: PulseMethod::Fixed {
+                voltage: 4.0,
+                polarity: PolaritySign::Positive,
+                random_switch: None,
+            },
             allowed_change_for_stable: 0.2,
             max_cycles: Some(1000),
             max_duration: Some(Duration::from_secs(3600)), // 1 hour
@@ -92,14 +125,22 @@ pub struct TipController {
 
     // Graceful shutdown support
     shutdown_requested: Option<Arc<AtomicBool>>,
+
+    // Polarity tracking
+    base_polarity: PolaritySign,
+    pulse_count_for_random: u32,
 }
 
 impl TipController {
     /// Create new tip controller with basic signal bounds
     pub fn new(driver: ActionDriver, config: TipControllerConfig) -> Self {
-        let initial_voltage = match config.pulse_method {
-            PulseMethod::Fixed(value) => value,
+        let initial_voltage = match &config.pulse_method {
+            PulseMethod::Fixed { voltage, .. } => *voltage,
             PulseMethod::Stepping { voltage_bounds, .. } => voltage_bounds.0,
+        };
+        let base_polarity = match &config.pulse_method {
+            PulseMethod::Fixed { polarity, .. } => *polarity,
+            PulseMethod::Stepping { polarity, .. } => *polarity,
         };
         let max_cycles = config.max_cycles;
         let max_duration = config.max_duration;
@@ -116,12 +157,47 @@ impl TipController {
             max_duration,
             loop_start_time: None,
             shutdown_requested: None,
+            base_polarity,
+            pulse_count_for_random: 0,
         }
     }
 
     /// Set shutdown flag for graceful termination
     pub fn set_shutdown_flag(&mut self, flag: Arc<AtomicBool>) {
         self.shutdown_requested = Some(flag);
+    }
+
+    /// Check if this pulse should use opposite polarity
+    fn should_use_opposite_polarity(&self) -> bool {
+        match &self.config.pulse_method {
+            PulseMethod::Stepping {
+                random_switch: Some(switch),
+                ..
+            }
+            | PulseMethod::Fixed {
+                random_switch: Some(switch),
+                ..
+            } => {
+                // Check if current pulse count is a multiple of switch interval
+                self.pulse_count_for_random > 0
+                    && self.pulse_count_for_random % switch.switch_every_n_pulses == 0
+            }
+            _ => false,
+        }
+    }
+
+    /// Get the signed pulse voltage based on current polarity
+    fn get_signed_pulse_voltage(&self) -> f32 {
+        let polarity = if self.should_use_opposite_polarity() {
+            self.base_polarity.opposite()
+        } else {
+            self.base_polarity
+        };
+
+        match polarity {
+            PolaritySign::Positive => self.current_pulse_voltage,
+            PolaritySign::Negative => -self.current_pulse_voltage,
+        }
     }
 
     /// Track a signal value in history
@@ -177,7 +253,7 @@ impl TipController {
         // Only check for stepping if PulseMethod is Stepping
         let threshold_fn = match &self.config.pulse_method {
             PulseMethod::Stepping { threshold, .. } => threshold,
-            PulseMethod::Fixed(_) => return (false, 0.0), // No stepping for fixed method
+            PulseMethod::Fixed { .. } => return (false, 0.0), // No stepping for fixed method
         };
 
         if let Some(history) = self.signal_histories.get(&signal_index) {
@@ -246,7 +322,7 @@ impl TipController {
                 voltage_steps,
                 ..
             } => (*voltage_bounds, *voltage_steps),
-            PulseMethod::Fixed(_) => return false, // No stepping for fixed method
+            PulseMethod::Fixed { .. } => return false, // No stepping for fixed method
         };
 
         // Calculate step size
@@ -279,7 +355,7 @@ impl TipController {
                 voltage_bounds,
                 ..
             } => (*cycles_before_step, *voltage_bounds),
-            PulseMethod::Fixed(_) => return, // No stepping for fixed method
+            PulseMethod::Fixed { .. } => return, // No stepping for fixed method
         };
 
         // Check for significant change and respond accordingly
@@ -388,18 +464,32 @@ impl TipController {
     /// Bad loop - execute recovery sequence with stable signal monitoring
     /// Sequence: capture_stable_before → pulse → capture_stable_after → withdraw → move → approach → check
     fn bad_loop(&mut self) -> Result<(), NanonisError> {
+        let signed_voltage = self.get_signed_pulse_voltage();
+
+        // Log if using opposite polarity
+        if self.should_use_opposite_polarity() {
+            info!(
+                "Random polarity switch: using {:?} for this pulse ({:.3}V)",
+                self.base_polarity.opposite(),
+                signed_voltage
+            );
+        }
+
         log::debug!(
-            "Executing PulseRetract Sequence with pulse = {} V",
-            self.current_pulse_voltage
+            "Executing PulseRetract Sequence with pulse = {:.3} V",
+            signed_voltage
         );
 
         self.driver
             .run(Action::PulseRetract {
                 pulse_width: Duration::from_millis(500),
-                pulse_height_v: self.current_pulse_voltage,
+                pulse_height_v: signed_voltage,
             })
             .with_data_collection(Duration::from_millis(50), Duration::from_millis(50))
             .execute()?;
+
+        // Increment pulse counter for random switching
+        self.pulse_count_for_random += 1;
 
         log::debug!("Repositioning...");
 

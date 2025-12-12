@@ -107,27 +107,90 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create pulse method from config
     let pulse_method = match app_config.pulse_method {
-        rusty_tip::config::PulseMethodConfig::Fixed { ref pulse_voltage } => {
+        rusty_tip::config::PulseMethodConfig::Fixed {
+            ref pulse_voltage,
+            polarity,
+            ref random_polarity_switch,
+        } => {
             let voltage = pulse_voltage.get(0).copied().unwrap_or(4.0);
-            info!("Using fixed pulse method with voltage: {:.2}V", voltage);
-            PulseMethod::Fixed(voltage)
+            let random_switch = random_polarity_switch.as_ref().and_then(|rps| {
+                if rps.enabled {
+                    Some(rusty_tip::tip_prep::RandomPolaritySwitch {
+                        switch_every_n_pulses: rps.switch_every_n_pulses,
+                    })
+                } else {
+                    None
+                }
+            });
+
+            info!(
+                "Using fixed pulse method with voltage: {:.2}V, polarity: {:?}",
+                voltage, polarity
+            );
+            if let Some(ref switch) = random_switch {
+                info!(
+                    "Random polarity switching enabled: every {} pulses",
+                    switch.switch_every_n_pulses
+                );
+            }
+
+            PulseMethod::Fixed {
+                voltage,
+                polarity: match polarity {
+                    rusty_tip::config::PolaritySign::Positive => {
+                        rusty_tip::tip_prep::PolaritySign::Positive
+                    }
+                    rusty_tip::config::PolaritySign::Negative => {
+                        rusty_tip::tip_prep::PolaritySign::Negative
+                    }
+                },
+                random_switch,
+            }
         }
         rusty_tip::config::PulseMethodConfig::Stepping {
             voltage_bounds,
             voltage_steps,
             cycles_before_step,
             threshold_value,
+            polarity,
+            ref random_polarity_switch,
             ..
         } => {
+            let random_switch = random_polarity_switch.as_ref().and_then(|rps| {
+                if rps.enabled {
+                    Some(rusty_tip::tip_prep::RandomPolaritySwitch {
+                        switch_every_n_pulses: rps.switch_every_n_pulses,
+                    })
+                } else {
+                    None
+                }
+            });
+
             info!(
-                "Using stepping pulse method: {:.2}V to {:.2}V in {} steps",
-                voltage_bounds[0], voltage_bounds[1], voltage_steps
+                "Using stepping pulse method: {:.2}V to {:.2}V in {} steps, polarity: {:?}",
+                voltage_bounds[0], voltage_bounds[1], voltage_steps, polarity
             );
+            if let Some(ref switch) = random_switch {
+                info!(
+                    "Random polarity switching enabled: every {} pulses",
+                    switch.switch_every_n_pulses
+                );
+            }
+
             PulseMethod::stepping_fixed_threshold(
                 (voltage_bounds[0], voltage_bounds[1]),
                 voltage_steps,
                 cycles_before_step,
                 threshold_value,
+                match polarity {
+                    rusty_tip::config::PolaritySign::Positive => {
+                        rusty_tip::tip_prep::PolaritySign::Positive
+                    }
+                    rusty_tip::config::PolaritySign::Negative => {
+                        rusty_tip::tip_prep::PolaritySign::Negative
+                    }
+                },
+                random_switch,
             )
         }
     };
