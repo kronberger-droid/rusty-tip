@@ -8,7 +8,7 @@ pub struct TcpChannelMapping {
     pub tcp_channel: u8,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct AppConfig {
     pub nanonis: NanonisConfig,
     pub data_acquisition: DataAcquisitionConfig,
@@ -52,17 +52,12 @@ pub struct TipPrepConfig {
     pub max_duration_secs: Option<u64>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum PolaritySign {
+    #[default]
     Positive,
     Negative,
-}
-
-impl Default for PolaritySign {
-    fn default() -> Self {
-        PolaritySign::Positive
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -92,20 +87,6 @@ pub enum PulseMethodConfig {
         #[serde(default)]
         random_polarity_switch: Option<RandomPolaritySwitchConfig>,
     },
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            nanonis: NanonisConfig::default(),
-            data_acquisition: DataAcquisitionConfig::default(),
-            experiment_logging: ExperimentLoggingConfig::default(),
-            console: ConsoleConfig::default(),
-            tip_prep: TipPrepConfig::default(),
-            pulse_method: PulseMethodConfig::default(),
-            tcp_channel_mapping: None,
-        }
-    }
 }
 
 impl Default for NanonisConfig {
@@ -171,8 +152,7 @@ impl Default for PulseMethodConfig {
 
 /// Load configuration from file with layered fallbacks
 pub fn load_config(config_path: Option<&Path>) -> Result<AppConfig, ConfigError> {
-    let mut builder = Config::builder()
-        .add_source(Config::try_from(&AppConfig::default())?);
+    let mut builder = Config::builder().add_source(Config::try_from(&AppConfig::default())?);
 
     if let Some(path) = config_path {
         if path.exists() {

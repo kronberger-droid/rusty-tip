@@ -1,4 +1,3 @@
-// chrono import removed - now using Utc::now() directly in actions.rs
 use log::{debug, info};
 use ndarray::Array1;
 
@@ -19,9 +18,9 @@ use std::collections::HashMap;
 use std::thread;
 use std::time::{Duration, Instant};
 
-// ============================================================================
+// ========================================================================
 // TIP STATE CHECKING CONSTANTS
-// ============================================================================
+// ========================================================================
 
 /// Relative standard deviation threshold for signal stability check (in percent)
 /// Lower values = stricter stability requirements

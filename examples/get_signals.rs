@@ -7,7 +7,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let values = client.signals_vals_get((0..=127).collect::<Vec<i32>>(), true)?;
     let names = client.signal_names_get()?;
 
-    let better_names = names.iter().map(|name| {
+    let _better_names = names.iter().map(|name| {
         if let Some(pos) = name.find('(') {
             name[..pos].trim().to_string()
         } else {
