@@ -1,6 +1,6 @@
 use super::NanonisClient;
 use crate::error::NanonisError;
-use crate::types::{NanonisValue, Position, ScanAction, ScanDirection, ScanFrame};
+use crate::types::{NanonisValue, Position, ScanAction, ScanConfig, ScanDirection, ScanFrame};
 use std::time::Duration;
 
 impl NanonisClient {
@@ -70,12 +70,8 @@ impl NanonisClient {
     /// Get the scan buffer parameters
     /// Returns: (channel_indexes, pixels, lines)
     pub fn scan_buffer_get(&mut self) -> Result<(Vec<i32>, i32, i32), NanonisError> {
-        let result = self.quick_send(
-            "Scan.BufferGet",
-            vec![],
-            vec![],
-            vec!["i", "*i", "i", "i"],
-        )?;
+        let result =
+            self.quick_send("Scan.BufferGet", vec![], vec![], vec!["i", "*i", "i", "i"])?;
         if result.len() >= 4 {
             let channel_indexes = result[1].as_i32_array()?.to_vec();
             let pixels = result[2].as_i32()?;
@@ -200,24 +196,16 @@ impl NanonisClient {
     /// client.scan_speed_set(1e-6, 1e-6, 0.1, 0.1, 2, 1.0)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn scan_speed_set(
-        &mut self,
-        forward_linear_speed_m_s: f32,
-        backward_linear_speed_m_s: f32,
-        forward_time_per_line_s: f32,
-        backward_time_per_line_s: f32,
-        keep_parameter_constant: u16,
-        speed_ratio: f32,
-    ) -> Result<(), NanonisError> {
+    pub fn scan_config_set(&mut self, config: ScanConfig) -> Result<(), NanonisError> {
         self.quick_send(
             "Scan.SpeedSet",
             vec![
-                NanonisValue::F32(forward_linear_speed_m_s),
-                NanonisValue::F32(backward_linear_speed_m_s),
-                NanonisValue::F32(forward_time_per_line_s),
-                NanonisValue::F32(backward_time_per_line_s),
-                NanonisValue::U16(keep_parameter_constant),
-                NanonisValue::F32(speed_ratio),
+                NanonisValue::F32(config.forward_linear_speed_m_s),
+                NanonisValue::F32(config.backward_linear_speed_m_s),
+                NanonisValue::F32(config.forward_time_per_line_s),
+                NanonisValue::F32(config.backward_time_per_line_s),
+                NanonisValue::U16(config.keep_parameter_constant),
+                NanonisValue::F32(config.speed_ratio),
             ],
             vec!["f", "f", "f", "f", "H", "f"],
             vec![],
@@ -256,9 +244,7 @@ impl NanonisClient {
     /// println!("Speed ratio: {:.1}", speed_ratio);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn scan_speed_get(
-        &mut self,
-    ) -> Result<(f32, f32, f32, f32, u16, f32), NanonisError> {
+    pub fn scan_speed_get(&mut self) -> Result<ScanConfig, NanonisError> {
         let result = self.quick_send(
             "Scan.SpeedGet",
             vec![],
@@ -267,14 +253,14 @@ impl NanonisClient {
         )?;
 
         if result.len() >= 6 {
-            Ok((
-                result[0].as_f32()?,
-                result[1].as_f32()?,
-                result[2].as_f32()?,
-                result[3].as_f32()?,
-                result[4].as_u16()?,
-                result[5].as_f32()?,
-            ))
+            Ok(ScanConfig {
+                forward_linear_speed_m_s: result[0].as_f32()?,
+                backward_linear_speed_m_s: result[1].as_f32()?,
+                forward_time_per_line_s: result[2].as_f32()?,
+                backward_time_per_line_s: result[3].as_f32()?,
+                keep_parameter_constant: result[4].as_u16()?,
+                speed_ratio: result[5].as_f32()?,
+            })
         } else {
             Err(NanonisError::Protocol(
                 "Invalid scan speed response".to_string(),
@@ -310,10 +296,7 @@ impl NanonisClient {
     /// let (x, y) = client.scan_xy_pos_get(true)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn scan_xy_pos_get(
-        &mut self,
-        wait_newest_data: bool,
-    ) -> Result<(f32, f32), NanonisError> {
+    pub fn scan_xy_pos_get(&mut self, wait_newest_data: bool) -> Result<(f32, f32), NanonisError> {
         let wait_flag = if wait_newest_data { 1u32 } else { 0u32 };
 
         let result = self.quick_send(
