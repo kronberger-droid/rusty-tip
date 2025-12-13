@@ -1,7 +1,8 @@
 use crate::action_driver::ActionDriver;
 use crate::actions::{Action, TipCheckMethod, TipState};
 use crate::error::NanonisError;
-use crate::types::{SignalIndex, TipShape};
+use crate::types::{ScanConfig, SignalIndex, TipShape};
+use crate::ScanAction;
 use log::info;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -90,6 +91,13 @@ pub enum PulseMethod {
         polarity: PolaritySign,
         random_switch: Option<RandomPolaritySwitch>,
     },
+    /// Linear response inside of linear clamp
+    /// otherwise pulse with upper voltage bound
+    Linear {
+        voltage_bounds: (f32, f32),
+        linear_clamp: (f32, f32),
+        polarity: PolaritySign,
+    },
 }
 
 impl PulseMethod {
@@ -175,10 +183,12 @@ impl TipController {
         let initial_voltage = match &config.pulse_method {
             PulseMethod::Fixed { voltage, .. } => *voltage,
             PulseMethod::Stepping { voltage_bounds, .. } => voltage_bounds.0,
+            PulseMethod::Linear { voltage_bounds, .. } => voltage_bounds.0,
         };
         let base_polarity = match &config.pulse_method {
             PulseMethod::Fixed { polarity, .. } => *polarity,
             PulseMethod::Stepping { polarity, .. } => *polarity,
+            PulseMethod::Linear { polarity, .. } => *polarity,
         };
         let max_cycles = config.max_cycles;
         let max_duration = config.max_duration;
@@ -292,6 +302,7 @@ impl TipController {
         let threshold_fn = match &self.config.pulse_method {
             PulseMethod::Stepping { threshold, .. } => threshold,
             PulseMethod::Fixed { .. } => return (false, 0.0), // No stepping for fixed method
+            PulseMethod::Linear { .. } => return (false, 0.0),
         };
 
         if let Some(history) = self.signal_histories.get(&signal_index) {
@@ -361,6 +372,7 @@ impl TipController {
                 ..
             } => (*voltage_bounds, *voltage_steps),
             PulseMethod::Fixed { .. } => return false, // No stepping for fixed method
+            PulseMethod::Linear { .. } => return false,
         };
 
         // Calculate step size
@@ -384,42 +396,74 @@ impl TipController {
 
     /// Update signal history and step pulse voltage if needed
     fn update_pulse_voltage(&mut self) {
-        let (is_significant, change) = self.has_significant_change(self.config.freq_shift_index);
-
-        // Get cycles_before_step from config, or use 0 for Fixed method
-        let cycles_before_step = match &self.config.pulse_method {
+        match &self.config.pulse_method {
             PulseMethod::Stepping {
-                cycles_before_step,
                 voltage_bounds,
+                cycles_before_step,
                 ..
-            } => (*cycles_before_step, *voltage_bounds),
-            PulseMethod::Fixed { .. } => return, // No stepping for fixed method
-        };
+            } => {
+                let (is_significant, change) =
+                    self.has_significant_change(self.config.freq_shift_index);
+                if is_significant && change >= 0.0 {
+                    // Positive significant change - reset to minimum voltage
+                    self.cycles_without_change = 0;
+                    self.current_pulse_voltage = voltage_bounds.0; // voltage_bounds.0 (min)
+                    log::debug!(
+                        "Positive significant change detected, resetting pulse voltage to minimum: {:.3}V",
+                        self.current_pulse_voltage
+                    );
+                } else if is_significant {
+                    log::warn!("Negative significant change detected!");
+                    self.cycles_without_change += 1;
 
-        // Check for significant change and respond accordingly
-        if is_significant && change >= 0.0 {
-            // Positive significant change - reset to minimum voltage
-            self.cycles_without_change = 0;
-            self.current_pulse_voltage = cycles_before_step.1 .0; // voltage_bounds.0 (min)
-            log::debug!(
-                "Positive significant change detected, resetting pulse voltage to minimum: {:.3}V",
-                self.current_pulse_voltage
-            );
-        } else if is_significant {
-            log::warn!("Negative significant change detected!");
-            self.cycles_without_change += 1;
+                    // Check if we need to step the pulse voltage
+                    if self.cycles_without_change >= *cycles_before_step as u32 {
+                        self.step_pulse_voltage();
+                    }
+                } else {
+                    // No significant change
+                    self.cycles_without_change += 1;
 
-            // Check if we need to step the pulse voltage
-            if self.cycles_without_change >= cycles_before_step.0 as u32 {
-                self.step_pulse_voltage();
+                    // Check if we need to step the pulse voltage
+                    if self.cycles_without_change >= *cycles_before_step as u32 {
+                        self.step_pulse_voltage();
+                    }
+                }
             }
-        } else {
-            // No significant change
-            self.cycles_without_change += 1;
+            PulseMethod::Fixed { .. } => {}
+            PulseMethod::Linear {
+                voltage_bounds,
+                linear_clamp,
+                polarity,
+            } => {
+                let current_freq_shift;
+                let mut pulse_voltage = self.current_pulse_voltage;
 
-            // Check if we need to step the pulse voltage
-            if self.cycles_without_change >= cycles_before_step.0 as u32 {
-                self.step_pulse_voltage();
+                if let Some(freq_shift_history) =
+                    self.signal_histories.get(&self.config.freq_shift_index)
+                {
+                    current_freq_shift = freq_shift_history[0];
+
+                    if !(voltage_bounds.0..voltage_bounds.1).contains(&current_freq_shift) {
+                        pulse_voltage = voltage_bounds.1;
+                    } else {
+                        let slope =
+                            linear_clamp.1 - linear_clamp.0 / voltage_bounds.1 - voltage_bounds.0;
+
+                        let d = voltage_bounds.0;
+
+                        pulse_voltage = slope * current_freq_shift + d;
+                    }
+                }
+
+                match polarity {
+                    PolaritySign::Positive => {
+                        self.current_pulse_voltage = pulse_voltage;
+                    }
+                    PolaritySign::Negative => {
+                        self.current_pulse_voltage = -pulse_voltage;
+                    }
+                }
             }
         }
     }
@@ -686,6 +730,23 @@ impl TipController {
 
         Ok(TipShape::Sharp)
     }
+
+    // fn bias_sweep(&mut self) -> Result<(), NanonisError> {
+    //     log::info!("Starting bias sweep");
+
+    //     let scan_config = self.driver.client_mut().scan_speed_get()?;
+
+    //     let scan_frame = self.driver.client_mut().scan_frame_get()?;
+    //     scan_config.forward_time_per_line_s
+
+    //     self.driver
+    //         .run(Action::ScanControl {
+    //             action: ScanAction::Start,
+    //         })
+    //         .go()?;
+
+    //     Ok(())
+    // }
 
     fn pre_loop_initialization(&mut self) -> Result<(), NanonisError> {
         log::debug!("Running pre loop initialization");
