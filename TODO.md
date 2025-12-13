@@ -9,6 +9,8 @@
 
 3. BiasSweep is broken -> implement it yourself
 
+4. check if bias voltage bounds are pos. to not mess up polarity
+
 ## Testing
 
 1. Implement scripts to interpret experiment logs

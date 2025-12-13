@@ -1768,3 +1768,13 @@ pub enum AutoApproachStatus {
     /// Auto-approach status is unknown (e.g., communication error)
     Unknown,
 }
+
+#[derive(Debug, Clone)]
+pub struct ScanConfig {
+    pub forward_linear_speed_m_s: f32,
+    pub backward_linear_speed_m_s: f32,
+    pub forward_time_per_line_s: f32,
+    pub backward_time_per_line_s: f32,
+    pub keep_parameter_constant: u16,
+    pub speed_ratio: f32,
+}
