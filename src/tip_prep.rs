@@ -4,6 +4,7 @@ use crate::error::NanonisError;
 use crate::types::{ScanConfig, SignalIndex, TipShape};
 use crate::ScanAction;
 use log::info;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -58,7 +59,8 @@ pub enum LoopType {
     StableLoop,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PolaritySign {
     Positive,
     Negative,
@@ -73,22 +75,35 @@ impl PolaritySign {
     }
 }
 
+impl Default for PolaritySign {
+    fn default() -> Self {
+        Self::Positive
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RandomPolaritySwitch {
     pub switch_every_n_pulses: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum PulseMethod {
     Fixed {
         voltage: f32,
+        #[serde(default)]
         polarity: PolaritySign,
+        #[serde(default)]
         random_switch: Option<RandomPolaritySwitch>,
     },
     Stepping {
         voltage_bounds: (f32, f32),
         voltage_steps: u16,
         cycles_before_step: u16,
-        threshold: Box<dyn Fn(f32) -> f32 + Send + Sync>,
+        threshold_value: f32,
+        #[serde(default)]
         polarity: PolaritySign,
+        #[serde(default)]
         random_switch: Option<RandomPolaritySwitch>,
     },
     /// Linear response inside of linear clamp
@@ -96,6 +111,7 @@ pub enum PulseMethod {
     Linear {
         voltage_bounds: (f32, f32),
         linear_clamp: (f32, f32),
+        #[serde(default)]
         polarity: PolaritySign,
     },
 }
@@ -105,18 +121,30 @@ impl PulseMethod {
         voltage_bounds: (f32, f32),
         voltage_steps: u16,
         cycles_before_step: u16,
-        threshold: f32,
+        threshold_value: f32,
         polarity: PolaritySign,
         random_switch: Option<RandomPolaritySwitch>,
     ) -> PulseMethod {
-        let threshold = threshold.abs();
         PulseMethod::Stepping {
             voltage_bounds,
             voltage_steps,
             cycles_before_step,
-            threshold: Box::new(move |_| threshold),
+            threshold_value: threshold_value.abs(),
             polarity,
             random_switch,
+        }
+    }
+}
+
+impl Default for PulseMethod {
+    fn default() -> Self {
+        Self::Stepping {
+            voltage_bounds: (2.0, 6.0),
+            voltage_steps: 4,
+            cycles_before_step: 2,
+            threshold_value: 0.1,
+            polarity: PolaritySign::Positive,
+            random_switch: None,
         }
     }
 }
@@ -299,8 +327,10 @@ impl TipController {
     /// Check if current signal represents a significant change from recent stable period
     fn has_significant_change(&self, signal_index: SignalIndex) -> (bool, f32) {
         // Only check for stepping if PulseMethod is Stepping
-        let threshold_fn = match &self.config.pulse_method {
-            PulseMethod::Stepping { threshold, .. } => threshold,
+        let threshold_value = match &self.config.pulse_method {
+            PulseMethod::Stepping {
+                threshold_value, ..
+            } => *threshold_value,
             PulseMethod::Fixed { .. } => return (false, 0.0), // No stepping for fixed method
             PulseMethod::Linear { .. } => return (false, 0.0),
         };
@@ -319,16 +349,15 @@ impl TipController {
                     // No stable period yet, compare against last signal
                     let current_signal = history[0];
                     let last_signal = history[1];
-                    let threshold = threshold_fn(current_signal);
 
                     log::debug!(
                         "Last signal: {:.3e} | Current threshold: {:.3e}",
                         last_signal,
-                        threshold
+                        threshold_value
                     );
 
                     let change = current_signal - last_signal;
-                    let has_change = change.abs() >= threshold;
+                    let has_change = change.abs() >= threshold_value;
 
                     (has_change, change)
                 } else {
@@ -343,16 +372,15 @@ impl TipController {
                     let stable_mean =
                         stable_signals.iter().sum::<f32>() / stable_signals.len() as f32;
 
-                    let threshold = threshold_fn(current_signal);
                     log::debug!(
                         "Current: {:.3e} | Stable mean: {:.3e} | Threshold: {:.3e}",
                         current_signal,
                         stable_mean,
-                        threshold
+                        threshold_value
                     );
 
                     let change = current_signal - stable_mean;
-                    let has_change = change.abs() >= threshold;
+                    let has_change = change.abs() >= threshold_value;
                     (has_change, change)
                 }
             }

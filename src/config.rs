@@ -2,6 +2,8 @@ use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+use crate::tip_prep::PulseMethod;
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TcpChannelMapping {
     pub nanonis_index: u8,
@@ -15,7 +17,7 @@ pub struct AppConfig {
     pub experiment_logging: ExperimentLoggingConfig,
     pub console: ConsoleConfig,
     pub tip_prep: TipPrepConfig,
-    pub pulse_method: PulseMethodConfig,
+    pub pulse_method: PulseMethod,
     #[serde(default)]
     pub tcp_channel_mapping: Option<Vec<TcpChannelMapping>>,
 }
@@ -50,43 +52,6 @@ pub struct TipPrepConfig {
     pub check_stability: bool,
     pub max_cycles: Option<usize>,
     pub max_duration_secs: Option<u64>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum PolaritySign {
-    #[default]
-    Positive,
-    Negative,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct RandomPolaritySwitchConfig {
-    pub enabled: bool,
-    pub switch_every_n_pulses: u32,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum PulseMethodConfig {
-    Fixed {
-        pulse_voltage: Vec<f32>,
-        #[serde(default)]
-        polarity: PolaritySign,
-        #[serde(default)]
-        random_polarity_switch: Option<RandomPolaritySwitchConfig>,
-    },
-    Stepping {
-        voltage_bounds: [f32; 2],
-        voltage_steps: u16,
-        cycles_before_step: u16,
-        threshold_type: String,
-        threshold_value: f32,
-        #[serde(default)]
-        polarity: PolaritySign,
-        #[serde(default)]
-        random_polarity_switch: Option<RandomPolaritySwitchConfig>,
-    },
 }
 
 impl Default for NanonisConfig {
@@ -132,20 +97,6 @@ impl Default for TipPrepConfig {
             check_stability: true,
             max_cycles: Some(10000),
             max_duration_secs: Some(12000),
-        }
-    }
-}
-
-impl Default for PulseMethodConfig {
-    fn default() -> Self {
-        Self::Stepping {
-            voltage_bounds: [2.0, 6.0],
-            voltage_steps: 4,
-            cycles_before_step: 2,
-            threshold_type: "absolute".to_string(),
-            threshold_value: 0.1,
-            polarity: PolaritySign::Positive,
-            random_polarity_switch: None,
         }
     }
 }

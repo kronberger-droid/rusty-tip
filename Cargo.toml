@@ -11,6 +11,10 @@ authors = ["Martin Kronberger <kronberger@proton.me"]
 name = "rusty_tip"
 path = "src/lib.rs"
 
+[[bin]]
+name = "tip-prep"
+path = "bin/tip-prep/main.rs"
+
 [dependencies]
 byteorder = "1.5"
 thiserror = "1.0"
@@ -24,6 +28,7 @@ ndarray = "0.16.1"
 ctrlc = "3.4"
 parking_lot = "0.12"
 config = { version = "0.15.18", features = [ "toml" ] }
+clap = { version = "4.5.53", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["consoleapi", "processenv", "wincon", "handleapi", "winbase"] }
