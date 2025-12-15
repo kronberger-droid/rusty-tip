@@ -106,8 +106,11 @@ pub enum PulseMethod {
         #[serde(default)]
         random_switch: Option<RandomPolaritySwitch>,
     },
-    /// Linear response inside of linear clamp
-    /// otherwise pulse with upper voltage bound
+    /// Linear response based on frequency shift
+    /// voltage_bounds: (min_voltage, max_voltage) - pulse voltage range in V
+    /// linear_clamp: (min_freq, max_freq) - frequency shift range in Hz
+    /// If freq_shift is outside linear_clamp range, pulse with max voltage
+    /// If freq_shift is inside linear_clamp range, linearly interpolate voltage
     Linear {
         voltage_bounds: (f32, f32),
         linear_clamp: (f32, f32),
@@ -472,13 +475,16 @@ impl TipController {
                 {
                     current_freq_shift = freq_shift_history[0];
 
-                    if !(voltage_bounds.0..voltage_bounds.1).contains(&current_freq_shift) {
+                    // linear_clamp is the freq shift range, voltage_bounds is the voltage range
+                    if !(linear_clamp.0..linear_clamp.1).contains(&current_freq_shift) {
+                        // Outside freq shift range -> use max voltage
                         pulse_voltage = voltage_bounds.1;
                     } else {
+                        // Inside freq shift range -> linearly interpolate voltage
                         let slope =
-                            (linear_clamp.1 - linear_clamp.0) / (voltage_bounds.1 - voltage_bounds.0);
+                            (voltage_bounds.1 - voltage_bounds.0) / (linear_clamp.1 - linear_clamp.0);
 
-                        let d = linear_clamp.0 - slope * voltage_bounds.0;
+                        let d = voltage_bounds.0 - slope * linear_clamp.0;
 
                         pulse_voltage = slope * current_freq_shift + d;
                     }

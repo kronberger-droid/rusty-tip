@@ -128,7 +128,7 @@ fn log_pulse_method(method: &PulseMethod) {
             polarity,
         } => {
             info!(
-                "Pulse method: Linear ({:.2}V to {:.2}V, clamp: {:.2}V to {:.2}V, {:?})",
+                "Pulse method: Linear (voltage: {:.2}V to {:.2}V, freq_shift range: {:.2} to {:.2} Hz, {:?})",
                 voltage_bounds.0, voltage_bounds.1, linear_clamp.0, linear_clamp.1, polarity
             );
         }
