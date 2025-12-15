@@ -54,6 +54,11 @@ linear_clamp = [0.0, 20.0]
 # Polarity of the pulse voltage: "positive" or "negative"
 polarity = "positive"
 
+# Optional: Random polarity switching
+# When enabled, every Nth pulse will use the opposite polarity
+[pulse_method.random_switch]
+switch_every_n_pulses = 10  # Every 10th pulse uses opposite polarity
+
 # Optional: Custom TCP channel mapping
 # Uncomment and modify if your Nanonis signal indices differ from the defaults
 # Format: { nanonis_index = X, tcp_channel = Y }
