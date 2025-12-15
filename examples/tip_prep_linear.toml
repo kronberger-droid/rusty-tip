@@ -44,12 +44,13 @@ voltage_bounds = [2.0, 6.0]
 # This is the X-axis: the freq_shift range for linear interpolation
 # When freq_shift is outside this range, pulse with max voltage (voltage_bounds[1])
 # When inside this range, linearly map freq_shift to pulse voltage
-# Example with linear_clamp = [0.0, 20.0] and voltage_bounds = [2.0, 6.0]:
-#          freq_shift =  0.0 Hz → pulse = 2.0 V
-#          freq_shift = 10.0 Hz → pulse = 4.0 V
-#          freq_shift = 20.0 Hz → pulse = 6.0 V
-#          freq_shift = 25.0 Hz → pulse = 6.0 V (clamped to max)
-linear_clamp = [0.0, 20.0]
+# NOTE: For STM/AFM, frequency shifts are typically NEGATIVE!
+# Example with linear_clamp = [-20.0, 0.0] and voltage_bounds = [2.0, 6.0]:
+#          freq_shift = -20.0 Hz → pulse = 2.0 V (min voltage for very negative)
+#          freq_shift = -10.0 Hz → pulse = 4.0 V (middle voltage)
+#          freq_shift =   0.0 Hz → pulse = 6.0 V (max voltage for close to zero)
+#          freq_shift = -25.0 Hz → pulse = 6.0 V (outside range, clamped to max)
+linear_clamp = [-20.0, 0.0]
 
 # Polarity of the pulse voltage: "positive" or "negative"
 polarity = "negative"
