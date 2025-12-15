@@ -1,6 +1,6 @@
+use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
-use super::NanonisClient;
 
 impl NanonisClient {
     /// Get the current tunneling current value.
@@ -23,7 +23,7 @@ impl NanonisClient {
     ///
     /// let current = client.current_get()?;
     /// println!("Tunneling current: {:.3e} A", current);
-    /// 
+    ///
     /// // Convert to more convenient units
     /// if current.abs() < 1e-9 {
     ///     println!("Current: {:.1} pA", current * 1e12);
@@ -34,7 +34,7 @@ impl NanonisClient {
     /// ```
     pub fn current_get(&mut self) -> Result<f32, NanonisError> {
         let result = self.quick_send("Current.Get", vec![], vec![], vec!["f"])?;
-        
+
         match result.first() {
             Some(value) => Ok(value.as_f32()?),
             None => Err(NanonisError::Protocol(
@@ -67,7 +67,7 @@ impl NanonisClient {
     /// ```
     pub fn current_100_get(&mut self) -> Result<f32, NanonisError> {
         let result = self.quick_send("Current.100Get", vec![], vec![], vec!["f"])?;
-        
+
         match result.first() {
             Some(value) => Ok(value.as_f32()?),
             None => Err(NanonisError::Protocol(
@@ -102,7 +102,7 @@ impl NanonisClient {
     /// ```
     pub fn current_beem_get(&mut self) -> Result<f32, NanonisError> {
         let result = self.quick_send("Current.BEEMGet", vec![], vec![], vec!["f"])?;
-        
+
         match result.first() {
             Some(value) => Ok(value.as_f32()?),
             None => Err(NanonisError::Protocol(
@@ -141,7 +141,11 @@ impl NanonisClient {
     /// client.current_gain_set(3, 1)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn current_gain_set(&mut self, gain_index: i32, filter_index: i32) -> Result<(), NanonisError> {
+    pub fn current_gain_set(
+        &mut self,
+        gain_index: i32,
+        filter_index: i32,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "Current.GainSet",
             vec![
@@ -176,24 +180,26 @@ impl NanonisClient {
     /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
     ///
     /// let (gains, gain_idx, filters, filter_idx) = client.current_gains_get()?;
-    /// 
+    ///
     /// println!("Current gain: {} (index {})", gains[gain_idx as usize], gain_idx);
     /// println!("Current filter: {} (index {})", filters[filter_idx as usize], filter_idx);
-    /// 
+    ///
     /// // List all available options
     /// for (i, gain) in gains.iter().enumerate() {
     ///     println!("Gain {}: {}", i, gain);
     /// }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn current_gains_get(&mut self) -> Result<(Vec<String>, u16, Vec<String>, i32), NanonisError> {
+    pub fn current_gains_get(
+        &mut self,
+    ) -> Result<(Vec<String>, u16, Vec<String>, i32), NanonisError> {
         let result = self.quick_send(
-            "Current.GainsGet", 
-            vec![], 
-            vec![], 
-            vec!["i", "i", "*+c", "i", "i", "i", "*+c", "i"]
+            "Current.GainsGet",
+            vec![],
+            vec![],
+            vec!["i", "i", "*+c", "i", "i", "i", "*+c", "i"],
         )?;
-        
+
         if result.len() >= 8 {
             let gains = result[2].as_string_array()?.to_vec();
             let gain_index = result[3].as_u16()?;
@@ -288,7 +294,7 @@ impl NanonisClient {
             vec!["i"],
             vec!["d", "d"],
         )?;
-        
+
         if result.len() >= 2 {
             let calibration = result[0].as_f64()?;
             let offset = result[1].as_f64()?;

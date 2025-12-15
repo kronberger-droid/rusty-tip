@@ -1,8 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-use crate::classifier::TipState;
 use crate::error::NanonisError;
-use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
+/// Simple tip shape - matches original controller
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum TipShape {
+    Blunt,
+    Sharp,
+    Stable,
+}
 
 #[derive(Debug, Clone)]
 pub enum NanonisValue {
@@ -298,87 +305,215 @@ impl NanonisValue {
     }
 }
 
-/// Type-safe wrappers for common Nanonis values
-#[derive(Debug, Clone, Copy)]
-pub struct Position {
-    pub x: f64,
-    pub y: f64,
-}
+/// Signal and Channel Types
+/// Nanonis signal index (0-127)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct NanonisIndex(pub u8);
 
-impl Position {
-    pub fn new(x: f64, y: f64) -> Self {
-        Self { x, y }
+impl NanonisIndex {
+    /// Create a new NanonisIndex with range validation
+    pub fn new(index: u8) -> Result<Self, String> {
+        if index <= 127 {
+            Ok(Self(index))
+        } else {
+            Err(format!("Nanonis index {} out of range (0-127)", index))
+        }
+    }
+
+    /// Create without validation (for internal use)
+    pub const fn new_unchecked(index: u8) -> Self {
+        Self(index)
+    }
+
+    /// Get the raw index value
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+
+    /// Convert to TCP channel using registry
+    pub fn to_channel_index(
+        &self,
+        registry: &crate::signal_registry::SignalRegistry,
+    ) -> Result<ChannelIndex, String> {
+        registry.nanonis_to_tcp(*self)
     }
 }
 
-/// Signal and Channel Types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SignalIndex(pub i32);
+impl std::fmt::Display for NanonisIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<u8> for NanonisIndex {
+    fn from(index: u8) -> Self {
+        Self::new(index).unwrap_or_else(|_| {
+            log::warn!(
+                "Creating NanonisIndex from out-of-range value {}, clamping to 127",
+                index
+            );
+            Self(127.min(index))
+        })
+    }
+}
+
+/// TCP channel index (0-23)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct ChannelIndex(pub u8);
+
+impl ChannelIndex {
+    /// Create a new ChannelIndex with range validation
+    pub fn new(index: u8) -> Result<Self, String> {
+        if index <= 23 {
+            Ok(Self(index))
+        } else {
+            Err(format!("Channel index {} out of range (0-23)", index))
+        }
+    }
+
+    /// Create without validation (for internal use)
+    pub const fn new_unchecked(index: u8) -> Self {
+        Self(index)
+    }
+
+    /// Get the raw index value
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+
+    /// Convert to Nanonis index using registry
+    pub fn to_nanonis_index(
+        &self,
+        registry: &crate::signal_registry::SignalRegistry,
+    ) -> Result<NanonisIndex, String> {
+        registry.tcp_to_nanonis(*self)
+    }
+}
+
+impl std::fmt::Display for ChannelIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<u8> for ChannelIndex {
+    fn from(index: u8) -> Self {
+        Self::new(index).unwrap_or_else(|_| {
+            log::warn!(
+                "Creating ChannelIndex from out-of-range value {}, clamping to 23",
+                index
+            );
+            Self(23.min(index))
+        })
+    }
+}
+
+/// Signal index wrapping a Nanonis index
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct SignalIndex(pub NanonisIndex);
 
 impl SignalIndex {
-    pub fn new(index: i32) -> Result<Self, crate::error::NanonisError> {
-        if (0..=127).contains(&index) {
-            Ok(SignalIndex(index))
-        } else {
-            Err(crate::error::NanonisError::InvalidCommand(format!(
-                "Signal index must be 0-127, got {}",
-                index
-            )))
-        }
+    /// Create a new SignalIndex (0-127 range)
+    pub const fn new(index: u8) -> Self {
+        Self(NanonisIndex::new_unchecked(index))
+    }
+
+    /// Create from validated NanonisIndex
+    pub const fn from_nanonis_index(index: NanonisIndex) -> Self {
+        Self(index)
+    }
+
+    /// Get the underlying NanonisIndex
+    pub const fn nanonis_index(self) -> NanonisIndex {
+        self.0
+    }
+
+    /// Get the raw index value  
+    pub const fn get(self) -> u8 {
+        self.0.get()
+    }
+
+    /// Create SignalIndex from signal name using registry lookup
+    pub fn from_name(
+        name: &str,
+        driver: &crate::action_driver::ActionDriver,
+    ) -> Result<Self, String> {
+        driver
+            .signal_registry()
+            .get_by_name(name)
+            .map(|info| Self(NanonisIndex::new_unchecked(info.nanonis_index)))
+            .ok_or_else(|| {
+                // Provide suggestions for typos
+                let suggestions = driver.signal_registry().find_signals_like(name);
+                if suggestions.is_empty() {
+                    format!("Signal '{}' not found", name)
+                } else {
+                    let names: Vec<String> =
+                        suggestions.iter().take(3).map(|s| s.name.clone()).collect();
+                    format!(
+                        "Signal '{}' not found. Did you mean: {}?",
+                        name,
+                        names.join(", ")
+                    )
+                }
+            })
+    }
+
+    /// Get TCP channel for this signal (if available)
+    pub fn tcp_channel(&self, driver: &crate::action_driver::ActionDriver) -> Option<ChannelIndex> {
+        driver.signal_registry().nanonis_to_tcp(self.0).ok()
+    }
+
+    /// Get TCP channel as raw u8 (deprecated - use tcp_channel)
+    pub fn tcp_channel_raw(&self, driver: &crate::action_driver::ActionDriver) -> Option<u8> {
+        self.tcp_channel(driver).map(|ch| ch.get())
+    }
+
+    /// Get human-readable name for this signal
+    pub fn name(&self, driver: &crate::action_driver::ActionDriver) -> Option<String> {
+        driver
+            .signal_registry()
+            .get_by_nanonis_index(self.0.get())
+            .map(|info| info.name.clone())
+    }
+
+    /// Check if this signal is available in TCP logger
+    pub fn has_tcp_channel(&self, driver: &crate::action_driver::ActionDriver) -> bool {
+        driver.signal_registry().has_tcp_channel(self.0)
+    }
+}
+
+impl From<SignalIndex> for u8 {
+    fn from(signal: SignalIndex) -> Self {
+        signal.0.get()
     }
 }
 
 impl From<SignalIndex> for i32 {
     fn from(signal: SignalIndex) -> Self {
-        signal.0
+        signal.0.get() as i32
     }
 }
 
-impl From<i32> for SignalIndex {
-    fn from(index: i32) -> Self {
-        SignalIndex(index)
+impl From<u8> for SignalIndex {
+    fn from(index: u8) -> Self {
+        Self(NanonisIndex::from(index))
     }
 }
 
 impl From<usize> for SignalIndex {
     fn from(index: usize) -> Self {
-        SignalIndex(index as i32)
+        Self(NanonisIndex::from(index as u8))
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChannelIndex(pub i32);
-
-impl ChannelIndex {
-    pub fn new(index: i32) -> Result<Self, crate::error::NanonisError> {
-        if (0..=23).contains(&index) {
-            Ok(ChannelIndex(index))
-        } else {
-            Err(crate::error::NanonisError::InvalidCommand(format!(
-                "Channel index must be 0-23, got {}",
-                index
-            )))
-        }
+impl From<NanonisIndex> for SignalIndex {
+    fn from(index: NanonisIndex) -> Self {
+        Self(index)
     }
 }
 
-impl From<ChannelIndex> for i32 {
-    fn from(channel: ChannelIndex) -> Self {
-        channel.0
-    }
-}
-
-impl From<i32> for ChannelIndex {
-    fn from(index: i32) -> Self {
-        ChannelIndex(index)
-    }
-}
-
-impl From<usize> for ChannelIndex {
-    fn from(index: usize) -> Self {
-        ChannelIndex(index as i32)
-    }
-}
+// Removed old ChannelIndex definition - now using typed ChannelIndex with u8
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OscilloscopeIndex(pub i32);
@@ -822,6 +957,54 @@ impl TryFrom<u32> for ScanDirection {
     }
 }
 
+// Interface Types
+/// Universal Z-controller hold states for SPM operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZControllerHold {
+    /// Don't modify Z-controller state
+    NoChange = 0,
+    /// Hold Z-controller during operation
+    Hold = 1,
+    /// Release/disable Z-controller during operation
+    Release = 2,
+}
+
+impl From<ZControllerHold> for u16 {
+    fn from(hold: ZControllerHold) -> Self {
+        hold as u16
+    }
+}
+
+/// Universal SPM pulse modes - concepts that apply to any SPM system
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PulseMode {
+    /// Keep current bias voltage unchanged
+    Keep = 0,
+    /// Add voltage to current bias (relative)
+    Relative = 1,
+    /// Set bias to absolute voltage value
+    Absolute = 2,
+}
+
+impl From<PulseMode> for u16 {
+    fn from(mode: PulseMode) -> Self {
+        mode as u16
+    }
+}
+
+/// position 2d used in
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Position {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl Position {
+    pub fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+}
+
 /// Session metadata - static information written once per monitoring session
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMetadata {
@@ -832,37 +1015,766 @@ pub struct SessionMetadata {
     pub session_start: f64,          // Session start timestamp
 }
 
-/// Comprehensive machine state for advanced policy engines
-/// Expandable for transformer/ML models that need rich context
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct MachineState {
-    // Current signal readings
-    pub all_signals: Option<Vec<f32>>, // All available signals for context
+// ==================== Action System Types ====================
 
-    // Runtime signal coordination (not saved to JSON - info is in SessionMetadata)
-    #[serde(skip)]
-    pub signal_indices: Option<Vec<i32>>, // Which signal indices all_signals contains [0,1,2,3,24,30,31]
+/// Motor movement specification
+#[derive(Debug, Clone)]
+pub struct MotorMovement {
+    pub direction: MotorDirection,
+    pub steps: StepCount,
+    pub group: MotorGroup,
+}
 
-    // Spatial context
-    pub position: Option<(f64, f64)>, // Current XY position
-    pub z_position: Option<f64>,      // Z height
+impl MotorMovement {
+    pub fn new(direction: MotorDirection, steps: StepCount, group: MotorGroup) -> Self {
+        Self {
+            direction,
+            steps,
+            group,
+        }
+    }
+}
 
-    // Temporal context
-    pub timestamp: f64, // When this state was captured
-    #[serde(skip)]
-    pub signal_history: VecDeque<f32>, // Historical signal values
-    #[serde(skip)]
-    pub decision_value_history: VecDeque<f32>, // History of processed values that led to each decision
+/// 3D motor displacement for coordinated movement
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MotorDisplacement {
+    pub x: i16, // Positive = XPlus, Negative = XMinus
+    pub y: i16, // Positive = YPlus, Negative = YMinus
+    pub z: i16, // Positive = ZPlus, Negative = ZMinus
+}
 
-    // System state
-    pub last_action: Option<String>, // Last action executed
-    pub system_parameters: Vec<f32>, // Configurable system params
+impl MotorDisplacement {
+    pub fn new(x: i16, y: i16, z: i16) -> Self {
+        Self { x, y, z }
+    }
 
-    // Classification result
-    pub classification: TipState, // How the classifier interpreted this state
+    /// Create displacement with only X movement
+    pub fn x_only(steps: i16) -> Self {
+        Self {
+            x: steps,
+            y: 0,
+            z: 0,
+        }
+    }
 
-                                  // For future ML/transformer expansion:
-                                  // pub embedding: Option<Vec<f32>>,         // Learned state representation
-                                  // pub attention_weights: Option<Vec<f32>>, // Transformer attention scores
-                                  // pub confidence: f32,                     // Model confidence in decision
+    /// Create displacement with only Y movement
+    pub fn y_only(steps: i16) -> Self {
+        Self {
+            x: 0,
+            y: steps,
+            z: 0,
+        }
+    }
+
+    /// Create displacement with only Z movement
+    pub fn z_only(steps: i16) -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            z: steps,
+        }
+    }
+
+    /// Check if this displacement has no movement
+    pub fn is_zero(&self) -> bool {
+        self.x == 0 && self.y == 0 && self.z == 0
+    }
+
+    /// Convert to sequence of individual motor directions and steps
+    /// SAFETY: Smart Z-axis ordering to prevent tip crashes:
+    /// - ZMinus (away from surface) executes FIRST to safely retract
+    /// - ZPlus (toward surface) executes LAST to only approach after positioning
+    pub fn to_motor_movements(&self) -> Vec<(MotorDirection, u16)> {
+        let mut movements = Vec::new();
+
+        // FIRST: ZMinus movements (away from surface) for safety
+        if self.z < 0 {
+            movements.push((MotorDirection::ZMinus, (-self.z) as u16));
+        }
+
+        // SECOND: X axis movements (lateral positioning)
+        if self.x > 0 {
+            movements.push((MotorDirection::XPlus, self.x as u16));
+        } else if self.x < 0 {
+            movements.push((MotorDirection::XMinus, (-self.x) as u16));
+        }
+
+        // THIRD: Y axis movements (lateral positioning)
+        if self.y > 0 {
+            movements.push((MotorDirection::YPlus, self.y as u16));
+        } else if self.y < 0 {
+            movements.push((MotorDirection::YMinus, (-self.y) as u16));
+        }
+
+        // LAST: ZPlus movements (toward surface) only after safe positioning
+        if self.z > 0 {
+            movements.push((MotorDirection::ZPlus, self.z as u16));
+        }
+
+        movements
+    }
+}
+
+/// Oscilloscope trigger mode for Osci1T and Osci2T
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsciTriggerMode {
+    Immediate = 0,
+    Level = 1,
+    Auto = 2,
+}
+
+impl From<OsciTriggerMode> for u16 {
+    fn from(mode: OsciTriggerMode) -> Self {
+        mode as u16
+    }
+}
+
+impl TryFrom<u16> for OsciTriggerMode {
+    type Error = NanonisError;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(OsciTriggerMode::Immediate),
+            1 => Ok(OsciTriggerMode::Level),
+            2 => Ok(OsciTriggerMode::Auto),
+            _ => Err(NanonisError::InvalidCommand(format!(
+                "Invalid oscilloscope trigger mode: {}",
+                value
+            ))),
+        }
+    }
+}
+
+/// Oversampling index for Osci2T
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OversamplingIndex {
+    Samples50 = 0,
+    Samples20 = 1,
+    Samples10 = 2,
+    Samples5 = 3,
+    Samples2 = 4,
+    Samples1 = 5,
+}
+
+impl From<OversamplingIndex> for u16 {
+    fn from(index: OversamplingIndex) -> Self {
+        index as u16
+    }
+}
+
+impl TryFrom<u16> for OversamplingIndex {
+    type Error = NanonisError;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(OversamplingIndex::Samples50),
+            1 => Ok(OversamplingIndex::Samples20),
+            2 => Ok(OversamplingIndex::Samples10),
+            3 => Ok(OversamplingIndex::Samples5),
+            4 => Ok(OversamplingIndex::Samples2),
+            5 => Ok(OversamplingIndex::Samples1),
+            _ => Err(NanonisError::InvalidCommand(format!(
+                "Invalid oversampling index: {}",
+                value
+            ))),
+        }
+    }
+}
+
+/// Timebase index for oscilloscope operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimebaseIndex(pub i32);
+
+impl From<TimebaseIndex> for i32 {
+    fn from(index: TimebaseIndex) -> Self {
+        index.0
+    }
+}
+
+impl From<TimebaseIndex> for u16 {
+    fn from(index: TimebaseIndex) -> Self {
+        index.0 as u16
+    }
+}
+
+impl From<i32> for TimebaseIndex {
+    fn from(value: i32) -> Self {
+        TimebaseIndex(value)
+    }
+}
+
+impl From<u16> for TimebaseIndex {
+    fn from(value: u16) -> Self {
+        TimebaseIndex(value as i32)
+    }
+}
+
+/// Data acquisition mode for oscilloscope operations
+///
+/// Note: `DataToGet::Stable` is only supported by the ActionDriver layer,
+/// which implements sophisticated stability detection logic. The SPM interface
+/// layer (spm_impl.rs) will return an error if `Stable` is used directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataToGet {
+    Current,
+    NextTrigger,
+    Wait2Triggers,
+    /// Stability detection mode - only supported by ActionDriver
+    ///
+    /// Parameters:
+    /// - `readings`: Number of stable readings required
+    /// - `timeout`: Maximum time to wait for stability
+    Stable {
+        readings: u32,
+        timeout: Duration,
+    },
+}
+
+/// TCP Logger status enumeration
+/// Represents the different states of the TCP Logger module in Nanonis
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TCPLogStatus {
+    Disconnected = 0,
+    Idle = 1,
+    Start = 2,
+    Stop = 3,
+    Running = 4,
+    TCPConnect = 5,
+    TCPDisconnect = 6,
+    BufferOverflow = 7,
+}
+
+impl From<TCPLogStatus> for i32 {
+    fn from(status: TCPLogStatus) -> Self {
+        status as i32
+    }
+}
+
+impl TryFrom<i32> for TCPLogStatus {
+    type Error = NanonisError;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(TCPLogStatus::Disconnected),
+            1 => Ok(TCPLogStatus::Idle),
+            2 => Ok(TCPLogStatus::Start),
+            3 => Ok(TCPLogStatus::Stop),
+            4 => Ok(TCPLogStatus::Running),
+            5 => Ok(TCPLogStatus::TCPConnect),
+            6 => Ok(TCPLogStatus::TCPDisconnect),
+            7 => Ok(TCPLogStatus::BufferOverflow),
+            _ => Err(NanonisError::InvalidCommand(format!(
+                "Invalid TCP Logger status: {}",
+                value
+            ))),
+        }
+    }
+}
+
+impl std::fmt::Display for TCPLogStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let status_str = match self {
+            TCPLogStatus::Disconnected => "Disconnected",
+            TCPLogStatus::Idle => "Idle",
+            TCPLogStatus::Start => "Start",
+            TCPLogStatus::Stop => "Stop",
+            TCPLogStatus::Running => "Running",
+            TCPLogStatus::TCPConnect => "TCP Connect",
+            TCPLogStatus::TCPDisconnect => "TCP Disconnect",
+            TCPLogStatus::BufferOverflow => "Buffer Overflow",
+        };
+        write!(f, "{}", status_str)
+    }
+}
+
+/// Trigger configuration for oscilloscope operations
+#[derive(Debug, Clone, Copy)]
+pub struct TriggerConfig {
+    pub mode: OsciTriggerMode,
+    pub slope: TriggerSlope,
+    pub level: f64,
+    pub hysteresis: f64,
+}
+
+impl TriggerConfig {
+    pub fn new(mode: OsciTriggerMode, slope: TriggerSlope, level: f64, hysteresis: f64) -> Self {
+        Self {
+            mode,
+            slope,
+            level,
+            hysteresis,
+        }
+    }
+
+    pub fn immediate() -> Self {
+        Self {
+            mode: OsciTriggerMode::Immediate,
+            slope: TriggerSlope::Rising,
+            level: 0.0,
+            hysteresis: 0.0,
+        }
+    }
+
+    pub fn level_trigger(level: f64, slope: TriggerSlope) -> Self {
+        Self {
+            mode: OsciTriggerMode::Level,
+            slope,
+            level,
+            hysteresis: 0.1,
+        }
+    }
+
+    pub fn auto_trigger() -> Self {
+        Self {
+            mode: OsciTriggerMode::Auto,
+            slope: TriggerSlope::Rising,
+            level: 0.0,
+            hysteresis: 0.1,
+        }
+    }
+}
+
+/// Statistical analysis of signal data
+#[derive(Debug, Clone)]
+pub struct SignalStats {
+    pub mean: f64,
+    pub std_dev: f64,
+    pub relative_std: f64,
+    pub window_size: usize,
+    /// Method used to determine stability: "relative", "absolute", or "both"
+    pub stability_method: String,
+}
+
+/// Oscilloscope data structure containing timing and measurement information
+#[derive(Debug, Clone)]
+pub struct OsciData {
+    pub t0: f64,
+    pub dt: f64,
+    pub size: i32,
+    pub data: Vec<f64>,
+    pub signal_stats: Option<SignalStats>,
+    /// Indicates if this data represents a stable reading (for ReadOsciStable actions)
+    pub is_stable: bool,
+    /// Fallback single value when stable oscilloscope data couldn't be obtained
+    pub fallback_value: Option<f64>,
+}
+
+impl OsciData {
+    pub fn new(t0: f64, dt: f64, size: i32, data: Vec<f64>) -> Self {
+        Self {
+            t0,
+            dt,
+            size,
+            data,
+            signal_stats: None,
+            is_stable: true, // Default to stable for regular osci readings
+            fallback_value: None,
+        }
+    }
+
+    pub fn new_with_stats(t0: f64, dt: f64, size: i32, data: Vec<f64>, stats: SignalStats) -> Self {
+        Self {
+            t0,
+            dt,
+            size,
+            data,
+            signal_stats: Some(stats),
+            is_stable: true, // Default to stable for regular osci readings
+            fallback_value: None,
+        }
+    }
+
+    /// Create OsciData for stable readings
+    pub fn new_stable(t0: f64, dt: f64, size: i32, data: Vec<f64>) -> Self {
+        Self {
+            t0,
+            dt,
+            size,
+            data,
+            signal_stats: None,
+            is_stable: true,
+            fallback_value: None,
+        }
+    }
+
+    /// Create OsciData for unstable readings with fallback value
+    pub fn new_unstable_with_fallback(
+        t0: f64,
+        dt: f64,
+        size: i32,
+        data: Vec<f64>,
+        fallback: f64,
+    ) -> Self {
+        Self {
+            t0,
+            dt,
+            size,
+            data,
+            signal_stats: None,
+            is_stable: false,
+            fallback_value: Some(fallback),
+        }
+    }
+
+    /// Get just the measurement values
+    pub fn values(&self) -> &[f64] {
+        &self.data
+    }
+
+    /// Get time series as (time, value) pairs
+    pub fn time_series(&self) -> Vec<(f64, f64)> {
+        self.data
+            .iter()
+            .enumerate()
+            .map(|(i, &value)| (self.t0 + i as f64 * self.dt, value))
+            .collect()
+    }
+
+    /// Get signal statistics if available
+    pub fn stats(&self) -> Option<&SignalStats> {
+        self.signal_stats.as_ref()
+    }
+
+    /// Check if this data includes stability analysis
+    pub fn is_stable(&self) -> bool {
+        self.signal_stats.is_some()
+    }
+
+    pub fn duration(&self) -> f64 {
+        (self.size - 1) as f64 * self.dt
+    }
+
+    pub fn sample_rate(&self) -> f64 {
+        if self.dt > 0.0 {
+            1.0 / self.dt
+        } else {
+            0.0
+        }
+    }
+
+    pub fn time_points(&self) -> Vec<f64> {
+        (0..self.size)
+            .map(|i| self.t0 + i as f64 * self.dt)
+            .collect()
+    }
+}
+
+/// TCP Logger data stream frame from Nanonis TCP Logger.
+#[derive(Debug, Clone)]
+pub struct TCPLoggerData {
+    /// Number of channels (32-bit integer)
+    pub num_channels: u32,
+    /// Oversampling rate (32-bit float)
+    pub oversampling: f32,
+    /// Frame counter (64-bit integer)
+    pub counter: u64,
+    /// Logger state (16-bit unsigned integer)
+    pub state: TCPLogStatus,
+    /// Signal data (num_channels × 32-bit floats)
+    pub data: Vec<f32>,
+}
+
+// ==================== Lightweight Signal Frame Types ====================
+
+/// Minimal per-frame data (just signals + sequence number)
+/// This is much more memory efficient than storing full TCPLoggerData per frame
+#[derive(Debug, Clone)]
+pub struct SignalFrame {
+    /// Sequence number from TCP logger
+    pub counter: u64,
+    /// Raw signal values only
+    pub data: Vec<f32>,
+}
+
+/// Timestamped version of SignalFrame for efficient buffering
+#[derive(Debug, Clone)]
+pub struct TimestampedSignalFrame {
+    /// The lightweight signal frame
+    pub signal_frame: SignalFrame,
+    /// High-resolution timestamp when frame was received
+    pub timestamp: Instant,
+    /// Time relative to collection start
+    pub relative_time: Duration,
+}
+
+impl TimestampedSignalFrame {
+    /// Create a new timestamped signal frame from lightweight signal frame
+    /// Just adds high-resolution timestamp to existing SignalFrame
+    pub fn new(signal_frame: SignalFrame, start_time: Instant) -> Self {
+        let timestamp = Instant::now();
+        Self {
+            signal_frame,
+            timestamp,
+            relative_time: timestamp.duration_since(start_time),
+        }
+    }
+}
+
+// ==================== Experiment Data with Lightweight Frames ====================
+
+/// Complete experiment result containing action outcome and synchronized signal data
+/// Now uses lightweight SignalFrame structures for better memory efficiency
+#[derive(Debug)]
+pub struct ExperimentData {
+    /// Result of the executed action
+    pub action_result: crate::actions::ActionResult,
+    /// Lightweight signal frames (much more memory efficient)
+    pub signal_frames: Vec<TimestampedSignalFrame>,
+    /// TCP logger configuration for context (stored once, not per frame)
+    pub tcp_config: crate::action_driver::TCPReaderConfig,
+    /// When the action started
+    pub action_start: Instant,
+    /// When the action ended  
+    pub action_end: Instant,
+    /// Total action duration
+    pub total_duration: Duration,
+}
+
+/// Experiment data for action chain execution with timing for each action
+#[derive(Debug)]
+pub struct ChainExperimentData {
+    /// Results of each action in the chain
+    pub action_results: Vec<crate::actions::ActionResult>,
+    /// All signal frames collected during the entire chain execution
+    pub signal_frames: Vec<TimestampedSignalFrame>,
+    /// TCP logger configuration for context
+    pub tcp_config: crate::action_driver::TCPReaderConfig,
+    /// Start and end times for each action in the chain
+    pub action_timings: Vec<(Instant, Instant)>,
+    /// When the entire chain started
+    pub chain_start: Instant,
+    /// When the entire chain ended
+    pub chain_end: Instant,
+    /// Duration of entire chain execution
+    pub total_duration: Duration,
+}
+
+impl ExperimentData {
+    /// Get signal data captured during action execution
+    pub fn data_during_action(&self) -> Vec<&TimestampedSignalFrame> {
+        self.signal_frames
+            .iter()
+            .filter(|frame| {
+                frame.timestamp >= self.action_start && frame.timestamp <= self.action_end
+            })
+            .collect()
+    }
+
+    /// Get signal data before action execution
+    pub fn data_before_action(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
+        let cutoff = self.action_start - duration;
+        self.signal_frames
+            .iter()
+            .filter(|frame| frame.timestamp >= cutoff && frame.timestamp < self.action_start)
+            .collect()
+    }
+
+    /// Get signal data after action execution
+    pub fn data_after_action(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
+        let cutoff = self.action_end + duration;
+        self.signal_frames
+            .iter()
+            .filter(|frame| frame.timestamp > self.action_end && frame.timestamp <= cutoff)
+            .collect()
+    }
+
+    /// Get full TCPLoggerData for compatibility when needed
+    /// This reconstructs the full data structures using stored TCP config
+    pub fn get_tcp_logger_data(&self) -> Vec<TCPLoggerData> {
+        self.signal_frames
+            .iter()
+            .map(|frame| TCPLoggerData {
+                num_channels: self.tcp_config.channels.len() as u32,
+                oversampling: self.tcp_config.oversampling as f32,
+                counter: frame.signal_frame.counter,
+                state: TCPLogStatus::Running,
+                data: frame.signal_frame.data.clone(),
+            })
+            .collect()
+    }
+}
+
+impl ChainExperimentData {
+    /// Get signal data captured during a specific action in the chain
+    ///
+    /// # Arguments
+    /// * `action_index` - Index of the action in the chain (0-based)
+    ///
+    /// # Returns
+    /// Vector of signal frames collected during the specified action
+    pub fn data_during_action(&self, action_index: usize) -> Vec<&TimestampedSignalFrame> {
+        if let Some((start, end)) = self.action_timings.get(action_index) {
+            self.signal_frames
+                .iter()
+                .filter(|frame| frame.timestamp >= *start && frame.timestamp <= *end)
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Get signal data captured between two actions in the chain
+    ///
+    /// # Arguments
+    /// * `action1_index` - Index of first action (end time)
+    /// * `action2_index` - Index of second action (start time)
+    ///
+    /// # Returns
+    /// Vector of signal frames collected between the two specified actions
+    pub fn data_between_actions(
+        &self,
+        action1_index: usize,
+        action2_index: usize,
+    ) -> Vec<&TimestampedSignalFrame> {
+        if let (Some((_, end1)), Some((start2, _))) = (
+            self.action_timings.get(action1_index),
+            self.action_timings.get(action2_index),
+        ) {
+            self.signal_frames
+                .iter()
+                .filter(|frame| frame.timestamp > *end1 && frame.timestamp < *start2)
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Get signal data before the chain execution
+    ///
+    /// # Arguments
+    /// * `duration` - How far back from chain start to collect data
+    ///
+    /// # Returns
+    /// Vector of signal frames from before the chain started
+    pub fn data_before_chain(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
+        let cutoff = self.chain_start - duration;
+        self.signal_frames
+            .iter()
+            .filter(|frame| frame.timestamp >= cutoff && frame.timestamp < self.chain_start)
+            .collect()
+    }
+
+    /// Get signal data after the chain execution
+    ///
+    /// # Arguments
+    /// * `duration` - How far forward from chain end to collect data
+    ///
+    /// # Returns
+    /// Vector of signal frames from after the chain ended
+    pub fn data_after_chain(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
+        let cutoff = self.chain_end + duration;
+        self.signal_frames
+            .iter()
+            .filter(|frame| frame.timestamp > self.chain_end && frame.timestamp <= cutoff)
+            .collect()
+    }
+
+    /// Get all signal data for the entire chain execution
+    ///
+    /// # Returns
+    /// Vector of signal frames from chain start to chain end
+    pub fn data_for_entire_chain(&self) -> Vec<&TimestampedSignalFrame> {
+        self.signal_frames
+            .iter()
+            .filter(|frame| {
+                frame.timestamp >= self.chain_start && frame.timestamp <= self.chain_end
+            })
+            .collect()
+    }
+
+    /// Get timing information for a specific action
+    ///
+    /// # Arguments
+    /// * `action_index` - Index of the action in the chain
+    ///
+    /// # Returns
+    /// Optional tuple of (start_time, end_time, duration)
+    pub fn action_timing(&self, action_index: usize) -> Option<(Instant, Instant, Duration)> {
+        self.action_timings
+            .get(action_index)
+            .map(|(start, end)| (*start, *end, end.duration_since(*start)))
+    }
+
+    /// Get summary statistics for the chain execution
+    ///
+    /// # Returns
+    /// Tuple of (total_actions, successful_actions, total_frames, chain_duration)
+    pub fn chain_summary(&self) -> (usize, usize, usize, Duration) {
+        let total_actions = self.action_results.len();
+        let successful_actions = self
+            .action_results
+            .iter()
+            .filter(|result| matches!(result, crate::actions::ActionResult::Success))
+            .count();
+        let total_frames = self.signal_frames.len();
+
+        (
+            total_actions,
+            successful_actions,
+            total_frames,
+            self.total_duration,
+        )
+    }
+}
+
+/// Result of an auto-approach operation
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutoApproachResult {
+    /// Auto-approach completed successfully
+    Success,
+    /// Auto-approach timed out before completion
+    Timeout,
+    /// Auto-approach failed (e.g., hardware error, abnormal termination)
+    Failed(String),
+    /// Auto-approach was already running when attempted to start
+    AlreadyRunning,
+    /// Auto-approach was cancelled/stopped externally
+    Cancelled,
+}
+
+impl AutoApproachResult {
+    /// Check if the result represents a successful operation
+    pub fn is_success(&self) -> bool {
+        matches!(self, AutoApproachResult::Success)
+    }
+
+    /// Check if the result represents a failure
+    pub fn is_failure(&self) -> bool {
+        matches!(
+            self,
+            AutoApproachResult::Failed(_) | AutoApproachResult::Timeout
+        )
+    }
+
+    /// Get error description if this is a failure
+    pub fn error_message(&self) -> Option<&str> {
+        match self {
+            AutoApproachResult::Failed(msg) => Some(msg),
+            AutoApproachResult::Timeout => Some("Auto-approach timed out"),
+            AutoApproachResult::AlreadyRunning => Some("Auto-approach already running"),
+            AutoApproachResult::Cancelled => Some("Auto-approach was cancelled"),
+            AutoApproachResult::Success => None,
+        }
+    }
+}
+
+/// Status information for auto-approach operations
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutoApproachStatus {
+    /// Auto-approach is not running
+    Idle,
+    /// Auto-approach is currently running
+    Running,
+    /// Auto-approach status is unknown (e.g., communication error)
+    Unknown,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScanConfig {
+    pub forward_linear_speed_m_s: f32,
+    pub backward_linear_speed_m_s: f32,
+    pub forward_time_per_line_s: f32,
+    pub backward_time_per_line_s: f32,
+    pub keep_parameter_constant: u16,
+    pub speed_ratio: f32,
 }

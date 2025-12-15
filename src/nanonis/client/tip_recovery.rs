@@ -1,6 +1,26 @@
 use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
+use std::time::Duration;
+
+/// Configuration parameters for tip shaper
+#[derive(Debug, Clone)]
+pub struct TipShaperConfig {
+    pub switch_off_delay: Duration,
+    pub change_bias: bool,
+    pub bias_v: f32,
+    pub tip_lift_m: f32,
+    pub lift_time_1: Duration,
+    pub bias_lift_v: f32,
+    pub bias_settling_time: Duration,
+    pub lift_height_m: f32,
+    pub lift_time_2: Duration,
+    pub end_wait_time: Duration,
+    pub restore_feedback: bool,
+}
+
+/// Return type for tip shaper properties
+pub type TipShaperProps = (f32, u32, f32, f32, f32, f32, f32, f32, f32, f32, u32);
 
 impl NanonisClient {
     /// Set the buffer size of the Tip Move Recorder.
@@ -231,13 +251,14 @@ impl NanonisClient {
     pub fn tip_shaper_start(
         &mut self,
         wait_until_finished: bool,
-        timeout_ms: i32,
+        timeout: Duration,
     ) -> Result<(), NanonisError> {
         let wait_flag = if wait_until_finished { 1u32 } else { 0u32 };
+        let timeout = timeout.as_millis().min(u32::MAX as u128) as i32;
 
         self.quick_send(
             "TipShaper.Start",
-            vec![NanonisValue::U32(wait_flag), NanonisValue::I32(timeout_ms)],
+            vec![NanonisValue::U32(wait_flag), NanonisValue::I32(timeout)],
             vec!["I", "i"],
             vec![],
         )?;
@@ -251,71 +272,50 @@ impl NanonisClient {
     /// with multiple stages of tip treatment.
     ///
     /// # Arguments
-    /// * `switch_off_delay` - Time to average Z position before turning off controller
-    /// * `change_bias` - Whether to change bias voltage (0=no change, 1=true, 2=false)
-    /// * `bias_v` - Bias voltage to apply if change_bias is true
-    /// * `tip_lift_m` - Relative height for first Z ramp (meters)
-    /// * `lift_time_1_s` - Time for first Z ramping (seconds)
-    /// * `bias_lift_v` - Bias voltage after first Z ramping
-    /// * `bias_settling_time_s` - Settling time after bias changes
-    /// * `lift_height_m` - Height for second Z ramp (meters)
-    /// * `lift_time_2_s` - Time for second Z ramping (seconds)
-    /// * `end_wait_time_s` - Wait time after restoring bias voltage
-    /// * `restore_feedback` - Whether to restore Z-controller (0=no change, 1=true, 2=false)
+    /// * `config` - Tip shaper configuration parameters
     ///
     /// # Errors
     /// Returns `NanonisError` if communication fails or invalid parameters.
     ///
     /// # Examples
     /// ```no_run
-    /// use rusty_tip::NanonisClient;
+    /// use rusty_tip::{NanonisClient, TipShaperConfig};
+    /// use std::time::Duration;
     ///
     /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
     ///
     /// // Conservative tip conditioning parameters
-    /// client.tip_shaper_props_set(
-    ///     0.1,    // switch_off_delay
-    ///     1,      // change_bias (true)
-    ///     -2.0,   // bias_v
-    ///     50e-9,  // tip_lift_m (50 nm)
-    ///     1.0,    // lift_time_1_s
-    ///     5.0,    // bias_lift_v
-    ///     0.5,    // bias_settling_time_s
-    ///     100e-9, // lift_height_m (100 nm)
-    ///     0.5,    // lift_time_2_s
-    ///     0.2,    // end_wait_time_s
-    ///     1,      // restore_feedback (true)
-    /// )?;
+    /// let config = TipShaperConfig {
+    ///     switch_off_delay: Duration::from_millis(100),
+    ///     change_bias: 1,      // true
+    ///     bias_v: -2.0,
+    ///     tip_lift_m: 50e-9,   // 50 nm
+    ///     lift_time_1: Duration::from_secs(1),
+    ///     bias_lift_v: 5.0,
+    ///     bias_settling_time: Duration::from_millis(500),
+    ///     lift_height_m: 100e-9, // 100 nm
+    ///     lift_time_2: Duration::from_millis(500),
+    ///     end_wait_time: Duration::from_millis(200),
+    ///     restore_feedback: 1, // true
+    /// };
+    /// client.tip_shaper_props_set(config)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn tip_shaper_props_set(
-        &mut self,
-        switch_off_delay: f32,
-        change_bias: u32,
-        bias_v: f32,
-        tip_lift_m: f32,
-        lift_time_1_s: f32,
-        bias_lift_v: f32,
-        bias_settling_time_s: f32,
-        lift_height_m: f32,
-        lift_time_2_s: f32,
-        end_wait_time_s: f32,
-        restore_feedback: u32,
-    ) -> Result<(), NanonisError> {
+    pub fn tip_shaper_props_set(&mut self, config: TipShaperConfig) -> Result<(), NanonisError> {
         self.quick_send(
             "TipShaper.PropsSet",
             vec![
-                NanonisValue::F32(switch_off_delay),
-                NanonisValue::U32(change_bias),
-                NanonisValue::F32(bias_v),
-                NanonisValue::F32(tip_lift_m),
-                NanonisValue::F32(lift_time_1_s),
-                NanonisValue::F32(bias_lift_v),
-                NanonisValue::F32(bias_settling_time_s),
-                NanonisValue::F32(lift_height_m),
-                NanonisValue::F32(lift_time_2_s),
-                NanonisValue::F32(end_wait_time_s),
-                NanonisValue::U32(restore_feedback),
+                NanonisValue::F32(config.switch_off_delay.as_secs_f32()),
+                NanonisValue::U32(config.change_bias.into()),
+                NanonisValue::F32(config.bias_v),
+                NanonisValue::F32(config.tip_lift_m),
+                NanonisValue::F32(config.lift_time_1.as_secs_f32()),
+                NanonisValue::F32(config.bias_lift_v),
+                NanonisValue::F32(config.bias_settling_time.as_secs_f32()),
+                NanonisValue::F32(config.lift_height_m),
+                NanonisValue::F32(config.lift_time_2.as_secs_f32()),
+                NanonisValue::F32(config.end_wait_time.as_secs_f32()),
+                NanonisValue::U32(config.restore_feedback.into()),
             ],
             vec!["f", "I", "f", "f", "f", "f", "f", "f", "f", "f", "I"],
             vec![],
@@ -360,9 +360,7 @@ impl NanonisClient {
     ///          switch_delay + lift_time1 + settling + lift_time2 + end_wait);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn tip_shaper_props_get(
-        &mut self,
-    ) -> Result<(f32, u32, f32, f32, f32, f32, f32, f32, f32, f32, u32), NanonisError> {
+    pub fn tip_shaper_props_get(&mut self) -> Result<TipShaperProps, NanonisError> {
         let result = self.quick_send(
             "TipShaper.PropsGet",
             vec![],
@@ -384,6 +382,74 @@ impl NanonisClient {
                 result[9].as_f32()?,  // end_wait_time_s
                 result[10].as_u32()?, // restore_feedback
             ))
+        } else {
+            Err(NanonisError::Protocol(
+                "Invalid tip shaper properties response".to_string(),
+            ))
+        }
+    }
+
+    /// Get the Tip Shaper properties as a type-safe TipShaperConfig struct
+    ///
+    /// This method returns the same information as `tip_shaper_props_get()` but
+    /// with Duration types for time fields instead of raw f32 seconds.
+    ///
+    /// # Returns
+    /// Returns a `TipShaperConfig` struct with type-safe Duration fields for all time parameters.
+    ///
+    /// # Errors
+    /// Returns `NanonisError` if communication fails or if the response format is invalid.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use rusty_tip::NanonisClient;
+    /// use std::time::Duration;
+    ///
+    /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
+    /// let config = client.tip_shaper_config_get()?;
+    ///
+    /// println!("Tip lift: {:.1} nm, Bias: {:.1} V",
+    ///          config.tip_lift_m * 1e9, config.bias_v);
+    /// println!("Total procedure time: {:.1} s",
+    ///          (config.switch_off_delay + config.lift_time_1 +
+    ///           config.bias_settling_time + config.lift_time_2 +
+    ///           config.end_wait_time).as_secs_f32());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn tip_shaper_config_get(&mut self) -> Result<TipShaperConfig, NanonisError> {
+        let result = self.quick_send(
+            "TipShaper.PropsGet",
+            vec![],
+            vec![],
+            vec!["f", "I", "f", "f", "f", "f", "f", "f", "f", "f", "I"],
+        )?;
+
+        if result.len() >= 11 {
+            let restore_feedback = match result[10].as_u32()? {
+                0 => true,
+                1 => false,
+                _ => panic!("Wrong return value for restore_feedback"),
+            };
+
+            let change_bias = match result[1].as_u32()? {
+                0 => true,
+                1 => false,
+                _ => panic!("Wrong return value for change_bias"),
+            };
+
+            Ok(TipShaperConfig {
+                switch_off_delay: Duration::from_secs_f32(result[0].as_f32()?),
+                change_bias,
+                bias_v: result[2].as_f32()?,
+                tip_lift_m: result[3].as_f32()?,
+                lift_time_1: Duration::from_secs_f32(result[4].as_f32()?),
+                bias_lift_v: result[5].as_f32()?,
+                bias_settling_time: Duration::from_secs_f32(result[6].as_f32()?),
+                lift_height_m: result[7].as_f32()?,
+                lift_time_2: Duration::from_secs_f32(result[8].as_f32()?),
+                end_wait_time: Duration::from_secs_f32(result[9].as_f32()?),
+                restore_feedback,
+            })
         } else {
             Err(NanonisError::Protocol(
                 "Invalid tip shaper properties response".to_string(),

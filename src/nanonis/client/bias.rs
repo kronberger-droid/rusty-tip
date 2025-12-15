@@ -65,7 +65,9 @@ impl NanonisClient {
         let result = self.quick_send("Bias.Get", vec![], vec![], vec!["f"])?;
         match result.first() {
             Some(value) => Ok(value.as_f32()?),
-            None => Err(NanonisError::Protocol("No bias value returned".to_string())),
+            None => {
+                Err(NanonisError::Protocol("No bias value returned".to_string()))
+            }
         }
     }
 
@@ -96,7 +98,10 @@ impl NanonisClient {
     /// client.bias_range_set(1)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn bias_range_set(&mut self, bias_range_index: u16) -> Result<(), NanonisError> {
+    pub fn bias_range_set(
+        &mut self,
+        bias_range_index: u16,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "Bias.RangeSet",
             vec![NanonisValue::U16(bias_range_index)],
@@ -134,8 +139,12 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn bias_range_get(&mut self) -> Result<(Vec<String>, u16), NanonisError> {
-        let result =
-            self.quick_send("Bias.RangeGet", vec![], vec![], vec!["i", "i", "*+c", "H"])?;
+        let result = self.quick_send(
+            "Bias.RangeGet",
+            vec![],
+            vec![],
+            vec!["i", "i", "*+c", "H"],
+        )?;
         if result.len() >= 4 {
             let ranges = result[2].as_string_array()?.to_vec();
             let current_index = result[3].as_u16()?;
@@ -172,7 +181,11 @@ impl NanonisClient {
     /// client.bias_calibr_set(0.998, 0.005)?;
     /// Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn bias_calibr_set(&mut self, calibration: f32, offset: f32) -> Result<(), NanonisError> {
+    pub fn bias_calibr_set(
+        &mut self,
+        calibration: f32,
+        offset: f32,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "Bias.CalibrSet",
             vec![NanonisValue::F32(calibration), NanonisValue::F32(offset)],
@@ -206,7 +219,8 @@ impl NanonisClient {
     /// Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn bias_calibr_get(&mut self) -> Result<(f32, f32), NanonisError> {
-        let result = self.quick_send("Bias.CalibrGet", vec![], vec![], vec!["f", "f"])?;
+        let result =
+            self.quick_send("Bias.CalibrGet", vec![], vec![], vec!["f", "f"])?;
         if result.len() >= 2 {
             let calibration = result[0].as_f32()?;
             let offset = result[1].as_f32()?;

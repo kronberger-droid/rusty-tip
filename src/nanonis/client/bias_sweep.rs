@@ -1,6 +1,6 @@
+use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
-use super::NanonisClient;
 
 impl NanonisClient {
     /// Open the Bias Sweep module.
@@ -62,7 +62,7 @@ impl NanonisClient {
     ///     true            // reset bias after sweep
     /// )?;
     /// println!("Recorded {} channels with {} points", channels.len(), data.len());
-    /// 
+    ///
     /// // Just start sweep without getting data
     /// let (_, _) = client.bias_sweep_start(false, true, 0, "", false)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -78,7 +78,7 @@ impl NanonisClient {
         let get_data_flag = if get_data { 1u32 } else { 0u32 };
         let direction_flag = if sweep_direction { 1u32 } else { 0u32 };
         let reset_flag = if reset_bias { 1u32 } else { 0u32 };
-        
+
         let result = self.quick_send(
             "BiasSwp.Start",
             vec![
@@ -96,7 +96,7 @@ impl NanonisClient {
             let channel_names = result[2].as_string_array()?.to_vec();
             let rows = result[3].as_i32()? as usize;
             let cols = result[4].as_i32()? as usize;
-            
+
             // Parse 2D data array
             let flat_data = result[5].as_f32_array()?;
             let mut data_2d = Vec::with_capacity(rows);
@@ -105,7 +105,7 @@ impl NanonisClient {
                 let end_idx = start_idx + cols;
                 data_2d.push(flat_data[start_idx..end_idx].to_vec());
             }
-            
+
             Ok((channel_names, data_2d))
         } else {
             Err(NanonisError::Protocol(
@@ -185,7 +185,7 @@ impl NanonisClient {
     ///
     /// // Positive voltage sweep only
     /// client.bias_sweep_limits_set(0.0, 5.0)?;
-    /// 
+    ///
     /// // Negative voltage sweep
     /// client.bias_sweep_limits_set(-3.0, 0.0)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -236,8 +236,9 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn bias_sweep_limits_get(&mut self) -> Result<(f32, f32), NanonisError> {
-        let result = self.quick_send("BiasSwp.LimitsGet", vec![], vec![], vec!["f", "f"])?;
-        
+        let result =
+            self.quick_send("BiasSwp.LimitsGet", vec![], vec![], vec!["f", "f"])?;
+
         if result.len() >= 2 {
             Ok((result[0].as_f32()?, result[1].as_f32()?))
         } else {

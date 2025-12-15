@@ -1,8 +1,9 @@
 use super::protocol::{Protocol, HEADER_SIZE};
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
-use log::{debug, trace, warn};
-use std::io::{Read, Write};
+use crate::{MotorDirection, MotorGroup};
+use log::{debug, warn};
+use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
@@ -15,12 +16,18 @@ pub mod motor;
 pub mod osci_1t;
 pub mod osci_2t;
 pub mod osci_hr;
+pub mod pll;
 pub mod safe_tip;
 pub mod scan;
 pub mod signals;
+pub mod tcplog;
 pub mod tip_recovery;
 pub mod z_ctrl;
 pub mod z_spectr;
+
+// Re-export types from submodules
+pub use tip_recovery::{TipShaperConfig, TipShaperProps};
+pub use z_spectr::ZSpectroscopyResult;
 
 /// Connection configuration for the Nanonis TCP client.
 ///
@@ -168,7 +175,10 @@ impl NanonisClientBuilder {
                 if e.kind() == std::io::ErrorKind::TimedOut {
                     NanonisError::Timeout
                 } else {
-                    NanonisError::Io(e)
+                    NanonisError::Io {
+                        source: e,
+                        context: format!("Failed to connect to {address}"),
+                    }
                 }
             })?;
 
@@ -222,7 +232,7 @@ impl NanonisClientBuilder {
 /// client.set_bias(1.0)?;
 ///
 /// // Read signal values
-/// let values = client.signals_val_get(vec![0, 1, 2], true)?;
+/// let values = client.signals_vals_get(vec![0, 1, 2], true)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
@@ -333,47 +343,118 @@ impl NanonisClient {
         argument_types: Vec<&str>,
         return_types: Vec<&str>,
     ) -> Result<Vec<NanonisValue>, NanonisError> {
-        if self.debug {
-            debug!("Sending command: {}", command);
-        }
+        debug!("=== COMMAND START: {} ===", command);
+        debug!("Arguments: {:?}", args);
+        debug!("Argument types: {:?}", argument_types);
+        debug!("Return types: {:?}", return_types);
 
         // Serialize arguments
         let mut body = Vec::new();
         for (arg, arg_type) in args.iter().zip(argument_types.iter()) {
+            debug!("Serializing {:?} as {}", arg, arg_type);
             Protocol::serialize_value(arg, arg_type, &mut body)?;
         }
 
         // Create command header
         let header = Protocol::create_command_header(command, body.len() as u32);
 
-        // Send command
-        self.stream.write_all(&header)?;
+        debug!("Header size: {}, Body size: {}", header.len(), body.len());
+        debug!("Full header bytes: {:02x?}", header);
+        debug!(
+            "Command in header: {:?}",
+            String::from_utf8_lossy(&header[0..32]).trim_end_matches('\0')
+        );
+        debug!(
+            "Body size in header: {}",
+            u32::from_be_bytes([header[32], header[33], header[34], header[35]])
+        );
+
         if !body.is_empty() {
-            self.stream.write_all(&body)?;
+            debug!("Body bytes: {:02x?}", body);
         }
 
-        if self.debug {
-            trace!("Command sent, waiting for response...");
+        // Send command
+        debug!("Sending header ({} bytes)...", header.len());
+        self.stream.write_all(&header).map_err(|e| {
+            debug!("Failed to write header: {}", e);
+            NanonisError::Io {
+                source: e,
+                context: "Writing command header".to_string(),
+            }
+        })?;
+
+        if !body.is_empty() {
+            debug!("Sending body ({} bytes)...", body.len());
+            self.stream.write_all(&body).map_err(|e| {
+                debug!("Failed to write body: {}", e);
+                NanonisError::Io {
+                    source: e,
+                    context: "Writing command body".to_string(),
+                }
+            })?;
         }
 
-        // Read response header
-        let mut response_header = [0u8; HEADER_SIZE];
-        self.stream.read_exact(&mut response_header)?;
+        debug!("Command data sent successfully");
+
+        // Read response header with improved error handling
+        debug!("Reading response header ({} bytes)...", HEADER_SIZE);
+        let response_header =
+            Protocol::read_exact_bytes::<HEADER_SIZE>(&mut self.stream).map_err(|e| {
+                debug!("Failed to read response header: {}", e);
+                e
+            })?;
+
+        debug!("Response header received: {:02x?}", response_header);
+        debug!(
+            "Response command: {:?}",
+            String::from_utf8_lossy(&response_header[0..32]).trim_end_matches('\0')
+        );
 
         // Validate and get body size
         let body_size = Protocol::validate_response_header(&response_header, command)?;
+        debug!("Expected response body size: {}", body_size);
 
-        // Read response body
-        let mut response_body = vec![0u8; body_size as usize];
-        if body_size > 0 {
-            self.stream.read_exact(&mut response_body)?;
-        }
+        // Read response body with size validation
+        let response_body = if body_size > 0 {
+            debug!("Reading response body ({} bytes)...", body_size);
+            let body = Protocol::read_variable_bytes(&mut self.stream, body_size as usize)
+                .map_err(|e| {
+                    debug!("Failed to read response body: {}", e);
+                    e
+                })?;
+            debug!(
+                "Response body received ({} bytes): {:02x?}",
+                body.len(),
+                if body.len() <= 100 {
+                    &body[..]
+                } else {
+                    &body[..100]
+                }
+            );
+            body
+        } else {
+            debug!("No response body expected");
+            Vec::new()
+        };
 
-        if self.debug {
-            trace!("Response received, body size: {}", body_size);
-        }
+        // Parse response with error checking
+        debug!("Parsing response with types: {:?}", return_types);
+        let result = Protocol::parse_response_with_error_check(&response_body, &return_types)
+            .map_err(|e| {
+                debug!("Failed to parse response: {}", e);
+                e
+            })?;
 
-        // Parse response
-        Protocol::parse_response(&response_body, &return_types)
+        debug!("=== COMMAND SUCCESS: {} ===", command);
+        debug!("Parsed result: {:?}", result);
+
+        Ok(result)
+    }
+}
+
+impl Drop for NanonisClient {
+    fn drop(&mut self) {
+        let _ = self.z_ctrl_withdraw(false, Duration::from_secs(2));
+        let _ = self.motor_start_move(MotorDirection::ZMinus, 15u16, MotorGroup::Group1, false);
     }
 }
