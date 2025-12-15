@@ -1,0 +1,68 @@
+# Tip Preparation Configuration
+# This config uses linear pulse method with adaptive voltage response
+
+[nanonis]
+host_ip = "127.0.0.1"
+control_ports = [6501, 6502, 6503, 6504]
+
+[data_acquisition]
+data_port = 6590
+sample_rate = 2000
+
+[experiment_logging]
+enabled = true
+output_path = "./experiments"
+
+[console]
+verbosity = "info"
+
+[tip_prep]
+# Frequency shift bounds for determining if tip is sharp
+sharp_tip_bounds = [-2.0, 0.0]
+
+# Maximum allowed change in frequency shift for tip to be considered stable
+stable_tip_allowed_change = 0.2
+
+# Whether to check for tip stability
+check_stability = true
+
+# Maximum number of pulse cycles (unlimited if not set)
+max_cycles = 10000
+
+# Maximum duration in seconds (unlimited if not set)
+max_duration_secs = 12000
+
+[pulse_method]
+# Use linear pulse method
+type = "linear"
+
+# Output pulse voltage range (in V)
+# This is the Y-axis: minimum and maximum pulse voltages
+voltage_bounds = [2.0, 6.0]
+
+# Frequency shift range to monitor (in Hz)
+# This is the X-axis: the freq_shift range for linear interpolation
+# When freq_shift is outside this range, pulse with max voltage (voltage_bounds[1])
+# When inside this range, linearly map freq_shift to pulse voltage
+# NOTE: For STM/AFM, frequency shifts are typically NEGATIVE!
+# Example with linear_clamp = [-20.0, 0.0] and voltage_bounds = [2.0, 6.0]:
+#          freq_shift = -20.0 Hz → pulse = 2.0 V (min voltage for very negative)
+#          freq_shift = -10.0 Hz → pulse = 4.0 V (middle voltage)
+#          freq_shift =   0.0 Hz → pulse = 6.0 V (max voltage for close to zero)
+#          freq_shift = -25.0 Hz → pulse = 6.0 V (outside range, clamped to max)
+linear_clamp = [-20.0, 0.0]
+
+# Polarity of the pulse voltage: "positive" or "negative"
+polarity = "negative"
+
+# Optional: Random polarity switching
+# When enabled, every Nth pulse will use the opposite polarity
+[pulse_method.random_switch]
+switch_every_n_pulses = 10  # Every 10th pulse uses opposite polarity
+
+# Optional: Custom TCP channel mapping
+# Uncomment and modify if your Nanonis signal indices differ from the defaults
+# Format: { nanonis_index = X, tcp_channel = Y }
+[[tcp_channel_mapping]]
+nanonis_index = 76  # Frequency shift
+tcp_channel = 19

@@ -1,14 +1,17 @@
-use crate::error::NanonisError;
-use crate::types::{Amplitude, Frequency, MotorAxis, MotorDirection, MotorGroup, MovementMode, NanonisValue, Position3D, StepCount};
-use std::time::Duration;
 use super::NanonisClient;
+use crate::error::NanonisError;
+use crate::types::{
+    Amplitude, Frequency, MotorAxis, MotorDirection, MotorGroup, MovementMode,
+    NanonisValue, Position3D,
+};
+use std::time::Duration;
 
 impl NanonisClient {
     /// Move the coarse positioning device (motor, piezo actuator)
     pub fn motor_start_move(
         &mut self,
         direction: impl Into<MotorDirection>,
-        number_of_steps: impl Into<StepCount>,
+        number_of_steps: impl Into<u16>,
         group: impl Into<MotorGroup>,
         wait_until_finished: bool,
     ) -> Result<(), NanonisError> {
@@ -17,7 +20,7 @@ impl NanonisClient {
             "Motor.StartMove",
             vec![
                 NanonisValue::U32(direction.into().into()),
-                NanonisValue::U16(number_of_steps.into().into()),
+                NanonisValue::U16(number_of_steps.into()),
                 NanonisValue::U32(group.into().into()),
                 NanonisValue::U32(wait_flag),
             ],
@@ -66,7 +69,10 @@ impl NanonisClient {
     ) -> Result<Position3D, NanonisError> {
         let result = self.quick_send(
             "Motor.PosGet",
-            vec![NanonisValue::U32(group.into()), NanonisValue::U32(timeout.as_millis() as u32)],
+            vec![
+                NanonisValue::U32(group.into()),
+                NanonisValue::U32(timeout.as_millis() as u32),
+            ],
             vec!["I", "I"],
             vec!["d", "d", "d"],
         )?;
@@ -120,7 +126,10 @@ impl NanonisClient {
 
     /// Get frequency and amplitude of the motor control module
     /// Available only for PD5, PMD4, and Attocube ANC150 devices
-    pub fn motor_freq_amp_get(&mut self, axis: MotorAxis) -> Result<(Frequency, Amplitude), NanonisError> {
+    pub fn motor_freq_amp_get(
+        &mut self,
+        axis: MotorAxis,
+    ) -> Result<(Frequency, Amplitude), NanonisError> {
         let result = self.quick_send(
             "Motor.FreqAmpGet",
             vec![NanonisValue::U16(axis.into())],

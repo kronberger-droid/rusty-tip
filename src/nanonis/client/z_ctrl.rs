@@ -1,11 +1,13 @@
+use std::time::Duration;
+
+use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
-use super::NanonisClient;
 
 impl NanonisClient {
     /// Switch the Z-Controller on or off.
     ///
-    /// Controls the Z-Controller state. This is fundamental for enabling/disabling 
+    /// Controls the Z-Controller state. This is fundamental for enabling/disabling
     /// tip-sample distance regulation during scanning and positioning operations.
     ///
     /// # Arguments
@@ -27,9 +29,12 @@ impl NanonisClient {
     /// client.z_ctrl_on_off_set(false)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn z_ctrl_on_off_set(&mut self, controller_on: bool) -> Result<(), NanonisError> {
+    pub fn z_ctrl_on_off_set(
+        &mut self,
+        controller_on: bool,
+    ) -> Result<(), NanonisError> {
         let status_flag = if controller_on { 1u32 } else { 0u32 };
-        
+
         self.quick_send(
             "ZCtrl.OnOffSet",
             vec![NanonisValue::U32(status_flag)],
@@ -67,7 +72,7 @@ impl NanonisClient {
     /// ```
     pub fn z_ctrl_on_off_get(&mut self) -> Result<bool, NanonisError> {
         let result = self.quick_send("ZCtrl.OnOffGet", vec![], vec![], vec!["I"])?;
-        
+
         match result.first() {
             Some(value) => Ok(value.as_u32()? == 1),
             None => Err(NanonisError::Protocol(
@@ -98,15 +103,18 @@ impl NanonisClient {
     ///
     /// // Ensure Z-controller is off
     /// client.z_ctrl_on_off_set(false)?;
-    /// 
+    ///
     /// // Move tip to specific Z position (10 nm above surface)
     /// client.z_ctrl_z_pos_set(10e-9)?;
-    /// 
+    ///
     /// // Move tip closer to surface (2 nm)
     /// client.z_ctrl_z_pos_set(2e-9)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn z_ctrl_z_pos_set(&mut self, z_position_m: f32) -> Result<(), NanonisError> {
+    pub fn z_ctrl_z_pos_set(
+        &mut self,
+        z_position_m: f32,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "ZCtrl.ZPosSet",
             vec![NanonisValue::F32(z_position_m)],
@@ -144,12 +152,12 @@ impl NanonisClient {
     /// ```
     pub fn z_ctrl_z_pos_get(&mut self) -> Result<f32, NanonisError> {
         let result = self.quick_send("ZCtrl.ZPosGet", vec![], vec![], vec!["f"])?;
-        
+
         match result.first() {
             Some(value) => Ok(value.as_f32()?),
-            None => Err(NanonisError::Protocol(
-                "No Z position returned".to_string(),
-            )),
+            None => {
+                Err(NanonisError::Protocol("No Z position returned".to_string()))
+            }
         }
     }
 
@@ -177,7 +185,10 @@ impl NanonisClient {
     /// client.z_ctrl_setpoint_set(1e-9)?;  // 1 nN
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn z_ctrl_setpoint_set(&mut self, setpoint: f32) -> Result<(), NanonisError> {
+    pub fn z_ctrl_setpoint_set(
+        &mut self,
+        setpoint: f32,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "ZCtrl.SetpntSet",
             vec![NanonisValue::F32(setpoint)],
@@ -208,13 +219,12 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn z_ctrl_setpoint_get(&mut self) -> Result<f32, NanonisError> {
-        let result = self.quick_send("ZCtrl.SetpntGet", vec![], vec![], vec!["f"])?;
-        
+        let result =
+            self.quick_send("ZCtrl.SetpntGet", vec![], vec![], vec!["f"])?;
+
         match result.first() {
             Some(value) => Ok(value.as_f32()?),
-            None => Err(NanonisError::Protocol(
-                "No setpoint returned".to_string(),
-            )),
+            None => Err(NanonisError::Protocol("No setpoint returned".to_string())),
         }
     }
 
@@ -293,8 +303,9 @@ impl NanonisClient {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn z_ctrl_gain_get(&mut self) -> Result<(f32, f32, f32), NanonisError> {
-        let result = self.quick_send("ZCtrl.GainGet", vec![], vec![], vec!["f", "f", "f"])?;
-        
+        let result =
+            self.quick_send("ZCtrl.GainGet", vec![], vec![], vec!["f", "f", "f"])?;
+
         if result.len() >= 3 {
             Ok((
                 result[0].as_f32()?,
@@ -302,9 +313,7 @@ impl NanonisClient {
                 result[2].as_f32()?,
             ))
         } else {
-            Err(NanonisError::Protocol(
-                "Invalid gain response".to_string(),
-            ))
+            Err(NanonisError::Protocol("Invalid gain response".to_string()))
         }
     }
 
@@ -328,7 +337,7 @@ impl NanonisClient {
     ///
     /// // Wait a moment for positioning to complete
     /// std::thread::sleep(std::time::Duration::from_secs(1));
-    /// 
+    ///
     /// // Check final position
     /// let final_pos = client.z_ctrl_z_pos_get()?;
     /// println!("Tip homed to: {:.2} nm", final_pos * 1e9);
@@ -355,27 +364,31 @@ impl NanonisClient {
     /// # Examples
     /// ```no_run
     /// use rusty_tip::NanonisClient;
+    /// use std::time::Duration;
     ///
     /// let mut client = NanonisClient::new("127.0.0.1", 6501)?;
     ///
     /// // Emergency withdrawal - don't wait
-    /// client.z_ctrl_withdraw(false, 5000)?;
+    /// client.z_ctrl_withdraw(false, Duration::from_secs(5))?;
     ///
     /// // Controlled withdrawal with waiting
-    /// client.z_ctrl_withdraw(true, 10000)?;
+    /// client.z_ctrl_withdraw(true, Duration::from_secs(10))?;
     /// println!("Tip safely withdrawn");
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn z_ctrl_withdraw(
         &mut self,
         wait_until_finished: bool,
-        timeout_ms: i32,
+        timeout_ms: Duration,
     ) -> Result<(), NanonisError> {
-        let wait_flag = if wait_until_finished { 1u16 } else { 0u16 };
+        let wait_flag = if wait_until_finished { 1u32 } else { 0u32 };
         self.quick_send(
             "ZCtrl.Withdraw",
-            vec![NanonisValue::U16(wait_flag), NanonisValue::I32(timeout_ms)],
-            vec!["H", "i"],
+            vec![
+                NanonisValue::U32(wait_flag),
+                NanonisValue::I32(timeout_ms.as_millis() as i32),
+            ],
+            vec!["I", "i"],
             vec![],
         )?;
         Ok(())

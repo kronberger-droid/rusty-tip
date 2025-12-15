@@ -1,6 +1,6 @@
+use super::NanonisClient;
 use crate::error::NanonisError;
 use crate::types::NanonisValue;
-use super::NanonisClient;
 
 impl NanonisClient {
     /// Set the channels to display in the Oscilloscope 2-Channels
@@ -26,7 +26,8 @@ impl NanonisClient {
     /// Get the channels displayed in the Oscilloscope 2-Channels
     /// Returns: (channel_a_index, channel_b_index)
     pub fn osci2t_ch_get(&mut self) -> Result<(i32, i32), NanonisError> {
-        let result = self.quick_send("Osci2T.ChGet", vec![], vec![], vec!["i", "i"])?;
+        let result =
+            self.quick_send("Osci2T.ChGet", vec![], vec![], vec!["i", "i"])?;
         if result.len() >= 2 {
             let channel_a = result[0].as_i32()?;
             let channel_b = result[1].as_i32()?;
@@ -40,7 +41,10 @@ impl NanonisClient {
 
     /// Set the timebase in the Oscilloscope 2-Channels
     /// Use osci2t_timebase_get() first to obtain available timebases, then use the index
-    pub fn osci2t_timebase_set(&mut self, timebase_index: u16) -> Result<(), NanonisError> {
+    pub fn osci2t_timebase_set(
+        &mut self,
+        timebase_index: u16,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "Osci2T.TimebaseSet",
             vec![NanonisValue::U16(timebase_index)],
@@ -53,7 +57,12 @@ impl NanonisClient {
     /// Get the timebase in the Oscilloscope 2-Channels
     /// Returns: (timebase_index, timebases_array)
     pub fn osci2t_timebase_get(&mut self) -> Result<(u16, Vec<f32>), NanonisError> {
-        let result = self.quick_send("Osci2T.TimebaseGet", vec![], vec![], vec!["H", "i", "*f"])?;
+        let result = self.quick_send(
+            "Osci2T.TimebaseGet",
+            vec![],
+            vec![],
+            vec!["H", "i", "*f"],
+        )?;
         if result.len() >= 3 {
             let timebase_index = result[0].as_u16()?;
             let timebases = result[2].as_f32_array()?.to_vec();
@@ -67,7 +76,10 @@ impl NanonisClient {
 
     /// Set the oversampling in the Oscilloscope 2-Channels
     /// oversampling_index: 0=50 samples, 1=20, 2=10, 3=5, 4=2, 5=1 sample (no averaging)
-    pub fn osci2t_oversampl_set(&mut self, oversampling_index: u16) -> Result<(), NanonisError> {
+    pub fn osci2t_oversampl_set(
+        &mut self,
+        oversampling_index: u16,
+    ) -> Result<(), NanonisError> {
         self.quick_send(
             "Osci2T.OversamplSet",
             vec![NanonisValue::U16(oversampling_index)],
@@ -80,7 +92,8 @@ impl NanonisClient {
     /// Get the oversampling in the Oscilloscope 2-Channels
     /// Returns: oversampling index (0=50 samples, 1=20, 2=10, 3=5, 4=2, 5=1 sample)
     pub fn osci2t_oversampl_get(&mut self) -> Result<u16, NanonisError> {
-        let result = self.quick_send("Osci2T.OversamplGet", vec![], vec![], vec!["H"])?;
+        let result =
+            self.quick_send("Osci2T.OversamplGet", vec![], vec![], vec!["H"])?;
         match result.first() {
             Some(value) => Ok(value.as_u16()?),
             None => Err(NanonisError::Protocol(
@@ -120,9 +133,15 @@ impl NanonisClient {
 
     /// Get the trigger configuration in the Oscilloscope 2-Channels
     /// Returns: (trigger_mode, trig_channel, trigger_slope, trigger_level, trigger_hysteresis, trig_position)
-    pub fn osci2t_trig_get(&mut self) -> Result<(u16, u16, u16, f64, f64, f64), NanonisError> {
-        let result =
-            self.quick_send("Osci2T.TrigGet", vec![], vec![], vec!["H", "H", "H", "d", "d", "d"])?;
+    pub fn osci2t_trig_get(
+        &mut self,
+    ) -> Result<(u16, u16, u16, f64, f64, f64), NanonisError> {
+        let result = self.quick_send(
+            "Osci2T.TrigGet",
+            vec![],
+            vec![],
+            vec!["H", "H", "H", "d", "d", "d"],
+        )?;
         if result.len() >= 6 {
             let trigger_mode = result[0].as_u16()?;
             let trig_channel = result[1].as_u16()?;

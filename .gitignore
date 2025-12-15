@@ -1,5 +1,7 @@
 *.csv
 target/
-examples/history
+experiments
 */.obsidian/workspace.json
 *.png
+.claude
+.direnv
