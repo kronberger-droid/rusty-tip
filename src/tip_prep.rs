@@ -476,9 +476,9 @@ impl TipController {
                         pulse_voltage = voltage_bounds.1;
                     } else {
                         let slope =
-                            linear_clamp.1 - linear_clamp.0 / voltage_bounds.1 - voltage_bounds.0;
+                            (linear_clamp.1 - linear_clamp.0) / (voltage_bounds.1 - voltage_bounds.0);
 
-                        let d = voltage_bounds.0;
+                        let d = linear_clamp.0 - slope * voltage_bounds.0;
 
                         pulse_voltage = slope * current_freq_shift + d;
                     }
