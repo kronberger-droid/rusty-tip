@@ -52,7 +52,7 @@ voltage_bounds = [2.0, 6.0]
 linear_clamp = [0.0, 20.0]
 
 # Polarity of the pulse voltage: "positive" or "negative"
-polarity = "positive"
+polarity = "negative"
 
 # Optional: Random polarity switching
 # When enabled, every Nth pulse will use the opposite polarity
