@@ -126,11 +126,18 @@ fn log_pulse_method(method: &PulseMethod) {
             voltage_bounds,
             linear_clamp,
             polarity,
+            random_switch,
         } => {
             info!(
                 "Pulse method: Linear (voltage: {:.2}V to {:.2}V, freq_shift range: {:.2} to {:.2} Hz, {:?})",
                 voltage_bounds.0, voltage_bounds.1, linear_clamp.0, linear_clamp.1, polarity
             );
+            if let Some(switch) = random_switch {
+                info!(
+                    "Random polarity switching: every {} pulses",
+                    switch.switch_every_n_pulses
+                );
+            }
         }
     }
 }

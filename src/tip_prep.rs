@@ -116,6 +116,8 @@ pub enum PulseMethod {
         linear_clamp: (f32, f32),
         #[serde(default)]
         polarity: PolaritySign,
+        #[serde(default)]
+        random_switch: Option<RandomPolaritySwitch>,
     },
 }
 
@@ -262,6 +264,10 @@ impl TipController {
                 ..
             }
             | PulseMethod::Fixed {
+                random_switch: Some(switch),
+                ..
+            }
+            | PulseMethod::Linear {
                 random_switch: Some(switch),
                 ..
             } => {
@@ -473,7 +479,7 @@ impl TipController {
             PulseMethod::Linear {
                 voltage_bounds,
                 linear_clamp,
-                polarity,
+                ..
             } => {
                 let current_freq_shift;
                 let mut pulse_voltage = self.current_pulse_voltage;
@@ -498,14 +504,7 @@ impl TipController {
                     }
                 }
 
-                match polarity {
-                    PolaritySign::Positive => {
-                        self.current_pulse_voltage = pulse_voltage;
-                    }
-                    PolaritySign::Negative => {
-                        self.current_pulse_voltage = -pulse_voltage;
-                    }
-                }
+                self.current_pulse_voltage = pulse_voltage;
             }
         }
     }
