@@ -137,6 +137,14 @@ impl PulseMethod {
             random_switch,
         }
     }
+
+    pub fn method_name(&self) -> &str {
+        match self {
+            PulseMethod::Fixed { .. } => "Fixed",
+            PulseMethod::Stepping { .. } => "Stepping",
+            PulseMethod::Linear { .. } => "Linear",
+        }
+    }
 }
 
 impl Default for PulseMethod {
@@ -481,8 +489,8 @@ impl TipController {
                         pulse_voltage = voltage_bounds.1;
                     } else {
                         // Inside freq shift range -> linearly interpolate voltage
-                        let slope =
-                            (voltage_bounds.1 - voltage_bounds.0) / (linear_clamp.1 - linear_clamp.0);
+                        let slope = (voltage_bounds.1 - voltage_bounds.0)
+                            / (linear_clamp.1 - linear_clamp.0);
 
                         let d = voltage_bounds.0 - slope * linear_clamp.0;
 
@@ -558,18 +566,23 @@ impl TipController {
             // Execute based on state
             match self.current_tip_shape {
                 TipShape::Blunt => {
+                    info!(
+                        "Cycle {}: running bad loop ==============",
+                        self.cycle_count
+                    );
                     self.bad_loop()?;
                     continue;
                 }
                 TipShape::Sharp => {
+                    info!(
+                        "Cycle {}: running good loop ==============",
+                        self.cycle_count
+                    );
                     self.good_loop()?;
                     continue;
                 }
                 TipShape::Stable => {
-                    info!(
-                        "STABLE achieved after {} cycles! Final pulse voltage: {:.3}V",
-                        self.cycle_count, self.current_pulse_voltage
-                    );
+                    info!("STABLE achieved after {} cycles!", self.cycle_count);
                     break;
                 }
             }
@@ -591,9 +604,10 @@ impl TipController {
             );
         }
 
-        log::debug!(
-            "Executing PulseRetract Sequence with pulse = {:.3} V",
-            signed_voltage
+        info!(
+            "Executing pulse: {:.3}V ({} method)",
+            signed_voltage,
+            self.config.pulse_method.method_name()
         );
 
         self.driver

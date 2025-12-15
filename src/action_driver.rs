@@ -1755,17 +1755,19 @@ impl ActionDriver {
                             ))
                             .unwrap_or(100); // Fallback to 100 if TCP not configured
 
-                        let stable_result = self.run(Action::ReadStableSignal {
-                            signal,
-                            data_points: Some(data_points),
-                            use_new_data: true, // Get fresh data for tip state checking
-                            stability_method: crate::actions::SignalStabilityMethod::Combined {
-                                max_std_dev: TIP_STATE_MAX_STD_DEV,
-                                max_slope: TIP_STATE_MAX_SLOPE,
-                            },
-                            timeout: Duration::from_secs(TIP_STATE_READ_TIMEOUT_SECS),
-                            retry_count: Some(TIP_STATE_READ_RETRY_COUNT),
-                        }).execute();
+                        let stable_result = self
+                            .run(Action::ReadStableSignal {
+                                signal,
+                                data_points: Some(data_points),
+                                use_new_data: true, // Get fresh data for tip state checking
+                                stability_method: crate::actions::SignalStabilityMethod::Combined {
+                                    max_std_dev: TIP_STATE_MAX_STD_DEV,
+                                    max_slope: TIP_STATE_MAX_SLOPE,
+                                },
+                                timeout: Duration::from_secs(TIP_STATE_READ_TIMEOUT_SECS),
+                                retry_count: Some(TIP_STATE_READ_RETRY_COUNT),
+                            })
+                            .execute();
 
                         let (value, raw_data, read_method) = match stable_result {
                             Ok(exec_result) => match exec_result {
@@ -1934,17 +1936,20 @@ impl ActionDriver {
 
                         // Read each signal using ReadStableSignal
                         for (signal, bounds) in signals.iter() {
-                            let stable_result = self.run(Action::ReadStableSignal {
-                                signal: *signal,
-                                data_points: Some(data_points),
-                                use_new_data: true, // Get fresh data for tip state checking
-                                stability_method: crate::actions::SignalStabilityMethod::Combined {
-                                    max_std_dev: TIP_STATE_MAX_STD_DEV,
-                                    max_slope: TIP_STATE_MAX_SLOPE,
-                                },
-                                timeout: Duration::from_secs(TIP_STATE_READ_TIMEOUT_SECS),
-                                retry_count: Some(TIP_STATE_READ_RETRY_COUNT),
-                            }).execute();
+                            let stable_result = self
+                                .run(Action::ReadStableSignal {
+                                    signal: *signal,
+                                    data_points: Some(data_points),
+                                    use_new_data: true, // Get fresh data for tip state checking
+                                    stability_method:
+                                        crate::actions::SignalStabilityMethod::Combined {
+                                            max_std_dev: TIP_STATE_MAX_STD_DEV,
+                                            max_slope: TIP_STATE_MAX_SLOPE,
+                                        },
+                                    timeout: Duration::from_secs(TIP_STATE_READ_TIMEOUT_SECS),
+                                    retry_count: Some(TIP_STATE_READ_RETRY_COUNT),
+                                })
+                                .execute();
 
                             let (value, raw_data, read_method) = match stable_result {
                                 Ok(exec_result) => match exec_result {
@@ -2653,9 +2658,16 @@ impl ActionDriver {
                         ))
                     })?;
 
-                log::info!("ReadStableSignal: Signal {} (Nanonis) -> TCP channel {} -> Array position {}",
-                    signal.0, tcp_channel.get(), signal_channel_idx);
-                log::info!("ReadStableSignal: Full TCP channel list: {:?}", tcp_config.channels);
+                log::debug!(
+                    "ReadStableSignal: Signal {} (Nanonis) -> TCP channel {} -> Array position {}",
+                    signal.0,
+                    tcp_channel.get(),
+                    signal_channel_idx
+                );
+                log::debug!(
+                    "ReadStableSignal: Full TCP channel list: {:?}",
+                    tcp_config.channels
+                );
 
                 // Retry loop for data collection and stability analysis
                 let mut attempt = 0;
@@ -2689,7 +2701,13 @@ impl ActionDriver {
                                     data_points_used: signal_data.len(),
                                     analysis_duration,
                                     stability_metrics: metrics,
-                                    raw_data: signal_data,
+                                    // Only include full buffer when not stable (for debugging)
+                                    // When stable, only keep the mean value to reduce log file size
+                                    raw_data: if is_stable {
+                                        vec![stable_value]
+                                    } else {
+                                        signal_data
+                                    },
                                 };
 
                                 // Store for correlation with future CheckTipState calls
@@ -2979,7 +2997,10 @@ impl ActionDriver {
                 (is_stable, confidence)
             }
 
-            SignalStabilityMethod::Combined { max_std_dev, max_slope } => {
+            SignalStabilityMethod::Combined {
+                max_std_dev,
+                max_slope,
+            } => {
                 // Calculate slope via linear regression
                 let n = data.len() as f32;
                 let x_mean = (n - 1.0) / 2.0;
