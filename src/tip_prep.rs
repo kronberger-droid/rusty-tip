@@ -492,6 +492,10 @@ impl TipController {
                     // linear_clamp is the freq shift range, voltage_bounds is the voltage range
                     if !(linear_clamp.0..linear_clamp.1).contains(&current_freq_shift) {
                         // Outside freq shift range -> use max voltage
+                        log::info!(
+                            "Linear pulse: freq_shift {:.2} Hz outside range [{:.2}, {:.2}] Hz -> using max voltage {:.2}V",
+                            current_freq_shift, linear_clamp.0, linear_clamp.1, voltage_bounds.1
+                        );
                         pulse_voltage = voltage_bounds.1;
                     } else {
                         // Inside freq shift range -> linearly interpolate voltage
@@ -501,6 +505,10 @@ impl TipController {
                         let d = voltage_bounds.0 - slope * linear_clamp.0;
 
                         pulse_voltage = slope * current_freq_shift + d;
+                        log::info!(
+                            "Linear pulse: freq_shift {:.2} Hz in range [{:.2}, {:.2}] Hz -> calculated voltage {:.2}V",
+                            current_freq_shift, linear_clamp.0, linear_clamp.1, pulse_voltage
+                        );
                     }
                 }
 
