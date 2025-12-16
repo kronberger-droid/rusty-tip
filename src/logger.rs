@@ -2,7 +2,7 @@ use log::info;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{io::Write, path::PathBuf};
 
-use crate::error::NanonisError;
+use crate::NanonisError;
 
 // Removed LogEntry wrapper - ActionLogEntry already has timestamps
 

@@ -1,11 +1,10 @@
 use crate::{
-    nanonis::client::types::SignalIndex,
     types::{
-        DataToGet, MotorDisplacement, MovementMode, OsciData, Position, Position3D, ScanAction,
-        TipShape, TriggerConfig,
+        DataToGet, MotorDisplacement, OsciData, TipShape, TriggerConfig,
     },
-    MotorDirection, TipShaperConfig,
+    MotorDirection, MovementMode, Position, Position3D, ScanAction, TipShaperConfig,
 };
+use nanonis_rs::SignalIndex;
 use std::{collections::HashMap, time::Duration};
 
 /// Method for determining tip state
@@ -1724,7 +1723,7 @@ impl ActionLogEntry {
     /// Create a new log entry with error
     pub fn new_error(
         action: &Action,
-        error: &crate::error::NanonisError,
+        error: &crate::NanonisError,
         start_time: chrono::DateTime<chrono::Utc>,
         duration: std::time::Duration,
     ) -> Self {

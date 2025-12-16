@@ -1,4 +1,4 @@
-use crate::error::NanonisError;
+use crate::NanonisError;
 use std::time::Duration;
 
 /// A trait for long-running processes that can succeed, fail, or timeout
