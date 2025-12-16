@@ -1,8 +1,8 @@
 use crate::action_driver::ActionDriver;
 use crate::actions::{Action, TipCheckMethod, TipState};
-use crate::error::NanonisError;
-use crate::nanonis::client::types::SignalIndex;
 use crate::types::TipShape;
+use crate::NanonisError;
+use nanonis_rs::SignalIndex;
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};

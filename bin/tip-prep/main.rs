@@ -2,9 +2,9 @@ use chrono::Utc;
 use clap::Parser;
 use env_logger::Env;
 use log::{error, info, LevelFilter};
+use nanonis_rs::SignalIndex;
 use rusty_tip::{
     load_config_or_default,
-    nanonis::client::types::SignalIndex,
     tip_prep::{PulseMethod, TipControllerConfig},
     ActionDriver, AppConfig, TCPReaderConfig, TipController,
 };

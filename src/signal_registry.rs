@@ -1,4 +1,4 @@
-use crate::error::NanonisError;
+use crate::NanonisError;
 use std::{collections::HashMap, ops::Deref};
 
 /// Generate common aliases for signal names

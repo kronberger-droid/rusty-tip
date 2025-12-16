@@ -5,16 +5,13 @@ use crate::actions::{
     Action, ActionChain, ActionLogEntry, ActionLogResult, ActionResult, ExpectFromAction,
 };
 use crate::buffered_tcp_reader::BufferedTCPReader;
-use crate::error::NanonisError;
-use crate::nanonis::client::types::SignalIndex;
-use crate::nanonis::NanonisClient;
 use crate::signal_registry::SignalRegistry;
 use crate::types::{
-    DataToGet, MotorGroup, OsciData, Position, PulseMode, ScanAction, ScanDirection, SignalStats,
-    TriggerConfig, ZControllerHold,
+    DataToGet, OsciData, SignalStats, TriggerConfig,
 };
 use crate::utils::{poll_until, poll_with_timeout, PollError};
-use crate::TipShaperConfig;
+use crate::{MotorGroup, NanonisClient, NanonisError, Position, PulseMode, ScanAction, ScanDirection, TipShaperConfig, ZControllerHold};
+use nanonis_rs::SignalIndex;
 use std::collections::HashMap;
 use std::thread;
 use std::time::{Duration, Instant};

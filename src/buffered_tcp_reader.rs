@@ -5,9 +5,9 @@
 //! the existing TCPLoggerStream infrastructure while providing efficient time-windowed
 //! queries for synchronized data collection during SPM experiments.
 
-use crate::error::NanonisError;
-use crate::nanonis::TCPLoggerStream;
+use crate::NanonisError;
 use crate::types::TimestampedSignalFrame;
+use nanonis_rs::TCPLoggerStream;
 use parking_lot::RwLock;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
