@@ -1,6 +1,7 @@
 use super::NanonisClient;
+use super::types::SignalIndex;
 use crate::error::NanonisError;
-use crate::types::{NanonisValue, SignalIndex};
+use crate::types::NanonisValue;
 
 impl NanonisClient {
     /// Get available signal names

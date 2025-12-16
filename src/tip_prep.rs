@@ -1,8 +1,8 @@
 use crate::action_driver::ActionDriver;
 use crate::actions::{Action, TipCheckMethod, TipState};
 use crate::error::NanonisError;
-use crate::types::{ScanConfig, SignalIndex, TipShape};
-use crate::ScanAction;
+use crate::nanonis::client::types::SignalIndex;
+use crate::types::TipShape;
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -676,7 +676,7 @@ impl TipController {
             } else {
                 log::warn!(
                     "CheckTipState did not return frequency shift signal (index: {})",
-                    self.config.freq_shift_index.0 .0
+                    self.config.freq_shift_index.get()
                 );
             }
 
@@ -707,15 +707,15 @@ impl TipController {
             return Ok(());
         }
 
-        // Otherwise, perform bias sweep to check stability
+        // Otherwise, perform scan with bias sweep to check stability
         let stability_result: crate::actions::StabilityResult = self
             .driver
             .run(Action::CheckTipStability {
                 method: crate::actions::TipStabilityMethod::BiasSweepResponse {
                     signal: self.config.freq_shift_index,
                     bias_range: STABILITY_BIAS_SWEEP_RANGE,
-                    sweep_steps: STABILITY_BIAS_SWEEP_STEPS,
-                    period: Duration::from_millis(STABILITY_BIAS_SWEEP_PERIOD_MS),
+                    bias_steps: STABILITY_BIAS_SWEEP_STEPS,
+                    step_duration: Duration::from_millis(STABILITY_BIAS_SWEEP_PERIOD_MS),
                     allowed_signal_change: self.config.allowed_change_for_stable,
                 },
                 max_duration: Duration::from_secs(STABILITY_CHECK_MAX_DURATION_SECS),

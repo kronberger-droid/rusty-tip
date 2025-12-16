@@ -1,3 +1,4 @@
+use crate::error::NanonisError;
 use std::{collections::HashMap, ops::Deref};
 
 /// Generate common aliases for signal names
@@ -89,34 +90,67 @@ impl Deref for SignalRegistry {
         &self.0
     }
 }
-
-#[derive(Debug, Clone)]
+/// Signal representation with both Nanonis index and optional TCP channel
+///
+/// This struct replaces the old SignalIndex/NanonisIndex/ChannelIndex wrapper types.
+/// It carries both the Nanonis signal index (0-127) and the optional TCP channel
+/// mapping (0-23) in one place, eliminating the need for verbose conversions.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default)]
 pub struct Signal {
-    /// Original name read from nanonis host
+    /// Original Name from Machine
     pub name: String,
-    pub nanonis_index: u8,
+    /// Nanonis signal index (0-127)
+    pub index: u8,
+    /// TCP channel index (0-23) if this signal has TCP logger mapping
     pub tcp_channel: Option<u8>,
 }
 
 impl Signal {
-    pub fn get_name(&self) -> &String {
-        &self.name
+    /// Create a new Signal with validation
+    pub fn new(name: String, index: u8, tcp_channel: Option<u8>) -> Result<Self, NanonisError> {
+        if index > 127 {
+            return Err(NanonisError::Protocol(format!(
+                "Nanonis index {index} out of range (0-127)"
+            )));
+        }
+
+        if let Some(ch) = tcp_channel {
+            if ch > 23 {
+                return Err(NanonisError::Protocol(format!(
+                    "TCP Channel {ch} is out of range (0-23) "
+                )));
+            }
+        }
+
+        Ok(Self {
+            name,
+            index,
+            tcp_channel,
+        })
     }
 
-    pub fn get_nanonis_index(&self) -> u8 {
-        self.nanonis_index
+    pub const fn new_unchecked(name: String, index: u8, tcp_channel: Option<u8>) -> Self {
+        Signal {
+            name,
+            index,
+            tcp_channel,
+        }
     }
 
-    pub fn get_tcp_channel(&self) -> Option<u8> {
-        self.tcp_channel
+    /// Create a Signal with only Nanonis index (no TCP mapping)
+    pub fn index_only(name: String, index: u8) -> Self {
+        Signal {
+            name,
+            index,
+            tcp_channel: None,
+        }
+    }
+
+    /// Create a Signal with both Nanonis index and TCP channel
+    pub fn with_tcp(name: String, index: u8, tcp_channel: u8) -> Result<Self, NanonisError> {
+        Self::new(name, index, Some(tcp_channel))
     }
 }
-
-// #[derive(Debug, Clone)]
-// pub struct SignalValue<'a> {
-//     pub value: f32,
-//     pub signal: &'a Signal,
-// }
 
 #[derive(Default)]
 pub struct SignalRegistryBuilder {
@@ -184,13 +218,13 @@ impl SignalRegistryBuilder {
             if let Some(tcp_channel) = self.nanonis_to_tcp.get(&(index as u8)).copied() {
                 signal = Signal {
                     name: name.clone(),
-                    nanonis_index: index as u8,
+                    index: index as u8,
                     tcp_channel: Some(tcp_channel),
                 };
             } else {
                 signal = Signal {
                     name: name.clone(),
-                    nanonis_index: index as u8,
+                    index: index as u8,
                     tcp_channel: None,
                 };
             }
@@ -204,13 +238,13 @@ impl SignalRegistryBuilder {
         self
     }
 
-    pub fn add_signal(mut self, name: String, nanonis_index: u8) -> Self {
-        let tcp_channel = self.nanonis_to_tcp.get(&nanonis_index).copied();
+    pub fn add_signal(mut self, name: String, index: u8) -> Self {
+        let tcp_channel = self.nanonis_to_tcp.get(&index).copied();
         let clean_name = name.split('(').next().unwrap().trim();
 
         let signal = Signal {
             name: name.clone(),
-            nanonis_index,
+            index,
             tcp_channel,
         };
 
@@ -270,14 +304,6 @@ impl SignalRegistry {
             .build()
     }
 
-    pub fn get_by_name(&self, name: &str) -> Option<&Signal> {
-        self.0.get(&name.to_lowercase())
-    }
-
-    pub fn get_by_nanonis_index(&self, index: u8) -> Option<&Signal> {
-        self.0.values().find(|s| s.nanonis_index == index)
-    }
-
     pub fn all_names(&self) -> Vec<String> {
         self.0
             .values()
@@ -302,32 +328,13 @@ impl SignalRegistry {
             .collect()
     }
 
-    pub fn nanonis_to_tcp(
-        &self,
-        nanonis_index: crate::NanonisIndex,
-    ) -> Result<crate::ChannelIndex, String> {
-        self.0
-            .values()
-            .find(|s| s.nanonis_index == nanonis_index.get())
-            .and_then(|s| s.tcp_channel)
-            .map(|ch| crate::ChannelIndex::new_unchecked(ch))
-            .ok_or_else(|| format!("No TCP channel for Nanonis index {}", nanonis_index.get()))
+    /// Get signal by name, returning the new Signal type
+    pub fn get_by_name(&self, name: &str) -> Option<&Signal> {
+        self.get(name)
     }
 
-    pub fn tcp_to_nanonis(
-        &self,
-        tcp_channel: crate::ChannelIndex,
-    ) -> Result<crate::NanonisIndex, String> {
-        self.0
-            .values()
-            .find(|s| s.tcp_channel == Some(tcp_channel.get()))
-            .map(|s| crate::NanonisIndex::new_unchecked(s.nanonis_index))
-            .ok_or_else(|| format!("No Nanonis index for TCP channel {}", tcp_channel.get()))
-    }
-
-    pub fn has_tcp_channel(&self, nanonis_index: crate::NanonisIndex) -> bool {
-        self.0
-            .values()
-            .any(|s| s.nanonis_index == nanonis_index.get() && s.tcp_channel.is_some())
+    /// Get signal by Nanonis index, returning the new Signal type
+    pub fn get_by_index(&self, index: u8) -> Option<&Signal> {
+        self.0.values().find(|signal| signal.index == index)
     }
 }

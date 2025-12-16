@@ -1,7 +1,8 @@
 use crate::{
+    nanonis::client::types::SignalIndex,
     types::{
         DataToGet, MotorDisplacement, MovementMode, OsciData, Position, Position3D, ScanAction,
-        SignalIndex, TipShape, TriggerConfig,
+        TipShape, TriggerConfig,
     },
     MotorDirection, TipShaperConfig,
 };
@@ -37,10 +38,7 @@ pub enum SignalStabilityMethod {
     TrendAnalysis { max_slope: f32 },
     /// Combined: checks both noise (std dev) AND drift (slope)
     /// Both conditions must be satisfied for signal to be stable
-    Combined {
-        max_std_dev: f32,
-        max_slope: f32,
-    },
+    Combined { max_std_dev: f32, max_slope: f32 },
 }
 
 impl Default for SignalStabilityMethod {
@@ -62,11 +60,22 @@ pub enum TipStabilityMethod {
         stability_threshold: f32,
     },
     /// Bias sweep response analysis (potentially destructive)
+    ///
+    /// This method starts a scan, then manually sweeps the bias voltage while monitoring
+    /// the specified signal (typically frequency shift) for sudden changes that indicate
+    /// tip instability. Unlike BiasSweepResponse, this keeps Z-controller ON and uses
+    /// manual bias control instead of the Nanonis bias sweep module.
     BiasSweepResponse {
+        /// Signal to monitor (typically frequency shift)
         signal: SignalIndex,
+        /// Bias voltage range to sweep (e.g., (-2.0, 2.0) V)
         bias_range: (f32, f32),
-        sweep_steps: u16,
-        period: Duration,
+        /// Number of bias steps in the sweep
+        bias_steps: u16,
+        /// Duration to wait at each bias step for signal to settle
+        step_duration: Duration,
+        /// Absolute threshold for sudden change detection (e.g., 0.5 Hz)
+        /// If abs(signal - baseline) > threshold, mark as unstable
         allowed_signal_change: f32,
     },
 }
@@ -788,10 +797,10 @@ impl Action {
     pub fn description(&self) -> String {
         match self {
             Action::ReadSignal { signal, .. } => {
-                format!("Read signal {}", signal.0)
+                format!("Read signal {}", signal.get())
             }
             Action::ReadSignals { signals, .. } => {
-                let indices: Vec<i32> = signals.iter().map(|s| s.0.get() as i32).collect();
+                let indices: Vec<i32> = signals.iter().map(|s| s.get() as i32).collect();
                 format!("Read signals: {:?}", indices)
             }
             Action::SetBias { voltage } => {
@@ -887,14 +896,14 @@ impl Action {
                 };
                 format!(
                     "Read oscilloscope signal {} with {} (mode: {:?}){}",
-                    signal.0, trigger_desc, data_to_get, stability_desc
+                    signal.get(), trigger_desc, data_to_get, stability_desc
                 )
             }
             Action::CheckTipState { method } => match method {
                 TipCheckMethod::SignalBounds { signal, bounds } => {
                     format!(
                         "Check tip state: signal {} bounds ({:.3e}, {:.3e})",
-                        signal.0, bounds.0, bounds.1
+                        signal.get(), bounds.0, bounds.1
                     )
                 }
                 TipCheckMethod::MultiSignalBounds { signals } => {
@@ -917,18 +926,17 @@ impl Action {
                         signal, duration, ..
                     } => {
                         format!("Check tip stability: extended monitoring signal {} for {:.1}s (max: {}, {})", 
-                               signal.0, duration.as_secs_f32(), duration_desc, abort_desc)
+                               signal.get(), duration.as_secs_f32(), duration_desc, abort_desc)
                     }
                     TipStabilityMethod::BiasSweepResponse {
                         signal,
                         bias_range,
-                        sweep_steps,
-                        period,
+                        bias_steps,
+                        step_duration,
                         allowed_signal_change,
-                        ..
                     } => {
-                        format!("Check tip stability: bias sweep signal {} from {:.2}V to {:.2}V ({} steps, {:.1}ms period, {:.1}% change allowed, max: {}, {})", 
-                               signal.0, bias_range.0, bias_range.1, sweep_steps, period.as_millis(), allowed_signal_change * 100.0, duration_desc, abort_desc)
+                        format!("Check tip stability: bias sweep signal {} from {:.2}V to {:.2}V ({} steps, {:.1}ms period, {:.1}% change allowed, max: {}, {})",
+                               signal.get(), bias_range.0, bias_range.1, bias_steps, step_duration.as_millis(), allowed_signal_change * 100.0, duration_desc, abort_desc)
                     }
                 }
             }
@@ -962,14 +970,21 @@ impl Action {
                     SignalStabilityMethod::TrendAnalysis { max_slope } => {
                         format!("trend analysis, max slope {:.3e}", max_slope)
                     }
-                    SignalStabilityMethod::Combined { max_std_dev, max_slope } => {
-                        format!("combined: std dev {:.3e}, slope {:.3e}", max_std_dev, max_slope)
+                    SignalStabilityMethod::Combined {
+                        max_std_dev,
+                        max_slope,
+                    } => {
+                        format!(
+                            "combined: std dev {:.3e}, slope {:.3e}",
+                            max_std_dev, max_slope
+                        )
                     }
                 };
-                let retry_desc = retry_count.map_or("no retry".to_string(), |r| format!("{} retries", r));
+                let retry_desc =
+                    retry_count.map_or("no retry".to_string(), |r| format!("{} retries", r));
                 format!(
                     "Get stable signal {} ({} points, {}, {}, timeout {:.1}s, {})",
-                    signal.0,
+                    signal.get(),
                     points_desc,
                     data_desc,
                     method_desc,
@@ -1777,7 +1792,7 @@ impl ActionLogResult {
                 let measured_signals = tip_state
                     .measured_signals
                     .iter()
-                    .map(|(signal_idx, value)| (signal_idx.0.0, *value))
+                    .map(|(signal_idx, value)| (signal_idx.get(), *value))
                     .collect();
 
                 // Extract bounds information from metadata if available
@@ -1801,20 +1816,23 @@ impl ActionLogResult {
                 } else {
                     TipShape::Blunt
                 };
-                
+
                 // Convert measured values from stability check
                 let measured_signals = result
                     .measured_values
                     .iter()
                     .flat_map(|(signal_idx, values)| {
                         // Use the last (most recent) measured value for each signal
-                        values.last().map(|&value| (signal_idx.0.0, value))
+                        values.last().map(|&value| (signal_idx.get(), value))
                     })
                     .collect();
 
                 // Create bounds info with stability metrics
                 let mut bounds_info = std::collections::HashMap::new();
-                bounds_info.insert("stability_score".to_string(), result.stability_score.to_string());
+                bounds_info.insert(
+                    "stability_score".to_string(),
+                    result.stability_score.to_string(),
+                );
                 bounds_info.insert("is_stable".to_string(), result.is_stable.to_string());
                 bounds_info.insert("method".to_string(), "stability_check".to_string());
 

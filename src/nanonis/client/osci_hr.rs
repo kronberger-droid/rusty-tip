@@ -1,22 +1,20 @@
+use super::types::SignalIndex;
 use super::NanonisClient;
 use crate::error::NanonisError;
-use crate::types::{
-    NanonisValue, OscilloscopeIndex, SampleCount, SignalIndex, TriggerLevel,
-    TriggerMode,
-};
+use crate::types::{NanonisValue, OscilloscopeIndex, SampleCount, TriggerLevel, TriggerMode};
 
 impl NanonisClient {
     /// Set the measured signal index of the selected channel from the Oscilloscope High Resolution
     pub fn osci_hr_ch_set(
         &mut self,
         osci_index: impl Into<OscilloscopeIndex>,
-        signal_index: impl Into<SignalIndex>,
+        signal: impl Into<SignalIndex>,
     ) -> Result<(), NanonisError> {
         self.quick_send(
             "OsciHR.ChSet",
             vec![
                 NanonisValue::I32(osci_index.into().into()),
-                NanonisValue::I32(signal_index.into().into()),
+                NanonisValue::I32(signal.into().into()),
             ],
             vec!["i", "i"],
             vec![],
@@ -44,10 +42,7 @@ impl NanonisClient {
     }
 
     /// Set the oversampling index of the Oscilloscope High Resolution
-    pub fn osci_hr_oversampl_set(
-        &mut self,
-        oversampling_index: i32,
-    ) -> Result<(), NanonisError> {
+    pub fn osci_hr_oversampl_set(&mut self, oversampling_index: i32) -> Result<(), NanonisError> {
         self.quick_send(
             "OsciHR.OversamplSet",
             vec![NanonisValue::I32(oversampling_index)],
@@ -59,8 +54,7 @@ impl NanonisClient {
 
     /// Get the oversampling index of the Oscilloscope High Resolution
     pub fn osci_hr_oversampl_get(&mut self) -> Result<i32, NanonisError> {
-        let result =
-            self.quick_send("OsciHR.OversamplGet", vec![], vec![], vec!["i"])?;
+        let result = self.quick_send("OsciHR.OversamplGet", vec![], vec![], vec!["i"])?;
         match result.first() {
             Some(value) => Ok(value.as_i32()?),
             None => Err(NanonisError::Protocol(
@@ -90,10 +84,7 @@ impl NanonisClient {
 
     /// Get the calibration mode of the selected channel from the Oscilloscope High Resolution
     /// Returns: 0 = Raw values, 1 = Calibrated values
-    pub fn osci_hr_calibr_mode_get(
-        &mut self,
-        osci_index: i32,
-    ) -> Result<u16, NanonisError> {
+    pub fn osci_hr_calibr_mode_get(&mut self, osci_index: i32) -> Result<u16, NanonisError> {
         let result = self.quick_send(
             "OsciHR.CalibrModeGet",
             vec![NanonisValue::I32(osci_index)],
@@ -124,8 +115,7 @@ impl NanonisClient {
 
     /// Get the number of samples to acquire in the Oscilloscope High Resolution
     pub fn osci_hr_samples_get(&mut self) -> Result<SampleCount, NanonisError> {
-        let result =
-            self.quick_send("OsciHR.SamplesGet", vec![], vec![], vec!["i"])?;
+        let result = self.quick_send("OsciHR.SamplesGet", vec![], vec![], vec!["i"])?;
         match result.first() {
             Some(value) => Ok(SampleCount::new(value.as_i32()?)),
             None => Err(NanonisError::Protocol(
@@ -154,8 +144,7 @@ impl NanonisClient {
 
     /// Get the Pre-Trigger Samples in the Oscilloscope High Resolution
     pub fn osci_hr_pre_trig_get(&mut self) -> Result<i32, NanonisError> {
-        let result =
-            self.quick_send("OsciHR.PreTrigGet", vec![], vec![], vec!["i"])?;
+        let result = self.quick_send("OsciHR.PreTrigGet", vec![], vec![], vec!["i"])?;
         match result.first() {
             Some(value) => Ok(value.as_i32()?),
             None => Err(NanonisError::Protocol(
@@ -219,8 +208,7 @@ impl NanonisClient {
 
     /// Get the trigger mode in the Oscilloscope High Resolution
     pub fn osci_hr_trig_mode_get(&mut self) -> Result<TriggerMode, NanonisError> {
-        let result =
-            self.quick_send("OsciHR.TrigModeGet", vec![], vec![], vec!["H"])?;
+        let result = self.quick_send("OsciHR.TrigModeGet", vec![], vec![], vec!["H"])?;
         match result.first() {
             Some(value) => {
                 let mode_val = value.as_u16()?;
@@ -256,8 +244,7 @@ impl NanonisClient {
 
     /// Get the Level Trigger Channel index in the Oscilloscope High Resolution
     pub fn osci_hr_trig_lev_ch_get(&mut self) -> Result<i32, NanonisError> {
-        let result =
-            self.quick_send("OsciHR.TrigLevChGet", vec![], vec![], vec!["i"])?;
+        let result = self.quick_send("OsciHR.TrigLevChGet", vec![], vec![], vec!["i"])?;
         match result.first() {
             Some(value) => Ok(value.as_i32()?),
             None => Err(NanonisError::Protocol(
@@ -281,11 +268,8 @@ impl NanonisClient {
     }
 
     /// Get the Level Trigger value in the Oscilloscope High Resolution
-    pub fn osci_hr_trig_lev_val_get(
-        &mut self,
-    ) -> Result<TriggerLevel, NanonisError> {
-        let result =
-            self.quick_send("OsciHR.TrigLevValGet", vec![], vec![], vec!["d"])?;
+    pub fn osci_hr_trig_lev_val_get(&mut self) -> Result<TriggerLevel, NanonisError> {
+        let result = self.quick_send("OsciHR.TrigLevValGet", vec![], vec![], vec!["d"])?;
         match result.first() {
             Some(value) => Ok(TriggerLevel(value.as_f64()?)),
             None => Err(NanonisError::Protocol(
@@ -310,8 +294,7 @@ impl NanonisClient {
 
     /// Get the Trigger Arming Mode in the Oscilloscope High Resolution
     pub fn osci_hr_trig_arm_mode_get(&mut self) -> Result<u16, NanonisError> {
-        let result =
-            self.quick_send("OsciHR.TrigArmModeGet", vec![], vec![], vec!["H"])?;
+        let result = self.quick_send("OsciHR.TrigArmModeGet", vec![], vec![], vec!["H"])?;
         match result.first() {
             Some(value) => Ok(value.as_u16()?),
             None => Err(NanonisError::Protocol(
@@ -321,10 +304,7 @@ impl NanonisClient {
     }
 
     /// Set the Level Trigger Hysteresis in the Oscilloscope High Resolution
-    pub fn osci_hr_trig_lev_hyst_set(
-        &mut self,
-        hysteresis: f64,
-    ) -> Result<(), NanonisError> {
+    pub fn osci_hr_trig_lev_hyst_set(&mut self, hysteresis: f64) -> Result<(), NanonisError> {
         self.quick_send(
             "OsciHR.TrigLevHystSet",
             vec![NanonisValue::F64(hysteresis)],
@@ -336,8 +316,7 @@ impl NanonisClient {
 
     /// Get the Level Trigger Hysteresis in the Oscilloscope High Resolution
     pub fn osci_hr_trig_lev_hyst_get(&mut self) -> Result<f64, NanonisError> {
-        let result =
-            self.quick_send("OsciHR.TrigLevHystGet", vec![], vec![], vec!["d"])?;
+        let result = self.quick_send("OsciHR.TrigLevHystGet", vec![], vec![], vec!["d"])?;
         match result.first() {
             Some(value) => Ok(value.as_f64()?),
             None => Err(NanonisError::Protocol(
@@ -347,10 +326,7 @@ impl NanonisClient {
     }
 
     /// Set the Level Trigger Slope in the Oscilloscope High Resolution
-    pub fn osci_hr_trig_lev_slope_set(
-        &mut self,
-        slope: u16,
-    ) -> Result<(), NanonisError> {
+    pub fn osci_hr_trig_lev_slope_set(&mut self, slope: u16) -> Result<(), NanonisError> {
         self.quick_send(
             "OsciHR.TrigLevSlopeSet",
             vec![NanonisValue::U16(slope)],
@@ -362,8 +338,7 @@ impl NanonisClient {
 
     /// Get the Level Trigger Slope in the Oscilloscope High Resolution
     pub fn osci_hr_trig_lev_slope_get(&mut self) -> Result<u16, NanonisError> {
-        let result =
-            self.quick_send("OsciHR.TrigLevSlopeGet", vec![], vec![], vec!["H"])?;
+        let result = self.quick_send("OsciHR.TrigLevSlopeGet", vec![], vec![], vec!["H"])?;
         match result.first() {
             Some(value) => Ok(value.as_u16()?),
             None => Err(NanonisError::Protocol(

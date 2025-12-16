@@ -16,7 +16,7 @@ pub use action_driver::{
     stability, ActionDriver, ActionDriverBuilder, ExecutionResult, ExecutionStats, TCPReaderConfig,
 };
 pub use actions::{Action, ActionChain, ActionLogEntry, ActionResult};
-pub use config::{AppConfig, load_config, load_config_or_default};
+pub use config::{load_config, load_config_or_default, AppConfig};
 pub use error::NanonisError;
 pub use job::Job;
 pub use logger::Logger;
@@ -25,13 +25,13 @@ pub use nanonis::{
     TipShaperProps, ZSpectroscopyResult,
 };
 pub use plotting::{plot_values, plot_values_with_range};
-pub use signal_registry::SignalRegistry;
+pub use signal_registry::{Signal, SignalRegistry};
 pub use tip_prep::{LoopType, TipController};
 pub use types::{
-    Amplitude, ChainExperimentData, ChannelIndex, ExperimentData, Frequency, MotorAxis,
-    MotorDirection, MotorGroup, MotorMovement, MovementMode, NanonisIndex, NanonisValue, 
-    OscilloscopeIndex, Position, Position3D, PulseMode, SampleCount, ScanAction, ScanDirection, 
-    ScanFrame, SessionMetadata, SignalFrame, SignalIndex, StepCount, TCPLogStatus, TCPLoggerData,
-    TimestampedSignalFrame, TriggerLevel, TriggerMode, TriggerSlope, ZControllerHold,
+    Amplitude, ChainExperimentData, ExperimentData, Frequency, MotorAxis, MotorDirection,
+    MotorGroup, MotorMovement, MovementMode, NanonisValue, OscilloscopeIndex, Position, Position3D,
+    PulseMode, SampleCount, ScanAction, ScanDirection, ScanFrame, SessionMetadata, SignalFrame,
+    StepCount, TCPLogStatus, TCPLoggerData, TimestampedSignalFrame, TriggerLevel, TriggerMode,
+    TriggerSlope, ZControllerHold,
 };
 pub use utils::{poll_until, poll_with_timeout, PollError};

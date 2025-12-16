@@ -4,8 +4,9 @@ use env_logger::Env;
 use log::{error, info, LevelFilter};
 use rusty_tip::{
     load_config_or_default,
+    nanonis::client::types::SignalIndex,
     tip_prep::{PulseMethod, TipControllerConfig},
-    ActionDriver, AppConfig, SignalIndex, TCPReaderConfig, TipController,
+    ActionDriver, AppConfig, TCPReaderConfig, TipController,
 };
 use std::{
     fs,
@@ -222,16 +223,21 @@ fn setup_driver(config: &AppConfig) -> Result<ActionDriver, Box<dyn std::error::
 fn setup_frequency_shift_signal(
     driver: &ActionDriver,
 ) -> Result<SignalIndex, Box<dyn std::error::Error>> {
-    let freq_shift = SignalIndex::from_name("freq shift", driver)?;
-    info!("Frequency shift signal: index {}", freq_shift.0 .0);
+    // Look up frequency shift signal in registry
+    let signal = driver.signal_registry()
+        .get_by_name("freq shift")
+        .ok_or("Frequency shift signal not found in registry")?;
 
-    // Validate TCP mapping
-    match driver.validate_tcp_signal(freq_shift) {
-        Ok(tcp_ch) => info!("Frequency shift maps to TCP channel: {}", tcp_ch),
-        Err(e) => error!("WARNING: Frequency shift has no TCP mapping: {}", e),
+    info!("Frequency shift signal: index {}", signal.index);
+
+    // TCP mapping validation
+    if let Some(tcp_ch) = signal.tcp_channel {
+        info!("Frequency shift maps to TCP channel: {}", tcp_ch);
+    } else {
+        error!("WARNING: Frequency shift has no TCP mapping");
     }
 
-    Ok(freq_shift)
+    Ok(SignalIndex::new(signal.index))
 }
 
 /// Create TipControllerConfig from AppConfig

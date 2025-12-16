@@ -1,6 +1,6 @@
 *.csv
 target/
-experiments
+experiments/
 */.obsidian/workspace.json
 *.png
 .claude
