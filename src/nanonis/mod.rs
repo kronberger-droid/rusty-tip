@@ -1,6 +1,7 @@
 pub mod client;
 pub mod protocol;
 pub mod tcplogger_stream;
+pub mod types;
 
 // Re-export the main types from client
 pub use client::{

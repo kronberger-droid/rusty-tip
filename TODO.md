@@ -11,6 +11,8 @@
 
 4. check if bias voltage bounds are pos. to not mess up polarity
 
+5. Reset the list of signals to make tcp channels fucking work
+
 ## Testing
 
 1. Implement scripts to interpret experiment logs

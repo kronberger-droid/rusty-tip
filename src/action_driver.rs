@@ -6,10 +6,11 @@ use crate::actions::{
 };
 use crate::buffered_tcp_reader::BufferedTCPReader;
 use crate::error::NanonisError;
+use crate::nanonis::client::types::SignalIndex;
 use crate::nanonis::NanonisClient;
 use crate::signal_registry::SignalRegistry;
 use crate::types::{
-    DataToGet, MotorGroup, OsciData, Position, PulseMode, ScanDirection, SignalIndex, SignalStats,
+    DataToGet, MotorGroup, OsciData, Position, PulseMode, ScanAction, ScanDirection, SignalStats,
     TriggerConfig, ZControllerHold,
 };
 use crate::utils::{poll_until, poll_with_timeout, PollError};
@@ -679,25 +680,6 @@ impl ActionDriver {
         &self.signal_registry
     }
 
-    /// Validate that a signal is available in TCP logger
-    pub fn validate_tcp_signal(&self, signal: SignalIndex) -> Result<u8, NanonisError> {
-        self.signal_registry
-            .nanonis_to_tcp(signal.0)
-            .map(|ch| ch.get())
-            .map_err(|e| {
-                NanonisError::Protocol(format!(
-                    "Signal {} not available in TCP logger channels. Available TCP signals: {:?}. Error: {}",
-                    signal.0,
-                    self.signal_registry
-                        .tcp_signals()
-                        .iter()
-                        .map(|s| format!("{}({})", s.name, s.nanonis_index))
-                        .collect::<Vec<_>>(),
-                    e
-                ))
-            })
-    }
-
     /// Calculate number of data points needed for a target duration
     ///
     /// Based on the TCP reader configuration (oversampling), calculates how many
@@ -1309,7 +1291,7 @@ impl ActionDriver {
             } => {
                 self.client.osci1t_run()?;
 
-                self.client.osci1t_ch_set(signal.0.get() as i32)?;
+                self.client.osci1t_ch_set(signal.get() as i32)?;
 
                 if let Some(trigger) = trigger {
                     self.client.osci1t_trig_set(
@@ -1738,14 +1720,14 @@ impl ActionDriver {
                         } else {
                             log::warn!(
                                 "CheckTipState: No TCP reader available for signal {}",
-                                signal.0 .0
+                                signal.get()
                             );
                         }
 
                         // Use ReadStableSignal instead of single instantaneous read
                         log::debug!(
                             "CheckTipState: Calling ReadStableSignal for signal {}",
-                            signal.0 .0
+                            signal.get()
                         );
 
                         // Calculate samples needed for configured data collection duration
@@ -1795,14 +1777,14 @@ impl ActionDriver {
                                     // Unexpected result type, fallback to single read
                                     log::warn!("CheckTipState: ReadStableSignal returned unexpected result type, falling back to single read");
                                     let single_value =
-                                        self.client.signal_val_get(signal.0, true)?;
+                                        self.client.signal_val_get(signal, true)?;
                                     (single_value, vec![single_value], "single_read_fallback")
                                 }
                             },
                             Err(e) => {
                                 // Complete fallback to single read
                                 log::warn!("CheckTipState: ReadStableSignal failed with error: {}, falling back to single read", e);
-                                let single_value = self.client.signal_val_get(signal.0, true)?;
+                                let single_value = self.client.signal_val_get(signal, true)?;
                                 (single_value, vec![single_value], "single_read_fallback")
                             }
                         };
@@ -1842,7 +1824,7 @@ impl ActionDriver {
                         // Populate metadata with analysis context and dataset
                         let mut metadata = HashMap::new();
                         metadata.insert("method".to_string(), "signal_bounds".to_string());
-                        metadata.insert("signal_index".to_string(), signal.0 .0.to_string());
+                        metadata.insert("signal_index".to_string(), signal.get().to_string());
                         metadata.insert("measured_value".to_string(), format!("{:.6e}", value));
                         metadata.insert("bounds_lower".to_string(), format!("{:.6e}", bounds.0));
                         metadata.insert("bounds_upper".to_string(), format!("{:.6e}", bounds.1));
@@ -1969,13 +1951,13 @@ impl ActionDriver {
                                     }
                                     _ => {
                                         let single_value =
-                                            self.client.signal_val_get(signal.0, true)?;
+                                            self.client.signal_val_get(*signal, true)?;
                                         (single_value, vec![single_value], "single_read_fallback")
                                     }
                                 },
                                 Err(_) => {
                                     let single_value =
-                                        self.client.signal_val_get(signal.0, true)?;
+                                        self.client.signal_val_get(*signal, true)?;
                                     (single_value, vec![single_value], "single_read_fallback")
                                 }
                             };
@@ -2042,7 +2024,7 @@ impl ActionDriver {
                             let prefix = format!("signal_{}", i);
                             let value = measured[signal];
 
-                            metadata.insert(format!("{}_index", prefix), signal.0 .0.to_string());
+                            metadata.insert(format!("{}_index", prefix), signal.get().to_string());
                             metadata.insert(format!("{}_value", prefix), format!("{:.6e}", value));
                             metadata.insert(
                                 format!("{}_bounds", prefix),
@@ -2127,7 +2109,7 @@ impl ActionDriver {
                                 .iter()
                                 .filter_map(|frame| {
                                     // Find the signal in the frame data (assuming signal index maps to data array position)
-                                    let idx = signal_idx.0 .0 as usize;
+                                    let idx = signal_idx.get() as usize;
                                     if idx < frame.signal_frame.data.len() {
                                         Some(frame.signal_frame.data[idx])
                                     } else {
@@ -2172,7 +2154,7 @@ impl ActionDriver {
                                     0.0
                                 };
 
-                                let signal_prefix = format!("tcp_signal_{}", signal_idx.0 .0);
+                                let signal_prefix = format!("tcp_signal_{}", signal_idx.get());
                                 metadata.insert(
                                     format!("{}_recent_samples", signal_prefix),
                                     signal_values.len().to_string(),
@@ -2324,7 +2306,7 @@ impl ActionDriver {
                 // Log measured signal values for analysis
                 let signal_values_str = measured_signals
                     .iter()
-                    .map(|(signal_idx, value)| format!("signal_{}={:.6e}", signal_idx.0 .0, value))
+                    .map(|(signal_idx, value)| format!("signal_{}={:.6e}", signal_idx.get(), value))
                     .collect::<Vec<_>>()
                     .join(", ");
 
@@ -2380,199 +2362,305 @@ impl ActionDriver {
                     TipStabilityMethod::BiasSweepResponse {
                         signal,
                         bias_range,
-                        sweep_steps,
-                        period,
+                        bias_steps,
+                        step_duration,
                         allowed_signal_change,
                     } => {
-                        log::warn!(
-                            "Performing bias sweep stability test - this may damage the tip!"
-                        );
+                        log::info!("Performing scan with bias sweep stability test");
 
-                        // Calculate total sweep duration
-                        let sweep_duration =
-                            Duration::from_millis((sweep_steps as u64) * period.as_millis() as u64);
-                        log::info!(
-                            "Bias sweep will take {:.1}s total",
-                            sweep_duration.as_secs_f32()
-                        );
-
-                        // Check TCP reader is available and get signal channel index
+                        // 1. Get signal channel index for TCP reader
+                        // TODO: This sould not be this big of a function:
+                        // Reduce it to a helper function or make the api better!
                         let signal_channel_idx = {
                             let tcp_config = self.tcp_reader_config.as_ref().ok_or_else(|| {
                                 NanonisError::Protocol("TCP logger not configured".to_string())
                             })?;
 
                             // Convert Nanonis signal index to TCP channel using registry
-                            let tcp_channel =
-                                self.signal_registry.nanonis_to_tcp(signal.0).map_err(|e| {
+                            // Look up the signal from registry to get TCP channel
+                            let registry_signal = self.signal_registry
+                                .get_by_index(signal.get())
+                                .ok_or_else(|| {
                                     NanonisError::Protocol(format!(
-                                        "Signal {} (Nanonis index) has no TCP channel mapping: {}",
-                                        signal.0, e
+                                        "Signal {} not found in registry",
+                                        signal.get()
+                                    ))
+                                })?;
+
+                            let tcp_channel = registry_signal.tcp_channel
+                                .ok_or_else(|| {
+                                    NanonisError::Protocol(format!(
+                                        "Signal {} (Nanonis index) has no TCP channel mapping",
+                                        signal.get()
                                     ))
                                 })?;
 
                             tcp_config
                                 .channels
                                 .iter()
-                                .position(|&ch| ch == tcp_channel.get() as i32)
+                                .position(|&ch| ch == tcp_channel as i32)
                                 .ok_or_else(|| {
                                     NanonisError::Protocol(format!(
                                         "TCP channel {} for signal {} not found in TCP logger configuration",
-                                        tcp_channel.get(), signal.0
+                                        tcp_channel, signal.get()
                                     ))
                                 })?
                         };
 
-                        // Configure bias sweep
-                        self.client.bias_sweep_open()?;
-                        self.client
-                            .bias_sweep_limits_set(bias_range.0, bias_range.1)?;
-                        self.client.bias_sweep_props_set(
-                            sweep_steps,
-                            period.as_millis() as u16,
-                            1,
-                            2,
-                        )?;
+                        // 2. Get initial bias for restoration
+                        let initial_bias = self.client.get_bias()?;
+                        log::info!(
+                            "Initial bias: {:.3} V (will restore after sweep)",
+                            initial_bias
+                        );
 
-                        // Get initial buffer state for monitoring
-                        let initial_frame_count = {
+                        // 3. Get baseline frequency shift value
+                        let baseline_value = {
                             let tcp_reader = self.tcp_reader_mut().ok_or_else(|| {
                                 NanonisError::Protocol(
                                     "TCP reader not available for bias sweep monitoring"
                                         .to_string(),
                                 )
                             })?;
+                            let initial_frame_count = tcp_reader.frame_count();
+
+                            // Wait for a new frame (up to 500ms)
+                            let mut wait_iterations = 0;
+                            loop {
+                                std::thread::sleep(Duration::from_millis(10));
+                                if tcp_reader.frame_count() > initial_frame_count {
+                                    break;
+                                }
+                                wait_iterations += 1;
+                                if wait_iterations > 50 {
+                                    return Err(NanonisError::Protocol(
+                                        "Timeout waiting for initial signal frame".to_string(),
+                                    ));
+                                }
+                            }
+
+                            let recent_frames = tcp_reader.get_recent_frames(1);
+                            if recent_frames.is_empty() {
+                                return Err(NanonisError::Protocol(
+                                    "No frames available from TCP reader".to_string(),
+                                ));
+                            }
+
+                            recent_frames[0].signal_frame.data[signal_channel_idx]
+                        };
+
+                        log::info!(
+                            "Starting ScanWithBiasSweep: baseline={:.3} Hz, threshold={:.3} Hz",
+                            baseline_value,
+                            allowed_signal_change
+                        );
+                        log::info!(
+                            "Bias sweep: {:.2}V to {:.2}V in {} steps ({:.0}ms per step)",
+                            bias_range.0,
+                            bias_range.1,
+                            bias_steps,
+                            step_duration.as_millis()
+                        );
+
+                        // 5. Start scan
+                        self.client
+                            .scan_action(ScanAction::Start, ScanDirection::Down)?;
+                        log::info!("Scan start command sent");
+
+                        // 6. Wait for scan to actually start (max 5 seconds)
+                        let mut scan_started = false;
+                        for _ in 0..50 {
+                            std::thread::sleep(Duration::from_millis(100));
+                            let is_scanning = self.client.scan_status_get()?;
+                            if is_scanning {
+                                scan_started = true;
+                                log::info!("Scan started successfully");
+                                break;
+                            }
+                        }
+
+                        if !scan_started {
+                            return Err(NanonisError::Protocol(
+                                "Scan failed to start within 5 seconds".to_string(),
+                            ));
+                        }
+
+                        // 7. Execute bias sweep with signal monitoring
+                        let bias_step_size = (bias_range.1 - bias_range.0) / (bias_steps as f32);
+                        let mut current_bias = bias_range.0;
+                        let mut collected_signals = Vec::new();
+                        let mut sudden_change_detected = false;
+                        let mut scan_stopped_unexpectedly = false;
+                        let mut steps_completed = 0;
+                        let mut last_frame_count = {
+                            let tcp_reader = self.tcp_reader_mut().ok_or_else(|| {
+                                NanonisError::Protocol("TCP reader not available".to_string())
+                            })?;
                             tcp_reader.frame_count()
                         };
 
-                        // Start bias sweep (without getting data immediately - we'll monitor via TCP)
-                        let _sweep_result = self.client.bias_sweep_start(
-                            false, // don't get_data immediately
-                            true,  // sweep direction (forward)
-                            1,     // turn off Z-controller
-                            "",    // no save base name
-                            true,  // reset bias after
-                        )?;
-
-                        // Get baseline signal value before starting sweep monitoring
-                        let baseline_value = {
-                            if let Some(tcp_reader) = self.tcp_reader_mut() {
-                                if let Some(recent_frame) = tcp_reader.get_recent_frames(1).first()
-                                {
-                                    if recent_frame.signal_frame.data.len() > signal_channel_idx {
-                                        recent_frame.signal_frame.data[signal_channel_idx]
-                                    } else {
-                                        0.0
-                                    }
-                                } else {
-                                    0.0
-                                }
-                            } else {
-                                0.0
+                        'sweep_loop: for step_num in 0..bias_steps {
+                            // a. Set bias
+                            if let Err(e) = self.client.set_bias(current_bias) {
+                                log::error!("Failed to set bias at step {}: {}", step_num, e);
+                                break;
                             }
-                        };
 
-                        // Calculate allowed bounds based on baseline and allowed change
-                        let max_allowed_change = baseline_value.abs() * allowed_signal_change;
-                        let lower_bound = baseline_value - max_allowed_change;
-                        let upper_bound = baseline_value + max_allowed_change;
+                            log::debug!(
+                                "Step {}/{}: bias={:.2}V",
+                                step_num,
+                                bias_steps,
+                                current_bias
+                            );
 
-                        log::info!(
-                            "Monitoring signal {} during bias sweep (baseline: {:.3}, allowed range: {:.3} to {:.3})...", 
-                            signal.0, baseline_value, lower_bound, upper_bound
-                        );
+                            // b. Wait for signal to settle
+                            std::thread::sleep(step_duration);
 
-                        // Monitor signal during sweep using TCP reader
-                        let start_time = std::time::Instant::now();
-                        let mut signal_stayed_in_bounds = true;
-                        let mut frames_checked = 0;
-                        let mut last_value = baseline_value;
+                            // c. Collect and analyze signal samples
+                            {
+                                let tcp_reader = self.tcp_reader_mut().ok_or_else(|| {
+                                    NanonisError::Protocol("TCP reader not available".to_string())
+                                })?;
+                                let current_frame_count = tcp_reader.frame_count();
 
-                        // Monitor until sweep completes or signal goes out of bounds
-                        while start_time.elapsed() < sweep_duration {
-                            // Check if we have new data
-                            let (current_frame_count, recent_frames) = {
-                                if let Some(tcp_reader) = self.tcp_reader_mut() {
-                                    let count = tcp_reader.frame_count();
-                                    let frames = if count > initial_frame_count + frames_checked {
-                                        tcp_reader.get_recent_frames(10)
-                                    } else {
-                                        Vec::new()
-                                    };
-                                    (count, frames)
-                                } else {
-                                    break; // TCP reader not available, exit monitoring
-                                }
-                            };
+                                if current_frame_count > last_frame_count {
+                                    let recent_frames = tcp_reader.get_recent_frames(10);
 
-                            if current_frame_count > initial_frame_count + frames_checked {
-                                for frame in recent_frames.iter().rev() {
-                                    if frame.signal_frame.data.len() > signal_channel_idx {
-                                        let signal_value =
-                                            frame.signal_frame.data[signal_channel_idx];
-                                        last_value = signal_value;
-
-                                        // Check if signal is within allowed bounds around baseline
-                                        if signal_value < lower_bound || signal_value > upper_bound
+                                    for frame in recent_frames {
+                                        if let Some(&value) =
+                                            frame.signal_frame.data.get(signal_channel_idx)
                                         {
-                                            let change_percent = ((signal_value - baseline_value)
-                                                .abs()
-                                                / baseline_value.abs())
-                                                * 100.0;
-                                            log::warn!(
-                                                "Signal {} out of bounds: {:.3} (baseline: {:.3}, change: {:.1}%, allowed: {:.1}%) - tip likely blunt",
-                                                signal.0, signal_value, baseline_value, change_percent, allowed_signal_change * 100.0
+                                            let deviation = (value - baseline_value).abs();
+
+                                            if deviation > allowed_signal_change {
+                                                log::error!(
+                                                    "Sudden change detected at bias {:.2}V: freq_shift={:.3} Hz \
+                                                     (baseline: {:.3} Hz, deviation: {:.3} Hz)",
+                                                    current_bias,
+                                                    value,
+                                                    baseline_value,
+                                                    deviation
+                                                );
+                                                sudden_change_detected = true;
+                                                break 'sweep_loop;
+                                            }
+
+                                            collected_signals.push(value);
+                                            log::trace!(
+                                                "freq_shift={:.3} Hz (deviation: {:.3} Hz)",
+                                                value,
+                                                deviation
                                             );
-                                            signal_stayed_in_bounds = false;
-                                            break;
                                         }
                                     }
-                                }
 
-                                frames_checked = current_frame_count - initial_frame_count;
-
-                                if !signal_stayed_in_bounds {
-                                    break;
+                                    last_frame_count = current_frame_count;
                                 }
                             }
 
-                            // Small sleep to avoid busy waiting
-                            std::thread::sleep(Duration::from_millis(10));
+                            // d. Check scan status
+                            let is_scanning = self.client.scan_status_get()?;
+                            if !is_scanning {
+                                log::warn!(
+                                    "Scan stopped unexpectedly during bias sweep at step {}/{}",
+                                    step_num,
+                                    bias_steps
+                                );
+                                scan_stopped_unexpectedly = true;
+                                break;
+                            }
+
+                            // e. Check timeout (max_duration is handled by outer action framework)
+
+                            // f. Update for next iteration
+                            current_bias += bias_step_size;
+                            steps_completed += 1;
+
+                            // g. Progress logging
+                            if step_num % 10 == 0 {
+                                log::info!(
+                                    "Bias sweep progress: step {}/{}, bias={:.2}V, samples={}",
+                                    step_num,
+                                    bias_steps,
+                                    current_bias,
+                                    collected_signals.len()
+                                );
+                            }
                         }
 
-                        // Determine stability based on signal behavior
-                        let (is_stable, stability_score) = if signal_stayed_in_bounds {
-                            log::info!("Signal stayed within bounds during bias sweep - tip appears stable");
-                            (true, 0.8) // Good stability score
-                        } else {
-                            log::warn!("Signal went out of bounds during bias sweep - tip instability detected");
-                            (false, 0.2) // Poor stability score
-                        };
+                        // 8. Cleanup - stop scan and restore bias
+                        log::info!("Stopping scan and restoring bias...");
 
-                        // Add metrics
-                        metrics
-                            .insert("sweep_duration_s".to_string(), sweep_duration.as_secs_f32());
-                        metrics.insert("final_signal_value".to_string(), last_value);
-                        metrics.insert("frames_monitored".to_string(), frames_checked as f32);
+                        // Always try to stop scan (ignore errors)
+                        let _ = self.client.scan_action(ScanAction::Stop, ScanDirection::Up);
+
+                        // Try to restore bias (log error if it fails but continue)
+                        if let Err(e) = self.client.set_bias(initial_bias) {
+                            log::error!("Failed to restore initial bias: {}", e);
+                        } else {
+                            log::info!("Bias restored to {:.3} V", initial_bias);
+                        }
+
+                        // 9. Determine stability
+                        let is_stable = !sudden_change_detected && !scan_stopped_unexpectedly;
+                        let stability_score = if is_stable { 0.8 } else { 0.2 };
+
+                        let final_signal_value =
+                            collected_signals.last().copied().unwrap_or(baseline_value);
+                        let max_deviation = collected_signals
+                            .iter()
+                            .map(|&v| (v - baseline_value).abs())
+                            .max_by(|a, b| a.partial_cmp(b).unwrap())
+                            .unwrap_or(0.0);
+
+                        // 10. Populate metrics
                         metrics.insert(
-                            "signal_in_bounds".to_string(),
-                            if signal_stayed_in_bounds { 1.0 } else { 0.0 },
+                            "scan_duration_s".to_string(),
+                            start_time.elapsed().as_secs_f32(),
                         );
+                        metrics.insert("bias_steps_completed".to_string(), steps_completed as f32);
+                        metrics.insert(
+                            "sudden_change_detected".to_string(),
+                            if sudden_change_detected { 1.0 } else { 0.0 },
+                        );
+                        metrics.insert(
+                            "scan_stopped".to_string(),
+                            if scan_stopped_unexpectedly { 1.0 } else { 0.0 },
+                        );
+                        metrics.insert("baseline_value".to_string(), baseline_value);
+                        metrics.insert("final_signal_value".to_string(), final_signal_value);
+                        metrics.insert("max_deviation".to_string(), max_deviation);
 
                         // Add recommendations
-                        if !signal_stayed_in_bounds {
-                            recommendations
-                                .push("Consider tip conditioning or replacement".to_string());
-                            recommendations
-                                .push("Signal exceeded bounds during bias sweep".to_string());
-                        } else {
-                            recommendations
-                                .push("Tip shows stable response to bias changes".to_string());
+                        if sudden_change_detected {
+                            recommendations.push(
+                                "Sudden signal change detected - tip may be unstable or contaminated"
+                                    .to_string(),
+                            );
                         }
+                        if scan_stopped_unexpectedly {
+                            recommendations.push(
+                                "Scan stopped unexpectedly - check tip condition".to_string(),
+                            );
+                        }
+                        if is_stable {
+                            recommendations.push(format!(
+                                "Tip appears stable across bias range {:.2}V to {:.2}V",
+                                bias_range.0, bias_range.1
+                            ));
+                        }
+
+                        log::info!(
+                            "ScanWithBiasSweep complete: is_stable={}, steps={}/{}, max_deviation={:.3} Hz",
+                            is_stable,
+                            steps_completed,
+                            bias_steps,
+                            max_deviation
+                        );
 
                         // Create measured values map
                         let mut measured_values = HashMap::new();
-                        measured_values.insert(signal, vec![last_value]);
+                        measured_values.insert(signal, collected_signals);
 
                         (is_stable, stability_score, measured_values)
                     }
@@ -2616,30 +2704,39 @@ impl ActionDriver {
                 // Convert Nanonis signal index to TCP channel using registry
                 log::debug!(
                     "ReadStableSignal: Looking up signal {} in signal registry",
-                    signal.0
+                    signal.get()
                 );
-                let tcp_channel =
-                    self.signal_registry
-                        .nanonis_to_tcp(signal.0)
-                        .map_err(|e| {
-                            log::error!("ReadStableSignal: Signal {} (Nanonis index) has no TCP channel mapping: {}", signal.0, e);
-                            NanonisError::Protocol(format!(
-                                "Signal {} (Nanonis index) has no TCP channel mapping: {}",
-                                signal.0, e
-                            ))
-                        })?;
+
+                // Look up the signal from registry to get TCP channel
+                let registry_signal = self.signal_registry
+                    .get_by_index(signal.get())
+                    .ok_or_else(|| {
+                        NanonisError::Protocol(format!(
+                            "Signal {} not found in registry",
+                            signal.get()
+                        ))
+                    })?;
+
+                let tcp_channel = registry_signal.tcp_channel
+                    .ok_or_else(|| {
+                        log::error!("ReadStableSignal: Signal {} (Nanonis index) has no TCP channel mapping", signal.get());
+                        NanonisError::Protocol(format!(
+                            "Signal {} (Nanonis index) has no TCP channel mapping",
+                            signal.get()
+                        ))
+                    })?;
 
                 log::debug!(
                     "ReadStableSignal: Signal {} mapped to TCP channel {}",
-                    signal.0,
-                    tcp_channel.get()
+                    signal.get(),
+                    tcp_channel
                 );
 
                 // Find TCP channel in TCP config channels
                 log::debug!(
                     "ReadStableSignal: Signal {} (Nanonis) maps to TCP channel {}",
-                    signal.0,
-                    tcp_channel.get()
+                    signal.get(),
+                    tcp_channel
                 );
                 log::debug!(
                     "ReadStableSignal: Available TCP channels: {:?}",
@@ -2648,20 +2745,20 @@ impl ActionDriver {
                 let signal_channel_idx = tcp_config
                     .channels
                     .iter()
-                    .position(|&ch| ch == tcp_channel.get() as i32)
+                    .position(|&ch| ch == tcp_channel as i32)
                     .ok_or_else(|| {
                         log::error!("ReadStableSignal: TCP channel {} for signal {} (Nanonis) not found in TCP logger configuration. Available channels: {:?}",
-                            tcp_channel.get(), signal.0, tcp_config.channels);
+                            tcp_channel, signal.get(), tcp_config.channels);
                         NanonisError::Protocol(format!(
                             "TCP channel {} for signal {} (Nanonis) not found in TCP logger configuration. Available: {:?}",
-                            tcp_channel.get(), signal.0, tcp_config.channels
+                            tcp_channel, signal.get(), tcp_config.channels
                         ))
                     })?;
 
                 log::debug!(
                     "ReadStableSignal: Signal {} (Nanonis) -> TCP channel {} -> Array position {}",
-                    signal.0,
-                    tcp_channel.get(),
+                    signal.get(),
+                    tcp_channel,
                     signal_channel_idx
                 );
                 log::debug!(
