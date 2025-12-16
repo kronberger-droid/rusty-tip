@@ -7,11 +7,9 @@
 
 2. Change behavior when freq shift is positive. Recovery only works by pulsing a lot and hard usually
 
-3. BiasSweep is broken -> implement it yourself
+3. check if bias voltage bounds are pos. to not mess up polarity
 
-4. check if bias voltage bounds are pos. to not mess up polarity
-
-5. Reset the list of signals to make tcp channels fucking work
+4. Reset the list of signals to make tcp channels fucking work
 
 ## Testing
 
@@ -25,7 +23,12 @@
 
 1. SignalRegistry is very badly used right now. go over and check usage
 
-## Clean Up
+# Clean Up
 
-1. Separate Nanonis client from action driver
-2. Clean up the action driver and think about improvements in architecture
+1. Clean up the action driver and think about improvements in architecture
+
+## Nanonis-rs Library
+
+1. Publish nanonis-rs to crates.io (version 0.0.3 ready)
+2. Write README.md and documentation for nanonis-rs
+3. Add usage examples to nanonis-rs
