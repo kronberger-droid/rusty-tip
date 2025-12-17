@@ -17,20 +17,11 @@ output_path = "./experiments"
 verbosity = "info"
 
 [tip_prep]
-# Frequency shift bounds for determining if tip is sharp
+# Frequency shift bounds for determining if tip is sharp (in Hz)
 sharp_tip_bounds = [-2.0, 0.0]
 
-# Maximum allowed change in frequency shift for tip to be considered stable
-stable_tip_allowed_change = 0.2
-
 # Whether to check for tip stability
-check_stability = true
-
-# Maximum number of pulse cycles (unlimited if not set)
-max_cycles = 10000
-
-# Maximum duration in seconds (unlimited if not set)
-max_duration_secs = 12000
+check_stability = false
 
 [pulse_method]
 # Use linear pulse method
@@ -41,15 +32,8 @@ type = "linear"
 voltage_bounds = [2.0, 6.0]
 
 # Frequency shift range to monitor (in Hz)
-# This is the X-axis: the freq_shift range for linear interpolation
 # When freq_shift is outside this range, pulse with max voltage (voltage_bounds[1])
 # When inside this range, linearly map freq_shift to pulse voltage
-# NOTE: For STM/AFM, frequency shifts are typically NEGATIVE!
-# Example with linear_clamp = [-20.0, 0.0] and voltage_bounds = [2.0, 6.0]:
-#          freq_shift = -20.0 Hz → pulse = 2.0 V (min voltage for very negative)
-#          freq_shift = -10.0 Hz → pulse = 4.0 V (middle voltage)
-#          freq_shift =   0.0 Hz → pulse = 6.0 V (max voltage for close to zero)
-#          freq_shift = -25.0 Hz → pulse = 6.0 V (outside range, clamped to max)
 linear_clamp = [-20.0, 0.0]
 
 # Polarity of the pulse voltage: "positive" or "negative"

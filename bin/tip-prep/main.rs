@@ -2,7 +2,7 @@ use chrono::Utc;
 use clap::Parser;
 use env_logger::Env;
 use log::{error, info, LevelFilter};
-use nanonis_rs::SignalIndex;
+use rusty_tip::Signal;
 use rusty_tip::{
     load_config_or_default,
     tip_prep::{PulseMethod, TipControllerConfig},
@@ -189,19 +189,23 @@ fn log_tip_config(config: &TipControllerConfig) {
 }
 
 /// Setup ActionDriver from configuration
-fn setup_driver(config: &AppConfig) -> Result<ActionDriver, Box<dyn std::error::Error>> {
-    let mut builder =
-        ActionDriver::builder(&config.nanonis.host_ip, config.nanonis.control_ports[0])
-            .with_tcp_reader(TCPReaderConfig {
-                stream_port: config.data_acquisition.data_port,
-                oversampling: (2000 / config.data_acquisition.sample_rate) as i32,
-                ..Default::default()
-            })
-            .with_action_logging(
-                create_log_file_path(&config.experiment_logging.output_path)?,
-                1000,
-                config.experiment_logging.enabled,
-            );
+fn setup_driver(
+    config: &AppConfig,
+) -> Result<ActionDriver, Box<dyn std::error::Error>> {
+    let mut builder = ActionDriver::builder(
+        &config.nanonis.host_ip,
+        config.nanonis.control_ports[0],
+    )
+    .with_tcp_reader(TCPReaderConfig {
+        stream_port: config.data_acquisition.data_port,
+        oversampling: (2000 / config.data_acquisition.sample_rate) as i32,
+        ..Default::default()
+    })
+    .with_action_logging(
+        create_log_file_path(&config.experiment_logging.output_path)?,
+        1000,
+        config.experiment_logging.enabled,
+    );
 
     // Apply custom TCP channel mapping from config if provided
     if let Some(ref tcp_mapping) = config.tcp_channel_mapping {
@@ -222,9 +226,10 @@ fn setup_driver(config: &AppConfig) -> Result<ActionDriver, Box<dyn std::error::
 /// Setup and validate frequency shift signal
 fn setup_frequency_shift_signal(
     driver: &ActionDriver,
-) -> Result<SignalIndex, Box<dyn std::error::Error>> {
+) -> Result<Signal, Box<dyn std::error::Error>> {
     // Look up frequency shift signal in registry
-    let signal = driver.signal_registry()
+    let signal = driver
+        .signal_registry()
         .get_by_name("freq shift")
         .ok_or("Frequency shift signal not found in registry")?;
 
@@ -237,16 +242,16 @@ fn setup_frequency_shift_signal(
         error!("WARNING: Frequency shift has no TCP mapping");
     }
 
-    Ok(SignalIndex::new(signal.index))
+    Ok(signal.clone())
 }
 
 /// Create TipControllerConfig from AppConfig
 fn create_tip_controller_config(
     config: &AppConfig,
-    freq_shift: SignalIndex,
+    freq_shift: Signal,
 ) -> TipControllerConfig {
     TipControllerConfig {
-        freq_shift_index: freq_shift,
+        freq_shift_signal: freq_shift,
         sharp_tip_bounds: (
             config.tip_prep.sharp_tip_bounds[0],
             config.tip_prep.sharp_tip_bounds[1],
@@ -255,7 +260,10 @@ fn create_tip_controller_config(
         allowed_change_for_stable: config.tip_prep.stable_tip_allowed_change,
         check_stability: config.tip_prep.check_stability,
         max_cycles: config.tip_prep.max_cycles,
-        max_duration: config.tip_prep.max_duration_secs.map(Duration::from_secs),
+        max_duration: config
+            .tip_prep
+            .max_duration_secs
+            .map(Duration::from_secs),
     }
 }
 
@@ -318,7 +326,9 @@ fn wait_for_user_confirmation() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Initialize logging with configurable level
-fn initialize_logging(log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn initialize_logging(
+    log_level: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let level = match log_level.to_lowercase().as_str() {
         "trace" => LevelFilter::Trace,
         "debug" => LevelFilter::Debug,
@@ -326,7 +336,10 @@ fn initialize_logging(log_level: &str) -> Result<(), Box<dyn std::error::Error>>
         "warn" => LevelFilter::Warn,
         "error" => LevelFilter::Error,
         _ => {
-            eprintln!("Warning: Invalid log level '{}', using 'info'", log_level);
+            eprintln!(
+                "Warning: Invalid log level '{}', using 'info'",
+                log_level
+            );
             LevelFilter::Info
         }
     };
@@ -339,14 +352,17 @@ fn initialize_logging(log_level: &str) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-fn create_log_file_path(log_path: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+fn create_log_file_path(
+    log_path: &str,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let history_dir = PathBuf::from(log_path);
 
     // Ensure directory exists
     fs::create_dir_all(&history_dir)?;
 
     // Create timestamped filename
-    let filename = format!("tip_prep_{}.jsonl", Utc::now().format("%Y%m%d_%H%M%S"));
+    let filename =
+        format!("tip_prep_{}.jsonl", Utc::now().format("%Y%m%d_%H%M%S"));
     let file_path = history_dir.join(filename);
 
     Ok(file_path)
@@ -372,11 +388,14 @@ fn ensure_console_allocated() {
         winapi::um::wincon::SetConsoleTitleW(wide_title.as_ptr());
 
         // Enable ANSI escape sequences for colored output (Windows 10+)
-        let stdout_handle =
-            winapi::um::processenv::GetStdHandle(winapi::um::winbase::STD_OUTPUT_HANDLE);
+        let stdout_handle = winapi::um::processenv::GetStdHandle(
+            winapi::um::winbase::STD_OUTPUT_HANDLE,
+        );
         if stdout_handle != winapi::um::handleapi::INVALID_HANDLE_VALUE {
             let mut mode: u32 = 0;
-            if winapi::um::consoleapi::GetConsoleMode(stdout_handle, &mut mode) != 0 {
+            if winapi::um::consoleapi::GetConsoleMode(stdout_handle, &mut mode)
+                != 0
+            {
                 mode |= winapi::um::wincon::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
                 winapi::um::consoleapi::SetConsoleMode(stdout_handle, mode);
             }

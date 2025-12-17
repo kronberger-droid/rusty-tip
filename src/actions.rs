@@ -2,7 +2,7 @@ use crate::{
     types::{
         DataToGet, MotorDisplacement, OsciData, TipShape, TriggerConfig,
     },
-    MotorDirection, MovementMode, Position, Position3D, ScanAction, TipShaperConfig,
+    MotorDirection, MovementMode, Position, Position3D, ScanAction, Signal, TipShaperConfig,
 };
 use nanonis_rs::SignalIndex;
 use std::{collections::HashMap, time::Duration};
@@ -12,12 +12,12 @@ use std::{collections::HashMap, time::Duration};
 pub enum TipCheckMethod {
     /// Check single signal against bounds
     SignalBounds {
-        signal: SignalIndex,
+        signal: Signal,
         bounds: (f32, f32),
     },
     /// Check multiple signals (all must be in bounds)
     MultiSignalBounds {
-        signals: Vec<(SignalIndex, (f32, f32))>,
+        signals: Vec<(Signal, (f32, f32))>,
     },
 }
 
@@ -53,7 +53,7 @@ impl Default for SignalStabilityMethod {
 pub enum TipStabilityMethod {
     /// Extended signal monitoring over time with statistical analysis
     ExtendedMonitoring {
-        signal: SignalIndex,
+        signal: Signal,
         duration: Duration,
         sampling_interval: Duration,
         stability_threshold: f32,
@@ -66,7 +66,7 @@ pub enum TipStabilityMethod {
     /// manual bias control instead of the Nanonis bias sweep module.
     BiasSweepResponse {
         /// Signal to monitor (typically frequency shift)
-        signal: SignalIndex,
+        signal: Signal,
         /// Bias voltage range to sweep (e.g., (-2.0, 2.0) V)
         bias_range: (f32, f32),
         /// Number of bias steps in the sweep
@@ -104,7 +104,7 @@ pub struct StabilityResult {
     pub is_stable: bool,
     pub stability_score: f32, // 0.0 to 1.0
     pub method_used: String,
-    pub measured_values: HashMap<SignalIndex, Vec<f32>>, // Time series data
+    pub measured_values: HashMap<Signal, Vec<f32>>, // Time series data
     pub analysis_duration: Duration,
     pub metrics: HashMap<String, f32>, // Method-specific metrics
     pub potential_damage_detected: bool,
@@ -145,13 +145,13 @@ pub struct StableSignal {
 pub enum Action {
     /// Read single signal value
     ReadSignal {
-        signal: SignalIndex,
+        signal: Signal,
         wait_for_newest: bool,
     },
 
     /// Read multiple signal values
     ReadSignals {
-        signals: Vec<SignalIndex>,
+        signals: Vec<Signal>,
         wait_for_newest: bool,
     },
 
@@ -166,7 +166,7 @@ pub enum Action {
 
     // Osci functions
     ReadOsci {
-        signal: SignalIndex,
+        signal: Signal,
         trigger: Option<TriggerConfig>,
         data_to_get: DataToGet,
         is_stable: Option<fn(&[f64]) -> bool>,
@@ -296,7 +296,7 @@ pub enum Action {
 
     /// Get a stable signal value using TCP logger data and stability analysis
     ReadStableSignal {
-        signal: SignalIndex,
+        signal: Signal,
         data_points: Option<usize>,
         use_new_data: bool,
         stability_method: SignalStabilityMethod,
@@ -796,10 +796,10 @@ impl Action {
     pub fn description(&self) -> String {
         match self {
             Action::ReadSignal { signal, .. } => {
-                format!("Read signal {}", signal.get())
+                format!("Read signal {}", signal.index)
             }
             Action::ReadSignals { signals, .. } => {
-                let indices: Vec<i32> = signals.iter().map(|s| s.get() as i32).collect();
+                let indices: Vec<i32> = signals.iter().map(|s| s.index as i32).collect();
                 format!("Read signals: {:?}", indices)
             }
             Action::SetBias { voltage } => {
@@ -895,14 +895,14 @@ impl Action {
                 };
                 format!(
                     "Read oscilloscope signal {} with {} (mode: {:?}){}",
-                    signal.get(), trigger_desc, data_to_get, stability_desc
+                    signal.index, trigger_desc, data_to_get, stability_desc
                 )
             }
             Action::CheckTipState { method } => match method {
                 TipCheckMethod::SignalBounds { signal, bounds } => {
                     format!(
                         "Check tip state: signal {} bounds ({:.3e}, {:.3e})",
-                        signal.get(), bounds.0, bounds.1
+                        signal.index, bounds.0, bounds.1
                     )
                 }
                 TipCheckMethod::MultiSignalBounds { signals } => {
@@ -925,7 +925,7 @@ impl Action {
                         signal, duration, ..
                     } => {
                         format!("Check tip stability: extended monitoring signal {} for {:.1}s (max: {}, {})", 
-                               signal.get(), duration.as_secs_f32(), duration_desc, abort_desc)
+                               signal.index, duration.as_secs_f32(), duration_desc, abort_desc)
                     }
                     TipStabilityMethod::BiasSweepResponse {
                         signal,
@@ -935,7 +935,7 @@ impl Action {
                         allowed_signal_change,
                     } => {
                         format!("Check tip stability: bias sweep signal {} from {:.2}V to {:.2}V ({} steps, {:.1}ms period, {:.1}% change allowed, max: {}, {})",
-                               signal.get(), bias_range.0, bias_range.1, bias_steps, step_duration.as_millis(), allowed_signal_change * 100.0, duration_desc, abort_desc)
+                               signal.index, bias_range.0, bias_range.1, bias_steps, step_duration.as_millis(), allowed_signal_change * 100.0, duration_desc, abort_desc)
                     }
                 }
             }
@@ -983,7 +983,7 @@ impl Action {
                     retry_count.map_or("no retry".to_string(), |r| format!("{} retries", r));
                 format!(
                     "Get stable signal {} ({} points, {}, {}, timeout {:.1}s, {})",
-                    signal.get(),
+                    signal.index,
                     points_desc,
                     data_desc,
                     method_desc,
@@ -1262,11 +1262,11 @@ impl ActionChain {
                     duration: Duration::from_millis(500),
                 },
                 Action::ReadSignal {
-                    signal: SignalIndex::new(24),
+                    signal: Signal::new("Bias".to_string(), 24, None).unwrap(),
                     wait_for_newest: true,
                 }, // Typical bias voltage
                 Action::ReadSignal {
-                    signal: SignalIndex::new(0),
+                    signal: Signal::new("Current".to_string(), 0, None).unwrap(),
                     wait_for_newest: true,
                 }, // Typical current
             ],
@@ -1290,7 +1290,7 @@ impl ActionChain {
                     timeout: Duration::from_secs(300),
                 },
                 Action::ReadSignal {
-                    signal: SignalIndex::new(24),
+                    signal: Signal::new("Bias".to_string(), 24, None).unwrap(),
                     wait_for_newest: true,
                 },
             ],
@@ -1335,11 +1335,11 @@ impl ActionChain {
                     timeout: Duration::from_secs(300),
                 },
                 Action::ReadSignal {
-                    signal: SignalIndex::new(24),
+                    signal: Signal::new("Bias".to_string(), 24, None).unwrap(),
                     wait_for_newest: true,
                 }, // Bias voltage
                 Action::ReadSignal {
-                    signal: SignalIndex::new(0),
+                    signal: Signal::new("Current".to_string(), 0, None).unwrap(),
                     wait_for_newest: true,
                 }, // Current
                 Action::Withdraw {
@@ -1374,7 +1374,7 @@ impl ActionChain {
                     timeout: Duration::from_secs(300),
                 },
                 Action::ReadSignal {
-                    signal: SignalIndex::new(24),
+                    signal: Signal::new("Bias".to_string(), 24, None).unwrap(),
                     wait_for_newest: true,
                 },
             ],
@@ -1822,7 +1822,7 @@ impl ActionLogResult {
                     .iter()
                     .flat_map(|(signal_idx, values)| {
                         // Use the last (most recent) measured value for each signal
-                        values.last().map(|&value| (signal_idx.get(), value))
+                        values.last().map(|&value| (signal_idx.index, value))
                     })
                     .collect();
 
