@@ -1,7 +1,7 @@
 use crate::action_driver::ActionDriver;
 use crate::actions::{Action, TipCheckMethod, TipState};
 use crate::types::TipShape;
-use crate::NanonisError;
+use crate::{NanonisError, Signal};
 use nanonis_rs::SignalIndex;
 use log::info;
 use serde::{Deserialize, Serialize};
@@ -163,7 +163,7 @@ impl Default for PulseMethod {
 }
 
 pub struct TipControllerConfig {
-    pub freq_shift_index: SignalIndex,
+    pub freq_shift_signal: Signal,
     pub sharp_tip_bounds: (f32, f32),
     pub pulse_method: PulseMethod,
     pub allowed_change_for_stable: f32,
@@ -174,8 +174,10 @@ pub struct TipControllerConfig {
 
 impl Default for TipControllerConfig {
     fn default() -> Self {
+        let freq_shift_signal = Signal::new_unchecked("freq_shift", 76, Some(18));
+
         Self {
-            freq_shift_index: 76u8.into(),
+            freq_shift_signal,
             sharp_tip_bounds: (-2.0, 0.0),
             pulse_method: PulseMethod::Fixed {
                 voltage: 4.0,
@@ -202,7 +204,7 @@ pub struct TipController {
     cycle_count: u32,
 
     // Multi-signal history for bias adjustment and analysis
-    signal_histories: HashMap<SignalIndex, VecDeque<f32>>,
+    signal_histories: HashMap<u8, VecDeque<f32>>, // Key is signal.index
     max_history_size: usize,
 
     // Loop termination safeguards
@@ -294,8 +296,8 @@ impl TipController {
     }
 
     /// Track a signal value in history
-    pub fn track_signal(&mut self, signal_index: SignalIndex, value: f32) {
-        let history = self.signal_histories.entry(signal_index).or_default();
+    pub fn track_signal(&mut self, signal: &Signal, value: f32) {
+        let history = self.signal_histories.entry(signal.index).or_default();
 
         // Add new value to front
         history.push_front(value);
@@ -307,8 +309,8 @@ impl TipController {
     }
 
     /// Get signal change (latest - previous) for a specific signal
-    pub fn get_signal_change(&self, signal_index: SignalIndex) -> Option<f32> {
-        if let Some(history) = self.signal_histories.get(&signal_index) {
+    pub fn get_signal_change(&self, signal: &Signal) -> Option<f32> {
+        if let Some(history) = self.signal_histories.get(&signal.index) {
             if history.len() >= 2 {
                 Some(history[0] - history[1]) // Latest - Previous
             } else {
@@ -320,12 +322,12 @@ impl TipController {
     }
 
     /// Get signal history for a specific signal (most recent first)
-    pub fn get_signal_history(&self, signal_index: SignalIndex) -> Option<&VecDeque<f32>> {
-        self.signal_histories.get(&signal_index)
+    pub fn get_signal_history(&self, signal: &Signal) -> Option<&VecDeque<f32>> {
+        self.signal_histories.get(&signal.index)
     }
 
-    pub fn get_last_signal(&self, signal_index: SignalIndex) -> Option<f32> {
-        match self.get_signal_history(signal_index) {
+    pub fn get_last_signal(&self, signal: &Signal) -> Option<f32> {
+        match self.get_signal_history(signal) {
             Some(history) => history.iter().last().copied(),
             None => None,
         }
@@ -337,12 +339,12 @@ impl TipController {
     }
 
     /// Clear history for a specific signal
-    pub fn clear_signal_history(&mut self, signal_index: SignalIndex) {
-        self.signal_histories.remove(&signal_index);
+    pub fn clear_signal_history(&mut self, signal: &Signal) {
+        self.signal_histories.remove(&signal.index);
     }
 
     /// Check if current signal represents a significant change from recent stable period
-    fn has_significant_change(&self, signal_index: SignalIndex) -> (bool, f32) {
+    fn has_significant_change(&self, signal: &Signal) -> (bool, f32) {
         // Only check for stepping if PulseMethod is Stepping
         let threshold_value = match &self.config.pulse_method {
             PulseMethod::Stepping {
@@ -352,7 +354,7 @@ impl TipController {
             PulseMethod::Linear { .. } => return (false, 0.0),
         };
 
-        if let Some(history) = self.signal_histories.get(&signal_index) {
+        if let Some(history) = self.signal_histories.get(&signal.index) {
             if history.len() < 2 {
                 // First signal - consider it a significant change to initialize properly
                 (true, 0.0)
@@ -448,7 +450,7 @@ impl TipController {
                 ..
             } => {
                 let (is_significant, change) =
-                    self.has_significant_change(self.config.freq_shift_index);
+                    self.has_significant_change(&self.config.freq_shift_signal);
                 if is_significant && change >= 0.0 {
                     // Positive significant change - reset to minimum voltage
                     self.cycles_without_change = 0;
@@ -485,7 +487,7 @@ impl TipController {
                 let mut pulse_voltage = self.current_pulse_voltage;
 
                 if let Some(freq_shift_history) =
-                    self.signal_histories.get(&self.config.freq_shift_index)
+                    self.signal_histories.get(&self.config.freq_shift_signal.index)
                 {
                     current_freq_shift = freq_shift_history[0];
 
@@ -658,7 +660,7 @@ impl TipController {
                 .driver
                 .run(Action::CheckTipState {
                     method: TipCheckMethod::SignalBounds {
-                        signal: self.config.freq_shift_index,
+                        signal: self.config.freq_shift_signal.clone(),
                         bounds: self.config.sharp_tip_bounds,
                     },
                 })
@@ -669,14 +671,15 @@ impl TipController {
             // Track the frequency shift signal if available
             if let Some(freq_shift_value) = tip_state
                 .measured_signals
-                .get(&self.config.freq_shift_index)
+                .get(&SignalIndex::new(self.config.freq_shift_signal.index))
                 .copied()
             {
-                self.track_signal(self.config.freq_shift_index, freq_shift_value);
+                let signal = self.config.freq_shift_signal.clone();
+                self.track_signal(&signal, freq_shift_value);
             } else {
                 log::warn!(
                     "CheckTipState did not return frequency shift signal (index: {})",
-                    self.config.freq_shift_index.get()
+                    self.config.freq_shift_signal.index
                 );
             }
 
@@ -712,7 +715,7 @@ impl TipController {
             .driver
             .run(Action::CheckTipStability {
                 method: crate::actions::TipStabilityMethod::BiasSweepResponse {
-                    signal: self.config.freq_shift_index,
+                    signal: self.config.freq_shift_signal.clone(),
                     bias_range: STABILITY_BIAS_SWEEP_RANGE,
                     bias_steps: STABILITY_BIAS_SWEEP_STEPS,
                     step_duration: Duration::from_millis(STABILITY_BIAS_SWEEP_PERIOD_MS),
@@ -726,10 +729,11 @@ impl TipController {
         // Track signal values from stability monitoring (use last measured value)
         if let Some(signal_values) = stability_result
             .measured_values
-            .get(&self.config.freq_shift_index)
+            .get(&self.config.freq_shift_signal)
         {
             if let Some(&last_value) = signal_values.last() {
-                self.track_signal(self.config.freq_shift_index, last_value);
+                let signal = self.config.freq_shift_signal.clone();
+                self.track_signal(&signal, last_value);
             }
         }
 
@@ -747,7 +751,7 @@ impl TipController {
             self.driver
                 .run(Action::CheckTipState {
                     method: TipCheckMethod::SignalBounds {
-                        signal: self.config.freq_shift_index,
+                        signal: self.config.freq_shift_signal.clone(),
                         bounds: self.config.sharp_tip_bounds,
                     },
                 })
@@ -772,7 +776,7 @@ impl TipController {
                 .driver
                 .run(Action::CheckTipState {
                     method: TipCheckMethod::SignalBounds {
-                        signal: self.config.freq_shift_index,
+                        signal: self.config.freq_shift_signal.clone(),
                         bounds: self.config.sharp_tip_bounds,
                     },
                 })
@@ -836,7 +840,7 @@ impl TipController {
             .driver
             .run(Action::CheckTipState {
                 method: TipCheckMethod::SignalBounds {
-                    signal: self.config.freq_shift_index,
+                    signal: self.config.freq_shift_signal.clone(),
                     bounds: self.config.sharp_tip_bounds,
                 },
             })
