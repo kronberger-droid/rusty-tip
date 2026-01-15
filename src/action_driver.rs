@@ -1353,9 +1353,10 @@ impl ActionDriver {
                 signal,
                 wait_for_newest,
             } => {
-                let value = self
-                    .client
-                    .signals_vals_get(vec![SignalIndex::new(signal.index).into()], wait_for_newest)?;
+                let value = self.client.signals_vals_get(
+                    vec![SignalIndex::new(signal.index).into()],
+                    wait_for_newest,
+                )?;
                 Ok(ActionResult::Value(value[0] as f64))
             }
 
@@ -1363,8 +1364,10 @@ impl ActionDriver {
                 signals,
                 wait_for_newest,
             } => {
-                let indices: Vec<i32> =
-                    signals.iter().map(|s| SignalIndex::new(s.index).into()).collect();
+                let indices: Vec<i32> = signals
+                    .iter()
+                    .map(|s| SignalIndex::new(s.index).into())
+                    .collect();
                 let values =
                     self.client.signals_vals_get(indices, wait_for_newest)?;
                 Ok(ActionResult::Values(
@@ -1931,9 +1934,11 @@ impl ActionDriver {
                                         _ => {
                                             // Unexpected result type, fallback to single read
                                             log::warn!("CheckTipState: ReadStableSignal returned unexpected result type, falling back to single read");
-                                            let single_value = self
-                                                .client
-                                                .signal_val_get(signal.index, true)?;
+                                            let single_value =
+                                                self.client.signal_val_get(
+                                                    signal.index,
+                                                    true,
+                                                )?;
                                             (
                                                 single_value,
                                                 vec![single_value],
@@ -1944,9 +1949,11 @@ impl ActionDriver {
                                     Err(e) => {
                                         // Complete fallback to single read
                                         log::warn!("CheckTipState: ReadStableSignal failed with error: {}, falling back to single read", e);
-                                        let single_value = self
-                                            .client
-                                            .signal_val_get(signal.index, true)?;
+                                        let single_value =
+                                            self.client.signal_val_get(
+                                                signal.index,
+                                                true,
+                                            )?;
                                         (
                                             single_value,
                                             vec![single_value],
@@ -1956,7 +1963,8 @@ impl ActionDriver {
                                 };
 
                             let mut measured = HashMap::new();
-                            measured.insert(SignalIndex::new(signal.index), value);
+                            measured
+                                .insert(SignalIndex::new(signal.index), value);
 
                             let shape =
                                 if value >= bounds.0 && value <= bounds.1 {
@@ -2162,7 +2170,8 @@ impl ActionDriver {
                                                 let single_value = self
                                                     .client
                                                     .signal_val_get(
-                                                        signal.index, true,
+                                                        signal.index,
+                                                        true,
                                                     )?;
                                                 (
                                                     single_value,
@@ -2174,7 +2183,8 @@ impl ActionDriver {
                                         Err(_) => {
                                             let single_value =
                                                 self.client.signal_val_get(
-                                                    signal.index, true,
+                                                    signal.index,
+                                                    true,
                                                 )?;
                                             (
                                                 single_value,
@@ -2184,14 +2194,21 @@ impl ActionDriver {
                                         }
                                     };
 
-                                measured.insert(SignalIndex::new(signal.index), value);
+                                measured.insert(
+                                    SignalIndex::new(signal.index),
+                                    value,
+                                );
                                 all_datasets.push(raw_data);
                                 read_methods.push(read_method);
 
                                 let in_bounds =
                                     value >= bounds.0 && value <= bounds.1;
                                 if !in_bounds {
-                                    violations.push((signal.clone(), value, *bounds));
+                                    violations.push((
+                                        signal.clone(),
+                                        value,
+                                        *bounds,
+                                    ));
                                     all_good = false;
                                 }
 
@@ -2260,7 +2277,8 @@ impl ActionDriver {
                                 .enumerate()
                             {
                                 let prefix = format!("signal_{}", i);
-                                let value = measured[&SignalIndex::new(signal.index)];
+                                let value =
+                                    measured[&SignalIndex::new(signal.index)];
 
                                 metadata.insert(
                                     format!("{}_index", prefix),
@@ -2639,8 +2657,7 @@ impl ActionDriver {
                 let mut metrics = HashMap::new();
                 let mut recommendations = Vec::new();
 
-                let (is_stable, stability_score, measured_values) = match method
-                {
+                let (is_stable, measured_values) = match method {
                     TipStabilityMethod::ExtendedMonitoring {
                         signal: _,
                         duration: _,
@@ -2658,16 +2675,18 @@ impl ActionDriver {
                         allowed_signal_change,
                     } => {
                         log::info!(
-                            "Performing scan with bias sweep stability test"
+                            "Performing simple bias sweep stability test: {:.2}V to {:.2}V",
+                            bias_range.0,
+                            bias_range.1
                         );
 
                         // 1. Get signal channel index for TCP reader
                         let tcp_channel = signal.tcp_channel.ok_or_else(|| {
-                                NanonisError::Protocol(format!(
-                                    "Signal {} (Nanonis index) has no TCP channel mapping",
-                                    signal.index
-                                ))
-                            })?;
+                            NanonisError::Protocol(format!(
+                                "Signal {} (Nanonis index) has no TCP channel mapping",
+                                signal.index
+                            ))
+                        })?;
 
                         // 2. Get initial bias for restoration
                         let initial_bias = self.client.get_bias()?;
@@ -2676,32 +2695,14 @@ impl ActionDriver {
                             initial_bias
                         );
 
-                        // 3. Get baseline frequency shift value
+                        // 3. Read baseline signal value once before starting
                         let baseline_value = {
-                            let tcp_reader = self.tcp_reader_mut().ok_or_else(|| {
-                                NanonisError::Protocol(
-                                    "TCP reader not available for bias sweep monitoring"
-                                        .to_string(),
-                                )
-                            })?;
-                            let initial_frame_count = tcp_reader.frame_count();
-
-                            // Wait for a new frame (up to 500ms)
-                            let mut wait_iterations = 0;
-                            loop {
-                                std::thread::sleep(Duration::from_millis(10));
-                                if tcp_reader.frame_count()
-                                    > initial_frame_count
-                                {
-                                    break;
-                                }
-                                wait_iterations += 1;
-                                if wait_iterations > 50 {
-                                    return Err(NanonisError::Protocol(
-                                        "Timeout waiting for initial signal frame".to_string(),
-                                    ));
-                                }
-                            }
+                            let tcp_reader =
+                                self.tcp_reader_mut().ok_or_else(|| {
+                                    NanonisError::Protocol(
+                                        "TCP reader not available".to_string(),
+                                    )
+                                })?;
 
                             let recent_frames = tcp_reader.get_recent_frames(1);
                             if recent_frames.is_empty() {
@@ -2716,26 +2717,19 @@ impl ActionDriver {
                         };
 
                         log::info!(
-                            "Starting ScanWithBiasSweep: baseline={:.3} Hz, threshold={:.3} Hz",
+                            "Baseline signal: {:.3}, threshold: {:.3}",
                             baseline_value,
                             allowed_signal_change
                         );
-                        log::info!(
-                            "Bias sweep: {:.2}V to {:.2}V in {} steps ({:.0}ms per step)",
-                            bias_range.0,
-                            bias_range.1,
-                            bias_steps,
-                            step_duration.as_millis()
-                        );
 
-                        // 5. Start scan
+                        // 4. Start scan
                         self.client.scan_action(
                             ScanAction::Start,
                             ScanDirection::Down,
                         )?;
-                        log::info!("Scan start command sent");
+                        log::info!("Scan started");
 
-                        // 6. Wait for scan to actually start (max 5 seconds)
+                        // Wait for scan to actually start (max 5 seconds)
                         let mut scan_started = false;
                         for _ in 0..50 {
                             std::thread::sleep(Duration::from_millis(100));
@@ -2754,136 +2748,50 @@ impl ActionDriver {
                             ));
                         }
 
-                        // 7. Execute bias sweep with signal monitoring
+                        // 5. Sweep bias from upper to lower
                         let bias_step_size =
                             (bias_range.1 - bias_range.0) / (bias_steps as f32);
                         let mut current_bias = bias_range.0;
-                        let mut collected_signals = Vec::new();
-                        let mut sudden_change_detected = false;
-                        let mut scan_stopped_unexpectedly = false;
-                        let mut steps_completed = 0;
-                        let mut last_frame_count = {
+
+                        for step_num in 0..bias_steps {
+                            self.client.set_bias(current_bias)?;
+                            log::debug!(
+                                "Step {}/{}: bias={:.2}V",
+                                step_num + 1,
+                                bias_steps,
+                                current_bias
+                            );
+                            std::thread::sleep(step_duration);
+                            current_bias += bias_step_size;
+                        }
+
+                        log::info!("Bias sweep completed");
+
+                        // 6. Read final signal value once after finishing
+                        let final_value = {
                             let tcp_reader =
                                 self.tcp_reader_mut().ok_or_else(|| {
                                     NanonisError::Protocol(
                                         "TCP reader not available".to_string(),
                                     )
                                 })?;
-                            tcp_reader.frame_count()
+
+                            let recent_frames = tcp_reader.get_recent_frames(1);
+                            if recent_frames.is_empty() {
+                                return Err(NanonisError::Protocol(
+                                    "No frames available from TCP reader"
+                                        .to_string(),
+                                ));
+                            }
+
+                            recent_frames[0].signal_frame.data
+                                [tcp_channel as usize]
                         };
 
-                        'sweep_loop: for step_num in 0..bias_steps {
-                            // a. Set bias
-                            if let Err(e) = self.client.set_bias(current_bias) {
-                                log::error!(
-                                    "Failed to set bias at step {}: {}",
-                                    step_num,
-                                    e
-                                );
-                                break;
-                            }
-
-                            log::debug!(
-                                "Step {}/{}: bias={:.2}V",
-                                step_num,
-                                bias_steps,
-                                current_bias
-                            );
-
-                            // b. Wait for signal to settle
-                            std::thread::sleep(step_duration);
-
-                            // c. Collect and analyze signal samples
-                            {
-                                let tcp_reader =
-                                    self.tcp_reader_mut().ok_or_else(|| {
-                                        NanonisError::Protocol(
-                                            "TCP reader not available"
-                                                .to_string(),
-                                        )
-                                    })?;
-                                let current_frame_count =
-                                    tcp_reader.frame_count();
-
-                                if current_frame_count > last_frame_count {
-                                    let recent_frames =
-                                        tcp_reader.get_recent_frames(10);
-
-                                    for frame in recent_frames {
-                                        if let Some(&value) = frame
-                                            .signal_frame
-                                            .data
-                                            .get(tcp_channel as usize)
-                                        {
-                                            let deviation =
-                                                (value - baseline_value).abs();
-
-                                            if deviation > allowed_signal_change
-                                            {
-                                                log::error!(
-                                                    "Sudden change detected at bias {:.2}V: freq_shift={:.3} Hz \
-                                                     (baseline: {:.3} Hz, deviation: {:.3} Hz)",
-                                                    current_bias,
-                                                    value,
-                                                    baseline_value,
-                                                    deviation
-                                                );
-                                                sudden_change_detected = true;
-                                                break 'sweep_loop;
-                                            }
-
-                                            collected_signals.push(value);
-                                            log::trace!(
-                                                "freq_shift={:.3} Hz (deviation: {:.3} Hz)",
-                                                value,
-                                                deviation
-                                            );
-                                        }
-                                    }
-
-                                    last_frame_count = current_frame_count;
-                                }
-                            }
-
-                            // d. Check scan status
-                            let is_scanning = self.client.scan_status_get()?;
-                            if !is_scanning {
-                                log::warn!(
-                                    "Scan stopped unexpectedly during bias sweep at step {}/{}",
-                                    step_num,
-                                    bias_steps
-                                );
-                                scan_stopped_unexpectedly = true;
-                                break;
-                            }
-
-                            // e. Check timeout (max_duration is handled by outer action framework)
-
-                            // f. Update for next iteration
-                            current_bias += bias_step_size;
-                            steps_completed += 1;
-
-                            // g. Progress logging
-                            if step_num % 10 == 0 {
-                                log::info!(
-                                    "Bias sweep progress: step {}/{}, bias={:.2}V, samples={}",
-                                    step_num,
-                                    bias_steps,
-                                    current_bias,
-                                    collected_signals.len()
-                                );
-                            }
-                        }
-
-                        // 8. Cleanup - stop scan and restore bias
-                        log::info!("Stopping scan and restoring bias...");
-
-                        // Always try to stop scan (ignore errors)
+                        // 7. Stop scan and restore bias
                         let _ = self
                             .client
                             .scan_action(ScanAction::Stop, ScanDirection::Up);
-
-                        // Try to restore bias (log error if it fails but continue)
                         if let Err(e) = self.client.set_bias(initial_bias) {
                             log::error!(
                                 "Failed to restore initial bias: {}",
@@ -2896,88 +2804,60 @@ impl ActionDriver {
                             );
                         }
 
-                        // 9. Determine stability
-                        let is_stable = !sudden_change_detected
-                            && !scan_stopped_unexpectedly;
-                        let stability_score = if is_stable { 0.8 } else { 0.2 };
+                        // 8. Check if change exceeded threshold
+                        let signal_change =
+                            (final_value - baseline_value).abs();
+                        let is_stable = signal_change <= allowed_signal_change;
 
-                        let final_signal_value = collected_signals
-                            .last()
-                            .copied()
-                            .unwrap_or(baseline_value);
-                        let max_deviation = collected_signals
-                            .iter()
-                            .map(|&v| (v - baseline_value).abs())
-                            .max_by(|a, b| a.partial_cmp(b).unwrap())
-                            .unwrap_or(0.0);
+                        log::info!(
+                            "Bias sweep result: baseline={:.3}, final={:.3}, change={:.3}, threshold={:.3}, stable={}",
+                            baseline_value,
+                            final_value,
+                            signal_change,
+                            allowed_signal_change,
+                            is_stable
+                        );
 
-                        // 10. Populate metrics
-                        metrics.insert(
-                            "scan_duration_s".to_string(),
-                            start_time.elapsed().as_secs_f32(),
-                        );
-                        metrics.insert(
-                            "bias_steps_completed".to_string(),
-                            steps_completed as f32,
-                        );
-                        metrics.insert(
-                            "sudden_change_detected".to_string(),
-                            if sudden_change_detected { 1.0 } else { 0.0 },
-                        );
-                        metrics.insert(
-                            "scan_stopped".to_string(),
-                            if scan_stopped_unexpectedly { 1.0 } else { 0.0 },
-                        );
+                        // 9. Populate metrics
                         metrics.insert(
                             "baseline_value".to_string(),
                             baseline_value,
                         );
-                        metrics.insert(
-                            "final_signal_value".to_string(),
-                            final_signal_value,
-                        );
+                        metrics.insert("final_value".to_string(), final_value);
                         metrics
-                            .insert("max_deviation".to_string(), max_deviation);
+                            .insert("signal_change".to_string(), signal_change);
+                        metrics.insert(
+                            "threshold".to_string(),
+                            allowed_signal_change,
+                        );
 
-                        // Add recommendations
-                        if sudden_change_detected {
-                            recommendations.push(
-                                "Sudden signal change detected - tip may be unstable or contaminated"
-                                    .to_string(),
-                            );
-                        }
-                        if scan_stopped_unexpectedly {
-                            recommendations.push(
-                                "Scan stopped unexpectedly - check tip condition".to_string(),
-                            );
-                        }
+                        // 10. Add recommendations
                         if is_stable {
                             recommendations.push(format!(
-                                "Tip appears stable across bias range {:.2}V to {:.2}V",
-                                bias_range.0, bias_range.1
+                                "Tip is stable - signal change {:.3} within threshold {:.3}",
+                                signal_change, allowed_signal_change
+                            ));
+                        } else {
+                            recommendations.push(format!(
+                                "Tip is blunt - signal change {:.3} exceeded threshold {:.3}. Tip shaping recommended.",
+                                signal_change, allowed_signal_change
                             ));
                         }
 
-                        log::info!(
-                            "ScanWithBiasSweep complete: is_stable={}, steps={}/{}, max_deviation={:.3} Hz",
-                            is_stable,
-                            steps_completed,
-                            bias_steps,
-                            max_deviation
-                        );
-
                         // Create measured values map
                         let mut measured_values = HashMap::new();
-                        measured_values.insert(signal.clone(), collected_signals);
+                        measured_values.insert(
+                            signal.clone(),
+                            vec![baseline_value, final_value],
+                        );
 
-                        (is_stable, stability_score, measured_values)
+                        (is_stable, measured_values)
                     }
                 };
 
                 let analysis_duration = start_time.elapsed();
                 let result = StabilityResult {
                     is_stable,
-                    stability_score,
                     method_used: format!("{:?}", method.clone()),
                     measured_values,
                     analysis_duration,

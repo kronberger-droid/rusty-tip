@@ -31,9 +31,9 @@ use std::os::windows::ffi::OsStrExt;
 #[command(name = "tip-prep")]
 #[command(about = "Automated tip preparation for STM/AFM", long_about = None)]
 struct Args {
-    /// Path to configuration file
-    #[arg(short, long, value_name = "FILE")]
-    config: Option<PathBuf>,
+    /// Path to configuration file (required)
+    #[arg(short, long, value_name = "FILE", required = true)]
+    config: PathBuf,
 
     /// Override log level (trace, debug, info, warn, error)
     #[arg(short, long, value_name = "LEVEL")]
@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Parse arguments and load configuration
     let args = Args::parse();
-    let config = load_config_or_default(args.config.as_deref());
+    let config = load_config_or_default(Some(&args.config));
 
     // Initialize logging
     let log_level = args.log_level.unwrap_or(config.console.verbosity.clone());
@@ -144,15 +144,9 @@ fn log_pulse_method(method: &PulseMethod) {
 }
 
 /// Log startup information
-fn log_startup_info(config: &AppConfig, config_path: &Option<PathBuf>) {
+fn log_startup_info(config: &AppConfig, config_path: &PathBuf) {
     info!("=== Rusty Tip Preparation Tool ===");
-    info!(
-        "Configuration: {}",
-        config_path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "defaults".to_string())
-    );
+    info!("Configuration: {}", config_path.display());
     info!(
         "Nanonis: {}:{}",
         config.nanonis.host_ip, config.nanonis.control_ports[0]

@@ -102,7 +102,6 @@ pub struct BoundsCheckInfo {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StabilityResult {
     pub is_stable: bool,
-    pub stability_score: f32, // 0.0 to 1.0
     pub method_used: String,
     pub measured_values: HashMap<Signal, Vec<f32>>, // Time series data
     pub analysis_duration: Duration,
@@ -1647,14 +1646,12 @@ pub enum ActionLogResult {
     /// Comprehensive tip state check result
     TipState {
         shape: TipShape,
-        confidence: f32,
         measured_signals: std::collections::HashMap<u8, f32>, // SignalIndex as u8 for JSON serialization
         bounds_info: Option<std::collections::HashMap<String, String>>, // Bounds and margins for analysis
     },
     /// Comprehensive stable signal result with full TCP dataset for debugging
     StableSignal {
         stable_value: f32,
-        confidence: f32,
         data_points_used: usize,
         analysis_duration_ms: u64,
         stability_metrics: std::collections::HashMap<String, f32>,
@@ -1803,7 +1800,6 @@ impl ActionLogResult {
 
                 ActionLogResult::TipState {
                     shape: tip_state.shape,
-                    confidence: tip_state.confidence,
                     measured_signals,
                     bounds_info,
                 }
@@ -1828,16 +1824,11 @@ impl ActionLogResult {
 
                 // Create bounds info with stability metrics
                 let mut bounds_info = std::collections::HashMap::new();
-                bounds_info.insert(
-                    "stability_score".to_string(),
-                    result.stability_score.to_string(),
-                );
                 bounds_info.insert("is_stable".to_string(), result.is_stable.to_string());
                 bounds_info.insert("method".to_string(), "stability_check".to_string());
 
                 ActionLogResult::TipState {
                     shape: tip_shape,
-                    confidence: result.stability_score,
                     measured_signals,
                     bounds_info: Some(bounds_info),
                 }
@@ -1846,7 +1837,6 @@ impl ActionLogResult {
                 // Convert stable signal with full dataset for debugging stability measures
                 ActionLogResult::StableSignal {
                     stable_value: stable.stable_value,
-                    confidence: stable.confidence,
                     data_points_used: stable.data_points_used,
                     analysis_duration_ms: stable.analysis_duration.as_millis() as u64,
                     stability_metrics: stable.stability_metrics.clone(),
