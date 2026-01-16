@@ -2688,14 +2688,31 @@ impl ActionDriver {
                             ))
                         })?;
 
-                        // 2. Get initial bias for restoration
+                        // 2. Save and configure scan properties
+                        log::info!("Reading current scan properties...");
+                        let original_props = self.client.scan_props_get()?;
+                        log::info!(
+                            "Original scan props: continuous={}, bouncy={}",
+                            original_props.continuous_scan,
+                            original_props.bouncy_scan
+                        );
+
+                        // Configure scan for stability check
+                        log::info!("Configuring scan: continuous=true, bouncy=true");
+                        let scan_props = nanonis_rs::ScanPropsBuilder::new()
+                            .continuous_scan(true)
+                            .bouncy_scan(true);
+                        self.client.scan_props_set(scan_props)?;
+                        log::info!("Scan properties configured");
+
+                        // 3. Get initial bias for restoration
                         let initial_bias = self.client.get_bias()?;
                         log::info!(
                             "Initial bias: {:.3} V (will restore after sweep)",
                             initial_bias
                         );
 
-                        // 3. Read baseline signal value once before starting
+                        // 4. Read baseline signal value once before starting
                         let baseline_value = {
                             let tcp_reader =
                                 self.tcp_reader_mut().ok_or_else(|| {
