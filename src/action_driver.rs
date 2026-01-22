@@ -16,6 +16,8 @@ use crate::{
 };
 use nanonis_rs::SignalIndex;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -388,6 +390,7 @@ pub struct ActionDriverBuilder {
     tcp_reader_config: Option<TCPReaderConfig>,
     action_logger_config: Option<(std::path::PathBuf, usize, bool)>, // (file_path, buffer_size, final_format_json)
     custom_tcp_mapping: Option<Vec<(u8, u8)>>, // Custom Nanonis to TCP channel mapping
+    shutdown_flag: Option<Arc<AtomicBool>>,    // Graceful shutdown support
 }
 
 impl ActionDriverBuilder {
@@ -401,6 +404,7 @@ impl ActionDriverBuilder {
             tcp_reader_config: None,
             action_logger_config: None,
             custom_tcp_mapping: None,
+            shutdown_flag: None,
         }
     }
 
@@ -518,6 +522,15 @@ impl ActionDriverBuilder {
         self
     }
 
+    /// Set shutdown flag for graceful termination of long-running operations
+    ///
+    /// When set, operations like stability checks will periodically check this flag
+    /// and return early with `NanonisError::Shutdown` if it becomes true.
+    pub fn with_shutdown_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.shutdown_flag = Some(flag);
+        self
+    }
+
     /// Build the ActionDriver with configured parameters and optional automatic buffering
     pub fn build(self) -> Result<ActionDriver, NanonisError> {
         let mut client = {
@@ -612,6 +625,7 @@ impl ActionDriverBuilder {
             action_logging_enabled: true, // Default to enabled if logger is configured
             signal_registry,
             recent_stable_signals: std::collections::VecDeque::new(),
+            shutdown_flag: self.shutdown_flag,
         })
     }
 }
@@ -639,6 +653,8 @@ pub struct ActionDriver {
         crate::actions::StableSignal,
         std::time::Instant,
     )>,
+    /// Shutdown flag for graceful termination of long-running operations
+    shutdown_flag: Option<Arc<AtomicBool>>,
 }
 
 impl ActionDriver {
@@ -668,6 +684,7 @@ impl ActionDriver {
             action_logging_enabled: false,
             signal_registry,
             recent_stable_signals: std::collections::VecDeque::new(),
+            shutdown_flag: None,
         }
     }
 
@@ -679,6 +696,19 @@ impl ActionDriver {
     /// Get a mutable reference to the underlying NanonisClient
     pub fn client_mut(&mut self) -> &mut NanonisClient {
         &mut self.client
+    }
+
+    /// Set shutdown flag for graceful termination of long-running operations
+    pub fn set_shutdown_flag(&mut self, flag: Arc<AtomicBool>) {
+        self.shutdown_flag = Some(flag);
+    }
+
+    /// Check if shutdown has been requested
+    fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_flag
+            .as_ref()
+            .map(|f| f.load(Ordering::SeqCst))
+            .unwrap_or(false)
     }
 
     /// Get TCP Logger configuration if set
@@ -2749,6 +2779,13 @@ impl ActionDriver {
                         // Wait for scan to actually start (max 5 seconds)
                         let mut scan_started = false;
                         for _ in 0..50 {
+                            // Check for shutdown request
+                            if self.is_shutdown_requested() {
+                                log::info!("Shutdown requested while waiting for scan to start");
+                                let _ = self.client.scan_action(ScanAction::Stop, ScanDirection::Up);
+                                let _ = self.client.set_bias(initial_bias);
+                                return Err(NanonisError::Shutdown);
+                            }
                             std::thread::sleep(Duration::from_millis(100));
                             let is_scanning = self.client.scan_status_get()?;
                             if is_scanning {
@@ -2771,6 +2808,13 @@ impl ActionDriver {
                         let mut current_bias = bias_range.0;
 
                         for step_num in 0..bias_steps {
+                            // Check for shutdown request
+                            if self.is_shutdown_requested() {
+                                log::info!("Shutdown requested during bias sweep at step {}/{}", step_num + 1, bias_steps);
+                                let _ = self.client.scan_action(ScanAction::Stop, ScanDirection::Up);
+                                let _ = self.client.set_bias(initial_bias);
+                                return Err(NanonisError::Shutdown);
+                            }
                             self.client.set_bias(current_bias)?;
                             log::debug!(
                                 "Step {}/{}: bias={:.2}V",
@@ -2778,7 +2822,18 @@ impl ActionDriver {
                                 bias_steps,
                                 current_bias
                             );
-                            std::thread::sleep(step_duration);
+                            // Interruptible sleep: split into 10ms chunks for responsive shutdown
+                            let sleep_chunks = (step_duration.as_millis() / 10).max(1) as u32;
+                            let chunk_duration = step_duration / sleep_chunks;
+                            for _ in 0..sleep_chunks {
+                                if self.is_shutdown_requested() {
+                                    log::info!("Shutdown requested during bias sweep step sleep");
+                                    let _ = self.client.scan_action(ScanAction::Stop, ScanDirection::Up);
+                                    let _ = self.client.set_bias(initial_bias);
+                                    return Err(NanonisError::Shutdown);
+                                }
+                                std::thread::sleep(chunk_duration);
+                            }
                             current_bias += bias_step_size;
                         }
 

@@ -255,7 +255,8 @@ impl TipController {
 
     /// Set shutdown flag for graceful termination
     pub fn set_shutdown_flag(&mut self, flag: Arc<AtomicBool>) {
-        self.shutdown_requested = Some(flag);
+        self.shutdown_requested = Some(flag.clone());
+        self.driver.set_shutdown_flag(flag);
     }
 
     /// Check if this pulse should use opposite polarity
