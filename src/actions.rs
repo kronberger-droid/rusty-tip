@@ -114,7 +114,6 @@ pub struct StabilityResult {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TipState {
     pub shape: TipShape, // the enum value
-    pub confidence: f32,
     pub measured_signals: HashMap<SignalIndex, f32>, // Always populated, empty for simple checks
     pub metadata: HashMap<String, String>,
 }
@@ -131,7 +130,6 @@ pub struct TCPReaderStatus {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StableSignal {
     pub stable_value: f32,
-    pub confidence: f32,
     pub data_points_used: usize,
     pub analysis_duration: Duration,
     pub stability_metrics: HashMap<String, f32>,

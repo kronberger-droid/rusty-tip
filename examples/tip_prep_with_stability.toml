@@ -71,5 +71,5 @@ switch_every_n_pulses = 5  # Every 5th pulse uses opposite polarity
 # Uncomment and modify if your Nanonis signal indices differ from the defaults
 # Format: { nanonis_index = X, tcp_channel = Y }
 [[tcp_channel_mapping]]
-nanonis_index = 76  # Frequency shift
-tcp_channel = 19
+# nanonis_index = 76  # Frequency shift
+# tcp_channel = 19

@@ -1881,8 +1881,7 @@ impl ActionDriver {
                 use crate::types::TipShape;
                 use std::collections::HashMap;
 
-                let (tip_shape, measured_signals, confidence, mut metadata) =
-                    match method {
+                let (tip_shape, measured_signals, mut metadata) = match method {
                         TipCheckMethod::SignalBounds { signal, bounds } => {
                             // Debug TCP logger status before calling ReadStableSignal
                             if let Some(ref tcp_reader) = self.tcp_reader {
@@ -2003,7 +2002,7 @@ impl ActionDriver {
                                     TipShape::Blunt
                                 };
 
-                            // Calculate confidence based on distance from bounds
+                            // Populate metadata with analysis context and dataset
                             let bounds_center = (bounds.0 + bounds.1) / 2.0;
                             let bounds_width = (bounds.1 - bounds.0).abs();
                             let distance_from_center =
@@ -2013,21 +2012,6 @@ impl ActionDriver {
                             } else {
                                 0.0
                             };
-
-                            let confidence = if shape == TipShape::Sharp {
-                                // Within bounds: confidence decreases as we approach the edges
-                                (1.0 - relative_distance).max(0.1) // Minimum confidence 0.1
-                            } else {
-                                // Outside bounds: confidence based on how far outside we are
-                                let margin_violation = if value < bounds.0 {
-                                    (bounds.0 - value) / bounds_width.abs()
-                                } else {
-                                    (value - bounds.1) / bounds_width.abs()
-                                };
-                                (1.0 / (1.0 + margin_violation)).max(0.05) // Lower confidence for violations
-                            };
-
-                            // Populate metadata with analysis context and dataset
                             let mut metadata = HashMap::new();
                             metadata.insert(
                                 "method".to_string(),
@@ -2127,14 +2111,13 @@ impl ActionDriver {
                                 );
                             }
 
-                            (shape, measured, confidence, metadata)
+                            (shape, measured, metadata)
                         }
 
                         TipCheckMethod::MultiSignalBounds { ref signals } => {
                             let mut measured = HashMap::new();
                             let mut violations = Vec::new();
                             let mut all_good = true;
-                            let mut confidence_scores = Vec::new();
                             let mut all_datasets = Vec::new();
                             let mut read_methods = Vec::new();
 
@@ -2242,28 +2225,6 @@ impl ActionDriver {
                                     all_good = false;
                                 }
 
-                                // Calculate per-signal confidence
-                                let bounds_center = (bounds.0 + bounds.1) / 2.0;
-                                let bounds_width = (bounds.1 - bounds.0).abs();
-                                let distance_from_center =
-                                    (value - bounds_center).abs();
-                                let relative_distance = if bounds_width > 0.0 {
-                                    distance_from_center / (bounds_width / 2.0)
-                                } else {
-                                    0.0
-                                };
-
-                                let signal_confidence = if in_bounds {
-                                    (1.0 - relative_distance).max(0.1)
-                                } else {
-                                    let margin_violation = if value < bounds.0 {
-                                        (bounds.0 - value) / bounds_width.abs()
-                                    } else {
-                                        (value - bounds.1) / bounds_width.abs()
-                                    };
-                                    (1.0 / (1.0 + margin_violation)).max(0.05)
-                                };
-                                confidence_scores.push(signal_confidence);
                             }
 
                             let shape = if all_good {
@@ -2271,11 +2232,6 @@ impl ActionDriver {
                             } else {
                                 TipShape::Blunt
                             };
-
-                            // Overall confidence is the minimum of all signal confidences
-                            let confidence = confidence_scores
-                                .iter()
-                                .fold(1.0f32, |acc, &x| acc.min(x));
 
                             // Populate metadata with multi-signal analysis and datasets
                             let mut metadata = HashMap::new();
@@ -2331,10 +2287,6 @@ impl ActionDriver {
                                         .to_string(),
                                 );
                                 metadata.insert(
-                                    format!("{}_confidence", prefix),
-                                    format!("{:.3}", confidence_scores[i]),
-                                );
-                                metadata.insert(
                                     format!("{}_read_method", prefix),
                                     read_methods[i].to_string(),
                                 );
@@ -2373,7 +2325,7 @@ impl ActionDriver {
                                 );
                             }
 
-                            (shape, measured, confidence, metadata)
+                            (shape, measured, metadata)
                         }
                     };
 
@@ -2567,10 +2519,6 @@ impl ActionDriver {
                             format!("{:.6e}", most_recent_signal.stable_value),
                         );
                         metadata.insert(
-                            "most_recent_stable_confidence".to_string(),
-                            format!("{:.3}", most_recent_signal.confidence),
-                        );
-                        metadata.insert(
                             "most_recent_data_points".to_string(),
                             most_recent_signal.data_points_used.to_string(),
                         );
@@ -2664,12 +2612,11 @@ impl ActionDriver {
                     ", recent_stable_data=false".to_string()
                 };
 
-                log::info!("CheckTipState result: shape={:?}, confidence={:.3}, read_method={}, dataset_size={}, measured_signals=[{}]{}",
-                    tip_shape, confidence, read_method, dataset_size, signal_values_str, stable_signal_info);
+                log::info!("CheckTipState result: shape={:?}, read_method={}, dataset_size={}, measured_signals=[{}]{}",
+                    tip_shape, read_method, dataset_size, signal_values_str, stable_signal_info);
 
                 Ok(ActionResult::TipState(TipState {
                     shape: tip_shape,
-                    confidence,
                     measured_signals,
                     metadata,
                 }))
@@ -3046,7 +2993,7 @@ impl ActionDriver {
                         timeout,
                         &stability_method,
                     ) {
-                        Ok((signal_data, is_stable, confidence, metrics)) => {
+                        Ok((signal_data, is_stable, metrics)) => {
                             let analysis_duration = start_time.elapsed();
 
                             if is_stable {
@@ -3064,7 +3011,6 @@ impl ActionDriver {
 
                                 let stable_signal = StableSignal {
                                     stable_value,
-                                    confidence,
                                     data_points_used: signal_data.len(),
                                     analysis_duration,
                                     stability_metrics: metrics,
@@ -3180,7 +3126,7 @@ impl ActionDriver {
         timeout: Duration,
         stability_method: &crate::actions::SignalStabilityMethod,
     ) -> Result<
-        (Vec<f32>, bool, f32, std::collections::HashMap<String, f32>),
+        (Vec<f32>, bool, std::collections::HashMap<String, f32>),
         NanonisError,
     > {
         // Collect signal data based on use_new_data flag
@@ -3203,10 +3149,10 @@ impl ActionDriver {
         }
 
         // Analyze stability using the specified method
-        let (is_stable, confidence, metrics) =
+        let (is_stable, metrics) =
             Self::analyze_signal_stability(&signal_data, stability_method);
 
-        Ok((signal_data, is_stable, confidence, metrics))
+        Ok((signal_data, is_stable, metrics))
     }
 
     /// Collect new signal data from TCP logger with timeout
@@ -3298,11 +3244,11 @@ impl ActionDriver {
     fn analyze_signal_stability(
         data: &[f32],
         method: &crate::actions::SignalStabilityMethod,
-    ) -> (bool, f32, std::collections::HashMap<String, f32>) {
+    ) -> (bool, std::collections::HashMap<String, f32>) {
         use crate::actions::SignalStabilityMethod;
 
         if data.len() < 2 {
-            return (false, 0.0, std::collections::HashMap::new());
+            return (false, std::collections::HashMap::new());
         }
 
         let mut metrics = std::collections::HashMap::new();
@@ -3315,13 +3261,10 @@ impl ActionDriver {
         metrics.insert("std_dev".to_string(), std_dev);
         metrics.insert("variance".to_string(), variance);
 
-        let (is_stable, confidence) = match method {
+        let is_stable = match method {
             SignalStabilityMethod::StandardDeviation { threshold } => {
-                let is_stable = std_dev <= *threshold;
-                let confidence =
-                    (1.0 - (std_dev / threshold).min(1.0)).max(0.0);
                 metrics.insert("threshold".to_string(), *threshold);
-                (is_stable, confidence)
+                std_dev <= *threshold
             }
 
             SignalStabilityMethod::RelativeStandardDeviation {
@@ -3332,17 +3275,13 @@ impl ActionDriver {
                 } else {
                     f32::INFINITY
                 };
-                let is_stable = relative_std <= *threshold_percent;
-                let confidence = (1.0
-                    - (relative_std / threshold_percent).min(1.0))
-                .max(0.0);
                 metrics
                     .insert("relative_std_percent".to_string(), relative_std);
                 metrics.insert(
                     "threshold_percent".to_string(),
                     *threshold_percent,
                 );
-                (is_stable, confidence)
+                relative_std <= *threshold_percent
             }
 
             SignalStabilityMethod::MovingWindow {
@@ -3350,7 +3289,7 @@ impl ActionDriver {
                 max_variation,
             } => {
                 if data.len() < *window_size {
-                    return (false, 0.0, metrics);
+                    return (false, metrics);
                 }
 
                 let mut max_window_variation = 0.0f32;
@@ -3363,10 +3302,6 @@ impl ActionDriver {
                     max_window_variation = max_window_variation.max(variation);
                 }
 
-                let is_stable = max_window_variation <= *max_variation;
-                let confidence = (1.0
-                    - (max_window_variation / max_variation).min(1.0))
-                .max(0.0);
                 metrics.insert(
                     "max_window_variation".to_string(),
                     max_window_variation,
@@ -3376,7 +3311,7 @@ impl ActionDriver {
                     "max_variation_threshold".to_string(),
                     *max_variation,
                 );
-                (is_stable, confidence)
+                max_window_variation <= *max_variation
             }
 
             SignalStabilityMethod::TrendAnalysis { max_slope } => {
@@ -3399,14 +3334,11 @@ impl ActionDriver {
                     0.0
                 };
                 let abs_slope = slope.abs();
-                let is_stable = abs_slope <= *max_slope;
-                let confidence =
-                    (1.0 - (abs_slope / max_slope).min(1.0)).max(0.0);
 
                 metrics.insert("slope".to_string(), slope);
                 metrics.insert("abs_slope".to_string(), abs_slope);
                 metrics.insert("max_slope_threshold".to_string(), *max_slope);
-                (is_stable, confidence)
+                abs_slope <= *max_slope
             }
 
             SignalStabilityMethod::Combined {
@@ -3436,14 +3368,6 @@ impl ActionDriver {
                 // Check both conditions: noise AND drift
                 let noise_ok = std_dev <= *max_std_dev;
                 let drift_ok = abs_slope <= *max_slope;
-                let is_stable = noise_ok && drift_ok;
-
-                // Confidence is the minimum of both checks
-                let noise_confidence =
-                    (1.0 - (std_dev / max_std_dev).min(1.0)).max(0.0);
-                let drift_confidence =
-                    (1.0 - (abs_slope / max_slope).min(1.0)).max(0.0);
-                let confidence = noise_confidence.min(drift_confidence);
 
                 metrics.insert("slope".to_string(), slope);
                 metrics.insert("abs_slope".to_string(), abs_slope);
@@ -3458,18 +3382,13 @@ impl ActionDriver {
                     "drift_ok".to_string(),
                     if drift_ok { 1.0 } else { 0.0 },
                 );
-                metrics
-                    .insert("noise_confidence".to_string(), noise_confidence);
-                metrics
-                    .insert("drift_confidence".to_string(), drift_confidence);
-                (is_stable, confidence)
+                noise_ok && drift_ok
             }
         };
 
-        metrics.insert("confidence".to_string(), confidence);
         metrics.insert("data_points".to_string(), data.len() as f32);
 
-        (is_stable, confidence, metrics)
+        (is_stable, metrics)
     }
 
     /// Execute action and extract specific type with validation
