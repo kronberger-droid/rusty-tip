@@ -1,5 +1,6 @@
 use crate::action_driver::ActionDriver;
 use crate::actions::{Action, TipCheckMethod, TipState};
+use crate::config::{BiasSweepPolarity, StabilityConfig};
 use crate::types::TipShape;
 use crate::{NanonisError, Signal};
 use nanonis_rs::SignalIndex;
@@ -38,18 +39,6 @@ const POST_APPROACH_SETTLE_TIME_MS: u64 = 2000;
 /// After repositioning and approach in bad_loop, signal needs time to settle
 /// Shorter than initial approach since it's a smaller movement
 const POST_REPOSITION_SETTLE_TIME_MS: u64 = 1000;
-
-/// Bias sweep range for stability checking (V)
-const STABILITY_BIAS_SWEEP_RANGE: (f32, f32) = (-2.0, 2.0);
-
-/// Number of steps in bias sweep for stability checking
-const STABILITY_BIAS_SWEEP_STEPS: u16 = 1000;
-
-/// Period per step in bias sweep for stability checking (ms)
-const STABILITY_BIAS_SWEEP_PERIOD_MS: u64 = 200;
-
-/// Maximum duration for stability check (seconds)
-const STABILITY_CHECK_MAX_DURATION_SECS: u64 = 100;
 
 /// Loop types based on tip shape - simple and direct
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -170,6 +159,7 @@ pub struct TipControllerConfig {
     pub max_cycles: Option<usize>,
     pub max_duration: Option<Duration>,
     pub check_stability: bool,
+    pub stability_config: StabilityConfig,
 }
 
 impl Default for TipControllerConfig {
@@ -188,6 +178,7 @@ impl Default for TipControllerConfig {
             max_cycles: Some(1000),
             max_duration: Some(Duration::from_secs(3600)), // 1 hour
             check_stability: true,
+            stability_config: StabilityConfig::default(),
         }
     }
 }
@@ -257,6 +248,14 @@ impl TipController {
     pub fn set_shutdown_flag(&mut self, flag: Arc<AtomicBool>) {
         self.shutdown_requested = Some(flag.clone());
         self.driver.set_shutdown_flag(flag);
+    }
+
+    /// Check if shutdown has been requested
+    fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_requested
+            .as_ref()
+            .map(|f| f.load(Ordering::SeqCst))
+            .unwrap_or(false)
     }
 
     /// Check if this pulse should use opposite polarity
@@ -711,35 +710,144 @@ impl TipController {
             return Ok(());
         }
 
-        // Otherwise, perform scan with bias sweep to check stability
-        let stability_result: crate::actions::StabilityResult = self
-            .driver
-            .run(Action::CheckTipStability {
-                method: crate::actions::TipStabilityMethod::BiasSweepResponse {
-                    signal: self.config.freq_shift_signal.clone(),
-                    bias_range: STABILITY_BIAS_SWEEP_RANGE,
-                    bias_steps: STABILITY_BIAS_SWEEP_STEPS,
-                    step_duration: Duration::from_millis(STABILITY_BIAS_SWEEP_PERIOD_MS),
-                    allowed_signal_change: self.config.allowed_change_for_stable,
-                },
-                max_duration: Duration::from_secs(STABILITY_CHECK_MAX_DURATION_SECS),
-                abort_on_damage_signs: false,
-            })
-            .expecting()?;
+        // Clone stability config values to avoid borrow issues
+        let stability_config = self.config.stability_config.clone();
+        let step_duration = Duration::from_millis(stability_config.step_period_ms);
+        let max_duration = Duration::from_secs(stability_config.max_duration_secs);
+        let bias_steps = stability_config.bias_steps;
+        let polarity_mode = stability_config.polarity_mode;
 
-        // Track signal values from stability monitoring (use last measured value)
-        if let Some(signal_values) = stability_result
-            .measured_values
-            .get(&self.config.freq_shift_signal)
-        {
-            if let Some(&last_value) = signal_values.last() {
-                let signal = self.config.freq_shift_signal.clone();
-                self.track_signal(&signal, last_value);
+        // Determine bias ranges based on polarity mode
+        let bias_ranges: Vec<(f32, f32)> = match polarity_mode {
+            BiasSweepPolarity::Positive => {
+                // Single sweep from 0 to upper_bound
+                vec![(0.0, stability_config.bias_range.1)]
+            }
+            BiasSweepPolarity::Negative => {
+                // Single sweep from 0 to lower_bound
+                vec![(0.0, stability_config.bias_range.0)]
+            }
+            BiasSweepPolarity::Both => {
+                // Two sweeps: first 0 to upper_bound, then 0 to lower_bound
+                vec![
+                    (0.0, stability_config.bias_range.1),
+                    (0.0, stability_config.bias_range.0),
+                ]
+            }
+        };
+
+        info!(
+            "Starting stability check with polarity mode: {:?}, {} sweep(s)",
+            polarity_mode,
+            bias_ranges.len()
+        );
+
+        // Save and set scan speed if configured
+        let original_scan_config = if let Some(target_speed) = stability_config.scan_speed_m_s {
+            match self.driver.client_mut().scan_speed_get() {
+                Ok(config) => {
+                    info!(
+                        "Saving original scan speed: {:.2e} m/s (forward), {:.2e} m/s (backward)",
+                        config.forward_linear_speed_m_s, config.backward_linear_speed_m_s
+                    );
+                    // Set new scan speed for stability check
+                    let mut new_config = config;
+                    new_config.forward_linear_speed_m_s = target_speed;
+                    new_config.backward_linear_speed_m_s = target_speed;
+                    new_config.keep_parameter_constant = 1; // Keep linear speed constant
+                    if let Err(e) = self.driver.client_mut().scan_config_set(new_config) {
+                        log::warn!("Failed to set scan speed for stability check: {}", e);
+                    } else {
+                        info!("Set scan speed to {:.2e} m/s for stability check", target_speed);
+                    }
+                    Some(config)
+                }
+                Err(e) => {
+                    log::warn!("Failed to get current scan speed: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Perform stability check for each bias range
+        let mut overall_stable = true;
+        let mut shutdown_requested = false;
+        for (sweep_idx, bias_range) in bias_ranges.iter().enumerate() {
+            if self.is_shutdown_requested() {
+                log::info!("Shutdown requested before stability sweep {}", sweep_idx + 1);
+                shutdown_requested = true;
+                break;
+            }
+
+            info!(
+                "Stability sweep {}/{}: {:.2}V to {:.2}V",
+                sweep_idx + 1,
+                bias_ranges.len(),
+                bias_range.0,
+                bias_range.1
+            );
+
+            let stability_result: crate::actions::StabilityResult = self
+                .driver
+                .run(Action::CheckTipStability {
+                    method: crate::actions::TipStabilityMethod::BiasSweepResponse {
+                        signal: self.config.freq_shift_signal.clone(),
+                        bias_range: *bias_range,
+                        bias_steps,
+                        step_duration,
+                        allowed_signal_change: self.config.allowed_change_for_stable,
+                    },
+                    max_duration,
+                    abort_on_damage_signs: false,
+                })
+                .expecting()?;
+
+            // Track signal values from stability monitoring (use last measured value)
+            if let Some(signal_values) = stability_result
+                .measured_values
+                .get(&self.config.freq_shift_signal)
+            {
+                if let Some(&last_value) = signal_values.last() {
+                    let signal = self.config.freq_shift_signal.clone();
+                    self.track_signal(&signal, last_value);
+                }
+            }
+
+            if !stability_result.is_stable {
+                info!(
+                    "Tip unstable during sweep {}/{} ({:.2}V to {:.2}V)",
+                    sweep_idx + 1,
+                    bias_ranges.len(),
+                    bias_range.0,
+                    bias_range.1
+                );
+                overall_stable = false;
+                break;
             }
         }
 
+        // Restore original scan speed if we changed it
+        if let Some(config) = original_scan_config {
+            if let Err(e) = self.driver.client_mut().scan_config_set(config) {
+                log::warn!("Failed to restore original scan speed: {}", e);
+            } else {
+                info!(
+                    "Restored original scan speed: {:.2e} m/s (forward)",
+                    config.forward_linear_speed_m_s
+                );
+            }
+        }
+
+        // Handle shutdown that was requested during the stability check loop
+        if shutdown_requested {
+            return Err(NanonisError::Shutdown);
+        }
+
         // Update tip shape based on stability result
-        self.current_tip_shape = if stability_result.is_stable {
+        self.current_tip_shape = if overall_stable {
+            info!("Tip is stable after {} sweep(s)", bias_ranges.len());
             TipShape::Stable
         } else {
             self.driver
@@ -765,13 +873,26 @@ impl TipController {
     fn pre_good_loop_check(&mut self) -> Result<TipShape, NanonisError> {
         log::info!("Checking reliability of tip state result");
 
-        for _ in 0..3 {
+        for i in 0..3 {
+            if self.is_shutdown_requested() {
+                log::info!(
+                    "Shutdown requested during pre_good_loop_check at iteration {}/3",
+                    i + 1
+                );
+                return Err(NanonisError::Shutdown);
+            }
+
             self.driver
                 .run(Action::SafeReposition {
                     x_steps: 3,
                     y_steps: 3,
                 })
                 .go()?;
+
+            if self.is_shutdown_requested() {
+                log::info!("Shutdown requested after reposition in pre_good_loop_check");
+                return Err(NanonisError::Shutdown);
+            }
 
             let tip_state: TipState = self
                 .driver

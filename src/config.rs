@@ -45,6 +45,48 @@ pub struct ConsoleConfig {
     pub verbosity: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BiasSweepPolarity {
+    /// Sweep 0 to upper_bound only
+    Positive,
+    /// Sweep 0 to lower_bound only
+    Negative,
+    /// Two separate sweeps: 0 to upper_bound, then 0 to lower_bound
+    #[default]
+    Both,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct StabilityConfig {
+    /// Bias voltage range for stability sweep (lower, upper) in V
+    pub bias_range: (f32, f32),
+    /// Number of steps in the bias sweep
+    pub bias_steps: u16,
+    /// Time to wait at each step in ms
+    pub step_period_ms: u64,
+    /// Maximum duration for stability check in seconds
+    pub max_duration_secs: u64,
+    /// Polarity mode for bias sweep
+    #[serde(default)]
+    pub polarity_mode: BiasSweepPolarity,
+    /// Scan speed for stability check in m/s (None = use current scan speed)
+    pub scan_speed_m_s: Option<f32>,
+}
+
+impl Default for StabilityConfig {
+    fn default() -> Self {
+        Self {
+            bias_range: (-2.0, 2.0),
+            bias_steps: 1000,
+            step_period_ms: 200,
+            max_duration_secs: 100,
+            polarity_mode: BiasSweepPolarity::Both,
+            scan_speed_m_s: Some(5e-9), // 5 nm/s default
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TipPrepConfig {
     pub sharp_tip_bounds: [f32; 2],
@@ -52,6 +94,8 @@ pub struct TipPrepConfig {
     pub check_stability: bool,
     pub max_cycles: Option<usize>,
     pub max_duration_secs: Option<u64>,
+    #[serde(default)]
+    pub stability: StabilityConfig,
 }
 
 impl Default for NanonisConfig {
@@ -97,6 +141,7 @@ impl Default for TipPrepConfig {
             check_stability: true,
             max_cycles: Some(10000),
             max_duration_secs: Some(12000),
+            stability: StabilityConfig::default(),
         }
     }
 }

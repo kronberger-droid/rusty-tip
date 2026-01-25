@@ -1,11 +1,5 @@
 # Tip Prep
 
-## Stability Check
-
-- CTRL-C not working during scan.
-
-- Make sure to not go over 0 during bias sweep
-
 ## General
 
 - Implement script for multiple different tip prep cycle testing

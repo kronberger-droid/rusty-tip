@@ -258,6 +258,7 @@ fn create_tip_controller_config(
             .tip_prep
             .max_duration_secs
             .map(Duration::from_secs),
+        stability_config: config.tip_prep.stability.clone(),
     }
 }
 

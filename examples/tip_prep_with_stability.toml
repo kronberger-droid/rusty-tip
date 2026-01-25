@@ -37,6 +37,32 @@ max_cycles = 10000
 # Maximum duration in seconds (unlimited if not set)
 max_duration_secs = 12000
 
+# Stability check configuration
+[tip_prep.stability]
+# Bias voltage range for stability sweep (lower, upper) in V
+bias_range = [-2.0, 2.0]
+
+# Number of steps in the bias sweep
+bias_steps = 1000
+
+# Time to wait at each step in milliseconds
+step_period_ms = 200
+
+# Maximum duration for stability check in seconds
+max_duration_secs = 100
+
+# Polarity mode for bias sweep:
+# - "positive": Single sweep from 0 to upper_bound
+# - "negative": Single sweep from 0 to lower_bound
+# - "both": Two consecutive sweeps - first 0 to upper_bound, then 0 to lower_bound
+polarity_mode = "both"
+
+# Scan speed for stability check in m/s
+# If set, the scan speed will be temporarily changed during stability check
+# and restored afterward. Use a slower speed for more reliable stability detection.
+# Set to null or remove this line to use the current scan speed
+scan_speed_m_s = 5e-9  # 5 nm/s
+
 [pulse_method]
 # Use stepping pulse method
 type = "stepping"
@@ -71,5 +97,5 @@ switch_every_n_pulses = 5  # Every 5th pulse uses opposite polarity
 # Uncomment and modify if your Nanonis signal indices differ from the defaults
 # Format: { nanonis_index = X, tcp_channel = Y }
 [[tcp_channel_mapping]]
-# nanonis_index = 76  # Frequency shift
-# tcp_channel = 19
+nanonis_index = 76  # Frequency shift
+tcp_channel = 19
