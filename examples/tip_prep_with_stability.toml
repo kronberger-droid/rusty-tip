@@ -21,16 +21,6 @@ verbosity = "info"
 # Values within this range indicate a sharp tip
 sharp_tip_bounds = [-2.0, 0.0]
 
-# Maximum allowed change in frequency shift for tip to be considered stable (in Hz)
-# During the bias sweep, if the signal changes more than this threshold,
-# the tip is considered blunt and will undergo tip shaping
-stable_tip_allowed_change = 0.5
-
-# Enable stability checking with bias sweep
-# When true, performs a scan with bias sweep to verify tip stability
-# When false, only checks if tip is sharp based on bounds
-check_stability = true
-
 # Maximum number of pulse cycles (unlimited if not set)
 max_cycles = 10000
 
@@ -39,8 +29,19 @@ max_duration_secs = 12000
 
 # Stability check configuration
 [tip_prep.stability]
+# Enable stability checking with bias sweep
+# When true, performs a scan with bias sweep to verify tip stability
+# When false, only checks if tip is sharp based on bounds
+check_stability = true
+
+# Maximum allowed change in frequency shift for tip to be considered stable (in Hz)
+# During the bias sweep, if the signal changes more than this threshold,
+# the tip is considered unstable and will undergo tip shaping
+stable_tip_allowed_change = 0.5
+
 # Bias voltage range for stability sweep (lower, upper) in V
-bias_range = [-2.0, 2.0]
+# Must be positive magnitude-only; polarity_mode determines sign
+bias_range = [0.0, 2.0]
 
 # Number of steps in the bias sweep
 bias_steps = 1000

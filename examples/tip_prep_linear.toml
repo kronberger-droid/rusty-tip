@@ -20,8 +20,12 @@ verbosity = "info"
 # Frequency shift bounds for determining if tip is sharp (in Hz)
 sharp_tip_bounds = [-2.0, 0.0]
 
+[tip_prep.stability]
 # Whether to check for tip stability
 check_stability = false
+
+# Maximum allowed change in frequency shift for tip to be considered stable
+stable_tip_allowed_change = 0.2
 
 [pulse_method]
 # Use linear pulse method

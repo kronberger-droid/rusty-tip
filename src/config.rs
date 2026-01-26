@@ -22,6 +22,20 @@ pub struct AppConfig {
     pub tcp_channel_mapping: Option<Vec<TcpChannelMapping>>,
 }
 
+impl AppConfig {
+    /// Validate all configuration values
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        // Validate stability config
+        self.tip_prep.stability.validate()?;
+
+        // Validate pulse method
+        self.pulse_method.validate()
+            .map_err(|e| ConfigError::Message(format!("Invalid pulse_method: {}", e)))?;
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct NanonisConfig {
     pub host_ip: String,
@@ -59,7 +73,16 @@ pub enum BiasSweepPolarity {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct StabilityConfig {
+    /// Whether to perform stability checking
+    /// When true, performs a scan with bias sweep to verify tip stability
+    /// When false, only checks if tip is sharp based on bounds
+    pub check_stability: bool,
+    /// Maximum allowed change in signal for tip to be considered stable (in Hz)
+    /// During the bias sweep, if the signal changes more than this threshold,
+    /// the tip is considered unstable
+    pub stable_tip_allowed_change: f32,
     /// Bias voltage range for stability sweep (lower, upper) in V
+    /// Must be positive magnitude-only; polarity_mode determines sign
     pub bias_range: (f32, f32),
     /// Number of steps in the bias sweep
     pub bias_steps: u16,
@@ -77,7 +100,9 @@ pub struct StabilityConfig {
 impl Default for StabilityConfig {
     fn default() -> Self {
         Self {
-            bias_range: (-2.0, 2.0),
+            check_stability: true,
+            stable_tip_allowed_change: 0.2,
+            bias_range: (0.0, 2.0), // Changed to positive range
             bias_steps: 1000,
             step_period_ms: 200,
             max_duration_secs: 100,
@@ -87,13 +112,48 @@ impl Default for StabilityConfig {
     }
 }
 
+impl StabilityConfig {
+    /// Validate configuration values
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        // Validate bias_range: both values must be positive and properly ordered
+        if self.bias_range.0 <= 0.0 || self.bias_range.1 <= 0.0 {
+            return Err(ConfigError::Message(format!(
+                "bias_range must be positive magnitude-only (got [{}, {}]). Use polarity_mode to control sign.",
+                self.bias_range.0, self.bias_range.1
+            )));
+        }
+        if self.bias_range.0 >= self.bias_range.1 {
+            return Err(ConfigError::Message(format!(
+                "bias_range: lower bound ({}) must be less than upper bound ({})",
+                self.bias_range.0, self.bias_range.1
+            )));
+        }
+
+        // Validate stable_tip_allowed_change is positive
+        if self.stable_tip_allowed_change <= 0.0 {
+            return Err(ConfigError::Message(format!(
+                "stable_tip_allowed_change must be positive, got: {}",
+                self.stable_tip_allowed_change
+            )));
+        }
+
+        // Validate bias_steps is non-zero
+        if self.bias_steps == 0 {
+            return Err(ConfigError::Message(
+                "bias_steps must be greater than zero".to_string()
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TipPrepConfig {
     pub sharp_tip_bounds: [f32; 2],
-    pub stable_tip_allowed_change: f32,
-    pub check_stability: bool,
     pub max_cycles: Option<usize>,
     pub max_duration_secs: Option<u64>,
+    /// Stability check configuration (includes check_stability flag)
     #[serde(default)]
     pub stability: StabilityConfig,
 }
@@ -137,8 +197,6 @@ impl Default for TipPrepConfig {
     fn default() -> Self {
         Self {
             sharp_tip_bounds: [-2.0, 0.0],
-            stable_tip_allowed_change: 0.2,
-            check_stability: true,
             max_cycles: Some(10000),
             max_duration_secs: Some(12000),
             stability: StabilityConfig::default(),
@@ -183,7 +241,12 @@ pub fn load_config(config_path: Option<&Path>) -> Result<AppConfig, ConfigError>
     );
 
     let config = builder.build()?;
-    config.try_deserialize::<AppConfig>()
+    let app_config = config.try_deserialize::<AppConfig>()?;
+
+    // Validate configuration before returning
+    app_config.validate()?;
+
+    Ok(app_config)
 }
 
 /// Load configuration with better error handling and defaults
