@@ -64,30 +64,21 @@ polarity_mode = "both"
 scan_speed_m_s = 5e-9  # 5 nm/s
 
 [pulse_method]
-# Use stepping pulse method
-type = "stepping"
+# Use linear pulse method
+type = "linear"
 
-# Voltage range: start at 4.0V and step up to 6.0V
-voltage_bounds = [4.0, 6.0]
+# Output pulse voltage range (in V)
+# This is the Y-axis: minimum and maximum pulse voltages
+voltage_bounds = [2.0, 6.0]
 
-# Number of voltage steps between min and max
-voltage_steps = 2
-
-# Number of cycles to perform at each voltage level before stepping up
-cycles_before_step = 2
-
-# Threshold type: "absolute" or "relative"
-threshold_type = "absolute"
-
-# Threshold value for determining if tip is sharp enough
-threshold_value = 1.0
+# Frequency shift range to monitor (in Hz)
+# When freq_shift is outside this range, pulse with max voltage (voltage_bounds[1])
+# When inside this range, linearly map freq_shift to pulse voltage
+linear_clamp = [-20.0, 0.0]
 
 # Polarity of the pulse voltage: "positive" or "negative"
-# positive: pulses from 4.0V to 6.0V
-# negative: pulses from -4.0V to -6.0V
 polarity = "negative"
 
-# Optional: Random polarity switching
 # When enabled, every Nth pulse will use the opposite polarity
 [pulse_method.random_polarity_switch]
 enabled = true
