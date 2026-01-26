@@ -3,8 +3,8 @@ use crate::actions::{Action, TipCheckMethod, TipState};
 use crate::config::{BiasSweepPolarity, StabilityConfig};
 use crate::types::TipShape;
 use crate::{NanonisError, Signal};
-use nanonis_rs::SignalIndex;
 use log::info;
+use nanonis_rs::SignalIndex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -157,7 +157,11 @@ impl PulseMethod {
                     ));
                 }
             }
-            PulseMethod::Stepping { voltage_bounds, voltage_steps, .. } => {
+            PulseMethod::Stepping {
+                voltage_bounds,
+                voltage_steps,
+                ..
+            } => {
                 if voltage_bounds.0 <= 0.0 || voltage_bounds.1 <= 0.0 {
                     return Err(format!(
                         "Stepping voltage_bounds must be positive (got [{}, {}]). Use polarity to control sign.",
@@ -171,10 +175,16 @@ impl PulseMethod {
                     ));
                 }
                 if *voltage_steps == 0 {
-                    return Err("voltage_steps must be greater than zero".to_string());
+                    return Err(
+                        "voltage_steps must be greater than zero".to_string()
+                    );
                 }
             }
-            PulseMethod::Linear { voltage_bounds, linear_clamp, .. } => {
+            PulseMethod::Linear {
+                voltage_bounds,
+                linear_clamp,
+                ..
+            } => {
                 if voltage_bounds.0 <= 0.0 || voltage_bounds.1 <= 0.0 {
                     return Err(format!(
                         "Linear voltage_bounds must be positive (got [{}, {}]). Use polarity to control sign.",
@@ -225,7 +235,8 @@ pub struct TipControllerConfig {
 
 impl Default for TipControllerConfig {
     fn default() -> Self {
-        let freq_shift_signal = Signal::new_unchecked("freq_shift", 76, Some(18));
+        let freq_shift_signal =
+            Signal::new_unchecked("freq_shift", 76, Some(18));
 
         Self {
             freq_shift_signal,
@@ -336,7 +347,9 @@ impl TipController {
             } => {
                 // Check if current pulse count is a multiple of switch interval
                 self.pulse_count_for_random > 0
-                    && self.pulse_count_for_random % switch.switch_every_n_pulses == 0
+                    && self.pulse_count_for_random
+                        % switch.switch_every_n_pulses
+                        == 0
             }
             _ => false,
         }
@@ -383,7 +396,10 @@ impl TipController {
     }
 
     /// Get signal history for a specific signal (most recent first)
-    pub fn get_signal_history(&self, signal: &Signal) -> Option<&VecDeque<f32>> {
+    pub fn get_signal_history(
+        &self,
+        signal: &Signal,
+    ) -> Option<&VecDeque<f32>> {
         self.signal_histories.get(&signal.index)
     }
 
@@ -460,8 +476,8 @@ impl TipController {
             } else {
                 // Compare only against signals from the current stable period
                 // cycles_without_change tells us how many recent signals were stable
-                let stable_period_size =
-                    (self.cycles_without_change as usize).min(history.len() - 1);
+                let stable_period_size = (self.cycles_without_change as usize)
+                    .min(history.len() - 1);
 
                 if stable_period_size == 0 {
                     // No stable period yet, compare against last signal
@@ -487,8 +503,8 @@ impl TipController {
                         .take(stable_period_size)
                         .cloned()
                         .collect();
-                    let stable_mean =
-                        stable_signals.iter().sum::<f32>() / stable_signals.len() as f32;
+                    let stable_mean = stable_signals.iter().sum::<f32>()
+                        / stable_signals.len() as f32;
 
                     log::debug!(
                         "Current: {:.3e} | Stable mean: {:.3e} | Threshold: {:.3e}",
@@ -522,8 +538,10 @@ impl TipController {
         };
 
         // Calculate step size
-        let step_size = (voltage_bounds.1 - voltage_bounds.0) / voltage_steps as f32;
-        let new_pulse = (self.current_pulse_voltage + step_size).min(voltage_bounds.1);
+        let step_size =
+            (voltage_bounds.1 - voltage_bounds.0) / voltage_steps as f32;
+        let new_pulse =
+            (self.current_pulse_voltage + step_size).min(voltage_bounds.1);
 
         if new_pulse > self.current_pulse_voltage {
             info!(
@@ -534,7 +552,10 @@ impl TipController {
             self.cycles_without_change = 0; // Reset counter after stepping
             true
         } else {
-            log::debug!("Pulse voltage already at maximum: {:.3}V", voltage_bounds.1);
+            log::debug!(
+                "Pulse voltage already at maximum: {:.3}V",
+                voltage_bounds.1
+            );
             self.cycles_without_change = 0; // Reset counter even if at max
             false
         }
@@ -563,7 +584,8 @@ impl TipController {
                     self.cycles_without_change += 1;
 
                     // Check if we need to step the pulse voltage
-                    if self.cycles_without_change >= *cycles_before_step as u32 {
+                    if self.cycles_without_change >= *cycles_before_step as u32
+                    {
                         self.step_pulse_voltage();
                     }
                 } else {
@@ -571,7 +593,8 @@ impl TipController {
                     self.cycles_without_change += 1;
 
                     // Check if we need to step the pulse voltage
-                    if self.cycles_without_change >= *cycles_before_step as u32 {
+                    if self.cycles_without_change >= *cycles_before_step as u32
+                    {
                         self.step_pulse_voltage();
                     }
                 }
@@ -585,13 +608,16 @@ impl TipController {
                 let current_freq_shift;
                 let mut pulse_voltage = self.current_pulse_voltage;
 
-                if let Some(freq_shift_history) =
-                    self.signal_histories.get(&self.config.freq_shift_signal.index)
+                if let Some(freq_shift_history) = self
+                    .signal_histories
+                    .get(&self.config.freq_shift_signal.index)
                 {
                     current_freq_shift = freq_shift_history[0];
 
                     // linear_clamp is the freq shift range, voltage_bounds is the voltage range
-                    if !(linear_clamp.0..linear_clamp.1).contains(&current_freq_shift) {
+                    if !(linear_clamp.0..linear_clamp.1)
+                        .contains(&current_freq_shift)
+                    {
                         // Outside freq shift range -> use max voltage
                         log::info!(
                             "Linear pulse: freq_shift {:.2} Hz outside range [{:.2}, {:.2}] Hz -> using max voltage {:.2}V",
@@ -640,7 +666,10 @@ impl TipController {
                 if let Some(start_time) = self.loop_start_time {
                     if start_time.elapsed() > max_dur {
                         return Err(NanonisError::TimeoutWithContext {
-                            context: format!("Max duration ({:?}) exceeded", max_dur),
+                            context: format!(
+                                "Max duration ({:?}) exceeded",
+                                max_dur
+                            ),
                         });
                     }
                 }
@@ -746,7 +775,9 @@ impl TipController {
             "Waiting {}ms for signal to stabilize after reposition...",
             POST_REPOSITION_SETTLE_TIME_MS
         );
-        std::thread::sleep(Duration::from_millis(POST_REPOSITION_SETTLE_TIME_MS));
+        std::thread::sleep(Duration::from_millis(
+            POST_REPOSITION_SETTLE_TIME_MS,
+        ));
 
         // let amplitude_reached: bool = self
         //     .driver
@@ -811,8 +842,10 @@ impl TipController {
 
         // Clone stability config values to avoid borrow issues
         let stability_config = self.config.stability_config.clone();
-        let step_duration = Duration::from_millis(stability_config.step_period_ms);
-        let max_duration = Duration::from_secs(stability_config.max_duration_secs);
+        let step_duration =
+            Duration::from_millis(stability_config.step_period_ms);
+        let max_duration =
+            Duration::from_secs(stability_config.max_duration_secs);
         let bias_steps = stability_config.bias_steps;
         let polarity_mode = stability_config.polarity_mode;
 
@@ -821,17 +854,29 @@ impl TipController {
         let bias_ranges: Vec<(f32, f32)> = match polarity_mode {
             BiasSweepPolarity::Positive => {
                 // Single positive sweep
-                vec![(stability_config.bias_range.0, stability_config.bias_range.1)]
+                vec![(
+                    stability_config.bias_range.0,
+                    stability_config.bias_range.1,
+                )]
             }
             BiasSweepPolarity::Negative => {
                 // Single negative sweep
-                vec![(-stability_config.bias_range.1, -stability_config.bias_range.0)]
+                vec![(
+                    -stability_config.bias_range.1,
+                    -stability_config.bias_range.0,
+                )]
             }
             BiasSweepPolarity::Both => {
                 // Two sweeps: first positive, then negative
                 vec![
-                    (stability_config.bias_range.0, stability_config.bias_range.1),
-                    (-stability_config.bias_range.1, -stability_config.bias_range.0),
+                    (
+                        stability_config.bias_range.0,
+                        stability_config.bias_range.1,
+                    ),
+                    (
+                        -stability_config.bias_range.1,
+                        -stability_config.bias_range.0,
+                    ),
                 ]
             }
         };
@@ -843,7 +888,9 @@ impl TipController {
         );
 
         // Save and set scan speed if configured
-        let original_scan_config = if let Some(target_speed) = stability_config.scan_speed_m_s {
+        let original_scan_config = if let Some(target_speed) =
+            stability_config.scan_speed_m_s
+        {
             match self.driver.client_mut().scan_speed_get() {
                 Ok(config) => {
                     info!(
@@ -855,10 +902,18 @@ impl TipController {
                     new_config.forward_linear_speed_m_s = target_speed;
                     new_config.backward_linear_speed_m_s = target_speed;
                     new_config.keep_parameter_constant = 1; // Keep linear speed constant
-                    if let Err(e) = self.driver.client_mut().scan_config_set(new_config) {
-                        log::warn!("Failed to set scan speed for stability check: {}", e);
+                    if let Err(e) =
+                        self.driver.client_mut().scan_config_set(new_config)
+                    {
+                        log::warn!(
+                            "Failed to set scan speed for stability check: {}",
+                            e
+                        );
                     } else {
-                        info!("Set scan speed to {:.2e} m/s for stability check", target_speed);
+                        info!(
+                            "Set scan speed to {:.2e} m/s for stability check",
+                            target_speed
+                        );
                     }
                     Some(config)
                 }
@@ -876,7 +931,10 @@ impl TipController {
         let mut shutdown_requested = false;
         for (sweep_idx, bias_range) in bias_ranges.iter().enumerate() {
             if self.is_shutdown_requested() {
-                log::info!("Shutdown requested before stability sweep {}", sweep_idx + 1);
+                log::info!(
+                    "Shutdown requested before stability sweep {}",
+                    sweep_idx + 1
+                );
                 shutdown_requested = true;
                 break;
             }
@@ -892,13 +950,16 @@ impl TipController {
             let stability_result: crate::actions::StabilityResult = self
                 .driver
                 .run(Action::CheckTipStability {
-                    method: crate::actions::TipStabilityMethod::BiasSweepResponse {
-                        signal: self.config.freq_shift_signal.clone(),
-                        bias_range: *bias_range,
-                        bias_steps,
-                        step_duration,
-                        allowed_signal_change: self.config.allowed_change_for_stable,
-                    },
+                    method:
+                        crate::actions::TipStabilityMethod::BiasSweepResponse {
+                            signal: self.config.freq_shift_signal.clone(),
+                            bias_range: *bias_range,
+                            bias_steps,
+                            step_duration,
+                            allowed_signal_change: self
+                                .config
+                                .allowed_change_for_stable,
+                        },
                     max_duration,
                     abort_on_damage_signs: false,
                 })
@@ -1013,28 +1074,58 @@ impl TipController {
         Ok(TipShape::Sharp)
     }
 
-    // fn bias_sweep(&mut self) -> Result<(), NanonisError> {
-    //     log::info!("Starting bias sweep");
-
-    //     let scan_config = self.driver.client_mut().scan_speed_get()?;
-
-    //     let scan_frame = self.driver.client_mut().scan_frame_get()?;
-    //     scan_config.forward_time_per_line_s
-
-    //     self.driver
-    //         .run(Action::ScanControl {
-    //             action: ScanAction::Start,
-    //         })
-    //         .go()?;
-
-    //     Ok(())
-    // }
-
     fn pre_loop_initialization(&mut self) -> Result<(), NanonisError> {
         log::debug!("Running pre loop initialization");
 
         self.driver.client_mut().set_bias(-500e-3)?;
         self.driver.client_mut().z_ctrl_setpoint_set(100e-12)?;
+
+        // Update some randome User Output to update TCP Channel List
+        // Should be fixed in next Nanonis Software Update
+        let output_to_toggle = 3;
+        let current_mode = self
+            .driver
+            .client_mut()
+            .user_out_mode_get(output_to_toggle)?;
+
+        match current_mode {
+            nanonis_rs::OutputMode::UserOutput => {
+                self.driver.client_mut().user_out_mode_set(
+                    output_to_toggle,
+                    nanonis_rs::OutputMode::Monitor,
+                )?;
+                self.driver
+                    .client_mut()
+                    .user_out_mode_set(output_to_toggle, current_mode)?;
+            }
+            nanonis_rs::OutputMode::CalcSignal => {
+                self.driver.client_mut().user_out_mode_set(
+                    output_to_toggle,
+                    nanonis_rs::OutputMode::UserOutput,
+                )?;
+                self.driver
+                    .client_mut()
+                    .user_out_mode_set(output_to_toggle, current_mode)?;
+            }
+            nanonis_rs::OutputMode::Monitor => {
+                self.driver.client_mut().user_out_mode_set(
+                    output_to_toggle,
+                    nanonis_rs::OutputMode::CalcSignal,
+                )?;
+                self.driver
+                    .client_mut()
+                    .user_out_mode_set(output_to_toggle, current_mode)?;
+            }
+            nanonis_rs::OutputMode::Override => {
+                self.driver.client_mut().user_out_mode_set(
+                    output_to_toggle,
+                    nanonis_rs::OutputMode::Monitor,
+                )?;
+                self.driver
+                    .client_mut()
+                    .user_out_mode_set(output_to_toggle, current_mode)?;
+            }
+        }
 
         info!("Executing Initial Approach");
 
