@@ -1,5 +1,9 @@
 # Tip Prep
 
+## Stability Check
+
+- High Voltage Pulse after Stability Check fails
+
 ## General
 
 - Implement script for multiple different tip prep cycle testing
