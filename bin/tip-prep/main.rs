@@ -251,8 +251,8 @@ fn create_tip_controller_config(
             config.tip_prep.sharp_tip_bounds[1],
         ),
         pulse_method: config.pulse_method.clone(),
-        allowed_change_for_stable: config.tip_prep.stable_tip_allowed_change,
-        check_stability: config.tip_prep.check_stability,
+        allowed_change_for_stable: config.tip_prep.stability.stable_tip_allowed_change,
+        check_stability: config.tip_prep.stability.check_stability,
         max_cycles: config.tip_prep.max_cycles,
         max_duration: config
             .tip_prep

@@ -136,6 +136,67 @@ impl PulseMethod {
             PulseMethod::Linear { .. } => "Linear",
         }
     }
+
+    /// Get the maximum voltage from this pulse method configuration
+    pub fn max_voltage(&self) -> f32 {
+        match self {
+            PulseMethod::Fixed { voltage, .. } => *voltage,
+            PulseMethod::Stepping { voltage_bounds, .. } => voltage_bounds.1,
+            PulseMethod::Linear { voltage_bounds, .. } => voltage_bounds.1,
+        }
+    }
+
+    /// Validate pulse method configuration
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            PulseMethod::Fixed { voltage, .. } => {
+                if *voltage <= 0.0 {
+                    return Err(format!(
+                        "Fixed pulse voltage must be positive, got: {}. Use polarity to control sign.",
+                        voltage
+                    ));
+                }
+            }
+            PulseMethod::Stepping { voltage_bounds, voltage_steps, .. } => {
+                if voltage_bounds.0 <= 0.0 || voltage_bounds.1 <= 0.0 {
+                    return Err(format!(
+                        "Stepping voltage_bounds must be positive (got [{}, {}]). Use polarity to control sign.",
+                        voltage_bounds.0, voltage_bounds.1
+                    ));
+                }
+                if voltage_bounds.0 >= voltage_bounds.1 {
+                    return Err(format!(
+                        "Stepping voltage_bounds: min ({}) must be less than max ({})",
+                        voltage_bounds.0, voltage_bounds.1
+                    ));
+                }
+                if *voltage_steps == 0 {
+                    return Err("voltage_steps must be greater than zero".to_string());
+                }
+            }
+            PulseMethod::Linear { voltage_bounds, linear_clamp, .. } => {
+                if voltage_bounds.0 <= 0.0 || voltage_bounds.1 <= 0.0 {
+                    return Err(format!(
+                        "Linear voltage_bounds must be positive (got [{}, {}]). Use polarity to control sign.",
+                        voltage_bounds.0, voltage_bounds.1
+                    ));
+                }
+                if voltage_bounds.0 >= voltage_bounds.1 {
+                    return Err(format!(
+                        "Linear voltage_bounds: min ({}) must be less than max ({})",
+                        voltage_bounds.0, voltage_bounds.1
+                    ));
+                }
+                if linear_clamp.0 >= linear_clamp.1 {
+                    return Err(format!(
+                        "Linear linear_clamp: min ({}) must be less than max ({})",
+                        linear_clamp.0, linear_clamp.1
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Default for PulseMethod {
@@ -341,6 +402,44 @@ impl TipController {
     /// Clear history for a specific signal
     pub fn clear_signal_history(&mut self, signal: &Signal) {
         self.signal_histories.remove(&signal.index);
+    }
+
+    /// Execute a single pulse at maximum voltage to aggressively reshape the tip
+    /// Used when stability check fails to force tip into a different state
+    fn execute_max_pulse(&mut self) -> Result<(), NanonisError> {
+        let max_voltage = self.config.pulse_method.max_voltage();
+        let signed_voltage = if self.should_use_opposite_polarity() {
+            match self.base_polarity.opposite() {
+                PolaritySign::Positive => max_voltage,
+                PolaritySign::Negative => -max_voltage,
+            }
+        } else {
+            match self.base_polarity {
+                PolaritySign::Positive => max_voltage,
+                PolaritySign::Negative => -max_voltage,
+            }
+        };
+
+        info!(
+            "Executing MAX pulse due to stability failure: {:.3}V",
+            signed_voltage
+        );
+
+        self.driver
+            .run(Action::PulseRetract {
+                pulse_width: Duration::from_millis(PULSE_WIDTH_MS),
+                pulse_height_v: signed_voltage,
+            })
+            .with_data_collection(
+                Duration::from_millis(PRE_PULSE_DATA_COLLECTION_MS),
+                Duration::from_millis(POST_PULSE_DATA_COLLECTION_MS),
+            )
+            .execute()?;
+
+        // Increment pulse counter for random switching
+        self.pulse_count_for_random += 1;
+
+        Ok(())
     }
 
     /// Check if current signal represents a significant change from recent stable period
@@ -718,20 +817,21 @@ impl TipController {
         let polarity_mode = stability_config.polarity_mode;
 
         // Determine bias ranges based on polarity mode
+        // bias_range is now always positive magnitude-only; polarity_mode determines sign
         let bias_ranges: Vec<(f32, f32)> = match polarity_mode {
             BiasSweepPolarity::Positive => {
-                // Single sweep from 0 to upper_bound
-                vec![(0.0, stability_config.bias_range.1)]
+                // Single positive sweep
+                vec![(stability_config.bias_range.0, stability_config.bias_range.1)]
             }
             BiasSweepPolarity::Negative => {
-                // Single sweep from 0 to lower_bound
-                vec![(0.0, stability_config.bias_range.0)]
+                // Single negative sweep
+                vec![(-stability_config.bias_range.1, -stability_config.bias_range.0)]
             }
             BiasSweepPolarity::Both => {
-                // Two sweeps: first 0 to upper_bound, then 0 to lower_bound
+                // Two sweeps: first positive, then negative
                 vec![
-                    (0.0, stability_config.bias_range.1),
-                    (0.0, stability_config.bias_range.0),
+                    (stability_config.bias_range.0, stability_config.bias_range.1),
+                    (-stability_config.bias_range.1, -stability_config.bias_range.0),
                 ]
             }
         };
@@ -846,10 +946,16 @@ impl TipController {
         }
 
         // Update tip shape based on stability result
-        self.current_tip_shape = if overall_stable {
+        if overall_stable {
             info!("Tip is stable after {} sweep(s)", bias_ranges.len());
-            TipShape::Stable
+            self.current_tip_shape = TipShape::Stable;
         } else {
+            info!("Stability check failed - executing max voltage pulse to reshape tip");
+
+            // Execute max voltage pulse to aggressively change tip shape
+            self.execute_max_pulse()?;
+
+            // Reposition to fresh location for next attempt
             self.driver
                 .run(Action::SafeReposition {
                     x_steps: 2,
@@ -857,15 +963,10 @@ impl TipController {
                 })
                 .go()?;
 
-            self.driver
-                .run(Action::CheckTipState {
-                    method: TipCheckMethod::SignalBounds {
-                        signal: self.config.freq_shift_signal.clone(),
-                        bounds: self.config.sharp_tip_bounds,
-                    },
-                })
-                .expecting()?
-        };
+            // Mark tip as blunt to restart preparation from beginning
+            info!("Restarting tip preparation from beginning after stability failure");
+            self.current_tip_shape = TipShape::Blunt;
+        }
 
         Ok(())
     }
