@@ -74,7 +74,7 @@ type = "linear"
 
 # Output pulse voltage range (in V)
 # This is the Y-axis: minimum and maximum pulse voltages
-voltage_bounds = [2.0, 8.0]
+voltage_bounds = [2.0, 7.0]
 
 # Frequency shift range to monitor (in Hz)
 # When freq_shift is outside this range, pulse with max voltage (voltage_bounds[1])
@@ -82,7 +82,7 @@ voltage_bounds = [2.0, 8.0]
 linear_clamp = [-20.0, 0.0]
 
 # Polarity of the pulse voltage: "positive" or "negative"
-polarity = "negative"
+polarity = "positive"
 
 # When enabled, every Nth pulse will use the opposite polarity
 [pulse_method.random_polarity_switch]
