@@ -1808,7 +1808,7 @@ impl ActionDriver {
                     lift_time_1: pulse_width,
                     bias_lift_v: current_bias,
                     bias_settling_time: std::time::Duration::from_millis(50),
-                    lift_height_m: 10e-9,
+                    lift_height_m: 100e-9,
                     lift_time_2: std::time::Duration::from_millis(100),
                     end_wait_time: std::time::Duration::from_millis(50),
                     restore_feedback: false,
