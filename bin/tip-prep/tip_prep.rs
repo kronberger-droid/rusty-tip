@@ -4,7 +4,7 @@ use rusty_tip::Signal;
 use rusty_tip::NanonisError;
 use crate::config::{BiasSweepPolarity, StabilityConfig};
 use log::info;
-use nanonis_rs::SignalIndex;
+use nanonis_rs::signals::SignalIndex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
@@ -42,6 +42,7 @@ const POST_APPROACH_SETTLE_TIME_MS: u64 = 2000;
 const POST_REPOSITION_SETTLE_TIME_MS: u64 = 1000;
 
 /// Loop types based on tip shape - simple and direct
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LoopType {
     BadLoop,
@@ -126,6 +127,7 @@ pub enum PulseMethod {
 }
 
 impl PulseMethod {
+    #[allow(dead_code)]
     pub fn stepping_fixed_threshold(
         voltage_bounds: (f32, f32),
         voltage_steps: u16,
@@ -403,6 +405,7 @@ impl TipController {
     }
 
     /// Get signal change (latest - previous) for a specific signal
+    #[allow(dead_code)]
     pub fn get_signal_change(&self, signal: &Signal) -> Option<f32> {
         if let Some(history) = self.signal_histories.get(&signal.index) {
             if history.len() >= 2 {
@@ -416,6 +419,7 @@ impl TipController {
     }
 
     /// Get signal history for a specific signal (most recent first)
+    #[allow(dead_code)]
     pub fn get_signal_history(
         &self,
         signal: &Signal,
@@ -423,6 +427,7 @@ impl TipController {
         self.signal_histories.get(&signal.index)
     }
 
+    #[allow(dead_code)]
     pub fn get_last_signal(&self, signal: &Signal) -> Option<f32> {
         match self.get_signal_history(signal) {
             Some(history) => history.iter().last().copied(),
@@ -431,11 +436,13 @@ impl TipController {
     }
 
     /// Clear all signal histories
+    #[allow(dead_code)]
     pub fn clear_all_histories(&mut self) {
         self.signal_histories.clear();
     }
 
     /// Clear history for a specific signal
+    #[allow(dead_code)]
     pub fn clear_signal_history(&mut self, signal: &Signal) {
         self.signal_histories.remove(&signal.index);
     }
@@ -685,9 +692,9 @@ impl TipController {
             // Check cycle limit
             if let Some(max) = self.max_cycles {
                 if self.cycle_count >= max as u32 {
-                    return Err(NanonisError::TimeoutWithContext {
-                        context: format!("Max cycles ({}) exceeded", max),
-                    });
+                    return Err(NanonisError::Timeout(
+                        format!("Max cycles ({}) exceeded", max),
+                    ));
                 }
             }
 
@@ -695,12 +702,12 @@ impl TipController {
             if let Some(max_dur) = self.max_duration {
                 if let Some(start_time) = self.loop_start_time {
                     if start_time.elapsed() > max_dur {
-                        return Err(NanonisError::TimeoutWithContext {
-                            context: format!(
+                        return Err(NanonisError::Timeout(
+                            format!(
                                 "Max duration ({:?}) exceeded",
                                 max_dur
                             ),
-                        });
+                        ));
                     }
                 }
             }
@@ -709,7 +716,7 @@ impl TipController {
             if let Some(flag) = &self.shutdown_requested {
                 if flag.load(Ordering::SeqCst) {
                     info!("Shutdown requested at cycle {}", self.cycle_count);
-                    return Err(NanonisError::Shutdown);
+                    return Err(NanonisError::Protocol("Shutdown requested".to_string()));
                 }
             }
 
@@ -1037,7 +1044,7 @@ impl TipController {
 
         // Handle shutdown that was requested during the stability check loop
         if shutdown_requested {
-            return Err(NanonisError::Shutdown);
+            return Err(NanonisError::Protocol("Shutdown requested".to_string()));
         }
 
         // Update tip shape based on stability result
@@ -1075,7 +1082,7 @@ impl TipController {
                     "Shutdown requested during pre_good_loop_check at iteration {}/3",
                     i + 1
                 );
-                return Err(NanonisError::Shutdown);
+                return Err(NanonisError::Protocol("Shutdown requested".to_string()));
             }
 
             self.driver
@@ -1087,7 +1094,7 @@ impl TipController {
 
             if self.is_shutdown_requested() {
                 log::info!("Shutdown requested after reposition in pre_good_loop_check");
-                return Err(NanonisError::Shutdown);
+                return Err(NanonisError::Protocol("Shutdown requested".to_string()));
             }
 
             let tip_state: TipState = self
@@ -1143,7 +1150,7 @@ impl TipController {
             info!("Settings loaded successfully");
         }
 
-        self.driver.client_mut().set_bias(-500e-3)?;
+        self.driver.client_mut().bias_set(-500e-3)?;
         self.driver.client_mut().z_ctrl_setpoint_set(100e-12)?;
 
         // Update some randome User Output to update TCP Channel List
@@ -1155,37 +1162,37 @@ impl TipController {
             .user_out_mode_get(output_to_toggle)?;
 
         match current_mode {
-            nanonis_rs::OutputMode::UserOutput => {
+            nanonis_rs::user_out::OutputMode::UserOutput => {
                 self.driver.client_mut().user_out_mode_set(
                     output_to_toggle,
-                    nanonis_rs::OutputMode::Monitor,
+                    nanonis_rs::user_out::OutputMode::Monitor,
                 )?;
                 self.driver
                     .client_mut()
                     .user_out_mode_set(output_to_toggle, current_mode)?;
             }
-            nanonis_rs::OutputMode::CalcSignal => {
+            nanonis_rs::user_out::OutputMode::CalcSignal => {
                 self.driver.client_mut().user_out_mode_set(
                     output_to_toggle,
-                    nanonis_rs::OutputMode::UserOutput,
+                    nanonis_rs::user_out::OutputMode::UserOutput,
                 )?;
                 self.driver
                     .client_mut()
                     .user_out_mode_set(output_to_toggle, current_mode)?;
             }
-            nanonis_rs::OutputMode::Monitor => {
+            nanonis_rs::user_out::OutputMode::Monitor => {
                 self.driver.client_mut().user_out_mode_set(
                     output_to_toggle,
-                    nanonis_rs::OutputMode::CalcSignal,
+                    nanonis_rs::user_out::OutputMode::CalcSignal,
                 )?;
                 self.driver
                     .client_mut()
                     .user_out_mode_set(output_to_toggle, current_mode)?;
             }
-            nanonis_rs::OutputMode::Override => {
+            nanonis_rs::user_out::OutputMode::Override => {
                 self.driver.client_mut().user_out_mode_set(
                     output_to_toggle,
-                    nanonis_rs::OutputMode::Monitor,
+                    nanonis_rs::user_out::OutputMode::Monitor,
                 )?;
                 self.driver
                     .client_mut()

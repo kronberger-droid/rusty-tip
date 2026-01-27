@@ -14,7 +14,7 @@ use crate::{
     MotorGroup, NanonisClient, NanonisError, Position, PulseMode, ScanAction,
     ScanDirection, TipShaperConfig, ZControllerHold,
 };
-use nanonis_rs::SignalIndex;
+use nanonis_rs::signals::SignalIndex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -234,7 +234,7 @@ impl ExecutionResult {
             ExecutionResult::Chain(mut results) if results.len() == 1 => {
                 Ok(results.pop().unwrap())
             }
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected single result".to_string(),
             )),
         }
@@ -246,7 +246,7 @@ impl ExecutionResult {
             ExecutionResult::Chain(results) => Ok(results),
             ExecutionResult::Single(result) => Ok(vec![result]),
             ExecutionResult::Partial(results, _) => Ok(results),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected chain results".to_string(),
             )),
         }
@@ -258,7 +258,7 @@ impl ExecutionResult {
     ) -> Result<crate::types::ExperimentData, NanonisError> {
         match self {
             ExecutionResult::ExperimentData(data) => Ok(data),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected experiment data".to_string(),
             )),
         }
@@ -270,7 +270,7 @@ impl ExecutionResult {
     ) -> Result<crate::types::ChainExperimentData, NanonisError> {
         match self {
             ExecutionResult::ChainExperimentData(data) => Ok(data),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected chain experiment data".to_string(),
             )),
         }
@@ -372,7 +372,7 @@ impl<'a> ExecutionBuilder<'a> {
                     self.driver.run_with_config(self.request, self.config)?;
                 result.into_single()
             }
-            ActionRequest::Chain(_) => Err(NanonisError::InvalidCommand(
+            ActionRequest::Chain(_) => Err(NanonisError::Protocol(
                 "Use .execute() for chains, .go() is only for single actions"
                     .to_string(),
             )),
@@ -525,7 +525,7 @@ impl ActionDriverBuilder {
     /// Set shutdown flag for graceful termination of long-running operations
     ///
     /// When set, operations like stability checks will periodically check this flag
-    /// and return early with `NanonisError::Shutdown` if it becomes true.
+    /// and return early with `NanonisError::Protocol("Shutdown requested".to_string())` if it becomes true.
     pub fn with_shutdown_flag(mut self, flag: Arc<AtomicBool>) -> Self {
         self.shutdown_flag = Some(flag);
         self
@@ -963,7 +963,7 @@ impl ActionDriver {
         post_duration: Duration,
     ) -> Result<crate::types::ExperimentData, NanonisError> {
         if self.tcp_reader.is_none() {
-            return Err(NanonisError::InvalidCommand(
+            return Err(NanonisError::Protocol(
                 "TCP buffering not active".to_string(),
             ));
         }
@@ -1121,7 +1121,7 @@ impl ActionDriver {
         post_duration: Duration,
     ) -> Result<crate::types::ChainExperimentData, NanonisError> {
         if self.tcp_reader.is_none() {
-            return Err(NanonisError::InvalidCommand(
+            return Err(NanonisError::Protocol(
                 "TCP buffering not active".to_string(),
             ));
         }
@@ -1412,12 +1412,12 @@ impl ActionDriver {
 
             // === Bias Operations ===
             Action::ReadBias => {
-                let bias = self.client.get_bias()?;
+                let bias = self.client.bias_get()?;
                 Ok(ActionResult::Value(bias as f64))
             }
 
             Action::SetBias { voltage } => {
-                self.client.set_bias(voltage)?;
+                self.client.bias_set(voltage)?;
                 Ok(ActionResult::Success)
             }
 
@@ -1591,7 +1591,7 @@ impl ActionDriver {
                 // Start auto-approach
                 if let Err(e) = self.client.auto_approach_on_off_set(true) {
                     log::error!("Failed to start auto-approach: {}", e);
-                    return Err(NanonisError::InvalidCommand(format!(
+                    return Err(NanonisError::Protocol(format!(
                         "Failed to start auto-approach: {}",
                         e
                     )));
@@ -1629,7 +1629,7 @@ impl ActionDriver {
                         );
                         // Try to stop the auto-approach
                         let _ = self.client.auto_approach_on_off_set(false);
-                        Err(NanonisError::InvalidCommand(
+                        Err(NanonisError::Protocol(
                             "Auto-approach timed out".to_string(),
                         ))
                     }
@@ -1638,7 +1638,7 @@ impl ActionDriver {
                             "Error checking auto-approach status: {}",
                             e
                         );
-                        Err(NanonisError::InvalidCommand(format!(
+                        Err(NanonisError::Protocol(format!(
                             "Status check error: {}",
                             e
                         )))
@@ -1706,7 +1706,7 @@ impl ActionDriver {
                         );
                         // Try to stop the auto-approach
                         let _ = self.client.auto_approach_on_off_set(false);
-                        return Err(NanonisError::InvalidCommand(
+                        return Err(NanonisError::Protocol(
                             "SafeReposition auto-approach timed out"
                                 .to_string(),
                         ));
@@ -1716,7 +1716,7 @@ impl ActionDriver {
                             "Error checking auto-approach status in SafeReposition: {}",
                             e
                         );
-                        return Err(NanonisError::InvalidCommand(format!(
+                        return Err(NanonisError::Protocol(format!(
                             "SafeReposition status check error: {}",
                             e
                         )));
@@ -1798,7 +1798,7 @@ impl ActionDriver {
                 pulse_height_v,
             } => {
                 let current_bias =
-                    self.client_mut().get_bias().unwrap_or(500e-3);
+                    self.client_mut().bias_get().unwrap_or(500e-3);
 
                 let config = TipShaperConfig {
                     switch_off_delay: std::time::Duration::from_millis(10),
@@ -1836,7 +1836,7 @@ impl ActionDriver {
 
             Action::Retrieve { key } => match self.stored_values.get(&key) {
                 Some(value) => Ok(value.clone()), // Return the stored result directly
-                None => Err(NanonisError::InvalidCommand(format!(
+                None => Err(NanonisError::Protocol(format!(
                     "No stored value found for key: {}",
                     key
                 ))),
@@ -2654,14 +2654,14 @@ impl ActionDriver {
                         log::info!(
                             "Configuring scan: continuous=true, bouncy=true"
                         );
-                        let scan_props = nanonis_rs::ScanPropsBuilder::new()
+                        let scan_props = nanonis_rs::scan::ScanPropsBuilder::new()
                             .continuous_scan(true)
                             .bouncy_scan(true);
                         self.client.scan_props_set(scan_props)?;
                         log::info!("Scan properties configured");
 
                         // 3. Get initial bias for restoration
-                        let initial_bias = self.client.get_bias()?;
+                        let initial_bias = self.client.bias_get()?;
                         log::info!(
                             "Initial bias: {:.3} V (will restore after sweep)",
                             initial_bias
@@ -2711,8 +2711,8 @@ impl ActionDriver {
                                     ScanAction::Stop,
                                     ScanDirection::Up,
                                 );
-                                let _ = self.client.set_bias(initial_bias);
-                                return Err(NanonisError::Shutdown);
+                                let _ = self.client.bias_set(initial_bias);
+                                return Err(NanonisError::Protocol("Shutdown requested".to_string()));
                             }
                             std::thread::sleep(Duration::from_millis(100));
                             let is_scanning = self.client.scan_status_get()?;
@@ -2743,10 +2743,10 @@ impl ActionDriver {
                                     ScanAction::Stop,
                                     ScanDirection::Up,
                                 );
-                                let _ = self.client.set_bias(initial_bias);
-                                return Err(NanonisError::Shutdown);
+                                let _ = self.client.bias_set(initial_bias);
+                                return Err(NanonisError::Protocol("Shutdown requested".to_string()));
                             }
-                            self.client.set_bias(current_bias)?;
+                            self.client.bias_set(current_bias)?;
                             log::debug!(
                                 "Step {}/{}: bias={:.2}V",
                                 step_num + 1,
@@ -2764,8 +2764,8 @@ impl ActionDriver {
                                         ScanAction::Stop,
                                         ScanDirection::Up,
                                     );
-                                    let _ = self.client.set_bias(initial_bias);
-                                    return Err(NanonisError::Shutdown);
+                                    let _ = self.client.bias_set(initial_bias);
+                                    return Err(NanonisError::Protocol("Shutdown requested".to_string()));
                                 }
                                 std::thread::sleep(chunk_duration);
                             }
@@ -2799,7 +2799,7 @@ impl ActionDriver {
                         let _ = self
                             .client
                             .scan_action(ScanAction::Stop, ScanDirection::Up);
-                        if let Err(e) = self.client.set_bias(initial_bias) {
+                        if let Err(e) = self.client.bias_set(initial_bias) {
                             log::error!(
                                 "Failed to restore initial bias: {}",
                                 e
@@ -3090,7 +3090,7 @@ impl ActionDriver {
                         ActionResult::Values(values) => values.iter().map(|v| *v as f32).sum::<f32>() / values.len() as f32,
                         ActionResult::StableSignal(value) => value.stable_value,
                         other => {
-                            return Err(NanonisError::Type(format!(
+                            return Err(NanonisError::Protocol(format!(
                                 "CheckAmplitudeStability returned unexpected result type. Expected Values or StableSignal, got {:?}",
                                 std::mem::discriminant(&other)
                             )))
@@ -3385,13 +3385,14 @@ impl ActionDriver {
     /// providing better ergonomics while preserving type safety.
     ///
     /// # Example
-    /// ```no_run
-    /// use rusty_tip::{ActionDriver, Action, SignalIndex};
+    /// ```ignore
+    /// use rusty_tip::{ActionDriver, Action, Signal};
     /// use rusty_tip::types::{DataToGet, OsciData};
     ///
     /// let mut driver = ActionDriver::new("127.0.0.1", 6501)?;
+    /// let signal = Signal::new("Frequency Shift", 24, None).unwrap();
     /// let osci_data: OsciData = driver.execute_expecting(Action::ReadOsci {
-    ///     signal: SignalIndex(24),
+    ///     signal,
     ///     trigger: None,
     ///     data_to_get: DataToGet::Current,
     ///     is_stable: None,
@@ -3791,7 +3792,7 @@ impl ActionDriver {
         })? {
             ActionResult::OsciData(osci_data) => Ok(Some(osci_data)),
             ActionResult::None => Ok(None),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected oscilloscope data".into(),
             )),
         }
@@ -3813,7 +3814,7 @@ impl ActionDriver {
         })? {
             ActionResult::OsciData(osci_data) => Ok(Some(osci_data)),
             ActionResult::None => Ok(None),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected oscilloscope data".into(),
             )),
         }
@@ -3984,7 +3985,7 @@ impl ExpectFromExecution<f64> for ExecutionResult {
             {
                 Ok(vs.pop().unwrap())
             }
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected single numeric value".to_string(),
             )),
         }
@@ -3996,7 +3997,7 @@ impl ExpectFromExecution<Vec<f64>> for ExecutionResult {
         match self {
             ExecutionResult::Single(ActionResult::Values(vs)) => Ok(vs),
             ExecutionResult::Single(ActionResult::Value(v)) => Ok(vec![v]),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected numeric values".to_string(),
             )),
         }
@@ -4007,7 +4008,7 @@ impl ExpectFromExecution<bool> for ExecutionResult {
     fn expect_from_execution(self) -> Result<bool, NanonisError> {
         match self {
             ExecutionResult::Single(ActionResult::Status(b)) => Ok(b),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected boolean status".to_string(),
             )),
         }
@@ -4018,7 +4019,7 @@ impl ExpectFromExecution<Position> for ExecutionResult {
     fn expect_from_execution(self) -> Result<Position, NanonisError> {
         match self {
             ExecutionResult::Single(ActionResult::Position(pos)) => Ok(pos),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected position data".to_string(),
             )),
         }
@@ -4029,7 +4030,7 @@ impl ExpectFromExecution<OsciData> for ExecutionResult {
     fn expect_from_execution(self) -> Result<OsciData, NanonisError> {
         match self {
             ExecutionResult::Single(ActionResult::OsciData(data)) => Ok(data),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected oscilloscope data".to_string(),
             )),
         }
@@ -4044,7 +4045,7 @@ impl ExpectFromExecution<crate::types::TipShape> for ExecutionResult {
             ExecutionResult::Single(ActionResult::TipState(tip_state)) => {
                 Ok(tip_state.shape)
             }
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected tip state".to_string(),
             )),
         }
@@ -4059,7 +4060,7 @@ impl ExpectFromExecution<crate::actions::TipState> for ExecutionResult {
             ExecutionResult::Single(ActionResult::TipState(tip_state)) => {
                 Ok(tip_state)
             }
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected tip state".to_string(),
             )),
         }
@@ -4074,7 +4075,7 @@ impl ExpectFromExecution<crate::actions::StableSignal> for ExecutionResult {
             ExecutionResult::Single(ActionResult::StableSignal(
                 stable_signal,
             )) => Ok(stable_signal),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected stable signal".to_string(),
             )),
         }
@@ -4089,7 +4090,7 @@ impl ExpectFromExecution<crate::actions::TCPReaderStatus> for ExecutionResult {
             ExecutionResult::Single(ActionResult::TCPReaderStatus(
                 tcp_status,
             )) => Ok(tcp_status),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected TCP reader status".to_string(),
             )),
         }
@@ -4104,7 +4105,7 @@ impl ExpectFromExecution<crate::actions::StabilityResult> for ExecutionResult {
             ExecutionResult::Single(ActionResult::StabilityResult(
                 stability_result,
             )) => Ok(stability_result),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected stability result".to_string(),
             )),
         }
@@ -4115,7 +4116,7 @@ impl ExpectFromExecution<Vec<String>> for ExecutionResult {
     fn expect_from_execution(self) -> Result<Vec<String>, NanonisError> {
         match self {
             ExecutionResult::Single(ActionResult::Text(text)) => Ok(text),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected text data".to_string(),
             )),
         }

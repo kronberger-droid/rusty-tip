@@ -4,7 +4,7 @@ use crate::{
     },
     MotorDirection, MovementMode, Position, Position3D, ScanAction, Signal, TipShaperConfig,
 };
-use nanonis_rs::SignalIndex;
+use nanonis_rs::signals::SignalIndex;
 use std::{collections::HashMap, time::Duration};
 
 /// Method for determining tip state

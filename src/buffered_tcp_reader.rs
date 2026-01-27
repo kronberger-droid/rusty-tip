@@ -187,7 +187,7 @@ impl BufferedTCPReader {
     /// the current duration. No locks are acquired.
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// let tcp_reader = BufferedTCPReader::new("127.0.0.1", 6590, 1000, 24, 100.0)?;
     ///
     /// // Later...
@@ -342,7 +342,7 @@ impl BufferedTCPReader {
     /// Vector of timestamped signal frames, newest first
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// let recent_100 = tcp_reader.get_recent_frames(100);
     /// ```
     pub fn get_recent_frames(
@@ -366,7 +366,7 @@ impl BufferedTCPReader {
     /// Vector of timestamped signal frames, oldest first
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// let baseline = tcp_reader.get_oldest_frames(50);
     /// ```
     pub fn get_oldest_frames(
@@ -386,7 +386,7 @@ impl BufferedTCPReader {
     /// Number of frames currently buffered
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// let available = tcp_reader.frame_count();
     /// if available >= 100 {
     ///     let data = tcp_reader.get_recent_frames(100);
@@ -411,7 +411,7 @@ impl BufferedTCPReader {
     /// Vector of timestamped signal frames in chronological order
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// // Get frames 50-149 (middle section of buffer)
     /// let middle_data = tcp_reader.get_frame_range(50, 100);
     /// ```
@@ -437,7 +437,7 @@ impl BufferedTCPReader {
     /// True if buffer contains at least `min_count` frames
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// if tcp_reader.has_frames(100) {
     ///     let stable_data = tcp_reader.get_recent_frames(100);
     /// } else {
@@ -455,7 +455,7 @@ impl BufferedTCPReader {
     /// This is useful when you want to discard old data and start fresh.
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// // Clear any stale data before starting a new measurement
     /// tcp_reader.clear_buffer();
     /// thread::sleep(Duration::from_millis(500)); // Wait for fresh data
@@ -481,7 +481,7 @@ impl BufferedTCPReader {
         if let Some(handle) = self.buffering_thread.take() {
             match handle.join() {
                 Ok(result) => result,
-                Err(_) => Err(NanonisError::InvalidCommand(
+                Err(_) => Err(NanonisError::Protocol(
                     "Buffering thread panicked".to_string(),
                 )),
             }
