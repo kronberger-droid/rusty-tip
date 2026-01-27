@@ -7,6 +7,7 @@ use log::info;
 use nanonis_rs::SignalIndex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -231,6 +232,10 @@ pub struct TipControllerConfig {
     pub max_duration: Option<Duration>,
     pub check_stability: bool,
     pub stability_config: StabilityConfig,
+    /// Optional path to a Nanonis layout file to load during initialization
+    pub layout_file: Option<String>,
+    /// Optional path to a Nanonis settings file to load during initialization
+    pub settings_file: Option<String>,
 }
 
 impl Default for TipControllerConfig {
@@ -251,6 +256,8 @@ impl Default for TipControllerConfig {
             max_duration: Some(Duration::from_secs(3600)), // 1 hour
             check_stability: true,
             stability_config: StabilityConfig::default(),
+            layout_file: None,
+            settings_file: None,
         }
     }
 }
@@ -1075,7 +1082,39 @@ impl TipController {
     }
 
     fn pre_loop_initialization(&mut self) -> Result<(), NanonisError> {
-        log::debug!("Running pre loop initialization");
+        log::info!("Running pre loop initialization");
+
+        // Load layout file if specified
+        if let Some(layout_path) = &self.config.layout_file {
+            // Convert to absolute path for Nanonis
+            let abs_path = Path::new(layout_path)
+                .canonicalize()
+                .map_err(|e| NanonisError::Protocol(format!(
+                    "Layout file not found: {} ({})", layout_path, e
+                )))?;
+            let abs_path_str = abs_path.to_string_lossy();
+            info!("Loading layout from: {}", abs_path_str);
+            self.driver
+                .client_mut()
+                .util_layout_load(&abs_path_str, false)?;
+            info!("Layout loaded successfully");
+        }
+
+        // Load settings file if specified
+        if let Some(settings_path) = &self.config.settings_file {
+            // Convert to absolute path for Nanonis
+            let abs_path = Path::new(settings_path)
+                .canonicalize()
+                .map_err(|e| NanonisError::Protocol(format!(
+                    "Settings file not found: {} ({})", settings_path, e
+                )))?;
+            let abs_path_str = abs_path.to_string_lossy();
+            info!("Loading settings from: {}", abs_path_str);
+            self.driver
+                .client_mut()
+                .util_settings_load(&abs_path_str, false)?;
+            info!("Settings loaded successfully");
+        }
 
         self.driver.client_mut().set_bias(-500e-3)?;
         self.driver.client_mut().z_ctrl_setpoint_set(100e-12)?;

@@ -4,6 +4,8 @@
 [nanonis]
 host_ip = "127.0.0.1"
 control_ports = [6501, 6502, 6503, 6504]
+# layout_file = "./examples/layout_tip-prep.lyt"
+# settings_file = "./examples/settings_tip-prep.ini"
 
 [data_acquisition]
 data_port = 6590
@@ -90,4 +92,4 @@ switch_every_n_pulses = 5  # Every 5th pulse uses opposite polarity
 # Format: { nanonis_index = X, tcp_channel = Y }
 [[tcp_channel_mapping]]
 nanonis_index = 76  # Frequency shift
-tcp_channel = 19
+tcp_channel = 19 # use 21 - demo-mode and 19 - LT 

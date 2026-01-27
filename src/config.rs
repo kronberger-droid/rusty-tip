@@ -40,7 +40,14 @@ impl AppConfig {
 pub struct NanonisConfig {
     pub host_ip: String,
     pub control_ports: Vec<u16>,
+    /// Optional path to a Nanonis layout file (.lyt) to load during initialization
+    /// If set, this layout will be loaded before tip preparation starts
+    pub layout_file: Option<String>,
+    /// Optional path to a Nanonis settings file (.ini) to load during initialization
+    /// If set, these settings will be loaded before tip preparation starts
+    pub settings_file: Option<String>,
 }
+
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DataAcquisitionConfig {
@@ -115,10 +122,10 @@ impl Default for StabilityConfig {
 impl StabilityConfig {
     /// Validate configuration values
     pub fn validate(&self) -> Result<(), ConfigError> {
-        // Validate bias_range: both values must be positive and properly ordered
-        if self.bias_range.0 <= 0.0 || self.bias_range.1 <= 0.0 {
+        // Validate bias_range: lower bound must be >= 0, upper bound must be > 0
+        if self.bias_range.0 < 0.0 || self.bias_range.1 <= 0.0 {
             return Err(ConfigError::Message(format!(
-                "bias_range must be positive magnitude-only (got [{}, {}]). Use polarity_mode to control sign.",
+                "bias_range must be non-negative (got [{}, {}]). Use polarity_mode to control sign.",
                 self.bias_range.0, self.bias_range.1
             )));
         }
@@ -163,6 +170,8 @@ impl Default for NanonisConfig {
         Self {
             host_ip: "127.0.0.1".to_string(),
             control_ports: vec![6501, 6502, 6503, 6504],
+            layout_file: None,
+            settings_file: None,
         }
     }
 }
@@ -206,11 +215,16 @@ impl Default for TipPrepConfig {
 
 /// Load configuration from file with layered fallbacks
 pub fn load_config(config_path: Option<&Path>) -> Result<AppConfig, ConfigError> {
-    let mut builder = Config::builder().add_source(Config::try_from(&AppConfig::default())?);
+    // Start with an empty builder - defaults will be applied by serde #[serde(default)]
+    let mut builder = Config::builder();
+
+    // Add config file source
+    let mut config_file_found = false;
 
     if let Some(path) = config_path {
         if path.exists() {
             builder = builder.add_source(File::from(path));
+            config_file_found = true;
         } else {
             return Err(ConfigError::Message(format!(
                 "Config file not found: {}",
@@ -228,9 +242,15 @@ pub fn load_config(config_path: Option<&Path>) -> Result<AppConfig, ConfigError>
         for path in &possible_paths {
             if Path::new(path).exists() {
                 builder = builder.add_source(File::with_name(path));
+                config_file_found = true;
                 break;
             }
         }
+    }
+
+    // If no config file was found, use defaults
+    if !config_file_found {
+        builder = builder.add_source(Config::try_from(&AppConfig::default())?);
     }
 
     // Add environment variable overrides with prefix "RUSTY_TIP_"
@@ -249,7 +269,14 @@ pub fn load_config(config_path: Option<&Path>) -> Result<AppConfig, ConfigError>
     Ok(app_config)
 }
 
-/// Load configuration with better error handling and defaults
+/// Load configuration with error handling
+///
+/// If a config path is provided and loading fails, this function will panic
+/// rather than silently falling back to defaults, since that would likely
+/// cause unexpected behavior.
+///
+/// If no config path is provided, it will try common locations and fall back
+/// to defaults only if no config file exists.
 pub fn load_config_or_default(config_path: Option<&Path>) -> AppConfig {
     match load_config(config_path) {
         Ok(config) => {
@@ -257,8 +284,18 @@ pub fn load_config_or_default(config_path: Option<&Path>) -> AppConfig {
             config
         }
         Err(e) => {
-            log::warn!("Failed to load config ({}), using defaults", e);
-            AppConfig::default()
+            if config_path.is_some() {
+                // User explicitly provided a config path - don't silently use defaults
+                panic!(
+                    "Failed to load configuration: {}\n\
+                    Please fix the configuration file or remove the --config argument to use defaults.",
+                    e
+                );
+            } else {
+                // No explicit config path - falling back to defaults is acceptable
+                log::warn!("No configuration file found, using defaults");
+                AppConfig::default()
+            }
         }
     }
 }

@@ -10,6 +10,7 @@ use rusty_tip::{
 };
 use std::{
     fs,
+    io,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -151,6 +152,14 @@ fn log_startup_info(config: &AppConfig, config_path: &PathBuf) {
         "Nanonis: {}:{}",
         config.nanonis.host_ip, config.nanonis.control_ports[0]
     );
+
+    // Log layout and settings files from config
+    if let Some(ref layout) = config.nanonis.layout_file {
+        info!("Layout file: {}", layout);
+    }
+    if let Some(ref settings) = config.nanonis.settings_file {
+        info!("Settings file: {}", settings);
+    }
 }
 
 /// Log tip controller configuration
@@ -178,6 +187,14 @@ fn log_tip_config(config: &TipControllerConfig) {
             .map(|d| format!("{} seconds", d.as_secs()))
             .unwrap_or_else(|| "unlimited".to_string())
     );
+
+    // Log layout and settings files if specified
+    if let Some(ref layout_file) = config.layout_file {
+        info!("Layout file: {}", layout_file);
+    }
+    if let Some(ref settings_file) = config.settings_file {
+        info!("Settings file: {}", settings_file);
+    }
 
     log_pulse_method(&config.pulse_method);
 }
@@ -259,6 +276,8 @@ fn create_tip_controller_config(
             .max_duration_secs
             .map(Duration::from_secs),
         stability_config: config.tip_prep.stability.clone(),
+        layout_file: config.nanonis.layout_file.clone(),
+        settings_file: config.nanonis.settings_file.clone(),
     }
 }
 
@@ -305,18 +324,12 @@ fn run_and_report(
     result
 }
 
-/// Windows: Wait for user confirmation before proceeding
-#[cfg(windows)]
+/// Wait for user confirmation before proceeding
 fn wait_for_user_confirmation() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("Press Enter to start tip preparation (or Ctrl+C to cancel)...");
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn wait_for_user_confirmation() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 

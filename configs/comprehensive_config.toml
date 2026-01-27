@@ -20,6 +20,34 @@ host_ip = "127.0.0.1"
 # Multiple ports allow parallel command execution
 control_ports = [6501, 6502, 6503, 6504]
 
+# Optional: Load a specific Nanonis layout file (.nlo) at initialization
+# The layout file controls the Nanonis UI window arrangement and visibility
+# This is loaded at the very start of pre_loop_initialization(), before any other setup
+# Useful for ensuring the Nanonis software is in a consistent UI state
+# To use: Save your desired layout in Nanonis (Utilities > Layout > Save)
+#         then uncomment and set the path below
+# layout_file = "/path/to/your/layout.nlo"
+# layout_file = "../examples/layout_tip-prep.lyt"  # Relative path example
+# layout_file = "C:\\Users\\YourName\\Documents\\Nanonis\\my_layout.nlo"  # Windows path example
+
+# Optional: Load a specific Nanonis settings file (.nsf) at initialization
+# The settings file contains all Nanonis configuration (Z-controller, scan params, etc.)
+# This is loaded at the very start of pre_loop_initialization(), after layout but before any other setup
+# Useful for applying a consistent instrument configuration before each run
+# To use: Save your desired settings in Nanonis (Utilities > Settings > Save)
+#         then uncomment and set the path below
+# settings_file = "/path/to/your/settings.nsf"
+# settings_file = "../examples/settings_tip-prep.ini"  # Relative path example
+# settings_file = "C:\\Users\\YourName\\Documents\\Nanonis\\my_settings.nsf"  # Windows path example
+
+# Notes on layout_file and settings_file:
+# - Both are optional - omit them or set to null to skip loading
+# - Files are loaded in order: layout first, then settings
+# - If a file path is invalid or the file doesn't exist, initialization will fail with an error
+# - Paths can be absolute or relative to the working directory
+# - The second parameter (load_session_settings/load_session_layout) is set to true,
+#   which means session-specific settings will be loaded from the files
+
 # =============================================================================
 # DATA ACQUISITION SETTINGS
 # =============================================================================
