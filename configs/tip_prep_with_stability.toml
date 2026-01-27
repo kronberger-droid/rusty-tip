@@ -23,7 +23,7 @@ verbosity = "info"
 [tip_prep]
 # Frequency shift bounds for determining if tip is sharp (in Hz)
 # Values within this range indicate a sharp tip
-sharp_tip_bounds = [-2.0, 0.0]
+sharp_tip_bounds = [-1.5, 0.0]
 
 # Maximum number of pulse cycles (unlimited if not set)
 max_cycles = 10000
@@ -41,11 +41,11 @@ check_stability = true
 # Maximum allowed change in frequency shift for tip to be considered stable (in Hz)
 # During the bias sweep, if the signal changes more than this threshold,
 # the tip is considered unstable and will undergo tip shaping
-stable_tip_allowed_change = 0.5
+stable_tip_allowed_change = 0.4
 
 # Bias voltage range for stability sweep (lower, upper) in V
 # Must be positive magnitude-only; polarity_mode determines sign
-bias_range = [0.0, 2.0]
+bias_range = [0.2, 2.0]
 
 # Number of steps in the bias sweep
 bias_steps = 1000
@@ -74,7 +74,7 @@ type = "linear"
 
 # Output pulse voltage range (in V)
 # This is the Y-axis: minimum and maximum pulse voltages
-voltage_bounds = [2.0, 6.0]
+voltage_bounds = [2.0, 8.0]
 
 # Frequency shift range to monitor (in Hz)
 # When freq_shift is outside this range, pulse with max voltage (voltage_bounds[1])
