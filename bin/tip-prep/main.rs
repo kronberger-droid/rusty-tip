@@ -1,13 +1,12 @@
+mod config;
+mod tip_prep;
+
 use chrono::Utc;
 use clap::Parser;
 use env_logger::Env;
 use log::{error, info, LevelFilter};
 use rusty_tip::Signal;
-use rusty_tip::{
-    load_config_or_default,
-    tip_prep::{PulseMethod, TipControllerConfig},
-    ActionDriver, AppConfig, TCPReaderConfig, TipController,
-};
+use rusty_tip::{ActionDriver, TCPReaderConfig};
 use std::{
     fs,
     io,
@@ -19,8 +18,8 @@ use std::{
     time::Duration,
 };
 
-#[cfg(windows)]
-use std::io;
+use crate::config::{load_config_or_default, AppConfig};
+use crate::tip_prep::{PulseMethod, TipController, TipControllerConfig};
 
 #[cfg(windows)]
 use std::ffi::OsString;

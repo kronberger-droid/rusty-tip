@@ -1,8 +1,8 @@
-use crate::action_driver::ActionDriver;
-use crate::actions::{Action, TipCheckMethod, TipState};
+use rusty_tip::action_driver::ActionDriver;
+use rusty_tip::actions::{Action, TipCheckMethod, TipState};
+use rusty_tip::Signal;
+use rusty_tip::NanonisError;
 use crate::config::{BiasSweepPolarity, StabilityConfig};
-use crate::types::TipShape;
-use crate::{NanonisError, Signal};
 use log::info;
 use nanonis_rs::SignalIndex;
 use serde::{Deserialize, Serialize};
@@ -47,6 +47,14 @@ pub enum LoopType {
     BadLoop,
     GoodLoop,
     StableLoop,
+}
+
+/// Tip shape states
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TipShape {
+    Blunt,
+    Sharp,
+    Stable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -803,7 +811,11 @@ impl TipController {
                 })
                 .expecting()?;
 
-            self.current_tip_shape = tip_state.shape;
+            self.current_tip_shape = match tip_state.shape {
+                rusty_tip::types::TipShape::Blunt => TipShape::Blunt,
+                rusty_tip::types::TipShape::Sharp => TipShape::Sharp,
+                rusty_tip::types::TipShape::Stable => TipShape::Stable,
+            };
 
             // Track the frequency shift signal if available
             if let Some(freq_shift_value) = tip_state
@@ -954,11 +966,11 @@ impl TipController {
                 bias_range.1
             );
 
-            let stability_result: crate::actions::StabilityResult = self
+            let stability_result: rusty_tip::actions::StabilityResult = self
                 .driver
                 .run(Action::CheckTipStability {
                     method:
-                        crate::actions::TipStabilityMethod::BiasSweepResponse {
+                        rusty_tip::actions::TipStabilityMethod::BiasSweepResponse {
                             signal: self.config.freq_shift_signal.clone(),
                             bias_range: *bias_range,
                             bias_steps,
@@ -1073,8 +1085,8 @@ impl TipController {
                 })
                 .expecting()?;
 
-            if matches!(tip_state.shape, TipShape::Blunt) {
-                return Ok(tip_state.shape);
+            if matches!(tip_state.shape, rusty_tip::types::TipShape::Blunt) {
+                return Ok(TipShape::Blunt);
             }
         }
 
@@ -1201,7 +1213,11 @@ impl TipController {
 
         info!("Current tip shape: {:?}", initial_tip_state.shape);
 
-        self.current_tip_shape = initial_tip_state.shape;
+        self.current_tip_shape = match initial_tip_state.shape {
+            rusty_tip::types::TipShape::Blunt => TipShape::Blunt,
+            rusty_tip::types::TipShape::Sharp => TipShape::Sharp,
+            rusty_tip::types::TipShape::Stable => TipShape::Stable,
+        };
 
         Ok(())
     }
