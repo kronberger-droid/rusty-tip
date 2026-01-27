@@ -4,6 +4,8 @@
 [nanonis]
 host_ip = "127.0.0.1"
 control_ports = [6501, 6502, 6503, 6504]
+
+# Be carefull these files must exist on the host machine
 # layout_file = "./examples/layout_tip-prep.lyt"
 # settings_file = "./examples/settings_tip-prep.ini"
 
