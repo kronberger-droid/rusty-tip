@@ -438,8 +438,12 @@ impl TipController {
     /// Execute a single pulse at maximum voltage to aggressively reshape the tip
     /// Used when stability check fails to force tip into a different state
     fn execute_max_pulse(&mut self) -> Result<(), NanonisError> {
+        // Increment pulse counter first so switch happens on the Nth pulse
+        self.pulse_count_for_random += 1;
+
         let max_voltage = self.config.pulse_method.max_voltage();
-        let signed_voltage = if self.should_use_opposite_polarity() {
+        let using_opposite = self.should_use_opposite_polarity();
+        let signed_voltage = if using_opposite {
             match self.base_polarity.opposite() {
                 PolaritySign::Positive => max_voltage,
                 PolaritySign::Negative => -max_voltage,
@@ -451,9 +455,18 @@ impl TipController {
             }
         };
 
+        let current_polarity = if using_opposite {
+            self.base_polarity.opposite()
+        } else {
+            self.base_polarity
+        };
+
         info!(
-            "Executing MAX pulse due to stability failure: {:.3}V",
-            signed_voltage
+            "Executing MAX pulse #{} due to stability failure: {:.3}V ({:?}{})",
+            self.pulse_count_for_random,
+            signed_voltage,
+            current_polarity,
+            if using_opposite { " - SWITCHED" } else { "" }
         );
 
         self.driver
@@ -466,9 +479,6 @@ impl TipController {
                 Duration::from_millis(POST_PULSE_DATA_COLLECTION_MS),
             )
             .execute()?;
-
-        // Increment pulse counter for random switching
-        self.pulse_count_for_random += 1;
 
         Ok(())
     }
@@ -745,21 +755,24 @@ impl TipController {
     /// Bad loop - execute recovery sequence with stable signal monitoring
     /// Sequence: capture_stable_before → pulse → capture_stable_after → withdraw → move → approach → check
     fn bad_loop(&mut self) -> Result<(), NanonisError> {
+        // Increment pulse counter first so switch happens on the Nth pulse
+        self.pulse_count_for_random += 1;
+
+        let using_opposite = self.should_use_opposite_polarity();
+        let current_polarity = if using_opposite {
+            self.base_polarity.opposite()
+        } else {
+            self.base_polarity
+        };
         let signed_voltage = self.get_signed_pulse_voltage();
 
-        // Log if using opposite polarity
-        if self.should_use_opposite_polarity() {
-            info!(
-                "Random polarity switch: using {:?} for this pulse ({:.3}V)",
-                self.base_polarity.opposite(),
-                signed_voltage
-            );
-        }
-
         info!(
-            "Executing pulse: {:.3}V ({} method)",
+            "Executing pulse #{}: {:.3}V ({} method, {:?}{})",
+            self.pulse_count_for_random,
             signed_voltage,
-            self.config.pulse_method.method_name()
+            self.config.pulse_method.method_name(),
+            current_polarity,
+            if using_opposite { " - SWITCHED" } else { "" }
         );
 
         self.driver
@@ -772,9 +785,6 @@ impl TipController {
                 Duration::from_millis(POST_PULSE_DATA_COLLECTION_MS),
             )
             .execute()?;
-
-        // Increment pulse counter for random switching
-        self.pulse_count_for_random += 1;
 
         log::debug!("Repositioning...");
 
