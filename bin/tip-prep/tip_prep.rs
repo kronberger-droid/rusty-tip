@@ -81,7 +81,13 @@ impl Default for PolaritySign {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RandomPolaritySwitch {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     pub switch_every_n_pulses: u32,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,8 +97,8 @@ pub enum PulseMethod {
         voltage: f32,
         #[serde(default)]
         polarity: PolaritySign,
-        #[serde(default)]
-        random_switch: Option<RandomPolaritySwitch>,
+        #[serde(default, alias = "random_switch")]
+        random_polarity_switch: Option<RandomPolaritySwitch>,
     },
     Stepping {
         voltage_bounds: (f32, f32),
@@ -101,8 +107,8 @@ pub enum PulseMethod {
         threshold_value: f32,
         #[serde(default)]
         polarity: PolaritySign,
-        #[serde(default)]
-        random_switch: Option<RandomPolaritySwitch>,
+        #[serde(default, alias = "random_switch")]
+        random_polarity_switch: Option<RandomPolaritySwitch>,
     },
     /// Linear response based on frequency shift
     /// voltage_bounds: (min_voltage, max_voltage) - pulse voltage range in V
@@ -114,8 +120,8 @@ pub enum PulseMethod {
         linear_clamp: (f32, f32),
         #[serde(default)]
         polarity: PolaritySign,
-        #[serde(default)]
-        random_switch: Option<RandomPolaritySwitch>,
+        #[serde(default, alias = "random_switch")]
+        random_polarity_switch: Option<RandomPolaritySwitch>,
     },
 }
 
@@ -126,7 +132,7 @@ impl PulseMethod {
         cycles_before_step: u16,
         threshold_value: f32,
         polarity: PolaritySign,
-        random_switch: Option<RandomPolaritySwitch>,
+        random_polarity_switch: Option<RandomPolaritySwitch>,
     ) -> PulseMethod {
         PulseMethod::Stepping {
             voltage_bounds,
@@ -134,7 +140,7 @@ impl PulseMethod {
             cycles_before_step,
             threshold_value: threshold_value.abs(),
             polarity,
-            random_switch,
+            random_polarity_switch,
         }
     }
 
@@ -226,7 +232,7 @@ impl Default for PulseMethod {
             cycles_before_step: 2,
             threshold_value: 0.1,
             polarity: PolaritySign::Positive,
-            random_switch: None,
+            random_polarity_switch: None,
         }
     }
 }
@@ -257,7 +263,7 @@ impl Default for TipControllerConfig {
             pulse_method: PulseMethod::Fixed {
                 voltage: 4.0,
                 polarity: PolaritySign::Positive,
-                random_switch: None,
+                random_polarity_switch: None,
             },
             allowed_change_for_stable: 0.2,
             max_cycles: Some(1000),
@@ -349,22 +355,21 @@ impl TipController {
     fn should_use_opposite_polarity(&self) -> bool {
         match &self.config.pulse_method {
             PulseMethod::Stepping {
-                random_switch: Some(switch),
+                random_polarity_switch: Some(switch),
                 ..
             }
             | PulseMethod::Fixed {
-                random_switch: Some(switch),
+                random_polarity_switch: Some(switch),
                 ..
             }
             | PulseMethod::Linear {
-                random_switch: Some(switch),
+                random_polarity_switch: Some(switch),
                 ..
             } => {
-                // Check if current pulse count is a multiple of switch interval
-                self.pulse_count_for_random > 0
-                    && self.pulse_count_for_random
-                        % switch.switch_every_n_pulses
-                        == 0
+                // Check if enabled and current pulse count is a multiple of switch interval
+                switch.enabled
+                    && self.pulse_count_for_random > 0
+                    && self.pulse_count_for_random % switch.switch_every_n_pulses == 0
             }
             _ => false,
         }

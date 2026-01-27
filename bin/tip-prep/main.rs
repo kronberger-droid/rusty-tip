@@ -93,14 +93,18 @@ fn log_pulse_method(method: &PulseMethod) {
         PulseMethod::Fixed {
             voltage,
             polarity,
-            random_switch,
+            random_polarity_switch,
         } => {
             info!("Pulse method: Fixed ({:.2}V, {:?})", voltage, polarity);
-            if let Some(switch) = random_switch {
-                info!(
-                    "Random polarity switching: every {} pulses",
-                    switch.switch_every_n_pulses
-                );
+            if let Some(switch) = random_polarity_switch {
+                if switch.enabled {
+                    info!(
+                        "Random polarity switching: every {} pulses",
+                        switch.switch_every_n_pulses
+                    );
+                } else {
+                    info!("Random polarity switching: disabled");
+                }
             }
         }
         PulseMethod::Stepping {
@@ -108,7 +112,7 @@ fn log_pulse_method(method: &PulseMethod) {
             voltage_steps,
             threshold_value,
             polarity,
-            random_switch,
+            random_polarity_switch,
             ..
         } => {
             info!(
@@ -116,28 +120,36 @@ fn log_pulse_method(method: &PulseMethod) {
                 voltage_bounds.0, voltage_bounds.1, voltage_steps, polarity
             );
             info!("Threshold value: {:.3}", threshold_value);
-            if let Some(switch) = random_switch {
-                info!(
-                    "Random polarity switching: every {} pulses",
-                    switch.switch_every_n_pulses
-                );
+            if let Some(switch) = random_polarity_switch {
+                if switch.enabled {
+                    info!(
+                        "Random polarity switching: every {} pulses",
+                        switch.switch_every_n_pulses
+                    );
+                } else {
+                    info!("Random polarity switching: disabled");
+                }
             }
         }
         PulseMethod::Linear {
             voltage_bounds,
             linear_clamp,
             polarity,
-            random_switch,
+            random_polarity_switch,
         } => {
             info!(
                 "Pulse method: Linear (voltage: {:.2}V to {:.2}V, freq_shift range: {:.2} to {:.2} Hz, {:?})",
                 voltage_bounds.0, voltage_bounds.1, linear_clamp.0, linear_clamp.1, polarity
             );
-            if let Some(switch) = random_switch {
-                info!(
-                    "Random polarity switching: every {} pulses",
-                    switch.switch_every_n_pulses
-                );
+            if let Some(switch) = random_polarity_switch {
+                if switch.enabled {
+                    info!(
+                        "Random polarity switching: every {} pulses",
+                        switch.switch_every_n_pulses
+                    );
+                } else {
+                    info!("Random polarity switching: disabled");
+                }
             }
         }
     }
