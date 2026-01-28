@@ -103,6 +103,16 @@ max_duration_secs = 12000
 # max_duration_secs = 3600  # Alternative: 1 hour
 # max_duration_secs = null  # Alternative: Unlimited time
 
+# Initial bias voltage (V) set before the first approach
+# Default: -0.5 V (omit to use default)
+# initial_bias_v = -0.5
+# initial_bias_v = -1.0  # Alternative: Larger initial bias
+
+# Initial Z-controller setpoint (A) set before the first approach
+# Default: 100 pA (omit to use default)
+# initial_z_setpoint_a = 100e-12
+# initial_z_setpoint_a = 50e-12  # Alternative: Lower setpoint
+
 # =============================================================================
 # STABILITY CHECK CONFIGURATION
 # =============================================================================
@@ -123,10 +133,10 @@ stable_tip_allowed_change = 0.5
 # Bias voltage range for stability sweep (lower, upper) in V
 # IMPORTANT: Must be positive magnitude-only values
 # The polarity_mode setting below controls the actual sign
-bias_range = [0.0, 2.0]
-# bias_range = [0.0, 1.0]  # Alternative: Smaller range
-# bias_range = [0.0, 3.0]  # Alternative: Larger range
-# bias_range = [0.5, 2.5]  # Alternative: Start from non-zero
+bias_range = [0.01, 2.0]
+# bias_range = [0.01, 1.0]  # Alternative: Smaller range
+# bias_range = [0.01, 3.0]  # Alternative: Larger range
+# bias_range = [0.5, 2.5]   # Alternative: Start further from zero
 
 # Number of steps in the bias sweep
 # More steps = more data points but slower sweep
@@ -322,7 +332,7 @@ tcp_channel = 19
 #    - Use 'polarity' setting to control sign
 #
 # 2. bias_range:
-#    - Both values must be positive (> 0)
+#    - Both values must be strictly positive (> 0); zero is not allowed
 #    - Lower bound must be less than upper bound
 #    - Use 'polarity_mode' setting to control sign
 #
