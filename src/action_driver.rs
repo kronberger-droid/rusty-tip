@@ -1682,8 +1682,14 @@ impl ActionDriver {
                 }
 
                 // 3. Center Frequency shift (TODO: Hardcoded index)
+                thread::sleep(Duration::from_millis(500));
+
                 let modulator_index = 1;
                 self.client.pll_freq_shift_auto_center(modulator_index)?;
+
+                info!("Centered frequency while not approached");
+
+                thread::sleep(Duration::from_millis(500));
 
                 // 4. Auto approach (using the same logic as AutoApproach)
                 // Open auto-approach module
