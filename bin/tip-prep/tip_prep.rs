@@ -1,10 +1,10 @@
-use rusty_tip::action_driver::ActionDriver;
-use rusty_tip::actions::{Action, TipCheckMethod, TipState};
-use rusty_tip::Signal;
-use rusty_tip::NanonisError;
 use crate::config::{BiasSweepPolarity, StabilityConfig};
 use log::info;
 use nanonis_rs::signals::SignalIndex;
+use rusty_tip::action_driver::ActionDriver;
+use rusty_tip::actions::{Action, TipCheckMethod, TipState};
+use rusty_tip::NanonisError;
+use rusty_tip::Signal;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
@@ -20,7 +20,7 @@ use std::time::Duration;
 const STATUS_INTERVAL: usize = 10;
 
 /// Pulse width for tip pulsing during bad_loop (ms)
-const PULSE_WIDTH_MS: u64 = 500;
+const PULSE_WIDTH_MS: u64 = 50;
 
 /// Data collection duration before pulse (ms)
 const PRE_PULSE_DATA_COLLECTION_MS: u64 = 50;
@@ -371,7 +371,9 @@ impl TipController {
                 // Check if enabled and current pulse count is a multiple of switch interval
                 switch.enabled
                     && self.pulse_count_for_random > 0
-                    && self.pulse_count_for_random % switch.switch_every_n_pulses == 0
+                    && self.pulse_count_for_random
+                        % switch.switch_every_n_pulses
+                        == 0
             }
             _ => false,
         }
@@ -692,9 +694,10 @@ impl TipController {
             // Check cycle limit
             if let Some(max) = self.max_cycles {
                 if self.cycle_count >= max as u32 {
-                    return Err(NanonisError::Timeout(
-                        format!("Max cycles ({}) exceeded", max),
-                    ));
+                    return Err(NanonisError::Timeout(format!(
+                        "Max cycles ({}) exceeded",
+                        max
+                    )));
                 }
             }
 
@@ -702,12 +705,10 @@ impl TipController {
             if let Some(max_dur) = self.max_duration {
                 if let Some(start_time) = self.loop_start_time {
                     if start_time.elapsed() > max_dur {
-                        return Err(NanonisError::Timeout(
-                            format!(
-                                "Max duration ({:?}) exceeded",
-                                max_dur
-                            ),
-                        ));
+                        return Err(NanonisError::Timeout(format!(
+                            "Max duration ({:?}) exceeded",
+                            max_dur
+                        )));
                     }
                 }
             }
@@ -716,7 +717,9 @@ impl TipController {
             if let Some(flag) = &self.shutdown_requested {
                 if flag.load(Ordering::SeqCst) {
                     info!("Shutdown requested at cycle {}", self.cycle_count);
-                    return Err(NanonisError::Protocol("Shutdown requested".to_string()));
+                    return Err(NanonisError::Protocol(
+                        "Shutdown requested".to_string(),
+                    ));
                 }
             }
 
@@ -787,23 +790,35 @@ impl TipController {
             if using_opposite { " - SWITCHED" } else { "" }
         );
 
+        // self.driver
+        //     .run(Action::PulseRetract {
+        //         pulse_width: Duration::from_millis(PULSE_WIDTH_MS),
+        //         pulse_height_v: signed_voltage,
+        //     })
+        //     .with_data_collection(
+        //         Duration::from_millis(PRE_PULSE_DATA_COLLECTION_MS),
+        //         Duration::from_millis(POST_PULSE_DATA_COLLECTION_MS),
+        //     )
+        //     .execute()?;
+        //
         self.driver
-            .run(Action::PulseRetract {
+            .run(Action::BiasPulse {
+                wait_until_done: true,
                 pulse_width: Duration::from_millis(PULSE_WIDTH_MS),
-                pulse_height_v: signed_voltage,
+                bias_value_v: signed_voltage,
+                z_controller_hold: 0,
+                pulse_mode: 0,
             })
-            .with_data_collection(
-                Duration::from_millis(PRE_PULSE_DATA_COLLECTION_MS),
-                Duration::from_millis(POST_PULSE_DATA_COLLECTION_MS),
-            )
-            .execute()?;
+            .go()?;
+
+        std::thread::sleep(Duration::from_secs(1));
 
         log::debug!("Repositioning...");
 
         self.driver
             .run(Action::SafeReposition {
-                x_steps: 2,
-                y_steps: 2,
+                x_steps: 3,
+                y_steps: 3,
             })
             .go()?;
 
@@ -980,6 +995,69 @@ impl TipController {
                 break;
             }
 
+            // Transition sequence between polarity sweeps:
+            // Stop scan -> Withdraw -> Change bias -> Approach -> Start scan
+            if sweep_idx > 0 {
+                info!(
+                    "Transitioning to sweep {}/{}: withdrawing and re-approaching",
+                    sweep_idx + 1,
+                    bias_ranges.len()
+                );
+
+                // Stop scanning (should already be stopped, but ensure it)
+                if let Err(e) = self
+                    .driver
+                    .client_mut()
+                    .scan_action(rusty_tip::ScanAction::Stop, rusty_tip::ScanDirection::Up)
+                {
+                    log::warn!("Failed to stop scan during polarity transition: {}", e);
+                }
+
+                // Withdraw tip
+                self.driver
+                    .run(Action::Withdraw {
+                        wait_until_finished: true,
+                        timeout: Duration::from_secs(60),
+                    })
+                    .go()?;
+
+                if self.is_shutdown_requested() {
+                    log::info!("Shutdown requested during polarity transition");
+                    shutdown_requested = true;
+                    break;
+                }
+
+                // Set bias to the starting value of the next sweep
+                let starting_bias = bias_range.0;
+                info!("Setting bias to {:.2}V for next sweep", starting_bias);
+                self.driver
+                    .run(Action::SetBias {
+                        voltage: starting_bias,
+                    })
+                    .go()?;
+
+                // Approach
+                self.driver
+                    .run(Action::AutoApproach {
+                        wait_until_finished: true,
+                        timeout: Duration::from_secs(300),
+                    })
+                    .go()?;
+
+                if self.is_shutdown_requested() {
+                    log::info!("Shutdown requested after approach during polarity transition");
+                    shutdown_requested = true;
+                    break;
+                }
+
+                // Wait for signal to stabilize after approach
+                log::debug!(
+                    "Waiting {}ms for signal to stabilize after polarity transition approach...",
+                    POST_REPOSITION_SETTLE_TIME_MS
+                );
+                std::thread::sleep(Duration::from_millis(POST_REPOSITION_SETTLE_TIME_MS));
+            }
+
             info!(
                 "Stability sweep {}/{}: {:.2}V to {:.2}V",
                 sweep_idx + 1,
@@ -1044,7 +1122,9 @@ impl TipController {
 
         // Handle shutdown that was requested during the stability check loop
         if shutdown_requested {
-            return Err(NanonisError::Protocol("Shutdown requested".to_string()));
+            return Err(NanonisError::Protocol(
+                "Shutdown requested".to_string(),
+            ));
         }
 
         // Update tip shape based on stability result
@@ -1082,7 +1162,9 @@ impl TipController {
                     "Shutdown requested during pre_good_loop_check at iteration {}/3",
                     i + 1
                 );
-                return Err(NanonisError::Protocol("Shutdown requested".to_string()));
+                return Err(NanonisError::Protocol(
+                    "Shutdown requested".to_string(),
+                ));
             }
 
             self.driver
@@ -1094,7 +1176,9 @@ impl TipController {
 
             if self.is_shutdown_requested() {
                 log::info!("Shutdown requested after reposition in pre_good_loop_check");
-                return Err(NanonisError::Protocol("Shutdown requested".to_string()));
+                return Err(NanonisError::Protocol(
+                    "Shutdown requested".to_string(),
+                ));
             }
 
             let tip_state: TipState = self
@@ -1121,11 +1205,13 @@ impl TipController {
         // Load layout file if specified
         if let Some(layout_path) = &self.config.layout_file {
             // Convert to absolute path for Nanonis
-            let abs_path = Path::new(layout_path)
-                .canonicalize()
-                .map_err(|e| NanonisError::Protocol(format!(
-                    "Layout file not found: {} ({})", layout_path, e
-                )))?;
+            let abs_path =
+                Path::new(layout_path).canonicalize().map_err(|e| {
+                    NanonisError::Protocol(format!(
+                        "Layout file not found: {} ({})",
+                        layout_path, e
+                    ))
+                })?;
             let abs_path_str = abs_path.to_string_lossy();
             info!("Loading layout from: {}", abs_path_str);
             self.driver
@@ -1137,11 +1223,13 @@ impl TipController {
         // Load settings file if specified
         if let Some(settings_path) = &self.config.settings_file {
             // Convert to absolute path for Nanonis
-            let abs_path = Path::new(settings_path)
-                .canonicalize()
-                .map_err(|e| NanonisError::Protocol(format!(
-                    "Settings file not found: {} ({})", settings_path, e
-                )))?;
+            let abs_path =
+                Path::new(settings_path).canonicalize().map_err(|e| {
+                    NanonisError::Protocol(format!(
+                        "Settings file not found: {} ({})",
+                        settings_path, e
+                    ))
+                })?;
             let abs_path_str = abs_path.to_string_lossy();
             info!("Loading settings from: {}", abs_path_str);
             self.driver

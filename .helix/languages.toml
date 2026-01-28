@@ -1,0 +1,2 @@
+[languages-server.rust-analyzer.config.cargo]
+features = [ "gui" ]

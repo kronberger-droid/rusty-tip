@@ -23,7 +23,7 @@ verbosity = "info"
 [tip_prep]
 # Frequency shift bounds for determining if tip is sharp (in Hz)
 # Values within this range indicate a sharp tip
-sharp_tip_bounds = [-1.5, 0.0]
+sharp_tip_bounds = [-3.0, 0.0]
 
 # Maximum number of pulse cycles (unlimited if not set)
 max_cycles = 10000
@@ -44,10 +44,10 @@ stable_tip_allowed_change = 0.4
 bias_range = [0.2, 2.0]
 
 # Number of steps in the bias sweep
-bias_steps = 1000
+bias_steps = 200
 
 # Time to wait at each step in milliseconds
-step_period_ms = 200
+step_period_ms = 100
 
 # Maximum duration for stability check in seconds
 max_duration_secs = 100
@@ -59,7 +59,7 @@ max_duration_secs = 100
 polarity_mode = "both"
 
 # Scan speed for stability check in m/s
-scan_speed_m_s = 5e-9  # 5 nm/s
+scan_speed_m_s = 60e-9  # 5 nm/s
 
 [pulse_method]
 # Use fixed pulse method
@@ -74,7 +74,7 @@ polarity = "negative"
 # When enabled, every Nth pulse will use the opposite polarity
 [pulse_method.random_polarity_switch]
 enabled = true
-switch_every_n_pulses = 2  # Every 2nd pulse uses opposite polarity
+switch_every_n_pulses = 5 # Every 2nd pulse uses opposite polarity
 
 # Optional: Custom TCP channel mapping
 [[tcp_channel_mapping]]
