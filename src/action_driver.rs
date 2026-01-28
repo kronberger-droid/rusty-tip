@@ -1,25 +1,29 @@
-use crate::Signal;
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread,
+    time::{Duration, Instant},
+};
+
 use log::{debug, info, warn};
+use nanonis_rs::signals::SignalIndex;
 use ndarray::Array1;
 
-use crate::actions::{
-    Action, ActionChain, ActionLogEntry, ActionLogResult, ActionResult,
-    ExpectFromAction,
-};
-use crate::buffered_tcp_reader::BufferedTCPReader;
-use crate::signal_registry::SignalRegistry;
-use crate::types::{DataToGet, OsciData, SignalStats, TriggerConfig};
-use crate::utils::{poll_until, poll_with_timeout, PollError};
 use crate::{
+    actions::{
+        Action, ActionChain, ActionLogEntry, ActionLogResult, ActionResult,
+        ExpectFromAction,
+    },
+    buffered_tcp_reader::BufferedTCPReader,
+    signal_registry::SignalRegistry,
+    types::{DataToGet, OsciData, SignalStats, TriggerConfig},
+    utils::{poll_until, poll_with_timeout, PollError},
     MotorGroup, NanonisClient, NanonisError, Position, PulseMode, ScanAction,
-    ScanDirection, TipShaperConfig, ZControllerHold,
+    ScanDirection, Signal, TipShaperConfig, ZControllerHold,
 };
-use nanonis_rs::signals::SignalIndex;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant};
 
 // ========================================================================
 // TIP STATE CHECKING CONSTANTS
@@ -1677,7 +1681,11 @@ impl ActionDriver {
                     )?;
                 }
 
-                // 3. Auto approach (using the same logic as AutoApproach)
+                // 3. Center Frequency shift (TODO: Hardcoded index)
+                let modulator_index = 1;
+                self.client.pll_freq_shift_auto_center(modulator_index)?;
+
+                // 4. Auto approach (using the same logic as AutoApproach)
                 // Open auto-approach module
                 self.client.auto_approach_open()?;
                 thread::sleep(Duration::from_millis(500)); // Wait for module initialization
@@ -1877,9 +1885,12 @@ impl ActionDriver {
             }
 
             Action::CheckTipState { method } => {
-                use crate::actions::{TipCheckMethod, TipState};
-                use crate::types::TipShape;
                 use std::collections::HashMap;
+
+                use crate::{
+                    actions::{TipCheckMethod, TipState},
+                    types::TipShape,
+                };
 
                 let (tip_shape, measured_signals, mut metadata) = match method {
                     TipCheckMethod::SignalBounds { signal, bounds } => {
@@ -2603,8 +2614,9 @@ impl ActionDriver {
                 max_duration: _,
                 abort_on_damage_signs: _,
             } => {
-                use crate::actions::{StabilityResult, TipStabilityMethod};
                 use std::collections::HashMap;
+
+                use crate::actions::{StabilityResult, TipStabilityMethod};
 
                 let start_time = std::time::Instant::now();
                 let mut metrics = HashMap::new();
@@ -2654,9 +2666,10 @@ impl ActionDriver {
                         log::info!(
                             "Configuring scan: continuous=true, bouncy=true"
                         );
-                        let scan_props = nanonis_rs::scan::ScanPropsBuilder::new()
-                            .continuous_scan(true)
-                            .bouncy_scan(true);
+                        let scan_props =
+                            nanonis_rs::scan::ScanPropsBuilder::new()
+                                .continuous_scan(true)
+                                .bouncy_scan(true);
                         self.client.scan_props_set(scan_props)?;
                         log::info!("Scan properties configured");
 
@@ -2712,7 +2725,9 @@ impl ActionDriver {
                                     ScanDirection::Up,
                                 );
                                 let _ = self.client.bias_set(initial_bias);
-                                return Err(NanonisError::Protocol("Shutdown requested".to_string()));
+                                return Err(NanonisError::Protocol(
+                                    "Shutdown requested".to_string(),
+                                ));
                             }
                             std::thread::sleep(Duration::from_millis(100));
                             let is_scanning = self.client.scan_status_get()?;
@@ -2744,7 +2759,9 @@ impl ActionDriver {
                                     ScanDirection::Up,
                                 );
                                 let _ = self.client.bias_set(initial_bias);
-                                return Err(NanonisError::Protocol("Shutdown requested".to_string()));
+                                return Err(NanonisError::Protocol(
+                                    "Shutdown requested".to_string(),
+                                ));
                             }
                             self.client.bias_set(current_bias)?;
                             log::debug!(
@@ -2765,7 +2782,9 @@ impl ActionDriver {
                                         ScanDirection::Up,
                                     );
                                     let _ = self.client.bias_set(initial_bias);
-                                    return Err(NanonisError::Protocol("Shutdown requested".to_string()));
+                                    return Err(NanonisError::Protocol(
+                                        "Shutdown requested".to_string(),
+                                    ));
                                 }
                                 std::thread::sleep(chunk_duration);
                             }
@@ -3792,9 +3811,9 @@ impl ActionDriver {
         })? {
             ActionResult::OsciData(osci_data) => Ok(Some(osci_data)),
             ActionResult::None => Ok(None),
-            _ => Err(NanonisError::Protocol(
-                "Expected oscilloscope data".into(),
-            )),
+            _ => {
+                Err(NanonisError::Protocol("Expected oscilloscope data".into()))
+            }
         }
     }
 
@@ -3814,9 +3833,9 @@ impl ActionDriver {
         })? {
             ActionResult::OsciData(osci_data) => Ok(Some(osci_data)),
             ActionResult::None => Ok(None),
-            _ => Err(NanonisError::Protocol(
-                "Expected oscilloscope data".into(),
-            )),
+            _ => {
+                Err(NanonisError::Protocol("Expected oscilloscope data".into()))
+            }
         }
     }
 }
@@ -4045,9 +4064,7 @@ impl ExpectFromExecution<crate::types::TipShape> for ExecutionResult {
             ExecutionResult::Single(ActionResult::TipState(tip_state)) => {
                 Ok(tip_state.shape)
             }
-            _ => Err(NanonisError::Protocol(
-                "Expected tip state".to_string(),
-            )),
+            _ => Err(NanonisError::Protocol("Expected tip state".to_string())),
         }
     }
 }
@@ -4060,9 +4077,7 @@ impl ExpectFromExecution<crate::actions::TipState> for ExecutionResult {
             ExecutionResult::Single(ActionResult::TipState(tip_state)) => {
                 Ok(tip_state)
             }
-            _ => Err(NanonisError::Protocol(
-                "Expected tip state".to_string(),
-            )),
+            _ => Err(NanonisError::Protocol("Expected tip state".to_string())),
         }
     }
 }
@@ -4116,9 +4131,7 @@ impl ExpectFromExecution<Vec<String>> for ExecutionResult {
     fn expect_from_execution(self) -> Result<Vec<String>, NanonisError> {
         match self {
             ExecutionResult::Single(ActionResult::Text(text)) => Ok(text),
-            _ => Err(NanonisError::Protocol(
-                "Expected text data".to_string(),
-            )),
+            _ => Err(NanonisError::Protocol("Expected text data".to_string())),
         }
     }
 }
