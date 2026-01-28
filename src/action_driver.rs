@@ -1661,7 +1661,7 @@ impl ActionDriver {
             Action::SafeReposition { x_steps, y_steps } => {
                 // Safe repositioning with hardcoded defaults
                 let displacement =
-                    crate::types::MotorDisplacement::new(x_steps, y_steps, -2);
+                    crate::types::MotorDisplacement::new(x_steps, y_steps, -3);
                 let withdraw_timeout = Duration::from_secs(5);
                 let approach_timeout = Duration::from_secs(20); // 20 seconds timeout for approach after reposition
                 let stabilization_wait = Duration::from_millis(500);

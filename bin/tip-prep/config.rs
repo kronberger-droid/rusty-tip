@@ -69,11 +69,11 @@ pub struct ConsoleConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BiasSweepPolarity {
-    /// Sweep 0 to upper_bound only
+    /// Sweep from upper_bound toward lower_bound (toward zero)
     Positive,
-    /// Sweep 0 to lower_bound only
+    /// Sweep from -upper_bound toward -lower_bound (toward zero)
     Negative,
-    /// Two separate sweeps: 0 to upper_bound, then 0 to lower_bound
+    /// Two sweeps: positive first (toward zero), then negative (toward zero)
     #[default]
     Both,
 }
@@ -109,7 +109,7 @@ impl Default for StabilityConfig {
         Self {
             check_stability: true,
             stable_tip_allowed_change: 0.2,
-            bias_range: (0.0, 2.0), // Changed to positive range
+            bias_range: (0.01, 2.0), // Strictly positive range
             bias_steps: 1000,
             step_period_ms: 200,
             max_duration_secs: 100,
@@ -123,9 +123,9 @@ impl StabilityConfig {
     /// Validate configuration values
     pub fn validate(&self) -> Result<(), ConfigError> {
         // Validate bias_range: lower bound must be >= 0, upper bound must be > 0
-        if self.bias_range.0 < 0.0 || self.bias_range.1 <= 0.0 {
+        if self.bias_range.0 <= 0.0 || self.bias_range.1 <= 0.0 {
             return Err(ConfigError::Message(format!(
-                "bias_range must be non-negative (got [{}, {}]). Use polarity_mode to control sign.",
+                "bias_range must be strictly positive (got [{}, {}]). Use polarity_mode to control sign.",
                 self.bias_range.0, self.bias_range.1
             )));
         }
@@ -155,6 +155,14 @@ impl StabilityConfig {
     }
 }
 
+fn default_initial_bias_v() -> f32 {
+    -500e-3
+}
+
+fn default_initial_z_setpoint_a() -> f32 {
+    100e-12
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TipPrepConfig {
     pub sharp_tip_bounds: [f32; 2],
@@ -163,6 +171,12 @@ pub struct TipPrepConfig {
     /// Stability check configuration (includes check_stability flag)
     #[serde(default)]
     pub stability: StabilityConfig,
+    /// Initial bias voltage (V) set before the first approach. Default: -0.5 V
+    #[serde(default = "default_initial_bias_v")]
+    pub initial_bias_v: f32,
+    /// Initial Z-controller setpoint (A) set before the first approach. Default: 100 pA
+    #[serde(default = "default_initial_z_setpoint_a")]
+    pub initial_z_setpoint_a: f32,
 }
 
 impl Default for NanonisConfig {
@@ -209,6 +223,8 @@ impl Default for TipPrepConfig {
             max_cycles: Some(10000),
             max_duration_secs: Some(12000),
             stability: StabilityConfig::default(),
+            initial_bias_v: default_initial_bias_v(),
+            initial_z_setpoint_a: default_initial_z_setpoint_a(),
         }
     }
 }

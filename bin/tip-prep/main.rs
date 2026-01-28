@@ -289,6 +289,8 @@ fn create_tip_controller_config(
         stability_config: config.tip_prep.stability.clone(),
         layout_file: config.nanonis.layout_file.clone(),
         settings_file: config.nanonis.settings_file.clone(),
+        initial_bias_v: config.tip_prep.initial_bias_v,
+        initial_z_setpoint_a: config.tip_prep.initial_z_setpoint_a,
     }
 }
 

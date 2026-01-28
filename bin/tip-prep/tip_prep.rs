@@ -1,10 +1,12 @@
+use rusty_tip::action_driver::ActionDriver;
+use rusty_tip::actions::{Action, TipCheckMethod, TipState};
+use rusty_tip::types::MotorDisplacement;
+use rusty_tip::Signal;
+use rusty_tip::NanonisError;
+use rusty_tip::ScanConfig;
 use crate::config::{BiasSweepPolarity, StabilityConfig};
 use log::info;
 use nanonis_rs::signals::SignalIndex;
-use rusty_tip::action_driver::ActionDriver;
-use rusty_tip::actions::{Action, TipCheckMethod, TipState};
-use rusty_tip::NanonisError;
-use rusty_tip::Signal;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
@@ -78,6 +80,18 @@ impl Default for PolaritySign {
     fn default() -> Self {
         Self::Positive
     }
+}
+
+/// Plan for a single bias stability sweep
+struct SweepPlan {
+    /// Bias voltage to set before approach (extreme value, far from zero)
+    starting_bias: f32,
+    /// Sweep range: (from, to) -- always sweeps from extreme toward zero
+    bias_range: (f32, f32),
+    /// 1-based index of this sweep
+    index: usize,
+    /// Total number of sweeps
+    total: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -252,6 +266,10 @@ pub struct TipControllerConfig {
     pub layout_file: Option<String>,
     /// Optional path to a Nanonis settings file to load during initialization
     pub settings_file: Option<String>,
+    /// Initial bias voltage (V) set before the first approach
+    pub initial_bias_v: f32,
+    /// Initial Z-controller setpoint (A) set before the first approach
+    pub initial_z_setpoint_a: f32,
 }
 
 impl Default for TipControllerConfig {
@@ -274,6 +292,8 @@ impl Default for TipControllerConfig {
             stability_config: StabilityConfig::default(),
             layout_file: None,
             settings_file: None,
+            initial_bias_v: -500e-3,
+            initial_z_setpoint_a: 100e-12,
         }
     }
 }
@@ -896,68 +916,207 @@ impl TipController {
             return Ok(());
         }
 
-        // Clone stability config values to avoid borrow issues
-        let stability_config = self.config.stability_config.clone();
-        let step_duration =
-            Duration::from_millis(stability_config.step_period_ms);
-        let max_duration =
-            Duration::from_secs(stability_config.max_duration_secs);
-        let bias_steps = stability_config.bias_steps;
-        let polarity_mode = stability_config.polarity_mode;
-
-        // Determine bias ranges based on polarity mode
-        // bias_range is now always positive magnitude-only; polarity_mode determines sign
-        let bias_ranges: Vec<(f32, f32)> = match polarity_mode {
-            BiasSweepPolarity::Positive => {
-                // Single positive sweep
-                vec![(
-                    stability_config.bias_range.0,
-                    stability_config.bias_range.1,
-                )]
-            }
-            BiasSweepPolarity::Negative => {
-                // Single negative sweep
-                vec![(
-                    -stability_config.bias_range.1,
-                    -stability_config.bias_range.0,
-                )]
-            }
-            BiasSweepPolarity::Both => {
-                // Two sweeps: first positive, then negative
-                vec![
-                    (
-                        stability_config.bias_range.0,
-                        stability_config.bias_range.1,
-                    ),
-                    (
-                        -stability_config.bias_range.1,
-                        -stability_config.bias_range.0,
-                    ),
-                ]
-            }
-        };
+        let sweep_plans = self.build_sweep_plans();
 
         info!(
             "Starting stability check with polarity mode: {:?}, {} sweep(s)",
-            polarity_mode,
-            bias_ranges.len()
+            self.config.stability_config.polarity_mode,
+            sweep_plans.len()
         );
 
-        // Save and set scan speed if configured
-        let original_scan_config = if let Some(target_speed) =
-            stability_config.scan_speed_m_s
+        let original_scan_config = self.save_and_set_scan_speed()?;
+
+        let mut overall_stable = true;
+        let mut shutdown_requested = false;
+        for plan in &sweep_plans {
+            if self.is_shutdown_requested() {
+                log::info!(
+                    "Shutdown requested before stability sweep {}",
+                    plan.index
+                );
+                shutdown_requested = true;
+                break;
+            }
+
+            self.prepare_for_sweep(plan.starting_bias)?;
+
+            let stable = self.execute_stability_sweep(plan)?;
+            if !stable {
+                overall_stable = false;
+                break;
+            }
+        }
+
+        self.restore_scan_speed(original_scan_config);
+
+        if shutdown_requested {
+            return Err(NanonisError::Protocol("Shutdown requested".to_string()));
+        }
+
+        self.handle_stability_outcome(overall_stable, sweep_plans.len())?;
+
+        Ok(())
+    }
+
+    /// Build sweep plans based on polarity mode.
+    /// Each plan sweeps from the extreme value toward zero, never crossing it.
+    fn build_sweep_plans(&self) -> Vec<SweepPlan> {
+        let stability_config = &self.config.stability_config;
+        let polarity_mode = stability_config.polarity_mode;
+        let bias_range = stability_config.bias_range;
+
+        match polarity_mode {
+            BiasSweepPolarity::Positive => {
+                // Sweep from upper_bound toward lower_bound (toward zero)
+                // bias_range passed as (upper, lower) so step_size is negative
+                vec![SweepPlan {
+                    starting_bias: bias_range.1,
+                    bias_range: (bias_range.1, bias_range.0),
+                    index: 1,
+                    total: 1,
+                }]
+            }
+            BiasSweepPolarity::Negative => {
+                // Sweep from -upper_bound toward -lower_bound (toward zero)
+                // bias_range passed as (-upper, -lower) so step_size is positive
+                vec![SweepPlan {
+                    starting_bias: -bias_range.1,
+                    bias_range: (-bias_range.1, -bias_range.0),
+                    index: 1,
+                    total: 1,
+                }]
+            }
+            BiasSweepPolarity::Both => {
+                // Two sweeps: positive first, then negative
+                vec![
+                    SweepPlan {
+                        starting_bias: bias_range.1,
+                        bias_range: (bias_range.1, bias_range.0),
+                        index: 1,
+                        total: 2,
+                    },
+                    SweepPlan {
+                        starting_bias: -bias_range.1,
+                        bias_range: (-bias_range.1, -bias_range.0),
+                        index: 2,
+                        total: 2,
+                    },
+                ]
+            }
+        }
+    }
+
+    /// Prepare the tip for a stability sweep by withdrawing, repositioning,
+    /// setting the bias to the extreme value, and approaching.
+    fn prepare_for_sweep(&mut self, starting_bias: f32) -> Result<(), NanonisError> {
+        info!("Preparing for sweep: withdrawing and repositioning, starting bias = {:.3}V", starting_bias);
+
+        self.driver
+            .run(Action::Withdraw {
+                wait_until_finished: true,
+                timeout: Duration::from_secs(5),
+            })
+            .go()?;
+
+        self.driver
+            .run(Action::MoveMotor3D {
+                displacement: MotorDisplacement::new(3, 3, -3),
+                blocking: true,
+            })
+            .go()?;
+
+        self.driver.client_mut().bias_set(starting_bias)?;
+        info!("Bias set to {:.3}V before approach", starting_bias);
+
+        self.driver
+            .run(Action::AutoApproach {
+                wait_until_finished: true,
+                timeout: Duration::from_secs(600),
+            })
+            .go()?;
+
+        info!(
+            "Waiting {}ms for signal to stabilize after approach...",
+            POST_APPROACH_SETTLE_TIME_MS
+        );
+        std::thread::sleep(Duration::from_millis(POST_APPROACH_SETTLE_TIME_MS));
+
+        Ok(())
+    }
+
+    /// Execute a single stability sweep and return whether the tip was stable.
+    fn execute_stability_sweep(&mut self, plan: &SweepPlan) -> Result<bool, NanonisError> {
+        let stability_config = self.config.stability_config.clone();
+        let step_duration = Duration::from_millis(stability_config.step_period_ms);
+        let max_duration = Duration::from_secs(stability_config.max_duration_secs);
+        let bias_steps = stability_config.bias_steps;
+
+        info!(
+            "Stability sweep {}/{}: {:.2}V to {:.2}V",
+            plan.index,
+            plan.total,
+            plan.bias_range.0,
+            plan.bias_range.1
+        );
+
+        let stability_result: rusty_tip::actions::StabilityResult = self
+            .driver
+            .run(Action::CheckTipStability {
+                method:
+                    rusty_tip::actions::TipStabilityMethod::BiasSweepResponse {
+                        signal: self.config.freq_shift_signal.clone(),
+                        bias_range: plan.bias_range,
+                        bias_steps,
+                        step_duration,
+                        allowed_signal_change: self
+                            .config
+                            .allowed_change_for_stable,
+                    },
+                max_duration,
+                abort_on_damage_signs: false,
+            })
+            .expecting()?;
+
+        // Track signal values from stability monitoring (use last measured value)
+        if let Some(signal_values) = stability_result
+            .measured_values
+            .get(&self.config.freq_shift_signal)
         {
+            if let Some(&last_value) = signal_values.last() {
+                let signal = self.config.freq_shift_signal.clone();
+                self.track_signal(&signal, last_value);
+            }
+        }
+
+        if !stability_result.is_stable {
+            info!(
+                "Tip unstable during sweep {}/{} ({:.2}V to {:.2}V)",
+                plan.index,
+                plan.total,
+                plan.bias_range.0,
+                plan.bias_range.1
+            );
+        }
+
+        Ok(stability_result.is_stable)
+    }
+
+    /// Save the current scan speed and set the stability-check speed if configured.
+    /// Returns the original ScanConfig to restore later, or None.
+    fn save_and_set_scan_speed(&mut self) -> Result<Option<ScanConfig>, NanonisError> {
+        let target_speed = self.config.stability_config.scan_speed_m_s;
+
+        if let Some(target_speed) = target_speed {
             match self.driver.client_mut().scan_speed_get() {
                 Ok(config) => {
                     info!(
                         "Saving original scan speed: {:.2e} m/s (forward), {:.2e} m/s (backward)",
                         config.forward_linear_speed_m_s, config.backward_linear_speed_m_s
                     );
-                    // Set new scan speed for stability check
                     let mut new_config = config;
                     new_config.forward_linear_speed_m_s = target_speed;
                     new_config.backward_linear_speed_m_s = target_speed;
-                    new_config.keep_parameter_constant = 1; // Keep linear speed constant
+                    new_config.keep_parameter_constant = 1;
                     if let Err(e) =
                         self.driver.client_mut().scan_config_set(new_config)
                     {
@@ -971,145 +1130,21 @@ impl TipController {
                             target_speed
                         );
                     }
-                    Some(config)
+                    Ok(Some(config))
                 }
                 Err(e) => {
                     log::warn!("Failed to get current scan speed: {}", e);
-                    None
+                    Ok(None)
                 }
             }
         } else {
-            None
-        };
-
-        // Perform stability check for each bias range
-        let mut overall_stable = true;
-        let mut shutdown_requested = false;
-        for (sweep_idx, bias_range) in bias_ranges.iter().enumerate() {
-            if self.is_shutdown_requested() {
-                log::info!(
-                    "Shutdown requested before stability sweep {}",
-                    sweep_idx + 1
-                );
-                shutdown_requested = true;
-                break;
-            }
-
-            // Transition sequence between polarity sweeps:
-            // Stop scan -> Withdraw -> Change bias -> Approach -> Start scan
-            if sweep_idx > 0 {
-                info!(
-                    "Transitioning to sweep {}/{}: withdrawing and re-approaching",
-                    sweep_idx + 1,
-                    bias_ranges.len()
-                );
-
-                // Stop scanning (should already be stopped, but ensure it)
-                if let Err(e) = self
-                    .driver
-                    .client_mut()
-                    .scan_action(rusty_tip::ScanAction::Stop, rusty_tip::ScanDirection::Up)
-                {
-                    log::warn!("Failed to stop scan during polarity transition: {}", e);
-                }
-
-                // Withdraw tip
-                self.driver
-                    .run(Action::Withdraw {
-                        wait_until_finished: true,
-                        timeout: Duration::from_secs(60),
-                    })
-                    .go()?;
-
-                if self.is_shutdown_requested() {
-                    log::info!("Shutdown requested during polarity transition");
-                    shutdown_requested = true;
-                    break;
-                }
-
-                // Set bias to the starting value of the next sweep
-                let starting_bias = bias_range.0;
-                info!("Setting bias to {:.2}V for next sweep", starting_bias);
-                self.driver
-                    .run(Action::SetBias {
-                        voltage: starting_bias,
-                    })
-                    .go()?;
-
-                // Approach
-                self.driver
-                    .run(Action::AutoApproach {
-                        wait_until_finished: true,
-                        timeout: Duration::from_secs(300),
-                    })
-                    .go()?;
-
-                if self.is_shutdown_requested() {
-                    log::info!("Shutdown requested after approach during polarity transition");
-                    shutdown_requested = true;
-                    break;
-                }
-
-                // Wait for signal to stabilize after approach
-                log::debug!(
-                    "Waiting {}ms for signal to stabilize after polarity transition approach...",
-                    POST_REPOSITION_SETTLE_TIME_MS
-                );
-                std::thread::sleep(Duration::from_millis(POST_REPOSITION_SETTLE_TIME_MS));
-            }
-
-            info!(
-                "Stability sweep {}/{}: {:.2}V to {:.2}V",
-                sweep_idx + 1,
-                bias_ranges.len(),
-                bias_range.0,
-                bias_range.1
-            );
-
-            let stability_result: rusty_tip::actions::StabilityResult = self
-                .driver
-                .run(Action::CheckTipStability {
-                    method:
-                        rusty_tip::actions::TipStabilityMethod::BiasSweepResponse {
-                            signal: self.config.freq_shift_signal.clone(),
-                            bias_range: *bias_range,
-                            bias_steps,
-                            step_duration,
-                            allowed_signal_change: self
-                                .config
-                                .allowed_change_for_stable,
-                        },
-                    max_duration,
-                    abort_on_damage_signs: false,
-                })
-                .expecting()?;
-
-            // Track signal values from stability monitoring (use last measured value)
-            if let Some(signal_values) = stability_result
-                .measured_values
-                .get(&self.config.freq_shift_signal)
-            {
-                if let Some(&last_value) = signal_values.last() {
-                    let signal = self.config.freq_shift_signal.clone();
-                    self.track_signal(&signal, last_value);
-                }
-            }
-
-            if !stability_result.is_stable {
-                info!(
-                    "Tip unstable during sweep {}/{} ({:.2}V to {:.2}V)",
-                    sweep_idx + 1,
-                    bias_ranges.len(),
-                    bias_range.0,
-                    bias_range.1
-                );
-                overall_stable = false;
-                break;
-            }
+            Ok(None)
         }
+    }
 
-        // Restore original scan speed if we changed it
-        if let Some(config) = original_scan_config {
+    /// Restore the original scan speed if it was saved.
+    fn restore_scan_speed(&mut self, original: Option<ScanConfig>) {
+        if let Some(config) = original {
             if let Err(e) = self.driver.client_mut().scan_config_set(config) {
                 log::warn!("Failed to restore original scan speed: {}", e);
             } else {
@@ -1119,33 +1154,31 @@ impl TipController {
                 );
             }
         }
+    }
 
-        // Handle shutdown that was requested during the stability check loop
-        if shutdown_requested {
-            return Err(NanonisError::Protocol(
-                "Shutdown requested".to_string(),
-            ));
-        }
-
-        // Update tip shape based on stability result
+    /// Handle the outcome of stability sweeps.
+    /// If stable: mark TipShape::Stable.
+    /// If unstable: pulse at max voltage, reposition, mark TipShape::Blunt.
+    fn handle_stability_outcome(
+        &mut self,
+        overall_stable: bool,
+        sweep_count: usize,
+    ) -> Result<(), NanonisError> {
         if overall_stable {
-            info!("Tip is stable after {} sweep(s)", bias_ranges.len());
+            info!("Tip is stable after {} sweep(s)", sweep_count);
             self.current_tip_shape = TipShape::Stable;
         } else {
             info!("Stability check failed - executing max voltage pulse to reshape tip");
 
-            // Execute max voltage pulse to aggressively change tip shape
             self.execute_max_pulse()?;
 
-            // Reposition to fresh location for next attempt
             self.driver
                 .run(Action::SafeReposition {
-                    x_steps: 2,
-                    y_steps: 2,
+                    x_steps: 3,
+                    y_steps: 3,
                 })
                 .go()?;
 
-            // Mark tip as blunt to restart preparation from beginning
             info!("Restarting tip preparation from beginning after stability failure");
             self.current_tip_shape = TipShape::Blunt;
         }
@@ -1238,8 +1271,8 @@ impl TipController {
             info!("Settings loaded successfully");
         }
 
-        self.driver.client_mut().bias_set(-500e-3)?;
-        self.driver.client_mut().z_ctrl_setpoint_set(100e-12)?;
+        self.driver.client_mut().bias_set(self.config.initial_bias_v)?;
+        self.driver.client_mut().z_ctrl_setpoint_set(self.config.initial_z_setpoint_a)?;
 
         // Update some randome User Output to update TCP Channel List
         // Should be fixed in next Nanonis Software Update
