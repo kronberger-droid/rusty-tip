@@ -1,12 +1,12 @@
-use rusty_tip::action_driver::ActionDriver;
-use rusty_tip::actions::{Action, TipCheckMethod, TipState};
-use rusty_tip::types::MotorDisplacement;
-use rusty_tip::Signal;
-use rusty_tip::NanonisError;
-use rusty_tip::ScanConfig;
 use crate::config::{BiasSweepPolarity, StabilityConfig};
 use log::info;
 use nanonis_rs::signals::SignalIndex;
+use rusty_tip::action_driver::ActionDriver;
+use rusty_tip::actions::{Action, TipCheckMethod, TipState};
+use rusty_tip::types::MotorDisplacement;
+use rusty_tip::NanonisError;
+use rusty_tip::ScanConfig;
+use rusty_tip::Signal;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
@@ -950,7 +950,9 @@ impl TipController {
         self.restore_scan_speed(original_scan_config);
 
         if shutdown_requested {
-            return Err(NanonisError::Protocol("Shutdown requested".to_string()));
+            return Err(NanonisError::Protocol(
+                "Shutdown requested".to_string(),
+            ));
         }
 
         self.handle_stability_outcome(overall_stable, sweep_plans.len())?;
@@ -1008,7 +1010,10 @@ impl TipController {
 
     /// Prepare the tip for a stability sweep by withdrawing, repositioning,
     /// setting the bias to the extreme value, and approaching.
-    fn prepare_for_sweep(&mut self, starting_bias: f32) -> Result<(), NanonisError> {
+    fn prepare_for_sweep(
+        &mut self,
+        starting_bias: f32,
+    ) -> Result<(), NanonisError> {
         info!("Preparing for sweep: withdrawing and repositioning, starting bias = {:.3}V", starting_bias);
 
         self.driver
@@ -1045,18 +1050,20 @@ impl TipController {
     }
 
     /// Execute a single stability sweep and return whether the tip was stable.
-    fn execute_stability_sweep(&mut self, plan: &SweepPlan) -> Result<bool, NanonisError> {
+    fn execute_stability_sweep(
+        &mut self,
+        plan: &SweepPlan,
+    ) -> Result<bool, NanonisError> {
         let stability_config = self.config.stability_config.clone();
-        let step_duration = Duration::from_millis(stability_config.step_period_ms);
-        let max_duration = Duration::from_secs(stability_config.max_duration_secs);
+        let step_duration =
+            Duration::from_millis(stability_config.step_period_ms);
+        let max_duration =
+            Duration::from_secs(stability_config.max_duration_secs);
         let bias_steps = stability_config.bias_steps;
 
         info!(
             "Stability sweep {}/{}: {:.2}V to {:.2}V",
-            plan.index,
-            plan.total,
-            plan.bias_range.0,
-            plan.bias_range.1
+            plan.index, plan.total, plan.bias_range.0, plan.bias_range.1
         );
 
         let stability_result: rusty_tip::actions::StabilityResult = self
@@ -1091,10 +1098,7 @@ impl TipController {
         if !stability_result.is_stable {
             info!(
                 "Tip unstable during sweep {}/{} ({:.2}V to {:.2}V)",
-                plan.index,
-                plan.total,
-                plan.bias_range.0,
-                plan.bias_range.1
+                plan.index, plan.total, plan.bias_range.0, plan.bias_range.1
             );
         }
 
@@ -1103,7 +1107,9 @@ impl TipController {
 
     /// Save the current scan speed and set the stability-check speed if configured.
     /// Returns the original ScanConfig to restore later, or None.
-    fn save_and_set_scan_speed(&mut self) -> Result<Option<ScanConfig>, NanonisError> {
+    fn save_and_set_scan_speed(
+        &mut self,
+    ) -> Result<Option<ScanConfig>, NanonisError> {
         let target_speed = self.config.stability_config.scan_speed_m_s;
 
         if let Some(target_speed) = target_speed {
@@ -1271,8 +1277,12 @@ impl TipController {
             info!("Settings loaded successfully");
         }
 
-        self.driver.client_mut().bias_set(self.config.initial_bias_v)?;
-        self.driver.client_mut().z_ctrl_setpoint_set(self.config.initial_z_setpoint_a)?;
+        self.driver
+            .client_mut()
+            .bias_set(self.config.initial_bias_v)?;
+        self.driver
+            .client_mut()
+            .z_ctrl_setpoint_set(self.config.initial_z_setpoint_a)?;
 
         // Update some randome User Output to update TCP Channel List
         // Should be fixed in next Nanonis Software Update
