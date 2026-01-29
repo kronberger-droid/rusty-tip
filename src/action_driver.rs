@@ -1681,17 +1681,17 @@ impl ActionDriver {
                         self.client_mut().safe_tip_on_off_set(true)?;
                     }
 
-                    self.check_safetip_status();
+                    self.check_safetip_status()?;
 
                     // Home 50nm away from the surface
                     self.client_mut().z_ctrl_home()?;
 
-                    self.check_safetip_status();
+                    self.check_safetip_status()?;
 
                     // Sleep for 0.5 secs
                     std::thread::sleep(Duration::from_millis(500));
 
-                    self.check_safetip_status();
+                    self.check_safetip_status()?;
 
                     // Center the freq shift
                     if let Err(e) = self.center_freq_shift() {
@@ -1699,12 +1699,12 @@ impl ActionDriver {
                         // Continue anyway, this is not critical
                     }
 
-                    self.check_safetip_status();
+                    self.check_safetip_status()?;
 
                     // Approach again
                     self.auto_approach(wait_until_finished, timeout)?;
 
-                    self.check_safetip_status();
+                    self.check_safetip_status()?;
 
                     // Toggle of the safe tip
                     if let Ok(safetip_state) =
@@ -3174,13 +3174,17 @@ impl ActionDriver {
         }
     }
 
-    fn check_safetip_status(&mut self) {
+    fn check_safetip_status(&mut self) -> Result<(), NanonisError> {
         if let Ok(status) = self.client_mut().z_ctrl_status_get() {
             if matches!(status, nanonis_rs::z_ctrl::ZControllerStatus::SafeTip)
             {
-                panic!("SafeTip Triggert, abort!")
+                return Err(NanonisError::Protocol(
+                    "SafeTip triggert, abort!".to_string(),
+                ));
             }
         }
+
+        Ok(())
     }
 
     /// Attempt a single stable signal read (used by retry logic)
