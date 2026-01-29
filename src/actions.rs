@@ -288,7 +288,6 @@ pub enum Action {
     CheckTipStability {
         method: TipStabilityMethod,
         max_duration: Duration,
-        abort_on_damage_signs: bool,
     },
 
     /// Get a stable signal value using TCP logger data and stability analysis
@@ -909,20 +908,14 @@ impl Action {
             Action::CheckTipStability {
                 method,
                 max_duration,
-                abort_on_damage_signs,
             } => {
                 let duration_desc = format!("{:.1}s", max_duration.as_secs_f32());
-                let abort_desc = if *abort_on_damage_signs {
-                    "abort on damage"
-                } else {
-                    "no abort"
-                };
                 match method {
                     TipStabilityMethod::ExtendedMonitoring {
                         signal, duration, ..
                     } => {
-                        format!("Check tip stability: extended monitoring signal {} for {:.1}s (max: {}, {})", 
-                               signal.index, duration.as_secs_f32(), duration_desc, abort_desc)
+                        format!("Check tip stability: extended monitoring signal {} for {:.1}s (max: {})",
+                               signal.index, duration.as_secs_f32(), duration_desc)
                     }
                     TipStabilityMethod::BiasSweepResponse {
                         signal,
@@ -931,8 +924,8 @@ impl Action {
                         step_duration,
                         allowed_signal_change,
                     } => {
-                        format!("Check tip stability: bias sweep signal {} from {:.2}V to {:.2}V ({} steps, {:.1}ms period, {:.1}% change allowed, max: {}, {})",
-                               signal.index, bias_range.0, bias_range.1, bias_steps, step_duration.as_millis(), allowed_signal_change * 100.0, duration_desc, abort_desc)
+                        format!("Check tip stability: bias sweep signal {} from {:.2}V to {:.2}V ({} steps, {:.1}ms period, {:.1}% change allowed, max: {})",
+                               signal.index, bias_range.0, bias_range.1, bias_steps, step_duration.as_millis(), allowed_signal_change * 100.0, duration_desc)
                     }
                 }
             }

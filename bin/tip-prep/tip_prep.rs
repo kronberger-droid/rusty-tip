@@ -504,15 +504,14 @@ impl TipController {
         );
 
         self.driver
-            .run(Action::PulseRetract {
+            .run(Action::BiasPulse {
+                wait_until_done: true,
                 pulse_width: Duration::from_millis(PULSE_WIDTH_MS),
-                pulse_height_v: signed_voltage,
+                bias_value_v: signed_voltage,
+                z_controller_hold: 0,
+                pulse_mode: 0,
             })
-            .with_data_collection(
-                Duration::from_millis(PRE_PULSE_DATA_COLLECTION_MS),
-                Duration::from_millis(POST_PULSE_DATA_COLLECTION_MS),
-            )
-            .execute()?;
+            .go()?;
 
         Ok(())
     }
@@ -810,17 +809,6 @@ impl TipController {
             if using_opposite { " - SWITCHED" } else { "" }
         );
 
-        // self.driver
-        //     .run(Action::PulseRetract {
-        //         pulse_width: Duration::from_millis(PULSE_WIDTH_MS),
-        //         pulse_height_v: signed_voltage,
-        //     })
-        //     .with_data_collection(
-        //         Duration::from_millis(PRE_PULSE_DATA_COLLECTION_MS),
-        //         Duration::from_millis(POST_PULSE_DATA_COLLECTION_MS),
-        //     )
-        //     .execute()?;
-        //
         self.driver
             .run(Action::BiasPulse {
                 wait_until_done: true,
@@ -901,7 +889,7 @@ impl TipController {
 
     /// Good loop - monitoring, increment good count
     fn good_loop(&mut self) -> Result<(), NanonisError> {
-        let confident_tip_shape = self.pre_good_loop_check()?;
+        let (confident_tip_shape, baseline_freq_shift) = self.pre_good_loop_check()?;
 
         if matches!(confident_tip_shape, TipShape::Blunt) {
             info!("Tip Shape was wrongly measured as good");
@@ -916,6 +904,20 @@ impl TipController {
             return Ok(());
         }
 
+        let baseline_freq_shift = match baseline_freq_shift {
+            Some(v) => v,
+            None => {
+                log::error!("No baseline freq_shift available for stability check");
+                self.current_tip_shape = TipShape::Blunt;
+                return Ok(());
+            }
+        };
+
+        info!(
+            "Baseline freq_shift for stability comparison: {:.3} Hz",
+            baseline_freq_shift
+        );
+
         let sweep_plans = self.build_sweep_plans();
 
         info!(
@@ -926,7 +928,6 @@ impl TipController {
 
         let original_scan_config = self.save_and_set_scan_speed()?;
 
-        let mut overall_stable = true;
         let mut shutdown_requested = false;
         for plan in &sweep_plans {
             if self.is_shutdown_requested() {
@@ -940,11 +941,8 @@ impl TipController {
 
             self.prepare_for_sweep(plan.starting_bias)?;
 
-            let stable = self.execute_stability_sweep(plan)?;
-            if !stable {
-                overall_stable = false;
-                break;
-            }
+            // Run sweep but don't use its stability result - we compare at the end
+            let _ = self.execute_stability_sweep(plan)?;
         }
 
         self.restore_scan_speed(original_scan_config);
@@ -955,9 +953,80 @@ impl TipController {
             ));
         }
 
-        self.handle_stability_outcome(overall_stable, sweep_plans.len())?;
+        // After all sweeps: withdraw, restore initial bias, approach, read freq_shift
+        let final_freq_shift = self.measure_final_freq_shift()?;
+
+        // Compare baseline vs final freq_shift
+        let signal_change = (final_freq_shift - baseline_freq_shift).abs();
+        let is_stable = signal_change <= self.config.allowed_change_for_stable;
+
+        info!(
+            "Stability comparison: baseline={:.3} Hz, final={:.3} Hz, change={:.3} Hz, threshold={:.3} Hz, stable={}",
+            baseline_freq_shift, final_freq_shift, signal_change, self.config.allowed_change_for_stable, is_stable
+        );
+
+        self.handle_stability_outcome(is_stable, sweep_plans.len())?;
 
         Ok(())
+    }
+
+    /// After all stability sweeps, withdraw, restore initial bias, approach, and read freq_shift.
+    fn measure_final_freq_shift(&mut self) -> Result<f32, NanonisError> {
+        info!("Measuring final freq_shift after all sweeps");
+
+        // Withdraw
+        self.driver
+            .run(Action::Withdraw {
+                wait_until_finished: true,
+                timeout: Duration::from_secs(5),
+            })
+            .go()?;
+
+        // Delay before changing bias
+        std::thread::sleep(Duration::from_millis(200));
+
+        // Restore initial bias
+        self.driver.client_mut().bias_set(self.config.initial_bias_v)?;
+        info!("Bias restored to initial value: {:.3} V", self.config.initial_bias_v);
+
+        // Approach
+        self.driver
+            .run(Action::AutoApproach {
+                wait_until_finished: true,
+                timeout: Duration::from_secs(600),
+            })
+            .go()?;
+
+        // Wait for signal to stabilize
+        info!(
+            "Waiting {}ms for signal to stabilize after approach...",
+            POST_APPROACH_SETTLE_TIME_MS
+        );
+        std::thread::sleep(Duration::from_millis(POST_APPROACH_SETTLE_TIME_MS));
+
+        // Read freq_shift
+        let tip_state: TipState = self
+            .driver
+            .run(Action::CheckTipState {
+                method: TipCheckMethod::SignalBounds {
+                    signal: self.config.freq_shift_signal.clone(),
+                    bounds: self.config.sharp_tip_bounds,
+                },
+            })
+            .expecting()?;
+
+        let final_freq_shift = tip_state
+            .measured_signals
+            .get(&SignalIndex::new(self.config.freq_shift_signal.index))
+            .copied()
+            .ok_or_else(|| {
+                NanonisError::Protocol(
+                    "Failed to read final freq_shift after stability sweeps".to_string(),
+                )
+            })?;
+
+        info!("Final freq_shift: {:.3} Hz", final_freq_shift);
+        Ok(final_freq_shift)
     }
 
     /// Build sweep plans based on polarity mode.
@@ -1083,7 +1152,6 @@ impl TipController {
                             .allowed_change_for_stable,
                     },
                 max_duration,
-                abort_on_damage_signs: false,
             })
             .expecting()?;
 
@@ -1195,8 +1263,12 @@ impl TipController {
         Ok(())
     }
 
-    fn pre_good_loop_check(&mut self) -> Result<TipShape, NanonisError> {
+    /// Check reliability of tip state and return baseline freq_shift for stability comparison.
+    /// Returns (TipShape, Option<baseline_freq_shift>).
+    fn pre_good_loop_check(&mut self) -> Result<(TipShape, Option<f32>), NanonisError> {
         log::info!("Checking reliability of tip state result");
+
+        let mut last_freq_shift: Option<f32> = None;
 
         for i in 0..3 {
             if self.is_shutdown_requested() {
@@ -1233,12 +1305,22 @@ impl TipController {
                 })
                 .expecting()?;
 
+            // Capture freq_shift from measured signals
+            if let Some(freq_shift_value) = tip_state
+                .measured_signals
+                .get(&SignalIndex::new(self.config.freq_shift_signal.index))
+                .copied()
+            {
+                last_freq_shift = Some(freq_shift_value);
+            }
+
             if matches!(tip_state.shape, rusty_tip::types::TipShape::Blunt) {
-                return Ok(TipShape::Blunt);
+                return Ok((TipShape::Blunt, None));
             }
         }
 
-        Ok(TipShape::Sharp)
+        log::info!("Baseline freq_shift for stability check: {:?}", last_freq_shift);
+        Ok((TipShape::Sharp, last_freq_shift))
     }
 
     fn pre_loop_initialization(&mut self) -> Result<(), NanonisError> {

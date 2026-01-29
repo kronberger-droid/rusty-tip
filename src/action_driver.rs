@@ -2618,7 +2618,6 @@ impl ActionDriver {
             Action::CheckTipStability {
                 method,
                 max_duration: _,
-                abort_on_damage_signs: _,
             } => {
                 use std::collections::HashMap;
 
