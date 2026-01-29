@@ -1,9 +1,5 @@
 # Tip Prep
 
-## Stability Check
-
-- High Voltage Pulse after Stability Check fails
-
 ## General
 
 - Implement script for multiple different tip prep cycle testing
@@ -21,3 +17,21 @@
 ## Logger Injection
 
 - Make it possible to inject Action Results without having to run an action
+
+## Autoapproach
+
+1. Autoapproach
+
+2. Wait 0.2 sec
+
+3. Safetip: Auto Recovery, setpoint 1nA,
+
+4. Home
+
+5. wait 0.5 sec
+
+6. center freq shift
+
+7. Auto Approach
+
+8. Turn off Safetip

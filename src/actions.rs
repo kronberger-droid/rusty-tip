@@ -1,8 +1,7 @@
 use crate::{
-    types::{
-        DataToGet, MotorDisplacement, OsciData, TipShape, TriggerConfig,
-    },
-    MotorDirection, MovementMode, Position, Position3D, ScanAction, Signal, TipShaperConfig,
+    types::{DataToGet, MotorDisplacement, OsciData, TipShape, TriggerConfig},
+    MotorDirection, MovementMode, Position, Position3D, ScanAction, Signal,
+    TipShaperConfig,
 };
 use nanonis_rs::signals::SignalIndex;
 use std::{collections::HashMap, time::Duration};
@@ -11,14 +10,9 @@ use std::{collections::HashMap, time::Duration};
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TipCheckMethod {
     /// Check single signal against bounds
-    SignalBounds {
-        signal: Signal,
-        bounds: (f32, f32),
-    },
+    SignalBounds { signal: Signal, bounds: (f32, f32) },
     /// Check multiple signals (all must be in bounds)
-    MultiSignalBounds {
-        signals: Vec<(Signal, (f32, f32))>,
-    },
+    MultiSignalBounds { signals: Vec<(Signal, (f32, f32))> },
 }
 
 /// Method for determining signal stability for GetStableSignal action
@@ -209,6 +203,8 @@ pub enum Action {
     AutoApproach {
         wait_until_finished: bool,
         timeout: Duration,
+        /// If true, center the frequency shift before starting auto-approach
+        center_freq_shift: bool,
     },
 
     /// Withdraw tip with timeout
@@ -442,7 +438,9 @@ impl ActionResult {
     pub fn expect_signal_value(self, action: &Action) -> f64 {
         match (action, self) {
             (Action::ReadSignal { .. }, ActionResult::Value(v)) => v,
-            (Action::ReadSignal { .. }, ActionResult::Values(mut vs)) if vs.len() == 1 => {
+            (Action::ReadSignal { .. }, ActionResult::Values(mut vs))
+                if vs.len() == 1 =>
+            {
                 vs.pop().unwrap()
             }
             (Action::ReadBias, ActionResult::Value(v)) => v,
@@ -456,10 +454,15 @@ impl ActionResult {
     /// Extract multiple values with action validation (panics on type mismatch)
     pub fn expect_values(self, action: &Action) -> Vec<f64> {
         match (action, self) {
-            (Action::ReadSignals { .. }, ActionResult::Values(values)) => values,
+            (Action::ReadSignals { .. }, ActionResult::Values(values)) => {
+                values
+            }
             (Action::ReadSignal { .. }, ActionResult::Value(v)) => vec![v],
             (action, result) => {
-                panic!("Expected values from action {:?}, got {:?}", action, result)
+                panic!(
+                    "Expected values from action {:?}, got {:?}",
+                    action, result
+                )
             }
         }
     }
@@ -467,7 +470,9 @@ impl ActionResult {
     /// Extract position with action validation (panics on type mismatch)
     pub fn expect_position(self, action: &Action) -> Position {
         match (action, self) {
-            (Action::ReadPiezoPosition { .. }, ActionResult::Position(pos)) => pos,
+            (Action::ReadPiezoPosition { .. }, ActionResult::Position(pos)) => {
+                pos
+            }
             (action, result) => panic!(
                 "Expected position from action {:?}, got {:?}",
                 action, result
@@ -502,7 +507,10 @@ impl ActionResult {
         match (action, self) {
             (Action::ReadScanStatus, ActionResult::Status(status)) => status,
             (action, result) => {
-                panic!("Expected status from action {:?}, got {:?}", action, result)
+                panic!(
+                    "Expected status from action {:?}, got {:?}",
+                    action, result
+                )
             }
         }
     }
@@ -510,7 +518,10 @@ impl ActionResult {
     /// Extract tip shape enum with action validation (panics on type mismatch)
     pub fn expect_tip_shape(self, action: &Action) -> TipShape {
         match (action, self) {
-            (Action::CheckTipState { .. }, ActionResult::TipState(tip_state)) => tip_state.shape,
+            (
+                Action::CheckTipState { .. },
+                ActionResult::TipState(tip_state),
+            ) => tip_state.shape,
             (action, result) => {
                 panic!(
                     "Expected tip state from action {:?}, got {:?}",
@@ -523,7 +534,10 @@ impl ActionResult {
     /// Extract full tip state result with action validation (panics on type mismatch)
     pub fn expect_tip_state(self, action: &Action) -> TipState {
         match (action, self) {
-            (Action::CheckTipState { .. }, ActionResult::TipState(tip_state)) => tip_state,
+            (
+                Action::CheckTipState { .. },
+                ActionResult::TipState(tip_state),
+            ) => tip_state,
             (action, result) => {
                 panic!(
                     "Expected tip state from action {:?}, got {:?}",
@@ -536,7 +550,10 @@ impl ActionResult {
     /// Extract stability result (panics on type mismatch)
     pub fn expect_stability_result(self, action: &Action) -> StabilityResult {
         match (action, self) {
-            (Action::CheckTipStability { .. }, ActionResult::StabilityResult(result)) => result,
+            (
+                Action::CheckTipStability { .. },
+                ActionResult::StabilityResult(result),
+            ) => result,
             (action, result) => {
                 panic!(
                     "Expected stability result from action {:?}, got {:?}",
@@ -549,9 +566,10 @@ impl ActionResult {
     /// Extract stable signal value (panics on type mismatch)
     pub fn expect_stable_signal_value(self, action: &Action) -> f32 {
         match (action, self) {
-            (Action::ReadStableSignal { .. }, ActionResult::StableSignal(stable)) => {
-                stable.stable_value
-            }
+            (
+                Action::ReadStableSignal { .. },
+                ActionResult::StableSignal(stable),
+            ) => stable.stable_value,
             (action, result) => {
                 panic!(
                     "Expected stable signal from action {:?}, got {:?}",
@@ -564,7 +582,10 @@ impl ActionResult {
     /// Extract full stable signal result with action validation (panics on type mismatch)
     pub fn expect_stable_signal(self, action: &Action) -> StableSignal {
         match (action, self) {
-            (Action::ReadStableSignal { .. }, ActionResult::StableSignal(stable)) => stable,
+            (
+                Action::ReadStableSignal { .. },
+                ActionResult::StableSignal(stable),
+            ) => stable,
             (action, result) => {
                 panic!(
                     "Expected stable signal from action {:?}, got {:?}",
@@ -577,7 +598,10 @@ impl ActionResult {
     /// Extract TCP reader status with action validation (panics on type mismatch)
     pub fn expect_tcp_reader_status(self, action: &Action) -> TCPReaderStatus {
         match (action, self) {
-            (Action::GetTCPLoggerStatus, ActionResult::TCPReaderStatus(status)) => status,
+            (
+                Action::GetTCPLoggerStatus,
+                ActionResult::TCPReaderStatus(status),
+            ) => status,
             (action, result) => {
                 panic!(
                     "Expected TCP reader status from action {:?}, got {:?}",
@@ -590,7 +614,10 @@ impl ActionResult {
     // === Safe Extraction Methods (non-panicking) ===
 
     /// Try to extract OsciData with action validation
-    pub fn try_into_osci_data(self, action: &Action) -> Result<OsciData, String> {
+    pub fn try_into_osci_data(
+        self,
+        action: &Action,
+    ) -> Result<OsciData, String> {
         match (action, self) {
             (Action::ReadOsci { .. }, ActionResult::OsciData(data)) => Ok(data),
             (action, result) => Err(format!(
@@ -604,7 +631,9 @@ impl ActionResult {
     pub fn try_into_signal_value(self, action: &Action) -> Result<f64, String> {
         match (action, self) {
             (Action::ReadSignal { .. }, ActionResult::Value(v)) => Ok(v),
-            (Action::ReadSignal { .. }, ActionResult::Values(mut vs)) if vs.len() == 1 => {
+            (Action::ReadSignal { .. }, ActionResult::Values(mut vs))
+                if vs.len() == 1 =>
+            {
                 Ok(vs.pop().unwrap())
             }
             (Action::ReadBias, ActionResult::Value(v)) => Ok(v),
@@ -616,9 +645,14 @@ impl ActionResult {
     }
 
     /// Try to extract position with action validation
-    pub fn try_into_position(self, action: &Action) -> Result<Position, String> {
+    pub fn try_into_position(
+        self,
+        action: &Action,
+    ) -> Result<Position, String> {
         match (action, self) {
-            (Action::ReadPiezoPosition { .. }, ActionResult::Position(pos)) => Ok(pos),
+            (Action::ReadPiezoPosition { .. }, ActionResult::Position(pos)) => {
+                Ok(pos)
+            }
             (action, result) => Err(format!(
                 "Expected position from action {:?}, got {:?}",
                 action, result
@@ -629,7 +663,9 @@ impl ActionResult {
     /// Try to extract status with action validation
     pub fn try_into_status(self, action: &Action) -> Result<bool, String> {
         match (action, self) {
-            (Action::ReadScanStatus, ActionResult::Status(status)) => Ok(status),
+            (Action::ReadScanStatus, ActionResult::Status(status)) => {
+                Ok(status)
+            }
             (action, result) => Err(format!(
                 "Expected status from action {:?}, got {:?}",
                 action, result
@@ -638,9 +674,15 @@ impl ActionResult {
     }
 
     /// Try to extract stability result with action validation
-    pub fn try_into_stability_result(self, action: &Action) -> Result<StabilityResult, String> {
+    pub fn try_into_stability_result(
+        self,
+        action: &Action,
+    ) -> Result<StabilityResult, String> {
         match (action, self) {
-            (Action::CheckTipStability { .. }, ActionResult::StabilityResult(result)) => Ok(result),
+            (
+                Action::CheckTipStability { .. },
+                ActionResult::StabilityResult(result),
+            ) => Ok(result),
             (action, result) => Err(format!(
                 "Expected stability result from action {:?}, got {:?}",
                 action, result
@@ -649,11 +691,15 @@ impl ActionResult {
     }
 
     /// Try to extract stable signal value with action validation
-    pub fn try_into_stable_signal_value(self, action: &Action) -> Result<f32, String> {
+    pub fn try_into_stable_signal_value(
+        self,
+        action: &Action,
+    ) -> Result<f32, String> {
         match (action, self) {
-            (Action::ReadStableSignal { .. }, ActionResult::StableSignal(stable)) => {
-                Ok(stable.stable_value)
-            }
+            (
+                Action::ReadStableSignal { .. },
+                ActionResult::StableSignal(stable),
+            ) => Ok(stable.stable_value),
             (action, result) => Err(format!(
                 "Expected stable signal from action {:?}, got {:?}",
                 action, result
@@ -714,7 +760,9 @@ impl ExpectFromAction<StabilityResult> for ActionResult {
 impl ExpectFromAction<f32> for ActionResult {
     fn expect_from_action(self, action: &Action) -> f32 {
         match action {
-            Action::ReadStableSignal { .. } => self.expect_stable_signal_value(action),
+            Action::ReadStableSignal { .. } => {
+                self.expect_stable_signal_value(action)
+            }
             _ => self.expect_bias_voltage(action),
         }
     }
@@ -795,7 +843,8 @@ impl Action {
                 format!("Read signal {}", signal.index)
             }
             Action::ReadSignals { signals, .. } => {
-                let indices: Vec<i32> = signals.iter().map(|s| s.index as i32).collect();
+                let indices: Vec<i32> =
+                    signals.iter().map(|s| s.index as i32).collect();
                 format!("Read signals: {:?}", indices)
             }
             Action::SetBias { voltage } => {
@@ -826,15 +875,19 @@ impl Action {
             Action::AutoApproach {
                 wait_until_finished,
                 timeout,
+                center_freq_shift,
             } => format!(
-                "Auto approach blocking: {wait_until_finished}, timeout: {:?}",
+                "Auto approach blocking: {wait_until_finished}, timeout: {:?}, center freq: {center_freq_shift}",
                 timeout
             ),
             Action::Withdraw { timeout, .. } => {
                 format!("Withdraw tip (timeout: {}ms)", timeout.as_micros())
             }
             Action::SafeReposition { x_steps, y_steps } => {
-                format!("Safe reposition: move ({}, {}) steps", x_steps, y_steps)
+                format!(
+                    "Safe reposition: move ({}, {}) steps",
+                    x_steps, y_steps
+                )
             }
             Action::SetZSetpoint { setpoint } => {
                 format!("Set Z setpoint: {:.3e}", setpoint)
@@ -849,7 +902,10 @@ impl Action {
                 z_controller_hold: _,
                 pulse_mode: _,
             } => {
-                format!("Bias pulse {:.3}V for {:?}ms", bias_value_v, pulse_width)
+                format!(
+                    "Bias pulse {:.3}V for {:?}ms",
+                    bias_value_v, pulse_width
+                )
             }
             Action::TipShaper {
                 config,
@@ -909,10 +965,13 @@ impl Action {
                 method,
                 max_duration,
             } => {
-                let duration_desc = format!("{:.1}s", max_duration.as_secs_f32());
+                let duration_desc =
+                    format!("{:.1}s", max_duration.as_secs_f32());
                 match method {
                     TipStabilityMethod::ExtendedMonitoring {
-                        signal, duration, ..
+                        signal,
+                        duration,
+                        ..
                     } => {
                         format!("Check tip stability: extended monitoring signal {} for {:.1}s (max: {})",
                                signal.index, duration.as_secs_f32(), duration_desc)
@@ -937,7 +996,8 @@ impl Action {
                 timeout,
                 retry_count,
             } => {
-                let points_desc = data_points.map_or("default".to_string(), |p| p.to_string());
+                let points_desc = data_points
+                    .map_or("default".to_string(), |p| p.to_string());
                 let data_desc = if *use_new_data {
                     "new data"
                 } else {
@@ -947,14 +1007,19 @@ impl Action {
                     SignalStabilityMethod::StandardDeviation { threshold } => {
                         format!("std dev {:.3e}", threshold)
                     }
-                    SignalStabilityMethod::RelativeStandardDeviation { threshold_percent } => {
+                    SignalStabilityMethod::RelativeStandardDeviation {
+                        threshold_percent,
+                    } => {
                         format!("rel std {:.1}%", threshold_percent)
                     }
                     SignalStabilityMethod::MovingWindow {
                         window_size,
                         max_variation,
                     } => {
-                        format!("window {}pts, max var {:.3e}", window_size, max_variation)
+                        format!(
+                            "window {}pts, max var {:.3e}",
+                            window_size, max_variation
+                        )
                     }
                     SignalStabilityMethod::TrendAnalysis { max_slope } => {
                         format!("trend analysis, max slope {:.3e}", max_slope)
@@ -969,8 +1034,10 @@ impl Action {
                         )
                     }
                 };
-                let retry_desc =
-                    retry_count.map_or("no retry".to_string(), |r| format!("{} retries", r));
+                let retry_desc = retry_count
+                    .map_or("no retry".to_string(), |r| {
+                        format!("{} retries", r)
+                    });
                 format!(
                     "Get stable signal {} ({} points, {}, {}, timeout {:.1}s, {})",
                     signal.index,
@@ -995,7 +1062,8 @@ mod tests {
         let bias_result = ActionResult::Value(2.5);
         assert_eq!(bias_result.as_f64(), Some(2.5));
 
-        let position_result = ActionResult::Position(Position { x: 1e-9, y: 2e-9 });
+        let position_result =
+            ActionResult::Position(Position { x: 1e-9, y: 2e-9 });
         assert_eq!(
             position_result.as_position(),
             Some(Position { x: 1e-9, y: 2e-9 })
@@ -1247,6 +1315,7 @@ impl ActionChain {
                 Action::AutoApproach {
                     wait_until_finished: true,
                     timeout: Duration::from_secs(300),
+                    center_freq_shift: false,
                 },
                 Action::Wait {
                     duration: Duration::from_millis(500),
@@ -1256,7 +1325,8 @@ impl ActionChain {
                     wait_for_newest: true,
                 }, // Typical bias voltage
                 Action::ReadSignal {
-                    signal: Signal::new("Current".to_string(), 0, None).unwrap(),
+                    signal: Signal::new("Current".to_string(), 0, None)
+                        .unwrap(),
                     wait_for_newest: true,
                 }, // Typical current
             ],
@@ -1278,13 +1348,17 @@ impl ActionChain {
                 Action::AutoApproach {
                     wait_until_finished: true,
                     timeout: Duration::from_secs(300),
+                    center_freq_shift: false,
                 },
                 Action::ReadSignal {
                     signal: Signal::new("Bias".to_string(), 24, None).unwrap(),
                     wait_for_newest: true,
                 },
             ],
-            format!("Move to ({:.1e}, {:.1e}) and approach", target.x, target.y),
+            format!(
+                "Move to ({:.1e}, {:.1e}) and approach",
+                target.x, target.y
+            ),
         )
     }
 
@@ -1323,13 +1397,15 @@ impl ActionChain {
                 Action::AutoApproach {
                     wait_until_finished: true,
                     timeout: Duration::from_secs(300),
+                    center_freq_shift: false,
                 },
                 Action::ReadSignal {
                     signal: Signal::new("Bias".to_string(), 24, None).unwrap(),
                     wait_for_newest: true,
                 }, // Bias voltage
                 Action::ReadSignal {
-                    signal: Signal::new("Current".to_string(), 0, None).unwrap(),
+                    signal: Signal::new("Current".to_string(), 0, None)
+                        .unwrap(),
                     wait_for_newest: true,
                 }, // Current
                 Action::Withdraw {
@@ -1362,6 +1438,7 @@ impl ActionChain {
                 Action::AutoApproach {
                     wait_until_finished: true,
                     timeout: Duration::from_secs(300),
+                    center_freq_shift: false,
                 },
                 Action::ReadSignal {
                     signal: Signal::new("Bias".to_string(), 24, None).unwrap(),
@@ -1381,7 +1458,10 @@ mod chain_tests {
     #[test]
     fn test_vec_foundation() {
         // Test direct Vec<Action> usage
-        let mut chain = ActionChain::new(vec![Action::ReadBias, Action::SetBias { voltage: 1.0 }]);
+        let mut chain = ActionChain::new(vec![
+            Action::ReadBias,
+            Action::SetBias { voltage: 1.0 },
+        ]);
 
         assert_eq!(chain.len(), 2);
 
@@ -1389,6 +1469,7 @@ mod chain_tests {
         chain.push(Action::AutoApproach {
             wait_until_finished: true,
             timeout: Duration::from_secs(300),
+            center_freq_shift: false,
         });
         assert_eq!(chain.len(), 3);
 
@@ -1397,7 +1478,8 @@ mod chain_tests {
             action,
             Action::AutoApproach {
                 wait_until_finished: true,
-                timeout: _
+                timeout: _,
+                center_freq_shift: _,
             }
         ));
         assert_eq!(chain.len(), 2);
@@ -1424,6 +1506,7 @@ mod chain_tests {
                 Action::AutoApproach {
                     wait_until_finished: true,
                     timeout: Duration::from_secs(300),
+                    center_freq_shift: false,
                 },
             ],
             "Test chain",
@@ -1474,7 +1557,8 @@ mod chain_tests {
         let approach = ActionChain::safe_tip_approach();
         assert!(!approach.control_actions().is_empty());
 
-        let positions = vec![Position { x: 1e-9, y: 1e-9 }, Position { x: 2e-9, y: 2e-9 }];
+        let positions =
+            vec![Position { x: 1e-9, y: 1e-9 }, Position { x: 2e-9, y: 2e-9 }];
         let survey = ActionChain::position_survey(positions);
         assert_eq!(survey.len(), 12); // 6 actions per position × 2 positions
     }
@@ -1495,6 +1579,7 @@ mod chain_tests {
             Action::AutoApproach {
                 wait_until_finished: true,
                 timeout: Duration::from_secs(1),
+                center_freq_shift: false,
             },
             Action::SetBias { voltage: 1.5 },
         ]);
@@ -1516,6 +1601,7 @@ mod chain_tests {
             Action::AutoApproach {
                 wait_until_finished: true,
                 timeout: Duration::from_secs(1),
+                center_freq_shift: false,
             },
             Action::Wait {
                 duration: Duration::from_millis(100),
@@ -1544,6 +1630,7 @@ mod chain_tests {
             Action::AutoApproach {
                 wait_until_finished: true,
                 timeout: Duration::from_secs(1),
+                center_freq_shift: false,
             },
         ];
 
@@ -1725,7 +1812,11 @@ impl ActionLogEntry {
     }
 
     /// Add metadata to this log entry
-    pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+    pub fn with_metadata(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
         if self.metadata.is_none() {
             self.metadata = Some(std::collections::HashMap::new());
         }
@@ -1743,25 +1834,28 @@ impl ActionLogResult {
     pub fn from_action_result(result: &ActionResult) -> Self {
         match result {
             ActionResult::Value(v) => ActionLogResult::Value(*v),
-            ActionResult::Values(values) => ActionLogResult::Values(values.clone()),
+            ActionResult::Values(values) => {
+                ActionLogResult::Values(values.clone())
+            }
             ActionResult::Text(text) => ActionLogResult::Text(text.clone()),
             ActionResult::Status(status) => ActionLogResult::Status(*status),
-            ActionResult::Position(pos) => ActionLogResult::Position { x: pos.x, y: pos.y },
+            ActionResult::Position(pos) => {
+                ActionLogResult::Position { x: pos.x, y: pos.y }
+            }
             ActionResult::OsciData(osci_data) => ActionLogResult::OsciData {
                 t0: osci_data.t0,
                 dt: osci_data.dt,
                 size: osci_data.size,
                 data: osci_data.data.clone(),
-                signal_stats: osci_data
-                    .signal_stats
-                    .as_ref()
-                    .map(|stats| LoggableSignalStats {
+                signal_stats: osci_data.signal_stats.as_ref().map(|stats| {
+                    LoggableSignalStats {
                         mean: stats.mean,
                         std_dev: stats.std_dev,
                         relative_std: stats.relative_std,
                         window_size: stats.window_size,
                         stability_method: stats.stability_method.clone(),
-                    }),
+                    }
+                }),
                 is_stable: osci_data.is_stable,
                 fallback_value: osci_data.fallback_value,
             },
@@ -1815,8 +1909,14 @@ impl ActionLogResult {
 
                 // Create bounds info with stability metrics
                 let mut bounds_info = std::collections::HashMap::new();
-                bounds_info.insert("is_stable".to_string(), result.is_stable.to_string());
-                bounds_info.insert("method".to_string(), "stability_check".to_string());
+                bounds_info.insert(
+                    "is_stable".to_string(),
+                    result.is_stable.to_string(),
+                );
+                bounds_info.insert(
+                    "method".to_string(),
+                    "stability_check".to_string(),
+                );
 
                 ActionLogResult::TipState {
                     shape: tip_shape,
@@ -1829,7 +1929,8 @@ impl ActionLogResult {
                 ActionLogResult::StableSignal {
                     stable_value: stable.stable_value,
                     data_points_used: stable.data_points_used,
-                    analysis_duration_ms: stable.analysis_duration.as_millis() as u64,
+                    analysis_duration_ms: stable.analysis_duration.as_millis()
+                        as u64,
                     stability_metrics: stable.stability_metrics.clone(),
                     raw_data: stable.raw_data.clone(), // Full TCP dataset for debugging
                 }
@@ -1838,8 +1939,11 @@ impl ActionLogResult {
     }
 
     /// Convert ExperimentData to ActionLogResult for comprehensive logging
-    pub fn from_experiment_data(exp_data: &crate::types::ExperimentData) -> Self {
-        let action_result = Box::new(Self::from_action_result(&exp_data.action_result));
+    pub fn from_experiment_data(
+        exp_data: &crate::types::ExperimentData,
+    ) -> Self {
+        let action_result =
+            Box::new(Self::from_action_result(&exp_data.action_result));
 
         let signal_frames: Vec<LoggableTimestampedSignalFrame> = exp_data
             .signal_frames
@@ -1873,7 +1977,9 @@ impl ActionLogResult {
     }
 
     /// Convert ChainExperimentData to ActionLogResult for comprehensive logging
-    pub fn from_chain_experiment_data(chain_data: &crate::types::ChainExperimentData) -> Self {
+    pub fn from_chain_experiment_data(
+        chain_data: &crate::types::ChainExperimentData,
+    ) -> Self {
         let action_results: Vec<ActionLogResult> = chain_data
             .action_results
             .iter()

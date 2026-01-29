@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    ops::DerefMut,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -713,6 +714,97 @@ impl ActionDriver {
             .as_ref()
             .map(|f| f.load(Ordering::SeqCst))
             .unwrap_or(false)
+    }
+
+    /// Execute an auto-approach operation.
+    ///
+    /// If `wait_until_finished` is true, blocks until approach completes or timeout.
+    /// If false, starts the approach and returns immediately.
+    pub fn auto_approach(
+        &mut self,
+        wait_until_finished: bool,
+        timeout: Duration,
+    ) -> Result<(), NanonisError> {
+        // Check if already running
+        match self.client.auto_approach_on_off_get() {
+            Ok(true) => {
+                log::warn!("Auto-approach already running");
+                return Ok(());
+            }
+            Ok(false) => {
+                log::debug!("Auto-approach is idle, proceeding to start");
+            }
+            Err(_) => {
+                log::warn!(
+                    "Auto-approach status unknown, attempting to proceed"
+                );
+            }
+        }
+
+        // Open auto-approach module
+        match self.client.auto_approach_open() {
+            Ok(_) => log::debug!("Opened the auto-approach module"),
+            Err(_) => {
+                log::debug!("Failed to open auto-approach module, already open")
+            }
+        }
+
+        // Wait for module initialization
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // Start auto-approach
+        if let Err(e) = self.client.auto_approach_on_off_set(true) {
+            log::error!("Failed to start auto-approach: {}", e);
+            return Err(NanonisError::Protocol(format!(
+                "Failed to start auto-approach: {}",
+                e
+            )));
+        }
+
+        if !wait_until_finished {
+            log::debug!("Auto-approach started, not waiting for completion");
+            return Ok(());
+        }
+
+        // Wait for completion with timeout
+        log::debug!("Waiting for auto-approach to complete...");
+        let poll_interval = std::time::Duration::from_millis(100);
+
+        match poll_until(
+            || {
+                self.client
+                    .auto_approach_on_off_get()
+                    .map(|running| !running)
+            },
+            timeout,
+            poll_interval,
+        ) {
+            Ok(()) => {
+                log::debug!("Auto-approach completed successfully");
+                Ok(())
+            }
+            Err(PollError::Timeout) => {
+                log::warn!("Auto-approach timed out after {:?}", timeout);
+                let _ = self.client.auto_approach_on_off_set(false);
+                Err(NanonisError::Protocol(
+                    "Auto-approach timed out".to_string(),
+                ))
+            }
+            Err(PollError::ConditionError(e)) => {
+                log::error!("Error checking auto-approach status: {}", e);
+                Err(NanonisError::Protocol(format!(
+                    "Status check error: {}",
+                    e
+                )))
+            }
+        }
+    }
+
+    /// Center the frequency shift using the PLL auto-center function.
+    pub fn center_freq_shift(&mut self) -> Result<(), NanonisError> {
+        let modulator_index = 1;
+        log::debug!("Centering frequency shift");
+        self.client.pll_freq_shift_auto_center(modulator_index)
     }
 
     /// Get TCP Logger configuration if set
@@ -1558,96 +1650,70 @@ impl ActionDriver {
             Action::AutoApproach {
                 wait_until_finished,
                 timeout,
+                center_freq_shift,
             } => {
                 log::debug!(
-                    "Starting auto-approach (wait: {}, timeout: {:?})",
+                    "Starting auto-approach (wait: {}, timeout: {:?}, center_freq: {})",
                     wait_until_finished,
-                    timeout
+                    timeout,
+                    center_freq_shift
                 );
 
-                // Check if already running
-                match self.client.auto_approach_on_off_get() {
-                    Ok(true) => {
-                        log::warn!("Auto-approach already running");
-                        return Ok(ActionResult::Success); // Consider already running as success
-                    }
-                    Ok(false) => {
-                        log::debug!(
-                            "Auto-approach is idle, proceeding to start"
-                        );
-                    }
-                    Err(_) => {
-                        log::warn!("Auto-approach status unknown, attempting to proceed");
-                    }
-                }
+                // Center frequency shift if requested
+                if center_freq_shift {
+                    // Approach to the surface
+                    self.auto_approach(true, timeout)?;
 
-                // Open auto-approach module
-                match self.client.auto_approach_open() {
-                    Ok(_) => debug!("Opened the auto-approach module"),
-                    Err(_) => debug!(
-                        "Failed to open auto-approach module, already open"
-                    ),
-                }
+                    // Sleep for 0.2 secs
+                    std::thread::sleep(Duration::from_millis(200));
 
-                // Wait for module initialization
-                std::thread::sleep(std::time::Duration::from_millis(500));
-
-                // Start auto-approach
-                if let Err(e) = self.client.auto_approach_on_off_set(true) {
-                    log::error!("Failed to start auto-approach: {}", e);
-                    return Err(NanonisError::Protocol(format!(
-                        "Failed to start auto-approach: {}",
-                        e
-                    )));
-                }
-
-                if !wait_until_finished {
-                    log::debug!(
-                        "Auto-approach started, not waiting for completion"
-                    );
-                    return Ok(ActionResult::Success);
-                }
-
-                // Wait for completion with timeout
-                log::debug!("Waiting for auto-approach to complete...");
-                let poll_interval = std::time::Duration::from_millis(100);
-
-                match poll_until(
-                    || {
-                        // Returns Ok(true) when auto-approach is complete (not running)
-                        self.client
-                            .auto_approach_on_off_get()
-                            .map(|running| !running)
-                    },
-                    timeout,
-                    poll_interval,
-                ) {
-                    Ok(()) => {
-                        log::debug!("Auto-approach completed successfully");
-                        Ok(ActionResult::Success)
-                    }
-                    Err(PollError::Timeout) => {
+                    // Toggle on the safe tip
+                    if let Ok(safetip_state) =
+                        self.client_mut().safe_tip_on_off_get()
+                    {
+                        if !safetip_state {
+                            self.client_mut().safe_tip_on_off_set(true)?;
+                        }
+                    } else {
                         log::warn!(
-                            "Auto-approach timed out after {:?}",
-                            timeout
+                            "Failed to read safe tip state, setting true"
                         );
-                        // Try to stop the auto-approach
-                        let _ = self.client.auto_approach_on_off_set(false);
-                        Err(NanonisError::Protocol(
-                            "Auto-approach timed out".to_string(),
-                        ))
+                        self.client_mut().safe_tip_on_off_set(true)?;
                     }
-                    Err(PollError::ConditionError(e)) => {
-                        log::error!(
-                            "Error checking auto-approach status: {}",
-                            e
+
+                    // Home 50nm away from the surface
+                    self.client_mut().z_ctrl_home()?;
+
+                    // Sleep for 0.5 secs
+                    std::thread::sleep(Duration::from_millis(500));
+
+                    // Center the freq shift
+                    if let Err(e) = self.center_freq_shift() {
+                        log::warn!("Failed to center frequency shift: {}", e);
+                        // Continue anyway, this is not critical
+                    }
+
+                    // Approach again
+                    self.auto_approach(wait_until_finished, timeout)?;
+
+                    // Toggle of the safe tip
+                    if let Ok(safetip_state) =
+                        self.client_mut().safe_tip_on_off_get()
+                    {
+                        if safetip_state {
+                            self.client_mut().safe_tip_on_off_set(false)?;
+                        }
+                    } else {
+                        log::warn!(
+                            "Failed to read safe tip state, setting false"
                         );
-                        Err(NanonisError::Protocol(format!(
-                            "Status check error: {}",
-                            e
-                        )))
+                        self.client_mut().safe_tip_on_off_set(false)?;
                     }
+                } else {
+                    self.auto_approach(wait_until_finished, timeout)?;
                 }
+
+                Ok(ActionResult::Success)
             }
 
             Action::Withdraw {
@@ -1681,61 +1747,11 @@ impl ActionDriver {
                     )?;
                 }
 
-                // 3. Center Frequency shift (TODO: Hardcoded index)
                 thread::sleep(Duration::from_millis(500));
 
-                let modulator_index = 1;
-                self.client.pll_freq_shift_auto_center(modulator_index)?;
-
-                info!("Centered frequency while not approached");
-
-                thread::sleep(Duration::from_millis(500));
-
-                // 4. Auto approach (using the same logic as AutoApproach)
-                // Open auto-approach module
-                self.client.auto_approach_open()?;
-                thread::sleep(Duration::from_millis(500)); // Wait for module initialization
-
-                // Start auto-approach
-                self.client.auto_approach_on_off_set(true)?;
-
-                // Wait for completion with timeout
-                let poll_interval = Duration::from_millis(100);
-                match poll_until(
-                    || {
-                        self.client
-                            .auto_approach_on_off_get()
-                            .map(|running| !running)
-                    },
-                    approach_timeout,
-                    poll_interval,
-                ) {
-                    Ok(()) => {
-                        log::debug!("SafeReposition auto-approach completed successfully");
-                    }
-                    Err(PollError::Timeout) => {
-                        log::warn!(
-                            "SafeReposition auto-approach timed out after {:?}",
-                            approach_timeout
-                        );
-                        // Try to stop the auto-approach
-                        let _ = self.client.auto_approach_on_off_set(false);
-                        return Err(NanonisError::Protocol(
-                            "SafeReposition auto-approach timed out"
-                                .to_string(),
-                        ));
-                    }
-                    Err(PollError::ConditionError(e)) => {
-                        log::error!(
-                            "Error checking auto-approach status in SafeReposition: {}",
-                            e
-                        );
-                        return Err(NanonisError::Protocol(format!(
-                            "SafeReposition status check error: {}",
-                            e
-                        )));
-                    }
-                }
+                // 3. Center frequency and auto approach
+                self.center_freq_shift()?;
+                self.auto_approach(true, approach_timeout)?;
 
                 // 4. Wait for stabilization
                 thread::sleep(stabilization_wait);
@@ -2825,8 +2841,14 @@ impl ActionDriver {
                             .scan_action(ScanAction::Stop, ScanDirection::Up);
 
                         // Withdraw before changing bias
-                        if let Err(e) = self.client.z_ctrl_withdraw(true, Duration::from_secs(5)) {
-                            log::error!("Failed to withdraw before restoring bias: {}", e);
+                        if let Err(e) = self
+                            .client
+                            .z_ctrl_withdraw(true, Duration::from_secs(5))
+                        {
+                            log::error!(
+                                "Failed to withdraw before restoring bias: {}",
+                                e
+                            );
                         }
 
                         // Delay before changing bias

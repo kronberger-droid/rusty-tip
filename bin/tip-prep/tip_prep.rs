@@ -24,12 +24,6 @@ const STATUS_INTERVAL: usize = 10;
 /// Pulse width for tip pulsing during bad_loop (ms)
 const PULSE_WIDTH_MS: u64 = 50;
 
-/// Data collection duration before pulse (ms)
-const PRE_PULSE_DATA_COLLECTION_MS: u64 = 50;
-
-/// Data collection duration after pulse (ms)
-const POST_PULSE_DATA_COLLECTION_MS: u64 = 50;
-
 /// Wait time after clearing TCP buffer to accumulate fresh data (ms)
 const BUFFER_CLEAR_WAIT_MS: u64 = 500;
 
@@ -42,15 +36,6 @@ const POST_APPROACH_SETTLE_TIME_MS: u64 = 2000;
 /// After repositioning and approach in bad_loop, signal needs time to settle
 /// Shorter than initial approach since it's a smaller movement
 const POST_REPOSITION_SETTLE_TIME_MS: u64 = 1000;
-
-/// Loop types based on tip shape - simple and direct
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum LoopType {
-    BadLoop,
-    GoodLoop,
-    StableLoop,
-}
 
 /// Tip shape states
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -819,6 +804,7 @@ impl TipController {
             })
             .go()?;
 
+        // TODO
         std::thread::sleep(Duration::from_secs(1));
 
         log::debug!("Repositioning...");
@@ -889,7 +875,8 @@ impl TipController {
 
     /// Good loop - monitoring, increment good count
     fn good_loop(&mut self) -> Result<(), NanonisError> {
-        let (confident_tip_shape, baseline_freq_shift) = self.pre_good_loop_check()?;
+        let (confident_tip_shape, baseline_freq_shift) =
+            self.pre_good_loop_check()?;
 
         if matches!(confident_tip_shape, TipShape::Blunt) {
             info!("Tip Shape was wrongly measured as good");
@@ -907,7 +894,9 @@ impl TipController {
         let baseline_freq_shift = match baseline_freq_shift {
             Some(v) => v,
             None => {
-                log::error!("No baseline freq_shift available for stability check");
+                log::error!(
+                    "No baseline freq_shift available for stability check"
+                );
                 self.current_tip_shape = TipShape::Blunt;
                 return Ok(());
             }
@@ -986,14 +975,20 @@ impl TipController {
         std::thread::sleep(Duration::from_millis(200));
 
         // Restore initial bias
-        self.driver.client_mut().bias_set(self.config.initial_bias_v)?;
-        info!("Bias restored to initial value: {:.3} V", self.config.initial_bias_v);
+        self.driver
+            .client_mut()
+            .bias_set(self.config.initial_bias_v)?;
+        info!(
+            "Bias restored to initial value: {:.3} V",
+            self.config.initial_bias_v
+        );
 
         // Approach
         self.driver
             .run(Action::AutoApproach {
                 wait_until_finished: true,
                 timeout: Duration::from_secs(600),
+                center_freq_shift: false,
             })
             .go()?;
 
@@ -1021,7 +1016,8 @@ impl TipController {
             .copied()
             .ok_or_else(|| {
                 NanonisError::Protocol(
-                    "Failed to read final freq_shift after stability sweeps".to_string(),
+                    "Failed to read final freq_shift after stability sweeps"
+                        .to_string(),
                 )
             })?;
 
@@ -1109,6 +1105,7 @@ impl TipController {
             .run(Action::AutoApproach {
                 wait_until_finished: true,
                 timeout: Duration::from_secs(600),
+                center_freq_shift: false,
             })
             .go()?;
 
@@ -1265,7 +1262,9 @@ impl TipController {
 
     /// Check reliability of tip state and return baseline freq_shift for stability comparison.
     /// Returns (TipShape, Option<baseline_freq_shift>).
-    fn pre_good_loop_check(&mut self) -> Result<(TipShape, Option<f32>), NanonisError> {
+    fn pre_good_loop_check(
+        &mut self,
+    ) -> Result<(TipShape, Option<f32>), NanonisError> {
         log::info!("Checking reliability of tip state result");
 
         let mut last_freq_shift: Option<f32> = None;
@@ -1319,7 +1318,10 @@ impl TipController {
             }
         }
 
-        log::info!("Baseline freq_shift for stability check: {:?}", last_freq_shift);
+        log::info!(
+            "Baseline freq_shift for stability check: {:?}",
+            last_freq_shift
+        );
         Ok((TipShape::Sharp, last_freq_shift))
     }
 
@@ -1365,11 +1367,27 @@ impl TipController {
         self.driver
             .client_mut()
             .bias_set(self.config.initial_bias_v)?;
+
         self.driver
             .client_mut()
             .z_ctrl_setpoint_set(self.config.initial_z_setpoint_a)?;
 
-        // Update some randome User Output to update TCP Channel List
+        // Set homeing config TODO: move parameter to const. definitions
+        let home_position_m = 50e-9;
+
+        self.driver
+            .client_mut()
+            .z_ctrl_home_props_set(2, home_position_m)?;
+
+        // Set correct safe tip config
+        let safe_tip_threshold = 1e-9;
+        self.driver.client_mut().safe_tip_props_set(
+            false,
+            true,
+            safe_tip_threshold,
+        )?;
+
+        // Update some random User Output to update TCP Channel List
         // Should be fixed in next Nanonis Software Update
         let output_to_toggle = 3;
         let current_mode = self
@@ -1422,6 +1440,7 @@ impl TipController {
             .run(Action::AutoApproach {
                 wait_until_finished: true,
                 timeout: Duration::from_secs(600), // 10 minutes timeout for approach
+                center_freq_shift: false,
             })
             .go()?;
 
