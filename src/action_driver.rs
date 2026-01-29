@@ -2820,10 +2820,19 @@ impl ActionDriver {
                                 [tcp_channel as usize]
                         };
 
-                        // 7. Stop scan and restore bias
+                        // 7. Stop scan, withdraw, then restore bias
                         let _ = self
                             .client
                             .scan_action(ScanAction::Stop, ScanDirection::Up);
+
+                        // Withdraw before changing bias
+                        if let Err(e) = self.client.z_ctrl_withdraw(true, Duration::from_secs(5)) {
+                            log::error!("Failed to withdraw before restoring bias: {}", e);
+                        }
+
+                        // Delay before changing bias
+                        std::thread::sleep(Duration::from_millis(200));
+
                         if let Err(e) = self.client.bias_set(initial_bias) {
                             log::error!(
                                 "Failed to restore initial bias: {}",

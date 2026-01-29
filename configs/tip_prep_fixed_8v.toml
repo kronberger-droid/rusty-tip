@@ -31,6 +31,9 @@ max_cycles = 10000
 # Maximum duration in seconds (unlimited if not set)
 max_duration_secs = 12000
 
+initial_bias_v = 1.0
+initial_z_setpoint_a = 50e-12
+
 # Stability check configuration
 [tip_prep.stability]
 # Enable stability checking with bias sweep

@@ -1030,6 +1030,9 @@ impl TipController {
             })
             .go()?;
 
+        // Delay before changing bias to allow tip to stabilize after withdraw
+        std::thread::sleep(Duration::from_millis(200));
+
         self.driver.client_mut().bias_set(starting_bias)?;
         info!("Bias set to {:.3}V before approach", starting_bias);
 
