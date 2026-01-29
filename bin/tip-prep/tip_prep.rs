@@ -988,7 +988,7 @@ impl TipController {
             .run(Action::AutoApproach {
                 wait_until_finished: true,
                 timeout: Duration::from_secs(600),
-                center_freq_shift: false,
+                center_freq_shift: true,
             })
             .go()?;
 
@@ -1105,7 +1105,7 @@ impl TipController {
             .run(Action::AutoApproach {
                 wait_until_finished: true,
                 timeout: Duration::from_secs(600),
-                center_freq_shift: false,
+                center_freq_shift: true,
             })
             .go()?;
 
@@ -1440,7 +1440,7 @@ impl TipController {
             .run(Action::AutoApproach {
                 wait_until_finished: true,
                 timeout: Duration::from_secs(600), // 10 minutes timeout for approach
-                center_freq_shift: false,
+                center_freq_shift: true,
             })
             .go()?;
 

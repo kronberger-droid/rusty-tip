@@ -1681,11 +1681,17 @@ impl ActionDriver {
                         self.client_mut().safe_tip_on_off_set(true)?;
                     }
 
+                    self.check_safetip_status();
+
                     // Home 50nm away from the surface
                     self.client_mut().z_ctrl_home()?;
 
+                    self.check_safetip_status();
+
                     // Sleep for 0.5 secs
                     std::thread::sleep(Duration::from_millis(500));
+
+                    self.check_safetip_status();
 
                     // Center the freq shift
                     if let Err(e) = self.center_freq_shift() {
@@ -1693,8 +1699,12 @@ impl ActionDriver {
                         // Continue anyway, this is not critical
                     }
 
+                    self.check_safetip_status();
+
                     // Approach again
                     self.auto_approach(wait_until_finished, timeout)?;
+
+                    self.check_safetip_status();
 
                     // Toggle of the safe tip
                     if let Ok(safetip_state) =
@@ -1729,7 +1739,7 @@ impl ActionDriver {
                 let displacement =
                     crate::types::MotorDisplacement::new(x_steps, y_steps, -3);
                 let withdraw_timeout = Duration::from_secs(5);
-                let approach_timeout = Duration::from_secs(20); // 20 seconds timeout for approach after reposition
+                let approach_timeout = Duration::from_secs(10);
                 let stabilization_wait = Duration::from_millis(500);
 
                 // Execute the safe repositioning sequence
@@ -1750,8 +1760,12 @@ impl ActionDriver {
                 thread::sleep(Duration::from_millis(500));
 
                 // 3. Center frequency and auto approach
-                self.center_freq_shift()?;
-                self.auto_approach(true, approach_timeout)?;
+                self.run(Action::AutoApproach {
+                    wait_until_finished: true,
+                    timeout: approach_timeout,
+                    center_freq_shift: true,
+                })
+                .go()?;
 
                 // 4. Wait for stabilization
                 thread::sleep(stabilization_wait);
@@ -3156,6 +3170,15 @@ impl ActionDriver {
                     .contains(&ampl_current);
 
                 Ok(ActionResult::Status(status))
+            }
+        }
+    }
+
+    fn check_safetip_status(&mut self) {
+        if let Ok(status) = self.client_mut().z_ctrl_status_get() {
+            if matches!(status, nanonis_rs::z_ctrl::ZControllerStatus::SafeTip)
+            {
+                panic!("SafeTip Triggert, abort!")
             }
         }
     }
