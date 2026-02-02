@@ -4222,8 +4222,8 @@ impl Drop for ActionDriver {
             },
             Action::MoveMotorAxis {
                 direction: crate::MotorDirection::ZMinus,
-                steps: 2,
-                blocking: true, // Make it blocking
+                steps: 10,
+                blocking: false,
             },
         ]);
 
