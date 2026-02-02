@@ -1,0 +1,347 @@
+# =============================================================================
+# COMPREHENSIVE TIP PREPARATION CONFIGURATION
+# =============================================================================
+# This config file shows ALL available options for rusty-tip.
+# Most options are commented out to show defaults and alternatives.
+# The uncommented settings form a valid, working configuration.
+#
+# To use this config:
+#   tip-prep --config examples/comprehensive_config.toml
+# =============================================================================
+
+# =============================================================================
+# NANONIS CONNECTION SETTINGS
+# =============================================================================
+[nanonis]
+# IP address of the Nanonis controller
+host_ip = "127.0.0.1"
+
+# Control ports for TCP communication
+# Multiple ports allow parallel command execution
+control_ports = [6501, 6502, 6503, 6504]
+
+# Optional: Load a specific Nanonis layout file (.nlo) at initialization
+# The layout file controls the Nanonis UI window arrangement and visibility
+# This is loaded at the very start of pre_loop_initialization(), before any other setup
+# Useful for ensuring the Nanonis software is in a consistent UI state
+# To use: Save your desired layout in Nanonis (Utilities > Layout > Save)
+#         then uncomment and set the path below
+# layout_file = "/path/to/your/layout.nlo"
+# layout_file = "../examples/layout_tip-prep.lyt"  # Relative path example
+# layout_file = "C:\\Users\\YourName\\Documents\\Nanonis\\my_layout.nlo"  # Windows path example
+
+# Optional: Load a specific Nanonis settings file (.nsf) at initialization
+# The settings file contains all Nanonis configuration (Z-controller, scan params, etc.)
+# This is loaded at the very start of pre_loop_initialization(), after layout but before any other setup
+# Useful for applying a consistent instrument configuration before each run
+# To use: Save your desired settings in Nanonis (Utilities > Settings > Save)
+#         then uncomment and set the path below
+# settings_file = "/path/to/your/settings.nsf"
+# settings_file = "../examples/settings_tip-prep.ini"  # Relative path example
+# settings_file = "C:\\Users\\YourName\\Documents\\Nanonis\\my_settings.nsf"  # Windows path example
+
+# Notes on layout_file and settings_file:
+# - Both are optional - omit them or set to null to skip loading
+# - Files are loaded in order: layout first, then settings
+# - If a file path is invalid or the file doesn't exist, initialization will fail with an error
+# - Paths can be absolute or relative to the working directory
+# - The second parameter (load_session_settings/load_session_layout) is set to true,
+#   which means session-specific settings will be loaded from the files
+
+# =============================================================================
+# DATA ACQUISITION SETTINGS
+# =============================================================================
+[data_acquisition]
+# TCP port for streaming data acquisition
+data_port = 6590
+
+# Sample rate in Hz for data acquisition
+# Higher rates = more data points but more CPU usage
+sample_rate = 2000
+# sample_rate = 1000  # Alternative: Lower sample rate
+
+# =============================================================================
+# EXPERIMENT LOGGING SETTINGS
+# =============================================================================
+[experiment_logging]
+# Enable/disable saving experiment data to files
+enabled = true
+
+# Directory path where experiment data will be saved
+output_path = "./experiments"
+# output_path = "/path/to/your/data"  # Alternative: Custom path
+
+# =============================================================================
+# CONSOLE OUTPUT SETTINGS
+# =============================================================================
+[console]
+# Log verbosity level: trace, debug, info, warn, error
+verbosity = "info"
+# verbosity = "debug"  # Alternative: More detailed logging
+# verbosity = "warn"   # Alternative: Only warnings and errors
+
+# =============================================================================
+# TIP PREPARATION SETTINGS
+# =============================================================================
+[tip_prep]
+# Frequency shift bounds (in Hz) for determining if tip is sharp
+# Values within this range indicate a sharp tip
+# Format: [lower_bound, upper_bound]
+sharp_tip_bounds = [-2.0, 0.0]
+# sharp_tip_bounds = [-1.5, 0.0]  # Alternative: Tighter bounds
+# sharp_tip_bounds = [-3.0, 0.0]  # Alternative: Wider bounds
+
+# Maximum number of pulse cycles before giving up
+# Set to null or remove for unlimited cycles
+max_cycles = 10000
+# max_cycles = 5000   # Alternative: Fewer cycles
+# max_cycles = null   # Alternative: Unlimited cycles
+
+# Maximum duration in seconds before giving up
+# Set to null or remove for unlimited duration
+max_duration_secs = 12000
+# max_duration_secs = 3600  # Alternative: 1 hour
+# max_duration_secs = null  # Alternative: Unlimited time
+
+# Initial bias voltage (V) set before the first approach
+# Default: -0.5 V (omit to use default)
+# initial_bias_v = -0.5
+# initial_bias_v = -1.0  # Alternative: Larger initial bias
+
+# Initial Z-controller setpoint (A) set before the first approach
+# Default: 100 pA (omit to use default)
+# initial_z_setpoint_a = 100e-12
+# initial_z_setpoint_a = 50e-12  # Alternative: Lower setpoint
+
+# =============================================================================
+# STABILITY CHECK CONFIGURATION
+# =============================================================================
+[tip_prep.stability]
+# Enable or disable stability checking
+# When true: Performs bias sweep to verify tip stability
+# When false: Only checks if tip is sharp based on bounds (faster)
+check_stability = true
+# check_stability = false  # Alternative: Disable for faster runs
+
+# Maximum allowed change in frequency shift (Hz) for tip to be considered stable
+# During the bias sweep, if the signal changes more than this threshold,
+# the tip is considered unstable and will undergo max voltage pulse + restart
+stable_tip_allowed_change = 0.5
+# stable_tip_allowed_change = 0.2  # Alternative: More sensitive
+# stable_tip_allowed_change = 1.0  # Alternative: Less sensitive
+
+# Bias voltage range for stability sweep (lower, upper) in V
+# IMPORTANT: Must be positive magnitude-only values
+# The polarity_mode setting below controls the actual sign
+bias_range = [0.01, 2.0]
+# bias_range = [0.01, 1.0]  # Alternative: Smaller range
+# bias_range = [0.01, 3.0]  # Alternative: Larger range
+# bias_range = [0.5, 2.5]   # Alternative: Start further from zero
+
+# Number of steps in the bias sweep
+# More steps = more data points but slower sweep
+bias_steps = 1000
+# bias_steps = 500   # Alternative: Faster but less detailed
+# bias_steps = 2000  # Alternative: Slower but more detailed
+
+# Time to wait at each step in milliseconds
+# Longer = more stable readings but slower overall
+step_period_ms = 200
+# step_period_ms = 100  # Alternative: Faster sweep
+# step_period_ms = 500  # Alternative: More settling time
+
+# Maximum duration for stability check in seconds
+# Prevents hanging if sweep takes too long
+max_duration_secs = 100
+# max_duration_secs = 60   # Alternative: Shorter timeout
+# max_duration_secs = 300  # Alternative: Longer timeout
+
+# Polarity mode for bias sweep
+# Options:
+#   "positive" - Single sweep from bias_range[0] to bias_range[1]
+#   "negative" - Single sweep from -bias_range[1] to -bias_range[0]
+#   "both"     - Two consecutive sweeps: positive then negative
+polarity_mode = "both"
+# polarity_mode = "positive"  # Alternative: Only positive bias
+# polarity_mode = "negative"  # Alternative: Only negative bias
+
+# Scan speed for stability check in m/s
+# If set, temporarily changes scan speed during stability check
+# Set to null or remove to use the current scan speed
+scan_speed_m_s = 5e-9  # 5 nm/s
+# scan_speed_m_s = 1e-9   # Alternative: Slower, more careful
+# scan_speed_m_s = 1e-8   # Alternative: Faster sweep
+# scan_speed_m_s = null   # Alternative: Use current scan speed
+
+# =============================================================================
+# PULSE METHOD CONFIGURATION
+# =============================================================================
+# Three pulse methods are available:
+# 1. Fixed    - Constant voltage pulses
+# 2. Stepping - Step up voltage after N cycles without improvement
+# 3. Linear   - Adaptive voltage based on frequency shift
+#
+# Choose ONE method by setting type = "fixed", "stepping", or "linear"
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# METHOD 1: LINEAR (Recommended for most cases)
+# -----------------------------------------------------------------------------
+# Pulse voltage adapts based on frequency shift
+# More blunt tip = higher voltage, sharper tip = lower voltage
+[pulse_method]
+type = "linear"
+
+# Output pulse voltage range (in V)
+# IMPORTANT: Must be positive magnitude-only values
+# The polarity setting below controls the actual sign
+voltage_bounds = [2.0, 6.0]
+# voltage_bounds = [1.0, 5.0]  # Alternative: Lower voltage range
+# voltage_bounds = [3.0, 8.0]  # Alternative: Higher voltage range
+
+# Frequency shift range (in Hz) for linear mapping
+# freq_shift outside this range → use max voltage (voltage_bounds[1])
+# freq_shift inside this range  → linearly interpolate voltage
+linear_clamp = [-20.0, 0.0]
+# linear_clamp = [-10.0, 0.0]  # Alternative: Smaller freq shift range
+# linear_clamp = [-30.0, 0.0]  # Alternative: Larger freq shift range
+
+# Polarity of the pulse voltage
+# Options: "positive" or "negative"
+polarity = "negative"
+# polarity = "positive"  # Alternative: Positive pulses
+
+# Optional: Random polarity switching
+# When enabled, every Nth pulse will use the opposite polarity
+# This can help with certain tip conditions
+[pulse_method.random_switch]
+switch_every_n_pulses = 10
+# switch_every_n_pulses = 5   # Alternative: Switch more frequently
+# switch_every_n_pulses = 20  # Alternative: Switch less frequently
+# Remove this entire section to disable random switching
+
+# -----------------------------------------------------------------------------
+# METHOD 2: STEPPING (Good for gradual approach)
+# -----------------------------------------------------------------------------
+# Uncomment this entire section to use stepping method instead
+# [pulse_method]
+# type = "stepping"
+#
+# # Voltage range (must be positive magnitude-only)
+# voltage_bounds = [4.0, 6.0]
+#
+# # Number of voltage steps between min and max
+# voltage_steps = 2
+# # voltage_steps = 4  # Alternative: More gradual stepping
+#
+# # Number of cycles to perform at each voltage level before stepping up
+# cycles_before_step = 2
+# # cycles_before_step = 5  # Alternative: More cycles per step
+#
+# # Threshold value for determining if tip is improving
+# # If signal change is less than this, step up voltage
+# threshold_value = 1.0
+# # threshold_value = 0.5  # Alternative: More sensitive
+# # threshold_value = 2.0  # Alternative: Less sensitive
+#
+# # Polarity of the pulse voltage
+# polarity = "negative"
+# # polarity = "positive"  # Alternative: Positive pulses
+#
+# # Optional: Random polarity switching
+# [pulse_method.random_polarity_switch]
+# enabled = true
+# switch_every_n_pulses = 5
+
+# -----------------------------------------------------------------------------
+# METHOD 3: FIXED (Simple, constant pulses)
+# -----------------------------------------------------------------------------
+# Uncomment this entire section to use fixed method instead
+# [pulse_method]
+# type = "fixed"
+#
+# # Fixed pulse voltage (must be positive magnitude-only)
+# voltage = 5.0
+# # voltage = 3.0  # Alternative: Lower voltage
+# # voltage = 7.0  # Alternative: Higher voltage
+#
+# # Polarity of the pulse voltage
+# polarity = "negative"
+# # polarity = "positive"  # Alternative: Positive pulses
+#
+# # Optional: Random polarity switching
+# [pulse_method.random_switch]
+# switch_every_n_pulses = 5
+
+# =============================================================================
+# TCP CHANNEL MAPPING (Optional)
+# =============================================================================
+# Custom mapping between Nanonis signal indices and TCP data channels
+# Only needed if your setup uses non-standard channel assignments
+# Format: { nanonis_index = X, tcp_channel = Y }
+#
+# Common signals:
+#   Frequency shift: typically index 76, TCP channel 19
+#   Current:        typically index 8,  TCP channel varies
+#   Z-position:     typically index 0,  TCP channel varies
+
+[[tcp_channel_mapping]]
+nanonis_index = 76  # Frequency shift
+tcp_channel = 19
+
+# Add more mappings as needed:
+# [[tcp_channel_mapping]]
+# nanonis_index = 8   # Current
+# tcp_channel = 0
+#
+# [[tcp_channel_mapping]]
+# nanonis_index = 0   # Z-position
+# tcp_channel = 1
+
+# =============================================================================
+# USAGE EXAMPLES
+# =============================================================================
+#
+# Basic usage:
+#   tip-prep --config examples/comprehensive_config.toml
+#
+# Override log level:
+#   tip-prep --config examples/comprehensive_config.toml --log-level debug
+#
+# Using different pulse methods:
+#   1. Edit this file and uncomment the desired [pulse_method] section
+#   2. Comment out or remove the other pulse_method sections
+#   3. Save and run
+#
+# Quick stability check disable:
+#   Set check_stability = false in the [tip_prep.stability] section
+#
+# Environment variable overrides:
+#   RUSTY_TIP__NANONIS__HOST_IP=192.168.1.100 tip-prep --config config.toml
+#   RUSTY_TIP__TIP_PREP__MAX_CYCLES=5000 tip-prep --config config.toml
+#
+# =============================================================================
+# VALIDATION RULES
+# =============================================================================
+#
+# The following validation rules are enforced at config load time:
+#
+# 1. voltage_bounds:
+#    - Both values must be positive (> 0)
+#    - Lower bound must be less than upper bound
+#    - Use 'polarity' setting to control sign
+#
+# 2. bias_range:
+#    - Both values must be strictly positive (> 0); zero is not allowed
+#    - Lower bound must be less than upper bound
+#    - Use 'polarity_mode' setting to control sign
+#
+# 3. stable_tip_allowed_change:
+#    - Must be positive (> 0)
+#
+# 4. Steps:
+#    - bias_steps and voltage_steps must be greater than zero
+#
+# Invalid configs will fail with clear error messages at startup.
+#
+# =============================================================================

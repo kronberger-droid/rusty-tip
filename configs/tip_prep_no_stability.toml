@@ -5,6 +5,11 @@
 host_ip = "127.0.0.1"
 control_ports = [6501, 6502, 6503, 6504]
 
+# Optional: Load layout and settings files at initialization
+# Uncomment and set paths as needed
+# layout_file = "../examples/layout_tip-prep.lyt"
+# settings_file = "../examples/settings_tip-prep.ini"
+
 [data_acquisition]
 data_port = 6590
 sample_rate = 2000
@@ -20,17 +25,18 @@ verbosity = "info"
 # Frequency shift bounds for determining if tip is sharp
 sharp_tip_bounds = [-2.0, 0.0]
 
-# Maximum allowed change in frequency shift for tip to be considered stable
-stable_tip_allowed_change = 0.2
-
-# Whether to check for tip stability (disabled for faster runs)
-check_stability = false
-
 # Maximum number of pulse cycles (unlimited if not set)
 max_cycles = 10000
 
 # Maximum duration in seconds (unlimited if not set)
 max_duration_secs = 12000
+
+[tip_prep.stability]
+# Whether to check for tip stability (disabled for faster runs)
+check_stability = false
+
+# Maximum allowed change in frequency shift for tip to be considered stable
+stable_tip_allowed_change = 0.2
 
 [pulse_method]
 # Use stepping pulse method

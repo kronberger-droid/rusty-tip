@@ -1,0 +1,85 @@
+# Tip Preparation Configuration
+# Fixed 8V pulse method with polarity switching every 2 cycles
+
+[nanonis]
+host_ip = "127.0.0.1"
+control_ports = [6501, 6502, 6503, 6504]
+
+# Be careful these files must exist on the host machine
+# layout_file = "./examples/layout_tip-prep.lyt"
+# settings_file = "./examples/settings_tip-prep.ini"
+
+[data_acquisition]
+data_port = 6590
+sample_rate = 2000
+
+[experiment_logging]
+enabled = true
+output_path = "./experiments"
+
+[console]
+verbosity = "info"
+
+[tip_prep]
+# Frequency shift bounds for determining if tip is sharp (in Hz)
+# Values within this range indicate a sharp tip
+sharp_tip_bounds = [-3.0, 0.0]
+
+# Maximum number of pulse cycles (unlimited if not set)
+max_cycles = 10000
+
+# Maximum duration in seconds (unlimited if not set)
+max_duration_secs = 12000
+
+initial_bias_v = 1.0
+initial_z_setpoint_a = 50e-12
+
+# Stability check configuration
+[tip_prep.stability]
+# Enable stability checking with bias sweep
+check_stability = true
+
+# Maximum allowed change in frequency shift for tip to be considered stable (in Hz)
+stable_tip_allowed_change = 1.0
+
+# Bias voltage range for stability sweep (lower, upper) in V
+# Must be positive magnitude-only; polarity_mode determines sign
+bias_range = [0.2, 2.0]
+
+# Number of steps in the bias sweep
+bias_steps = 200
+
+# Time to wait at each step in milliseconds
+step_period_ms = 100
+
+# Maximum duration for stability check in seconds
+max_duration_secs = 100
+
+# Polarity mode for bias sweep:
+# - "positive": Single sweep from 0 to upper_bound
+# - "negative": Single sweep from 0 to lower_bound
+# - "both": Two consecutive sweeps - first 0 to upper_bound, then 0 to lower_bound
+polarity_mode = "both"
+
+# Scan speed for stability check in m/s
+scan_speed_m_s = 60e-9  # 5 nm/s
+
+[pulse_method]
+# Use fixed pulse method
+type = "fixed"
+
+# Fixed pulse voltage (in V)
+voltage = 8.0
+
+# Polarity of the pulse voltage: "positive" or "negative"
+polarity = "negative"
+
+# When enabled, every Nth pulse will use the opposite polarity
+[pulse_method.random_polarity_switch]
+enabled = true
+switch_every_n_pulses = 5 # Every 2nd pulse uses opposite polarity
+
+# Optional: Custom TCP channel mapping
+[[tcp_channel_mapping]]
+nanonis_index = 76  # Frequency shift
+tcp_channel = 19    # use 21 - demo-mode and 19 - LT

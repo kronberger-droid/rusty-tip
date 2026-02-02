@@ -16,7 +16,7 @@ name = "tip-prep"
 path = "bin/tip-prep/main.rs"
 
 [dependencies]
-nanonis-rs = "0.0.3"
+nanonis-rs = "0.1.0"
 byteorder = "1.5"
 thiserror = "1.0"
 log = "0.4"

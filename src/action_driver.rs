@@ -1,23 +1,30 @@
-use crate::Signal;
-use log::{debug, info};
+use std::{
+    collections::HashMap,
+    ops::DerefMut,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread,
+    time::{Duration, Instant},
+};
+
+use log::{debug, info, warn};
+use nanonis_rs::signals::SignalIndex;
 use ndarray::Array1;
 
-use crate::actions::{
-    Action, ActionChain, ActionLogEntry, ActionLogResult, ActionResult,
-    ExpectFromAction,
-};
-use crate::buffered_tcp_reader::BufferedTCPReader;
-use crate::signal_registry::SignalRegistry;
-use crate::types::{DataToGet, OsciData, SignalStats, TriggerConfig};
-use crate::utils::{poll_until, poll_with_timeout, PollError};
 use crate::{
+    actions::{
+        Action, ActionChain, ActionLogEntry, ActionLogResult, ActionResult,
+        ExpectFromAction,
+    },
+    buffered_tcp_reader::BufferedTCPReader,
+    signal_registry::SignalRegistry,
+    types::{DataToGet, OsciData, SignalStats, TriggerConfig},
+    utils::{poll_until, poll_with_timeout, PollError},
     MotorGroup, NanonisClient, NanonisError, Position, PulseMode, ScanAction,
-    ScanDirection, TipShaperConfig, ZControllerHold,
+    ScanDirection, Signal, TipShaperConfig, ZControllerHold,
 };
-use nanonis_rs::SignalIndex;
-use std::collections::HashMap;
-use std::thread;
-use std::time::{Duration, Instant};
 
 // ========================================================================
 // TIP STATE CHECKING CONSTANTS
@@ -232,7 +239,7 @@ impl ExecutionResult {
             ExecutionResult::Chain(mut results) if results.len() == 1 => {
                 Ok(results.pop().unwrap())
             }
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected single result".to_string(),
             )),
         }
@@ -244,7 +251,7 @@ impl ExecutionResult {
             ExecutionResult::Chain(results) => Ok(results),
             ExecutionResult::Single(result) => Ok(vec![result]),
             ExecutionResult::Partial(results, _) => Ok(results),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected chain results".to_string(),
             )),
         }
@@ -256,7 +263,7 @@ impl ExecutionResult {
     ) -> Result<crate::types::ExperimentData, NanonisError> {
         match self {
             ExecutionResult::ExperimentData(data) => Ok(data),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected experiment data".to_string(),
             )),
         }
@@ -268,7 +275,7 @@ impl ExecutionResult {
     ) -> Result<crate::types::ChainExperimentData, NanonisError> {
         match self {
             ExecutionResult::ChainExperimentData(data) => Ok(data),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected chain experiment data".to_string(),
             )),
         }
@@ -370,7 +377,7 @@ impl<'a> ExecutionBuilder<'a> {
                     self.driver.run_with_config(self.request, self.config)?;
                 result.into_single()
             }
-            ActionRequest::Chain(_) => Err(NanonisError::InvalidCommand(
+            ActionRequest::Chain(_) => Err(NanonisError::Protocol(
                 "Use .execute() for chains, .go() is only for single actions"
                     .to_string(),
             )),
@@ -388,6 +395,7 @@ pub struct ActionDriverBuilder {
     tcp_reader_config: Option<TCPReaderConfig>,
     action_logger_config: Option<(std::path::PathBuf, usize, bool)>, // (file_path, buffer_size, final_format_json)
     custom_tcp_mapping: Option<Vec<(u8, u8)>>, // Custom Nanonis to TCP channel mapping
+    shutdown_flag: Option<Arc<AtomicBool>>,    // Graceful shutdown support
 }
 
 impl ActionDriverBuilder {
@@ -401,6 +409,7 @@ impl ActionDriverBuilder {
             tcp_reader_config: None,
             action_logger_config: None,
             custom_tcp_mapping: None,
+            shutdown_flag: None,
         }
     }
 
@@ -518,6 +527,15 @@ impl ActionDriverBuilder {
         self
     }
 
+    /// Set shutdown flag for graceful termination of long-running operations
+    ///
+    /// When set, operations like stability checks will periodically check this flag
+    /// and return early with `NanonisError::Protocol("Shutdown requested".to_string())` if it becomes true.
+    pub fn with_shutdown_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.shutdown_flag = Some(flag);
+        self
+    }
+
     /// Build the ActionDriver with configured parameters and optional automatic buffering
     pub fn build(self) -> Result<ActionDriver, NanonisError> {
         let mut client = {
@@ -546,7 +564,7 @@ impl ActionDriverBuilder {
                         config.channels.len() as u32,
                         config.oversampling as f32,
                     )?;
-                log::info!(
+                log::debug!(
                     "TCP stream connected, buffer capacity: {} frames",
                     buffer_size
                 );
@@ -554,13 +572,13 @@ impl ActionDriverBuilder {
                 // 3. NOW start TCP logger (data flows to connected reader)
                 if config.auto_start {
                     // Reset TCP logger state first to ensure clean start
-                    log::info!("Stopping TCP logger to ensure clean state");
+                    log::debug!("Stopping TCP logger to ensure clean state");
                     let _ = client.tcplog_stop(); // Ignore errors - might not be running
                     std::thread::sleep(std::time::Duration::from_millis(200)); // Give it time to stop
 
                     // Now start TCP logger
                     client.tcplog_start()?;
-                    log::info!("TCP logger started, data collection active");
+                    log::debug!("TCP logger started, data collection active");
                 }
 
                 Some(reader)
@@ -589,7 +607,7 @@ impl ActionDriverBuilder {
         let signal_names = client.signal_names_get()?;
         let signal_registry =
             if let Some(ref custom_map) = self.custom_tcp_mapping {
-                log::info!(
+                log::debug!(
                     "Using custom TCP channel mapping with {} entries",
                     custom_map.len()
                 );
@@ -612,6 +630,7 @@ impl ActionDriverBuilder {
             action_logging_enabled: true, // Default to enabled if logger is configured
             signal_registry,
             recent_stable_signals: std::collections::VecDeque::new(),
+            shutdown_flag: self.shutdown_flag,
         })
     }
 }
@@ -639,6 +658,8 @@ pub struct ActionDriver {
         crate::actions::StableSignal,
         std::time::Instant,
     )>,
+    /// Shutdown flag for graceful termination of long-running operations
+    shutdown_flag: Option<Arc<AtomicBool>>,
 }
 
 impl ActionDriver {
@@ -668,6 +689,7 @@ impl ActionDriver {
             action_logging_enabled: false,
             signal_registry,
             recent_stable_signals: std::collections::VecDeque::new(),
+            shutdown_flag: None,
         }
     }
 
@@ -679,6 +701,110 @@ impl ActionDriver {
     /// Get a mutable reference to the underlying NanonisClient
     pub fn client_mut(&mut self) -> &mut NanonisClient {
         &mut self.client
+    }
+
+    /// Set shutdown flag for graceful termination of long-running operations
+    pub fn set_shutdown_flag(&mut self, flag: Arc<AtomicBool>) {
+        self.shutdown_flag = Some(flag);
+    }
+
+    /// Check if shutdown has been requested
+    fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_flag
+            .as_ref()
+            .map(|f| f.load(Ordering::SeqCst))
+            .unwrap_or(false)
+    }
+
+    /// Execute an auto-approach operation.
+    ///
+    /// If `wait_until_finished` is true, blocks until approach completes or timeout.
+    /// If false, starts the approach and returns immediately.
+    pub fn auto_approach(
+        &mut self,
+        wait_until_finished: bool,
+        timeout: Duration,
+    ) -> Result<(), NanonisError> {
+        // Check if already running
+        match self.client.auto_approach_on_off_get() {
+            Ok(true) => {
+                log::warn!("Auto-approach already running");
+                return Ok(());
+            }
+            Ok(false) => {
+                log::debug!("Auto-approach is idle, proceeding to start");
+            }
+            Err(_) => {
+                log::warn!(
+                    "Auto-approach status unknown, attempting to proceed"
+                );
+            }
+        }
+
+        // Open auto-approach module
+        match self.client.auto_approach_open() {
+            Ok(_) => log::debug!("Opened the auto-approach module"),
+            Err(_) => {
+                log::debug!("Failed to open auto-approach module, already open")
+            }
+        }
+
+        // Wait for module initialization
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // Start auto-approach
+        if let Err(e) = self.client.auto_approach_on_off_set(true) {
+            log::error!("Failed to start auto-approach: {}", e);
+            return Err(NanonisError::Protocol(format!(
+                "Failed to start auto-approach: {}",
+                e
+            )));
+        }
+
+        if !wait_until_finished {
+            log::debug!("Auto-approach started, not waiting for completion");
+            return Ok(());
+        }
+
+        // Wait for completion with timeout
+        log::debug!("Waiting for auto-approach to complete...");
+        let poll_interval = std::time::Duration::from_millis(100);
+
+        match poll_until(
+            || {
+                self.client
+                    .auto_approach_on_off_get()
+                    .map(|running| !running)
+            },
+            timeout,
+            poll_interval,
+        ) {
+            Ok(()) => {
+                log::debug!("Auto-approach completed successfully");
+                Ok(())
+            }
+            Err(PollError::Timeout) => {
+                log::warn!("Auto-approach timed out after {:?}", timeout);
+                let _ = self.client.auto_approach_on_off_set(false);
+                Err(NanonisError::Protocol(
+                    "Auto-approach timed out".to_string(),
+                ))
+            }
+            Err(PollError::ConditionError(e)) => {
+                log::error!("Error checking auto-approach status: {}", e);
+                Err(NanonisError::Protocol(format!(
+                    "Status check error: {}",
+                    e
+                )))
+            }
+        }
+    }
+
+    /// Center the frequency shift using the PLL auto-center function.
+    pub fn center_freq_shift(&mut self) -> Result<(), NanonisError> {
+        let modulator_index = 1;
+        log::debug!("Centering frequency shift");
+        self.client.pll_freq_shift_auto_center(modulator_index)
     }
 
     /// Get TCP Logger configuration if set
@@ -702,9 +828,9 @@ impl ActionDriver {
     pub fn clear_tcp_buffer(&self) {
         if let Some(ref tcp_reader) = self.tcp_reader {
             tcp_reader.clear_buffer();
-            info!("TCP reader buffer cleared");
+            debug!("TCP reader buffer cleared");
         } else {
-            log::warn!("No TCP reader available to clear");
+            warn!("No TCP reader available to clear");
         }
     }
 
@@ -933,7 +1059,7 @@ impl ActionDriver {
         post_duration: Duration,
     ) -> Result<crate::types::ExperimentData, NanonisError> {
         if self.tcp_reader.is_none() {
-            return Err(NanonisError::InvalidCommand(
+            return Err(NanonisError::Protocol(
                 "TCP buffering not active".to_string(),
             ));
         }
@@ -1091,7 +1217,7 @@ impl ActionDriver {
         post_duration: Duration,
     ) -> Result<crate::types::ChainExperimentData, NanonisError> {
         if self.tcp_reader.is_none() {
-            return Err(NanonisError::InvalidCommand(
+            return Err(NanonisError::Protocol(
                 "TCP buffering not active".to_string(),
             ));
         }
@@ -1353,9 +1479,10 @@ impl ActionDriver {
                 signal,
                 wait_for_newest,
             } => {
-                let value = self
-                    .client
-                    .signals_vals_get(vec![SignalIndex::new(signal.index).into()], wait_for_newest)?;
+                let value = self.client.signals_vals_get(
+                    vec![SignalIndex::new(signal.index).into()],
+                    wait_for_newest,
+                )?;
                 Ok(ActionResult::Value(value[0] as f64))
             }
 
@@ -1363,8 +1490,10 @@ impl ActionDriver {
                 signals,
                 wait_for_newest,
             } => {
-                let indices: Vec<i32> =
-                    signals.iter().map(|s| SignalIndex::new(s.index).into()).collect();
+                let indices: Vec<i32> = signals
+                    .iter()
+                    .map(|s| SignalIndex::new(s.index).into())
+                    .collect();
                 let values =
                     self.client.signals_vals_get(indices, wait_for_newest)?;
                 Ok(ActionResult::Values(
@@ -1379,12 +1508,12 @@ impl ActionDriver {
 
             // === Bias Operations ===
             Action::ReadBias => {
-                let bias = self.client.get_bias()?;
+                let bias = self.client.bias_get()?;
                 Ok(ActionResult::Value(bias as f64))
             }
 
             Action::SetBias { voltage } => {
-                self.client.set_bias(voltage)?;
+                self.client.bias_set(voltage)?;
                 Ok(ActionResult::Success)
             }
 
@@ -1521,96 +1650,80 @@ impl ActionDriver {
             Action::AutoApproach {
                 wait_until_finished,
                 timeout,
+                center_freq_shift,
             } => {
                 log::debug!(
-                    "Starting auto-approach (wait: {}, timeout: {:?})",
+                    "Starting auto-approach (wait: {}, timeout: {:?}, center_freq: {})",
                     wait_until_finished,
-                    timeout
+                    timeout,
+                    center_freq_shift
                 );
 
-                // Check if already running
-                match self.client.auto_approach_on_off_get() {
-                    Ok(true) => {
-                        log::warn!("Auto-approach already running");
-                        return Ok(ActionResult::Success); // Consider already running as success
-                    }
-                    Ok(false) => {
-                        log::debug!(
-                            "Auto-approach is idle, proceeding to start"
-                        );
-                    }
-                    Err(_) => {
-                        log::warn!("Auto-approach status unknown, attempting to proceed");
-                    }
-                }
+                // Center frequency shift if requested
+                if center_freq_shift {
+                    // Approach to the surface
+                    self.auto_approach(true, timeout)?;
 
-                // Open auto-approach module
-                match self.client.auto_approach_open() {
-                    Ok(_) => debug!("Opened the auto-approach module"),
-                    Err(_) => debug!(
-                        "Failed to open auto-approach module, already open"
-                    ),
-                }
+                    // Sleep for 0.2 secs
+                    std::thread::sleep(Duration::from_millis(200));
 
-                // Wait for module initialization
-                std::thread::sleep(std::time::Duration::from_millis(500));
-
-                // Start auto-approach
-                if let Err(e) = self.client.auto_approach_on_off_set(true) {
-                    log::error!("Failed to start auto-approach: {}", e);
-                    return Err(NanonisError::InvalidCommand(format!(
-                        "Failed to start auto-approach: {}",
-                        e
-                    )));
-                }
-
-                if !wait_until_finished {
-                    log::debug!(
-                        "Auto-approach started, not waiting for completion"
-                    );
-                    return Ok(ActionResult::Success);
-                }
-
-                // Wait for completion with timeout
-                log::debug!("Waiting for auto-approach to complete...");
-                let poll_interval = std::time::Duration::from_millis(100);
-
-                match poll_until(
-                    || {
-                        // Returns Ok(true) when auto-approach is complete (not running)
-                        self.client
-                            .auto_approach_on_off_get()
-                            .map(|running| !running)
-                    },
-                    timeout,
-                    poll_interval,
-                ) {
-                    Ok(()) => {
-                        log::debug!("Auto-approach completed successfully");
-                        Ok(ActionResult::Success)
-                    }
-                    Err(PollError::Timeout) => {
+                    // Toggle on the safe tip
+                    if let Ok(safetip_state) =
+                        self.client_mut().safe_tip_on_off_get()
+                    {
+                        if !safetip_state {
+                            self.client_mut().safe_tip_on_off_set(true)?;
+                        }
+                    } else {
                         log::warn!(
-                            "Auto-approach timed out after {:?}",
-                            timeout
+                            "Failed to read safe tip state, setting true"
                         );
-                        // Try to stop the auto-approach
-                        let _ = self.client.auto_approach_on_off_set(false);
-                        Err(NanonisError::InvalidCommand(
-                            "Auto-approach timed out".to_string(),
-                        ))
+                        self.client_mut().safe_tip_on_off_set(true)?;
                     }
-                    Err(PollError::ConditionError(e)) => {
-                        log::error!(
-                            "Error checking auto-approach status: {}",
-                            e
+
+                    self.check_safetip_status()?;
+
+                    // Home 50nm away from the surface
+                    self.client_mut().z_ctrl_home()?;
+
+                    self.check_safetip_status()?;
+
+                    // Sleep for 0.5 secs
+                    std::thread::sleep(Duration::from_millis(500));
+
+                    self.check_safetip_status()?;
+
+                    // Center the freq shift
+                    if let Err(e) = self.center_freq_shift() {
+                        log::warn!("Failed to center frequency shift: {}", e);
+                        // Continue anyway, this is not critical
+                    }
+
+                    self.check_safetip_status()?;
+
+                    // Approach again
+                    self.auto_approach(wait_until_finished, timeout)?;
+
+                    self.check_safetip_status()?;
+
+                    // Toggle of the safe tip
+                    if let Ok(safetip_state) =
+                        self.client_mut().safe_tip_on_off_get()
+                    {
+                        if safetip_state {
+                            self.client_mut().safe_tip_on_off_set(false)?;
+                        }
+                    } else {
+                        log::warn!(
+                            "Failed to read safe tip state, setting false"
                         );
-                        Err(NanonisError::InvalidCommand(format!(
-                            "Status check error: {}",
-                            e
-                        )))
+                        self.client_mut().safe_tip_on_off_set(false)?;
                     }
+                } else {
+                    self.auto_approach(wait_until_finished, timeout)?;
                 }
+
+                Ok(ActionResult::Success)
             }
 
             Action::Withdraw {
@@ -1624,9 +1737,9 @@ impl ActionDriver {
             Action::SafeReposition { x_steps, y_steps } => {
                 // Safe repositioning with hardcoded defaults
                 let displacement =
-                    crate::types::MotorDisplacement::new(x_steps, y_steps, -2);
+                    crate::types::MotorDisplacement::new(x_steps, y_steps, -3);
                 let withdraw_timeout = Duration::from_secs(5);
-                let approach_timeout = Duration::from_secs(20); // 20 seconds timeout for approach after reposition
+                let approach_timeout = Duration::from_secs(10);
                 let stabilization_wait = Duration::from_millis(500);
 
                 // Execute the safe repositioning sequence
@@ -1644,51 +1757,15 @@ impl ActionDriver {
                     )?;
                 }
 
-                // 3. Auto approach (using the same logic as AutoApproach)
-                // Open auto-approach module
-                self.client.auto_approach_open()?;
-                thread::sleep(Duration::from_millis(500)); // Wait for module initialization
+                thread::sleep(Duration::from_millis(500));
 
-                // Start auto-approach
-                self.client.auto_approach_on_off_set(true)?;
-
-                // Wait for completion with timeout
-                let poll_interval = Duration::from_millis(100);
-                match poll_until(
-                    || {
-                        self.client
-                            .auto_approach_on_off_get()
-                            .map(|running| !running)
-                    },
-                    approach_timeout,
-                    poll_interval,
-                ) {
-                    Ok(()) => {
-                        log::debug!("SafeReposition auto-approach completed successfully");
-                    }
-                    Err(PollError::Timeout) => {
-                        log::warn!(
-                            "SafeReposition auto-approach timed out after {:?}",
-                            approach_timeout
-                        );
-                        // Try to stop the auto-approach
-                        let _ = self.client.auto_approach_on_off_set(false);
-                        return Err(NanonisError::InvalidCommand(
-                            "SafeReposition auto-approach timed out"
-                                .to_string(),
-                        ));
-                    }
-                    Err(PollError::ConditionError(e)) => {
-                        log::error!(
-                            "Error checking auto-approach status in SafeReposition: {}",
-                            e
-                        );
-                        return Err(NanonisError::InvalidCommand(format!(
-                            "SafeReposition status check error: {}",
-                            e
-                        )));
-                    }
-                }
+                // 3. Center frequency and auto approach
+                self.run(Action::AutoApproach {
+                    wait_until_finished: true,
+                    timeout: approach_timeout,
+                    center_freq_shift: true,
+                })
+                .go()?;
 
                 // 4. Wait for stabilization
                 thread::sleep(stabilization_wait);
@@ -1765,7 +1842,7 @@ impl ActionDriver {
                 pulse_height_v,
             } => {
                 let current_bias =
-                    self.client_mut().get_bias().unwrap_or(500e-3);
+                    self.client_mut().bias_get().unwrap_or(500e-3);
 
                 let config = TipShaperConfig {
                     switch_off_delay: std::time::Duration::from_millis(10),
@@ -1775,7 +1852,7 @@ impl ActionDriver {
                     lift_time_1: pulse_width,
                     bias_lift_v: current_bias,
                     bias_settling_time: std::time::Duration::from_millis(50),
-                    lift_height_m: 10e-9,
+                    lift_height_m: 100e-9,
                     lift_time_2: std::time::Duration::from_millis(100),
                     end_wait_time: std::time::Duration::from_millis(50),
                     restore_feedback: false,
@@ -1803,7 +1880,7 @@ impl ActionDriver {
 
             Action::Retrieve { key } => match self.stored_values.get(&key) {
                 Some(value) => Ok(value.clone()), // Return the stored result directly
-                None => Err(NanonisError::InvalidCommand(format!(
+                None => Err(NanonisError::Protocol(format!(
                     "No stored value found for key: {}",
                     key
                 ))),
@@ -1844,42 +1921,44 @@ impl ActionDriver {
             }
 
             Action::CheckTipState { method } => {
-                use crate::actions::{TipCheckMethod, TipState};
-                use crate::types::TipShape;
                 use std::collections::HashMap;
 
-                let (tip_shape, measured_signals, confidence, mut metadata) =
-                    match method {
-                        TipCheckMethod::SignalBounds { signal, bounds } => {
-                            // Debug TCP logger status before calling ReadStableSignal
-                            if let Some(ref tcp_reader) = self.tcp_reader {
-                                let (frame_count, _max_capacity, time_span) =
-                                    tcp_reader.buffer_stats();
-                                log::debug!("CheckTipState: TCP reader available with {} frames, timespan: {}ms", 
+                use crate::{
+                    actions::{TipCheckMethod, TipState},
+                    types::TipShape,
+                };
+
+                let (tip_shape, measured_signals, mut metadata) = match method {
+                    TipCheckMethod::SignalBounds { signal, bounds } => {
+                        // Debug TCP logger status before calling ReadStableSignal
+                        if let Some(ref tcp_reader) = self.tcp_reader {
+                            let (frame_count, _max_capacity, time_span) =
+                                tcp_reader.buffer_stats();
+                            log::debug!("CheckTipState: TCP reader available with {} frames, timespan: {}ms", 
                                 frame_count, time_span.as_millis());
-                            } else {
-                                log::warn!(
+                        } else {
+                            log::warn!(
                                 "CheckTipState: No TCP reader available for signal {}",
                                 signal.index
                                 );
-                            }
+                        }
 
-                            // Use ReadStableSignal instead of single instantaneous read
-                            log::debug!(
+                        // Use ReadStableSignal instead of single instantaneous read
+                        log::debug!(
                             "CheckTipState: Calling ReadStableSignal for signal {}",
                             signal.index
                         );
 
-                            // Calculate samples needed for configured data collection duration
-                            let data_points = self
-                                .calculate_samples_for_duration(
-                                    Duration::from_millis(
-                                        TIP_STATE_DATA_COLLECTION_DURATION_MS,
-                                    ),
-                                )
-                                .unwrap_or(100); // Fallback to 100 if TCP not configured
+                        // Calculate samples needed for configured data collection duration
+                        let data_points = self
+                            .calculate_samples_for_duration(
+                                Duration::from_millis(
+                                    TIP_STATE_DATA_COLLECTION_DURATION_MS,
+                                ),
+                            )
+                            .unwrap_or(100); // Fallback to 100 if TCP not configured
 
-                            let stable_result = self
+                        let stable_result = self
                             .run(Action::ReadStableSignal {
                                 signal: signal.clone(),
                                 data_points: Some(data_points),
@@ -1893,6 +1972,216 @@ impl ActionDriver {
                             })
                             .execute();
 
+                        let (value, raw_data, read_method) = match stable_result
+                        {
+                            Ok(exec_result) => match exec_result {
+                                ExecutionResult::Single(
+                                    ActionResult::StableSignal(stable_signal),
+                                ) => {
+                                    // Use stable value from ReadStableSignal
+                                    log::debug!("CheckTipState: ReadStableSignal succeeded with {} data points", stable_signal.raw_data.len());
+                                    (
+                                        stable_signal.stable_value,
+                                        stable_signal.raw_data,
+                                        "stable_signal",
+                                    )
+                                }
+                                ExecutionResult::Single(
+                                    ActionResult::Values(values),
+                                ) => {
+                                    // ReadStableSignal failed but returned raw data, use minimum as fallback
+                                    log::warn!("CheckTipState: ReadStableSignal failed but returned {} raw values, using minimum as fallback", values.len());
+                                    let raw_data: Vec<f32> = values
+                                        .iter()
+                                        .map(|&v| v as f32)
+                                        .collect();
+                                    let min_value = raw_data
+                                        .iter()
+                                        .cloned()
+                                        .fold(f32::INFINITY, f32::min);
+                                    (min_value, raw_data, "fallback_minimum")
+                                }
+                                _ => {
+                                    // Unexpected result type, fallback to single read
+                                    log::warn!("CheckTipState: ReadStableSignal returned unexpected result type, falling back to single read");
+                                    let single_value = self
+                                        .client
+                                        .signal_val_get(signal.index, true)?;
+                                    (
+                                        single_value,
+                                        vec![single_value],
+                                        "single_read_fallback",
+                                    )
+                                }
+                            },
+                            Err(e) => {
+                                // Complete fallback to single read
+                                log::warn!("CheckTipState: ReadStableSignal failed with error: {}, falling back to single read", e);
+                                let single_value = self
+                                    .client
+                                    .signal_val_get(signal.index, true)?;
+                                (
+                                    single_value,
+                                    vec![single_value],
+                                    "single_read_fallback",
+                                )
+                            }
+                        };
+
+                        let mut measured = HashMap::new();
+                        measured.insert(SignalIndex::new(signal.index), value);
+
+                        let shape = if value >= bounds.0 && value <= bounds.1 {
+                            TipShape::Sharp
+                        } else {
+                            TipShape::Blunt
+                        };
+
+                        // Populate metadata with analysis context and dataset
+                        let bounds_center = (bounds.0 + bounds.1) / 2.0;
+                        let bounds_width = (bounds.1 - bounds.0).abs();
+                        let distance_from_center =
+                            (value - bounds_center).abs();
+                        let relative_distance = if bounds_width > 0.0 {
+                            distance_from_center / (bounds_width / 2.0)
+                        } else {
+                            0.0
+                        };
+                        let mut metadata = HashMap::new();
+                        metadata.insert(
+                            "method".to_string(),
+                            "signal_bounds".to_string(),
+                        );
+                        metadata.insert(
+                            "signal_index".to_string(),
+                            signal.index.to_string(),
+                        );
+                        metadata.insert(
+                            "measured_value".to_string(),
+                            format!("{:.6e}", value),
+                        );
+                        metadata.insert(
+                            "bounds_lower".to_string(),
+                            format!("{:.6e}", bounds.0),
+                        );
+                        metadata.insert(
+                            "bounds_upper".to_string(),
+                            format!("{:.6e}", bounds.1),
+                        );
+                        metadata.insert(
+                            "bounds_center".to_string(),
+                            format!("{:.6e}", bounds_center),
+                        );
+                        metadata.insert(
+                            "bounds_width".to_string(),
+                            format!("{:.6e}", bounds_width),
+                        );
+                        metadata.insert(
+                            "distance_from_center".to_string(),
+                            format!("{:.6e}", distance_from_center),
+                        );
+                        metadata.insert(
+                            "relative_distance".to_string(),
+                            format!("{:.3}", relative_distance),
+                        );
+                        metadata.insert(
+                            "within_bounds".to_string(),
+                            (shape == TipShape::Sharp).to_string(),
+                        );
+                        metadata.insert(
+                            "read_method".to_string(),
+                            read_method.to_string(),
+                        );
+                        metadata.insert(
+                            "dataset_size".to_string(),
+                            raw_data.len().to_string(),
+                        );
+
+                        // Store raw dataset for debugging stability measures
+                        let raw_data_summary = if raw_data.len() <= 10 {
+                            raw_data
+                                .iter()
+                                .map(|x| format!("{:.3e}", x))
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        } else {
+                            let first_5: String = raw_data
+                                .iter()
+                                .take(5)
+                                .map(|x| format!("{:.3e}", x))
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            let last_5: String = raw_data
+                                .iter()
+                                .rev()
+                                .take(5)
+                                .rev()
+                                .map(|x| format!("{:.3e}", x))
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            format!("{},...,{}", first_5, last_5)
+                        };
+                        metadata.insert(
+                            "raw_dataset_summary".to_string(),
+                            format!("[{}]", raw_data_summary),
+                        );
+
+                        if shape == TipShape::Blunt {
+                            let margin_violation = if value < bounds.0 {
+                                bounds.0 - value
+                            } else {
+                                value - bounds.1
+                            };
+                            metadata.insert(
+                                "margin_violation".to_string(),
+                                format!("{:.6e}", margin_violation),
+                            );
+                            metadata.insert(
+                                "violation_direction".to_string(),
+                                if value < bounds.0 {
+                                    "below_lower_bound".to_string()
+                                } else {
+                                    "above_upper_bound".to_string()
+                                },
+                            );
+                        }
+
+                        (shape, measured, metadata)
+                    }
+
+                    TipCheckMethod::MultiSignalBounds { ref signals } => {
+                        let mut measured = HashMap::new();
+                        let mut violations = Vec::new();
+                        let mut all_good = true;
+                        let mut all_datasets = Vec::new();
+                        let mut read_methods = Vec::new();
+
+                        // Calculate samples needed for configured data collection duration
+                        let data_points = self
+                            .calculate_samples_for_duration(
+                                Duration::from_millis(
+                                    TIP_STATE_DATA_COLLECTION_DURATION_MS,
+                                ),
+                            )
+                            .unwrap_or(100); // Fallback to 100 if TCP not configured
+
+                        // Read each signal using ReadStableSignal
+                        for (signal, bounds) in signals.iter() {
+                            let stable_result = self
+                                .run(Action::ReadStableSignal {
+                                    signal: signal.clone(),
+                                    data_points: Some(data_points),
+                                    use_new_data: true, // Get fresh data for tip state checking
+                                    stability_method:
+                                        crate::actions::SignalStabilityMethod::Combined {
+                                            max_std_dev: TIP_STATE_MAX_STD_DEV,
+                                            max_slope: TIP_STATE_MAX_SLOPE,
+                                        },
+                                    timeout: Duration::from_secs(TIP_STATE_READ_TIMEOUT_SECS),
+                                    retry_count: Some(TIP_STATE_READ_RETRY_COUNT),
+                                })
+                                .execute();
+
                             let (value, raw_data, read_method) =
                                 match stable_result {
                                     Ok(exec_result) => match exec_result {
@@ -1900,20 +2189,14 @@ impl ActionDriver {
                                             ActionResult::StableSignal(
                                                 stable_signal,
                                             ),
-                                        ) => {
-                                            // Use stable value from ReadStableSignal
-                                            log::debug!("CheckTipState: ReadStableSignal succeeded with {} data points", stable_signal.raw_data.len());
-                                            (
-                                                stable_signal.stable_value,
-                                                stable_signal.raw_data,
-                                                "stable_signal",
-                                            )
-                                        }
+                                        ) => (
+                                            stable_signal.stable_value,
+                                            stable_signal.raw_data,
+                                            "stable_signal",
+                                        ),
                                         ExecutionResult::Single(
                                             ActionResult::Values(values),
                                         ) => {
-                                            // ReadStableSignal failed but returned raw data, use minimum as fallback
-                                            log::warn!("CheckTipState: ReadStableSignal failed but returned {} raw values, using minimum as fallback", values.len());
                                             let raw_data: Vec<f32> = values
                                                 .iter()
                                                 .map(|&v| v as f32)
@@ -1929,11 +2212,11 @@ impl ActionDriver {
                                             )
                                         }
                                         _ => {
-                                            // Unexpected result type, fallback to single read
-                                            log::warn!("CheckTipState: ReadStableSignal returned unexpected result type, falling back to single read");
-                                            let single_value = self
-                                                .client
-                                                .signal_val_get(signal.index, true)?;
+                                            let single_value =
+                                                self.client.signal_val_get(
+                                                    signal.index,
+                                                    true,
+                                                )?;
                                             (
                                                 single_value,
                                                 vec![single_value],
@@ -1941,12 +2224,12 @@ impl ActionDriver {
                                             )
                                         }
                                     },
-                                    Err(e) => {
-                                        // Complete fallback to single read
-                                        log::warn!("CheckTipState: ReadStableSignal failed with error: {}, falling back to single read", e);
-                                        let single_value = self
-                                            .client
-                                            .signal_val_get(signal.index, true)?;
+                                    Err(_) => {
+                                        let single_value =
+                                            self.client.signal_val_get(
+                                                signal.index,
+                                                true,
+                                            )?;
                                         (
                                             single_value,
                                             vec![single_value],
@@ -1955,379 +2238,119 @@ impl ActionDriver {
                                     }
                                 };
 
-                            let mut measured = HashMap::new();
-                            measured.insert(SignalIndex::new(signal.index), value);
+                            measured
+                                .insert(SignalIndex::new(signal.index), value);
+                            all_datasets.push(raw_data);
+                            read_methods.push(read_method);
 
-                            let shape =
-                                if value >= bounds.0 && value <= bounds.1 {
-                                    TipShape::Sharp
-                                } else {
-                                    TipShape::Blunt
-                                };
+                            let in_bounds =
+                                value >= bounds.0 && value <= bounds.1;
+                            if !in_bounds {
+                                violations.push((
+                                    signal.clone(),
+                                    value,
+                                    *bounds,
+                                ));
+                                all_good = false;
+                            }
+                        }
 
-                            // Calculate confidence based on distance from bounds
-                            let bounds_center = (bounds.0 + bounds.1) / 2.0;
-                            let bounds_width = (bounds.1 - bounds.0).abs();
-                            let distance_from_center =
-                                (value - bounds_center).abs();
-                            let relative_distance = if bounds_width > 0.0 {
-                                distance_from_center / (bounds_width / 2.0)
-                            } else {
-                                0.0
-                            };
+                        let shape = if all_good {
+                            TipShape::Sharp
+                        } else {
+                            TipShape::Blunt
+                        };
 
-                            let confidence = if shape == TipShape::Sharp {
-                                // Within bounds: confidence decreases as we approach the edges
-                                (1.0 - relative_distance).max(0.1) // Minimum confidence 0.1
-                            } else {
-                                // Outside bounds: confidence based on how far outside we are
-                                let margin_violation = if value < bounds.0 {
-                                    (bounds.0 - value) / bounds_width.abs()
-                                } else {
-                                    (value - bounds.1) / bounds_width.abs()
-                                };
-                                (1.0 / (1.0 + margin_violation)).max(0.05) // Lower confidence for violations
-                            };
+                        // Populate metadata with multi-signal analysis and datasets
+                        let mut metadata = HashMap::new();
+                        metadata.insert(
+                            "method".to_string(),
+                            "multi_signal_bounds".to_string(),
+                        );
+                        metadata.insert(
+                            "signal_count".to_string(),
+                            signals.len().to_string(),
+                        );
+                        metadata.insert(
+                            "signals_in_bounds".to_string(),
+                            (signals.len() - violations.len()).to_string(),
+                        );
+                        metadata.insert(
+                            "violation_count".to_string(),
+                            violations.len().to_string(),
+                        );
+                        metadata.insert(
+                            "overall_pass".to_string(),
+                            all_good.to_string(),
+                        );
 
-                            // Populate metadata with analysis context and dataset
-                            let mut metadata = HashMap::new();
+                        // Add individual signal details with datasets
+                        for (i, ((signal, bounds), dataset)) in
+                            signals.iter().zip(all_datasets.iter()).enumerate()
+                        {
+                            let prefix = format!("signal_{}", i);
+                            let value =
+                                measured[&SignalIndex::new(signal.index)];
+
                             metadata.insert(
-                                "method".to_string(),
-                                "signal_bounds".to_string(),
-                            );
-                            metadata.insert(
-                                "signal_index".to_string(),
+                                format!("{}_index", prefix),
                                 signal.index.to_string(),
                             );
                             metadata.insert(
-                                "measured_value".to_string(),
+                                format!("{}_value", prefix),
                                 format!("{:.6e}", value),
                             );
                             metadata.insert(
-                                "bounds_lower".to_string(),
-                                format!("{:.6e}", bounds.0),
+                                format!("{}_bounds", prefix),
+                                format!("[{:.3e}, {:.3e}]", bounds.0, bounds.1),
                             );
                             metadata.insert(
-                                "bounds_upper".to_string(),
-                                format!("{:.6e}", bounds.1),
+                                format!("{}_in_bounds", prefix),
+                                (value >= bounds.0 && value <= bounds.1)
+                                    .to_string(),
                             );
                             metadata.insert(
-                                "bounds_center".to_string(),
-                                format!("{:.6e}", bounds_center),
+                                format!("{}_read_method", prefix),
+                                read_methods[i].to_string(),
                             );
                             metadata.insert(
-                                "bounds_width".to_string(),
-                                format!("{:.6e}", bounds_width),
-                            );
-                            metadata.insert(
-                                "distance_from_center".to_string(),
-                                format!("{:.6e}", distance_from_center),
-                            );
-                            metadata.insert(
-                                "relative_distance".to_string(),
-                                format!("{:.3}", relative_distance),
-                            );
-                            metadata.insert(
-                                "within_bounds".to_string(),
-                                (shape == TipShape::Sharp).to_string(),
-                            );
-                            metadata.insert(
-                                "read_method".to_string(),
-                                read_method.to_string(),
-                            );
-                            metadata.insert(
-                                "dataset_size".to_string(),
-                                raw_data.len().to_string(),
+                                format!("{}_dataset_size", prefix),
+                                dataset.len().to_string(),
                             );
 
-                            // Store raw dataset for debugging stability measures
-                            let raw_data_summary = if raw_data.len() <= 10 {
-                                raw_data
+                            // Store dataset summary for debugging
+                            let dataset_summary = if dataset.len() <= 10 {
+                                dataset
                                     .iter()
                                     .map(|x| format!("{:.3e}", x))
                                     .collect::<Vec<_>>()
                                     .join(",")
                             } else {
-                                let first_5: String = raw_data
+                                let first_3: String = dataset
                                     .iter()
-                                    .take(5)
+                                    .take(3)
                                     .map(|x| format!("{:.3e}", x))
                                     .collect::<Vec<_>>()
                                     .join(",");
-                                let last_5: String = raw_data
+                                let last_3: String = dataset
                                     .iter()
                                     .rev()
-                                    .take(5)
+                                    .take(3)
                                     .rev()
                                     .map(|x| format!("{:.3e}", x))
                                     .collect::<Vec<_>>()
                                     .join(",");
-                                format!("{},...,{}", first_5, last_5)
+                                format!("{},...,{}", first_3, last_3)
                             };
                             metadata.insert(
-                                "raw_dataset_summary".to_string(),
-                                format!("[{}]", raw_data_summary),
+                                format!("{}_dataset_summary", prefix),
+                                format!("[{}]", dataset_summary),
                             );
-
-                            if shape == TipShape::Blunt {
-                                let margin_violation = if value < bounds.0 {
-                                    bounds.0 - value
-                                } else {
-                                    value - bounds.1
-                                };
-                                metadata.insert(
-                                    "margin_violation".to_string(),
-                                    format!("{:.6e}", margin_violation),
-                                );
-                                metadata.insert(
-                                    "violation_direction".to_string(),
-                                    if value < bounds.0 {
-                                        "below_lower_bound".to_string()
-                                    } else {
-                                        "above_upper_bound".to_string()
-                                    },
-                                );
-                            }
-
-                            (shape, measured, confidence, metadata)
                         }
 
-                        TipCheckMethod::MultiSignalBounds { ref signals } => {
-                            let mut measured = HashMap::new();
-                            let mut violations = Vec::new();
-                            let mut all_good = true;
-                            let mut confidence_scores = Vec::new();
-                            let mut all_datasets = Vec::new();
-                            let mut read_methods = Vec::new();
-
-                            // Calculate samples needed for configured data collection duration
-                            let data_points = self
-                                .calculate_samples_for_duration(
-                                    Duration::from_millis(
-                                        TIP_STATE_DATA_COLLECTION_DURATION_MS,
-                                    ),
-                                )
-                                .unwrap_or(100); // Fallback to 100 if TCP not configured
-
-                            // Read each signal using ReadStableSignal
-                            for (signal, bounds) in signals.iter() {
-                                let stable_result = self
-                                .run(Action::ReadStableSignal {
-                                    signal: signal.clone(),
-                                    data_points: Some(data_points),
-                                    use_new_data: true, // Get fresh data for tip state checking
-                                    stability_method:
-                                        crate::actions::SignalStabilityMethod::Combined {
-                                            max_std_dev: TIP_STATE_MAX_STD_DEV,
-                                            max_slope: TIP_STATE_MAX_SLOPE,
-                                        },
-                                    timeout: Duration::from_secs(TIP_STATE_READ_TIMEOUT_SECS),
-                                    retry_count: Some(TIP_STATE_READ_RETRY_COUNT),
-                                })
-                                .execute();
-
-                                let (value, raw_data, read_method) =
-                                    match stable_result {
-                                        Ok(exec_result) => match exec_result {
-                                            ExecutionResult::Single(
-                                                ActionResult::StableSignal(
-                                                    stable_signal,
-                                                ),
-                                            ) => (
-                                                stable_signal.stable_value,
-                                                stable_signal.raw_data,
-                                                "stable_signal",
-                                            ),
-                                            ExecutionResult::Single(
-                                                ActionResult::Values(values),
-                                            ) => {
-                                                let raw_data: Vec<f32> = values
-                                                    .iter()
-                                                    .map(|&v| v as f32)
-                                                    .collect();
-                                                let min_value = raw_data
-                                                    .iter()
-                                                    .cloned()
-                                                    .fold(
-                                                        f32::INFINITY,
-                                                        f32::min,
-                                                    );
-                                                (
-                                                    min_value,
-                                                    raw_data,
-                                                    "fallback_minimum",
-                                                )
-                                            }
-                                            _ => {
-                                                let single_value = self
-                                                    .client
-                                                    .signal_val_get(
-                                                        signal.index, true,
-                                                    )?;
-                                                (
-                                                    single_value,
-                                                    vec![single_value],
-                                                    "single_read_fallback",
-                                                )
-                                            }
-                                        },
-                                        Err(_) => {
-                                            let single_value =
-                                                self.client.signal_val_get(
-                                                    signal.index, true,
-                                                )?;
-                                            (
-                                                single_value,
-                                                vec![single_value],
-                                                "single_read_fallback",
-                                            )
-                                        }
-                                    };
-
-                                measured.insert(SignalIndex::new(signal.index), value);
-                                all_datasets.push(raw_data);
-                                read_methods.push(read_method);
-
-                                let in_bounds =
-                                    value >= bounds.0 && value <= bounds.1;
-                                if !in_bounds {
-                                    violations.push((signal.clone(), value, *bounds));
-                                    all_good = false;
-                                }
-
-                                // Calculate per-signal confidence
-                                let bounds_center = (bounds.0 + bounds.1) / 2.0;
-                                let bounds_width = (bounds.1 - bounds.0).abs();
-                                let distance_from_center =
-                                    (value - bounds_center).abs();
-                                let relative_distance = if bounds_width > 0.0 {
-                                    distance_from_center / (bounds_width / 2.0)
-                                } else {
-                                    0.0
-                                };
-
-                                let signal_confidence = if in_bounds {
-                                    (1.0 - relative_distance).max(0.1)
-                                } else {
-                                    let margin_violation = if value < bounds.0 {
-                                        (bounds.0 - value) / bounds_width.abs()
-                                    } else {
-                                        (value - bounds.1) / bounds_width.abs()
-                                    };
-                                    (1.0 / (1.0 + margin_violation)).max(0.05)
-                                };
-                                confidence_scores.push(signal_confidence);
-                            }
-
-                            let shape = if all_good {
-                                TipShape::Sharp
-                            } else {
-                                TipShape::Blunt
-                            };
-
-                            // Overall confidence is the minimum of all signal confidences
-                            let confidence = confidence_scores
-                                .iter()
-                                .fold(1.0f32, |acc, &x| acc.min(x));
-
-                            // Populate metadata with multi-signal analysis and datasets
-                            let mut metadata = HashMap::new();
-                            metadata.insert(
-                                "method".to_string(),
-                                "multi_signal_bounds".to_string(),
-                            );
-                            metadata.insert(
-                                "signal_count".to_string(),
-                                signals.len().to_string(),
-                            );
-                            metadata.insert(
-                                "signals_in_bounds".to_string(),
-                                (signals.len() - violations.len()).to_string(),
-                            );
-                            metadata.insert(
-                                "violation_count".to_string(),
-                                violations.len().to_string(),
-                            );
-                            metadata.insert(
-                                "overall_pass".to_string(),
-                                all_good.to_string(),
-                            );
-
-                            // Add individual signal details with datasets
-                            for (i, ((signal, bounds), dataset)) in signals
-                                .iter()
-                                .zip(all_datasets.iter())
-                                .enumerate()
-                            {
-                                let prefix = format!("signal_{}", i);
-                                let value = measured[&SignalIndex::new(signal.index)];
-
-                                metadata.insert(
-                                    format!("{}_index", prefix),
-                                    signal.index.to_string(),
-                                );
-                                metadata.insert(
-                                    format!("{}_value", prefix),
-                                    format!("{:.6e}", value),
-                                );
-                                metadata.insert(
-                                    format!("{}_bounds", prefix),
-                                    format!(
-                                        "[{:.3e}, {:.3e}]",
-                                        bounds.0, bounds.1
-                                    ),
-                                );
-                                metadata.insert(
-                                    format!("{}_in_bounds", prefix),
-                                    (value >= bounds.0 && value <= bounds.1)
-                                        .to_string(),
-                                );
-                                metadata.insert(
-                                    format!("{}_confidence", prefix),
-                                    format!("{:.3}", confidence_scores[i]),
-                                );
-                                metadata.insert(
-                                    format!("{}_read_method", prefix),
-                                    read_methods[i].to_string(),
-                                );
-                                metadata.insert(
-                                    format!("{}_dataset_size", prefix),
-                                    dataset.len().to_string(),
-                                );
-
-                                // Store dataset summary for debugging
-                                let dataset_summary = if dataset.len() <= 10 {
-                                    dataset
-                                        .iter()
-                                        .map(|x| format!("{:.3e}", x))
-                                        .collect::<Vec<_>>()
-                                        .join(",")
-                                } else {
-                                    let first_3: String = dataset
-                                        .iter()
-                                        .take(3)
-                                        .map(|x| format!("{:.3e}", x))
-                                        .collect::<Vec<_>>()
-                                        .join(",");
-                                    let last_3: String = dataset
-                                        .iter()
-                                        .rev()
-                                        .take(3)
-                                        .rev()
-                                        .map(|x| format!("{:.3e}", x))
-                                        .collect::<Vec<_>>()
-                                        .join(",");
-                                    format!("{},...,{}", first_3, last_3)
-                                };
-                                metadata.insert(
-                                    format!("{}_dataset_summary", prefix),
-                                    format!("[{}]", dataset_summary),
-                                );
-                            }
-
-                            (shape, measured, confidence, metadata)
-                        }
-                    };
+                        (shape, measured, metadata)
+                    }
+                };
 
                 // Add TCP buffer context and recent signal trends if available
                 if let Some(ref tcp_reader) = self.tcp_reader {
@@ -2519,10 +2542,6 @@ impl ActionDriver {
                             format!("{:.6e}", most_recent_signal.stable_value),
                         );
                         metadata.insert(
-                            "most_recent_stable_confidence".to_string(),
-                            format!("{:.3}", most_recent_signal.confidence),
-                        );
-                        metadata.insert(
                             "most_recent_data_points".to_string(),
                             most_recent_signal.data_points_used.to_string(),
                         );
@@ -2616,12 +2635,11 @@ impl ActionDriver {
                     ", recent_stable_data=false".to_string()
                 };
 
-                log::info!("CheckTipState result: shape={:?}, confidence={:.3}, read_method={}, dataset_size={}, measured_signals=[{}]{}",
-                    tip_shape, confidence, read_method, dataset_size, signal_values_str, stable_signal_info);
+                log::info!("CheckTipState result: shape={:?}, read_method={}, dataset_size={}, measured_signals=[{}]{}",
+                    tip_shape, read_method, dataset_size, signal_values_str, stable_signal_info);
 
                 Ok(ActionResult::TipState(TipState {
                     shape: tip_shape,
-                    confidence,
                     measured_signals,
                     metadata,
                 }))
@@ -2630,17 +2648,16 @@ impl ActionDriver {
             Action::CheckTipStability {
                 method,
                 max_duration: _,
-                abort_on_damage_signs: _,
             } => {
-                use crate::actions::{StabilityResult, TipStabilityMethod};
                 use std::collections::HashMap;
+
+                use crate::actions::{StabilityResult, TipStabilityMethod};
 
                 let start_time = std::time::Instant::now();
                 let mut metrics = HashMap::new();
                 let mut recommendations = Vec::new();
 
-                let (is_stable, stability_score, measured_values) = match method
-                {
+                let (is_stable, measured_values) = match method {
                     TipStabilityMethod::ExtendedMonitoring {
                         signal: _,
                         duration: _,
@@ -2658,50 +2675,54 @@ impl ActionDriver {
                         allowed_signal_change,
                     } => {
                         log::info!(
-                            "Performing scan with bias sweep stability test"
+                            "Performing simple bias sweep stability test: {:.2}V to {:.2}V",
+                            bias_range.0,
+                            bias_range.1
                         );
 
                         // 1. Get signal channel index for TCP reader
                         let tcp_channel = signal.tcp_channel.ok_or_else(|| {
-                                NanonisError::Protocol(format!(
-                                    "Signal {} (Nanonis index) has no TCP channel mapping",
-                                    signal.index
-                                ))
-                            })?;
+                            NanonisError::Protocol(format!(
+                                "Signal {} (Nanonis index) has no TCP channel mapping",
+                                signal.index
+                            ))
+                        })?;
 
-                        // 2. Get initial bias for restoration
-                        let initial_bias = self.client.get_bias()?;
+                        // 2. Save and configure scan properties
+                        log::info!("Reading current scan properties...");
+                        let original_props = self.client.scan_props_get()?;
+                        log::info!(
+                            "Original scan props: continuous={}, bouncy={}",
+                            original_props.continuous_scan,
+                            original_props.bouncy_scan
+                        );
+
+                        // Configure scan for stability check
+                        log::info!(
+                            "Configuring scan: continuous=true, bouncy=true"
+                        );
+                        let scan_props =
+                            nanonis_rs::scan::ScanPropsBuilder::new()
+                                .continuous_scan(true)
+                                .bouncy_scan(true);
+                        self.client.scan_props_set(scan_props)?;
+                        log::info!("Scan properties configured");
+
+                        // 3. Get initial bias for restoration
+                        let initial_bias = self.client.bias_get()?;
                         log::info!(
                             "Initial bias: {:.3} V (will restore after sweep)",
                             initial_bias
                         );
 
-                        // 3. Get baseline frequency shift value
+                        // 4. Read baseline signal value once before starting
                         let baseline_value = {
-                            let tcp_reader = self.tcp_reader_mut().ok_or_else(|| {
-                                NanonisError::Protocol(
-                                    "TCP reader not available for bias sweep monitoring"
-                                        .to_string(),
-                                )
-                            })?;
-                            let initial_frame_count = tcp_reader.frame_count();
-
-                            // Wait for a new frame (up to 500ms)
-                            let mut wait_iterations = 0;
-                            loop {
-                                std::thread::sleep(Duration::from_millis(10));
-                                if tcp_reader.frame_count()
-                                    > initial_frame_count
-                                {
-                                    break;
-                                }
-                                wait_iterations += 1;
-                                if wait_iterations > 50 {
-                                    return Err(NanonisError::Protocol(
-                                        "Timeout waiting for initial signal frame".to_string(),
-                                    ));
-                                }
-                            }
+                            let tcp_reader =
+                                self.tcp_reader_mut().ok_or_else(|| {
+                                    NanonisError::Protocol(
+                                        "TCP reader not available".to_string(),
+                                    )
+                                })?;
 
                             let recent_frames = tcp_reader.get_recent_frames(1);
                             if recent_frames.is_empty() {
@@ -2716,28 +2737,33 @@ impl ActionDriver {
                         };
 
                         log::info!(
-                            "Starting ScanWithBiasSweep: baseline={:.3} Hz, threshold={:.3} Hz",
+                            "Baseline signal: {:.3}, threshold: {:.3}",
                             baseline_value,
                             allowed_signal_change
                         );
-                        log::info!(
-                            "Bias sweep: {:.2}V to {:.2}V in {} steps ({:.0}ms per step)",
-                            bias_range.0,
-                            bias_range.1,
-                            bias_steps,
-                            step_duration.as_millis()
-                        );
 
-                        // 5. Start scan
+                        // 4. Start scan
                         self.client.scan_action(
                             ScanAction::Start,
                             ScanDirection::Down,
                         )?;
-                        log::info!("Scan start command sent");
+                        log::info!("Scan started");
 
-                        // 6. Wait for scan to actually start (max 5 seconds)
+                        // Wait for scan to actually start (max 5 seconds)
                         let mut scan_started = false;
                         for _ in 0..50 {
+                            // Check for shutdown request
+                            if self.is_shutdown_requested() {
+                                log::info!("Shutdown requested while waiting for scan to start");
+                                let _ = self.client.scan_action(
+                                    ScanAction::Stop,
+                                    ScanDirection::Up,
+                                );
+                                let _ = self.client.bias_set(initial_bias);
+                                return Err(NanonisError::Protocol(
+                                    "Shutdown requested".to_string(),
+                                ));
+                            }
                             std::thread::sleep(Duration::from_millis(100));
                             let is_scanning = self.client.scan_status_get()?;
                             if is_scanning {
@@ -2754,137 +2780,95 @@ impl ActionDriver {
                             ));
                         }
 
-                        // 7. Execute bias sweep with signal monitoring
+                        // 5. Sweep bias from upper to lower
                         let bias_step_size =
                             (bias_range.1 - bias_range.0) / (bias_steps as f32);
                         let mut current_bias = bias_range.0;
-                        let mut collected_signals = Vec::new();
-                        let mut sudden_change_detected = false;
-                        let mut scan_stopped_unexpectedly = false;
-                        let mut steps_completed = 0;
-                        let mut last_frame_count = {
+
+                        for step_num in 0..bias_steps {
+                            // Check for shutdown request
+                            if self.is_shutdown_requested() {
+                                log::info!("Shutdown requested during bias sweep at step {}/{}", step_num + 1, bias_steps);
+                                let _ = self.client.scan_action(
+                                    ScanAction::Stop,
+                                    ScanDirection::Up,
+                                );
+                                let _ = self.client.bias_set(initial_bias);
+                                return Err(NanonisError::Protocol(
+                                    "Shutdown requested".to_string(),
+                                ));
+                            }
+                            self.client.bias_set(current_bias)?;
+                            log::debug!(
+                                "Step {}/{}: bias={:.2}V",
+                                step_num + 1,
+                                bias_steps,
+                                current_bias
+                            );
+                            // Interruptible sleep: split into 10ms chunks for responsive shutdown
+                            let sleep_chunks =
+                                (step_duration.as_millis() / 10).max(1) as u32;
+                            let chunk_duration = step_duration / sleep_chunks;
+                            for _ in 0..sleep_chunks {
+                                if self.is_shutdown_requested() {
+                                    log::info!("Shutdown requested during bias sweep step sleep");
+                                    let _ = self.client.scan_action(
+                                        ScanAction::Stop,
+                                        ScanDirection::Up,
+                                    );
+                                    let _ = self.client.bias_set(initial_bias);
+                                    return Err(NanonisError::Protocol(
+                                        "Shutdown requested".to_string(),
+                                    ));
+                                }
+                                std::thread::sleep(chunk_duration);
+                            }
+                            current_bias += bias_step_size;
+                        }
+
+                        log::info!("Bias sweep completed");
+
+                        // 6. Read final signal value once after finishing
+                        let final_value = {
                             let tcp_reader =
                                 self.tcp_reader_mut().ok_or_else(|| {
                                     NanonisError::Protocol(
                                         "TCP reader not available".to_string(),
                                     )
                                 })?;
-                            tcp_reader.frame_count()
+
+                            let recent_frames = tcp_reader.get_recent_frames(1);
+                            if recent_frames.is_empty() {
+                                return Err(NanonisError::Protocol(
+                                    "No frames available from TCP reader"
+                                        .to_string(),
+                                ));
+                            }
+
+                            recent_frames[0].signal_frame.data
+                                [tcp_channel as usize]
                         };
 
-                        'sweep_loop: for step_num in 0..bias_steps {
-                            // a. Set bias
-                            if let Err(e) = self.client.set_bias(current_bias) {
-                                log::error!(
-                                    "Failed to set bias at step {}: {}",
-                                    step_num,
-                                    e
-                                );
-                                break;
-                            }
-
-                            log::debug!(
-                                "Step {}/{}: bias={:.2}V",
-                                step_num,
-                                bias_steps,
-                                current_bias
-                            );
-
-                            // b. Wait for signal to settle
-                            std::thread::sleep(step_duration);
-
-                            // c. Collect and analyze signal samples
-                            {
-                                let tcp_reader =
-                                    self.tcp_reader_mut().ok_or_else(|| {
-                                        NanonisError::Protocol(
-                                            "TCP reader not available"
-                                                .to_string(),
-                                        )
-                                    })?;
-                                let current_frame_count =
-                                    tcp_reader.frame_count();
-
-                                if current_frame_count > last_frame_count {
-                                    let recent_frames =
-                                        tcp_reader.get_recent_frames(10);
-
-                                    for frame in recent_frames {
-                                        if let Some(&value) = frame
-                                            .signal_frame
-                                            .data
-                                            .get(tcp_channel as usize)
-                                        {
-                                            let deviation =
-                                                (value - baseline_value).abs();
-
-                                            if deviation > allowed_signal_change
-                                            {
-                                                log::error!(
-                                                    "Sudden change detected at bias {:.2}V: freq_shift={:.3} Hz \
-                                                     (baseline: {:.3} Hz, deviation: {:.3} Hz)",
-                                                    current_bias,
-                                                    value,
-                                                    baseline_value,
-                                                    deviation
-                                                );
-                                                sudden_change_detected = true;
-                                                break 'sweep_loop;
-                                            }
-
-                                            collected_signals.push(value);
-                                            log::trace!(
-                                                "freq_shift={:.3} Hz (deviation: {:.3} Hz)",
-                                                value,
-                                                deviation
-                                            );
-                                        }
-                                    }
-
-                                    last_frame_count = current_frame_count;
-                                }
-                            }
-
-                            // d. Check scan status
-                            let is_scanning = self.client.scan_status_get()?;
-                            if !is_scanning {
-                                log::warn!(
-                                    "Scan stopped unexpectedly during bias sweep at step {}/{}",
-                                    step_num,
-                                    bias_steps
-                                );
-                                scan_stopped_unexpectedly = true;
-                                break;
-                            }
-
-                            // e. Check timeout (max_duration is handled by outer action framework)
-
-                            // f. Update for next iteration
-                            current_bias += bias_step_size;
-                            steps_completed += 1;
-
-                            // g. Progress logging
-                            if step_num % 10 == 0 {
-                                log::info!(
-                                    "Bias sweep progress: step {}/{}, bias={:.2}V, samples={}",
-                                    step_num,
-                                    bias_steps,
-                                    current_bias,
-                                    collected_signals.len()
-                                );
-                            }
-                        }
-
-                        // 8. Cleanup - stop scan and restore bias
-                        log::info!("Stopping scan and restoring bias...");
-
-                        // Always try to stop scan (ignore errors)
+                        // 7. Stop scan, withdraw, then restore bias
                         let _ = self
                             .client
                             .scan_action(ScanAction::Stop, ScanDirection::Up);
 
-                        // Try to restore bias (log error if it fails but continue)
-                        if let Err(e) = self.client.set_bias(initial_bias) {
+                        // Withdraw before changing bias
+                        if let Err(e) = self
+                            .client
+                            .z_ctrl_withdraw(true, Duration::from_secs(5))
+                        {
+                            log::error!(
+                                "Failed to withdraw before restoring bias: {}",
+                                e
+                            );
+                        }
+
+                        // Delay before changing bias
+                        std::thread::sleep(Duration::from_millis(200));
+
+                        if let Err(e) = self.client.bias_set(initial_bias) {
                             log::error!(
                                 "Failed to restore initial bias: {}",
                                 e
@@ -2896,88 +2880,60 @@ impl ActionDriver {
                             );
                         }
 
-                        // 9. Determine stability
-                        let is_stable = !sudden_change_detected
-                            && !scan_stopped_unexpectedly;
-                        let stability_score = if is_stable { 0.8 } else { 0.2 };
+                        // 8. Check if change exceeded threshold
+                        let signal_change =
+                            (final_value - baseline_value).abs();
+                        let is_stable = signal_change <= allowed_signal_change;
 
-                        let final_signal_value = collected_signals
-                            .last()
-                            .copied()
-                            .unwrap_or(baseline_value);
-                        let max_deviation = collected_signals
-                            .iter()
-                            .map(|&v| (v - baseline_value).abs())
-                            .max_by(|a, b| a.partial_cmp(b).unwrap())
-                            .unwrap_or(0.0);
+                        log::info!(
+                            "Bias sweep result: baseline={:.3}, final={:.3}, change={:.3}, threshold={:.3}, stable={}",
+                            baseline_value,
+                            final_value,
+                            signal_change,
+                            allowed_signal_change,
+                            is_stable
+                        );
 
-                        // 10. Populate metrics
-                        metrics.insert(
-                            "scan_duration_s".to_string(),
-                            start_time.elapsed().as_secs_f32(),
-                        );
-                        metrics.insert(
-                            "bias_steps_completed".to_string(),
-                            steps_completed as f32,
-                        );
-                        metrics.insert(
-                            "sudden_change_detected".to_string(),
-                            if sudden_change_detected { 1.0 } else { 0.0 },
-                        );
-                        metrics.insert(
-                            "scan_stopped".to_string(),
-                            if scan_stopped_unexpectedly { 1.0 } else { 0.0 },
-                        );
+                        // 9. Populate metrics
                         metrics.insert(
                             "baseline_value".to_string(),
                             baseline_value,
                         );
-                        metrics.insert(
-                            "final_signal_value".to_string(),
-                            final_signal_value,
-                        );
+                        metrics.insert("final_value".to_string(), final_value);
                         metrics
-                            .insert("max_deviation".to_string(), max_deviation);
+                            .insert("signal_change".to_string(), signal_change);
+                        metrics.insert(
+                            "threshold".to_string(),
+                            allowed_signal_change,
+                        );
 
-                        // Add recommendations
-                        if sudden_change_detected {
-                            recommendations.push(
-                                "Sudden signal change detected - tip may be unstable or contaminated"
-                                    .to_string(),
-                            );
-                        }
-                        if scan_stopped_unexpectedly {
-                            recommendations.push(
-                                "Scan stopped unexpectedly - check tip condition".to_string(),
-                            );
-                        }
+                        // 10. Add recommendations
                         if is_stable {
                             recommendations.push(format!(
-                                "Tip appears stable across bias range {:.2}V to {:.2}V",
-                                bias_range.0, bias_range.1
+                                "Tip is stable - signal change {:.3} within threshold {:.3}",
+                                signal_change, allowed_signal_change
+                            ));
+                        } else {
+                            recommendations.push(format!(
+                                "Tip is blunt - signal change {:.3} exceeded threshold {:.3}. Tip shaping recommended.",
+                                signal_change, allowed_signal_change
                             ));
                         }
 
-                        log::info!(
-                            "ScanWithBiasSweep complete: is_stable={}, steps={}/{}, max_deviation={:.3} Hz",
-                            is_stable,
-                            steps_completed,
-                            bias_steps,
-                            max_deviation
-                        );
-
                         // Create measured values map
                         let mut measured_values = HashMap::new();
-                        measured_values.insert(signal.clone(), collected_signals);
+                        measured_values.insert(
+                            signal.clone(),
+                            vec![baseline_value, final_value],
+                        );
 
-                        (is_stable, stability_score, measured_values)
+                        (is_stable, measured_values)
                     }
                 };
 
                 let analysis_duration = start_time.elapsed();
                 let result = StabilityResult {
                     is_stable,
-                    stability_score,
                     method_used: format!("{:?}", method.clone()),
                     measured_values,
                     analysis_duration,
@@ -3094,7 +3050,7 @@ impl ActionDriver {
                         timeout,
                         &stability_method,
                     ) {
-                        Ok((signal_data, is_stable, confidence, metrics)) => {
+                        Ok((signal_data, is_stable, metrics)) => {
                             let analysis_duration = start_time.elapsed();
 
                             if is_stable {
@@ -3112,7 +3068,6 @@ impl ActionDriver {
 
                                 let stable_signal = StableSignal {
                                     stable_value,
-                                    confidence,
                                     data_points_used: signal_data.len(),
                                     analysis_duration,
                                     stability_metrics: metrics,
@@ -3204,7 +3159,7 @@ impl ActionDriver {
                         ActionResult::Values(values) => values.iter().map(|v| *v as f32).sum::<f32>() / values.len() as f32,
                         ActionResult::StableSignal(value) => value.stable_value,
                         other => {
-                            return Err(NanonisError::Type(format!(
+                            return Err(NanonisError::Protocol(format!(
                                 "CheckAmplitudeStability returned unexpected result type. Expected Values or StableSignal, got {:?}",
                                 std::mem::discriminant(&other)
                             )))
@@ -3219,6 +3174,19 @@ impl ActionDriver {
         }
     }
 
+    fn check_safetip_status(&mut self) -> Result<(), NanonisError> {
+        if let Ok(status) = self.client_mut().z_ctrl_status_get() {
+            if matches!(status, nanonis_rs::z_ctrl::ZControllerStatus::SafeTip)
+            {
+                return Err(NanonisError::Protocol(
+                    "SafeTip triggert, abort!".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Attempt a single stable signal read (used by retry logic)
     fn attempt_stable_signal_read(
         &self,
@@ -3228,7 +3196,7 @@ impl ActionDriver {
         timeout: Duration,
         stability_method: &crate::actions::SignalStabilityMethod,
     ) -> Result<
-        (Vec<f32>, bool, f32, std::collections::HashMap<String, f32>),
+        (Vec<f32>, bool, std::collections::HashMap<String, f32>),
         NanonisError,
     > {
         // Collect signal data based on use_new_data flag
@@ -3251,10 +3219,10 @@ impl ActionDriver {
         }
 
         // Analyze stability using the specified method
-        let (is_stable, confidence, metrics) =
+        let (is_stable, metrics) =
             Self::analyze_signal_stability(&signal_data, stability_method);
 
-        Ok((signal_data, is_stable, confidence, metrics))
+        Ok((signal_data, is_stable, metrics))
     }
 
     /// Collect new signal data from TCP logger with timeout
@@ -3346,11 +3314,11 @@ impl ActionDriver {
     fn analyze_signal_stability(
         data: &[f32],
         method: &crate::actions::SignalStabilityMethod,
-    ) -> (bool, f32, std::collections::HashMap<String, f32>) {
+    ) -> (bool, std::collections::HashMap<String, f32>) {
         use crate::actions::SignalStabilityMethod;
 
         if data.len() < 2 {
-            return (false, 0.0, std::collections::HashMap::new());
+            return (false, std::collections::HashMap::new());
         }
 
         let mut metrics = std::collections::HashMap::new();
@@ -3363,13 +3331,10 @@ impl ActionDriver {
         metrics.insert("std_dev".to_string(), std_dev);
         metrics.insert("variance".to_string(), variance);
 
-        let (is_stable, confidence) = match method {
+        let is_stable = match method {
             SignalStabilityMethod::StandardDeviation { threshold } => {
-                let is_stable = std_dev <= *threshold;
-                let confidence =
-                    (1.0 - (std_dev / threshold).min(1.0)).max(0.0);
                 metrics.insert("threshold".to_string(), *threshold);
-                (is_stable, confidence)
+                std_dev <= *threshold
             }
 
             SignalStabilityMethod::RelativeStandardDeviation {
@@ -3380,17 +3345,13 @@ impl ActionDriver {
                 } else {
                     f32::INFINITY
                 };
-                let is_stable = relative_std <= *threshold_percent;
-                let confidence = (1.0
-                    - (relative_std / threshold_percent).min(1.0))
-                .max(0.0);
                 metrics
                     .insert("relative_std_percent".to_string(), relative_std);
                 metrics.insert(
                     "threshold_percent".to_string(),
                     *threshold_percent,
                 );
-                (is_stable, confidence)
+                relative_std <= *threshold_percent
             }
 
             SignalStabilityMethod::MovingWindow {
@@ -3398,7 +3359,7 @@ impl ActionDriver {
                 max_variation,
             } => {
                 if data.len() < *window_size {
-                    return (false, 0.0, metrics);
+                    return (false, metrics);
                 }
 
                 let mut max_window_variation = 0.0f32;
@@ -3411,10 +3372,6 @@ impl ActionDriver {
                     max_window_variation = max_window_variation.max(variation);
                 }
 
-                let is_stable = max_window_variation <= *max_variation;
-                let confidence = (1.0
-                    - (max_window_variation / max_variation).min(1.0))
-                .max(0.0);
                 metrics.insert(
                     "max_window_variation".to_string(),
                     max_window_variation,
@@ -3424,7 +3381,7 @@ impl ActionDriver {
                     "max_variation_threshold".to_string(),
                     *max_variation,
                 );
-                (is_stable, confidence)
+                max_window_variation <= *max_variation
             }
 
             SignalStabilityMethod::TrendAnalysis { max_slope } => {
@@ -3447,14 +3404,11 @@ impl ActionDriver {
                     0.0
                 };
                 let abs_slope = slope.abs();
-                let is_stable = abs_slope <= *max_slope;
-                let confidence =
-                    (1.0 - (abs_slope / max_slope).min(1.0)).max(0.0);
 
                 metrics.insert("slope".to_string(), slope);
                 metrics.insert("abs_slope".to_string(), abs_slope);
                 metrics.insert("max_slope_threshold".to_string(), *max_slope);
-                (is_stable, confidence)
+                abs_slope <= *max_slope
             }
 
             SignalStabilityMethod::Combined {
@@ -3484,14 +3438,6 @@ impl ActionDriver {
                 // Check both conditions: noise AND drift
                 let noise_ok = std_dev <= *max_std_dev;
                 let drift_ok = abs_slope <= *max_slope;
-                let is_stable = noise_ok && drift_ok;
-
-                // Confidence is the minimum of both checks
-                let noise_confidence =
-                    (1.0 - (std_dev / max_std_dev).min(1.0)).max(0.0);
-                let drift_confidence =
-                    (1.0 - (abs_slope / max_slope).min(1.0)).max(0.0);
-                let confidence = noise_confidence.min(drift_confidence);
 
                 metrics.insert("slope".to_string(), slope);
                 metrics.insert("abs_slope".to_string(), abs_slope);
@@ -3506,18 +3452,13 @@ impl ActionDriver {
                     "drift_ok".to_string(),
                     if drift_ok { 1.0 } else { 0.0 },
                 );
-                metrics
-                    .insert("noise_confidence".to_string(), noise_confidence);
-                metrics
-                    .insert("drift_confidence".to_string(), drift_confidence);
-                (is_stable, confidence)
+                noise_ok && drift_ok
             }
         };
 
-        metrics.insert("confidence".to_string(), confidence);
         metrics.insert("data_points".to_string(), data.len() as f32);
 
-        (is_stable, confidence, metrics)
+        (is_stable, metrics)
     }
 
     /// Execute action and extract specific type with validation
@@ -3526,13 +3467,14 @@ impl ActionDriver {
     /// providing better ergonomics while preserving type safety.
     ///
     /// # Example
-    /// ```no_run
-    /// use rusty_tip::{ActionDriver, Action, SignalIndex};
+    /// ```ignore
+    /// use rusty_tip::{ActionDriver, Action, Signal};
     /// use rusty_tip::types::{DataToGet, OsciData};
     ///
     /// let mut driver = ActionDriver::new("127.0.0.1", 6501)?;
+    /// let signal = Signal::new("Frequency Shift", 24, None).unwrap();
     /// let osci_data: OsciData = driver.execute_expecting(Action::ReadOsci {
-    ///     signal: SignalIndex(24),
+    ///     signal,
     ///     trigger: None,
     ///     data_to_get: DataToGet::Current,
     ///     is_stable: None,
@@ -3932,9 +3874,9 @@ impl ActionDriver {
         })? {
             ActionResult::OsciData(osci_data) => Ok(Some(osci_data)),
             ActionResult::None => Ok(None),
-            _ => Err(NanonisError::InvalidCommand(
-                "Expected oscilloscope data".into(),
-            )),
+            _ => {
+                Err(NanonisError::Protocol("Expected oscilloscope data".into()))
+            }
         }
     }
 
@@ -3954,9 +3896,9 @@ impl ActionDriver {
         })? {
             ActionResult::OsciData(osci_data) => Ok(Some(osci_data)),
             ActionResult::None => Ok(None),
-            _ => Err(NanonisError::InvalidCommand(
-                "Expected oscilloscope data".into(),
-            )),
+            _ => {
+                Err(NanonisError::Protocol("Expected oscilloscope data".into()))
+            }
         }
     }
 }
@@ -4125,7 +4067,7 @@ impl ExpectFromExecution<f64> for ExecutionResult {
             {
                 Ok(vs.pop().unwrap())
             }
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected single numeric value".to_string(),
             )),
         }
@@ -4137,7 +4079,7 @@ impl ExpectFromExecution<Vec<f64>> for ExecutionResult {
         match self {
             ExecutionResult::Single(ActionResult::Values(vs)) => Ok(vs),
             ExecutionResult::Single(ActionResult::Value(v)) => Ok(vec![v]),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected numeric values".to_string(),
             )),
         }
@@ -4148,7 +4090,7 @@ impl ExpectFromExecution<bool> for ExecutionResult {
     fn expect_from_execution(self) -> Result<bool, NanonisError> {
         match self {
             ExecutionResult::Single(ActionResult::Status(b)) => Ok(b),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected boolean status".to_string(),
             )),
         }
@@ -4159,7 +4101,7 @@ impl ExpectFromExecution<Position> for ExecutionResult {
     fn expect_from_execution(self) -> Result<Position, NanonisError> {
         match self {
             ExecutionResult::Single(ActionResult::Position(pos)) => Ok(pos),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected position data".to_string(),
             )),
         }
@@ -4170,7 +4112,7 @@ impl ExpectFromExecution<OsciData> for ExecutionResult {
     fn expect_from_execution(self) -> Result<OsciData, NanonisError> {
         match self {
             ExecutionResult::Single(ActionResult::OsciData(data)) => Ok(data),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected oscilloscope data".to_string(),
             )),
         }
@@ -4185,9 +4127,7 @@ impl ExpectFromExecution<crate::types::TipShape> for ExecutionResult {
             ExecutionResult::Single(ActionResult::TipState(tip_state)) => {
                 Ok(tip_state.shape)
             }
-            _ => Err(NanonisError::InvalidCommand(
-                "Expected tip state".to_string(),
-            )),
+            _ => Err(NanonisError::Protocol("Expected tip state".to_string())),
         }
     }
 }
@@ -4200,9 +4140,7 @@ impl ExpectFromExecution<crate::actions::TipState> for ExecutionResult {
             ExecutionResult::Single(ActionResult::TipState(tip_state)) => {
                 Ok(tip_state)
             }
-            _ => Err(NanonisError::InvalidCommand(
-                "Expected tip state".to_string(),
-            )),
+            _ => Err(NanonisError::Protocol("Expected tip state".to_string())),
         }
     }
 }
@@ -4215,7 +4153,7 @@ impl ExpectFromExecution<crate::actions::StableSignal> for ExecutionResult {
             ExecutionResult::Single(ActionResult::StableSignal(
                 stable_signal,
             )) => Ok(stable_signal),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected stable signal".to_string(),
             )),
         }
@@ -4230,7 +4168,7 @@ impl ExpectFromExecution<crate::actions::TCPReaderStatus> for ExecutionResult {
             ExecutionResult::Single(ActionResult::TCPReaderStatus(
                 tcp_status,
             )) => Ok(tcp_status),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected TCP reader status".to_string(),
             )),
         }
@@ -4245,7 +4183,7 @@ impl ExpectFromExecution<crate::actions::StabilityResult> for ExecutionResult {
             ExecutionResult::Single(ActionResult::StabilityResult(
                 stability_result,
             )) => Ok(stability_result),
-            _ => Err(NanonisError::InvalidCommand(
+            _ => Err(NanonisError::Protocol(
                 "Expected stability result".to_string(),
             )),
         }
@@ -4256,9 +4194,7 @@ impl ExpectFromExecution<Vec<String>> for ExecutionResult {
     fn expect_from_execution(self) -> Result<Vec<String>, NanonisError> {
         match self {
             ExecutionResult::Single(ActionResult::Text(text)) => Ok(text),
-            _ => Err(NanonisError::InvalidCommand(
-                "Expected text data".to_string(),
-            )),
+            _ => Err(NanonisError::Protocol("Expected text data".to_string())),
         }
     }
 }
@@ -4286,8 +4222,8 @@ impl Drop for ActionDriver {
             },
             Action::MoveMotorAxis {
                 direction: crate::MotorDirection::ZMinus,
-                steps: 2,
-                blocking: true, // Make it blocking
+                steps: 10,
+                blocking: false,
             },
         ]);
 

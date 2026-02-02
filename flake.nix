@@ -23,13 +23,12 @@
           overlays = [fenix.overlays.default rust-overlay.overlays.default];
         };
 
-        # Rust toolchain configuration
         rustTools = {
-          stable = fenix.packages.${system}.combine [
-            fenix.packages.${system}.stable.toolchain
-            fenix.packages.${system}.targets.x86_64-pc-windows-gnu.stable.rust-std
-          ];
-          analyzer = fenix.packages.${system}.latest.rust-analyzer;
+          stable = pkgs.rust-bin.stable."1.89.0".default.override {
+            extensions = ["rust-src"];
+            targets = ["x86_64-pc-windows-gnu"];
+          };
+          analyzer = pkgs.rust-bin.stable."1.89.0".rust-analyzer;
         };
 
         # Development tools
