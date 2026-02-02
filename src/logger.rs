@@ -1,4 +1,4 @@
-use log::info;
+use log::debug;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{io::Write, path::PathBuf};
 
@@ -23,22 +23,30 @@ impl<T> Logger<T>
 where
     T: Serialize + Clone + DeserializeOwned,
 {
-    pub fn new<P: Into<PathBuf>>(file_path: P, buffer_size: usize, final_format_json: bool) -> Self {
+    pub fn new<P: Into<PathBuf>>(
+        file_path: P,
+        buffer_size: usize,
+        final_format_json: bool,
+    ) -> Self {
         let mut path = file_path.into();
-        
+
         // Automatically add appropriate file extension
         if final_format_json {
             // For JSON output, ensure .json extension
-            if path.extension().is_none() || path.extension() != Some(std::ffi::OsStr::new("json")) {
+            if path.extension().is_none()
+                || path.extension() != Some(std::ffi::OsStr::new("json"))
+            {
                 path.set_extension("json");
             }
         } else {
             // For JSONL output, ensure .jsonl extension
-            if path.extension().is_none() || path.extension() != Some(std::ffi::OsStr::new("jsonl")) {
+            if path.extension().is_none()
+                || path.extension() != Some(std::ffi::OsStr::new("jsonl"))
+            {
                 path.set_extension("jsonl");
             }
         }
-        
+
         Self {
             buffer: Vec::with_capacity(buffer_size),
             buffer_size,
@@ -119,9 +127,9 @@ where
 
         match write_result {
             Ok(_) => {
-                self.flush_failures = 0;  // Reset on success
+                self.flush_failures = 0; // Reset on success
                 self.buffer.clear();
-                info!("Logger flushed successfully to file");
+                debug!("Logger flushed successfully to file");
                 Ok(())
             }
             Err(e) => {
@@ -168,10 +176,15 @@ where
         self.flush()?;
 
         // Read all JSONL entries
-        let content = std::fs::read_to_string(&self.file_path)
-            .map_err(|source| NanonisError::Io {
-                source,
-                context: format!("Could not read JSONL file at {:?}", self.file_path),
+        let content =
+            std::fs::read_to_string(&self.file_path).map_err(|source| {
+                NanonisError::Io {
+                    source,
+                    context: format!(
+                        "Could not read JSONL file at {:?}",
+                        self.file_path
+                    ),
+                }
             })?;
 
         let mut entries = Vec::new();
@@ -184,13 +197,20 @@ where
 
         // Write as JSON array with pretty formatting
         let json_output = serde_json::to_string_pretty(&entries)?;
-        std::fs::write(&self.file_path, json_output)
-            .map_err(|source| NanonisError::Io {
+        std::fs::write(&self.file_path, json_output).map_err(|source| {
+            NanonisError::Io {
                 source,
-                context: format!("Could not write JSON file at {:?}", self.file_path),
-            })?;
+                context: format!(
+                    "Could not write JSON file at {:?}",
+                    self.file_path
+                ),
+            }
+        })?;
 
-        info!("Converted {} entries from JSONL to JSON format", entries.len());
+        debug!(
+            "Converted {} entries from JSONL to JSON format",
+            entries.len()
+        );
         Ok(())
     }
 

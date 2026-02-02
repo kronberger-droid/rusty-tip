@@ -1,0 +1,97 @@
+# Tip Preparation Configuration
+# This config enables stability checking with bias sweep method
+
+[nanonis]
+host_ip = "127.0.0.1"
+control_ports = [6501, 6502, 6503, 6504]
+
+# Be carefull these files must exist on the host machine
+# layout_file = "./examples/layout_tip-prep.lyt"
+# settings_file = "./examples/settings_tip-prep.ini"
+
+[data_acquisition]
+data_port = 6590
+sample_rate = 2000
+
+[experiment_logging]
+enabled = true
+output_path = "./experiments"
+
+[console]
+verbosity = "info"
+
+[tip_prep]
+# Frequency shift bounds for determining if tip is sharp (in Hz)
+# Values within this range indicate a sharp tip
+sharp_tip_bounds = [-1.5, 0.0]
+
+# Maximum number of pulse cycles (unlimited if not set)
+max_cycles = 10000
+
+# Maximum duration in seconds (unlimited if not set)
+max_duration_secs = 12000
+
+# Stability check configuration
+[tip_prep.stability]
+# Enable stability checking with bias sweep
+# When true, performs a scan with bias sweep to verify tip stability
+# When false, only checks if tip is sharp based on bounds
+check_stability = true
+
+# Maximum allowed change in frequency shift for tip to be considered stable (in Hz)
+# During the bias sweep, if the signal changes more than this threshold,
+# the tip is considered unstable and will undergo tip shaping
+stable_tip_allowed_change = 0.4
+
+# Bias voltage range for stability sweep (lower, upper) in V
+# Must be positive magnitude-only; polarity_mode determines sign
+bias_range = [0.2, 2.0]
+
+# Number of steps in the bias sweep
+bias_steps = 1000
+
+# Time to wait at each step in milliseconds
+step_period_ms = 200
+
+# Maximum duration for stability check in seconds
+max_duration_secs = 100
+
+# Polarity mode for bias sweep:
+# - "positive": Single sweep from 0 to upper_bound
+# - "negative": Single sweep from 0 to lower_bound
+# - "both": Two consecutive sweeps - first 0 to upper_bound, then 0 to lower_bound
+polarity_mode = "both"
+
+# Scan speed for stability check in m/s
+# If set, the scan speed will be temporarily changed during stability check
+# and restored afterward. Use a slower speed for more reliable stability detection.
+# Set to null or remove this line to use the current scan speed
+scan_speed_m_s = 5e-9  # 5 nm/s
+
+[pulse_method]
+# Use linear pulse method
+type = "linear"
+
+# Output pulse voltage range (in V)
+# This is the Y-axis: minimum and maximum pulse voltages
+voltage_bounds = [2.0, 7.0]
+
+# Frequency shift range to monitor (in Hz)
+# When freq_shift is outside this range, pulse with max voltage (voltage_bounds[1])
+# When inside this range, linearly map freq_shift to pulse voltage
+linear_clamp = [-20.0, 0.0]
+
+# Polarity of the pulse voltage: "positive" or "negative"
+polarity = "positive"
+
+# When enabled, every Nth pulse will use the opposite polarity
+[pulse_method.random_polarity_switch]
+enabled = true
+switch_every_n_pulses = 5  # Every 5th pulse uses opposite polarity
+
+# Optional: Custom TCP channel mapping
+# Uncomment and modify if your Nanonis signal indices differ from the defaults
+# Format: { nanonis_index = X, tcp_channel = Y }
+[[tcp_channel_mapping]]
+nanonis_index = 76  # Frequency shift
+tcp_channel = 19 # use 21 - demo-mode and 19 - LT 

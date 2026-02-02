@@ -580,9 +580,9 @@ checksum = "32a282da65faaf38286cf3be983213fcf1d2e2a58700e808f83f4ea9a4804bc0"
 
 [[package]]
 name = "nanonis-rs"
-version = "0.0.3"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2280ff59684bcaa1ae90a5e74ded48c702e7cd2d134adb7c3c07c1c70ff0c275"
+checksum = "d22a7025ba9241dc5aec9895ad08cd59a86748f2bfeb56ddc9188eababd63fec"
 dependencies = [
  "byteorder",
  "log",

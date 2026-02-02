@@ -1,15 +1,15 @@
+mod config;
+mod tip_prep;
+
 use chrono::Utc;
 use clap::Parser;
 use env_logger::Env;
 use log::{error, info, LevelFilter};
 use rusty_tip::Signal;
-use rusty_tip::{
-    load_config_or_default,
-    tip_prep::{PulseMethod, TipControllerConfig},
-    ActionDriver, AppConfig, TCPReaderConfig, TipController,
-};
+use rusty_tip::{ActionDriver, TCPReaderConfig};
 use std::{
     fs,
+    io,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -18,8 +18,8 @@ use std::{
     time::Duration,
 };
 
-#[cfg(windows)]
-use std::io;
+use crate::config::{load_config_or_default, AppConfig};
+use crate::tip_prep::{PulseMethod, TipController, TipControllerConfig};
 
 #[cfg(windows)]
 use std::ffi::OsString;
@@ -31,9 +31,9 @@ use std::os::windows::ffi::OsStrExt;
 #[command(name = "tip-prep")]
 #[command(about = "Automated tip preparation for STM/AFM", long_about = None)]
 struct Args {
-    /// Path to configuration file
-    #[arg(short, long, value_name = "FILE")]
-    config: Option<PathBuf>,
+    /// Path to configuration file (required)
+    #[arg(short, long, value_name = "FILE", required = true)]
+    config: PathBuf,
 
     /// Override log level (trace, debug, info, warn, error)
     #[arg(short, long, value_name = "LEVEL")]
@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Parse arguments and load configuration
     let args = Args::parse();
-    let config = load_config_or_default(args.config.as_deref());
+    let config = load_config_or_default(Some(&args.config));
 
     // Initialize logging
     let log_level = args.log_level.unwrap_or(config.console.verbosity.clone());
@@ -93,14 +93,18 @@ fn log_pulse_method(method: &PulseMethod) {
         PulseMethod::Fixed {
             voltage,
             polarity,
-            random_switch,
+            random_polarity_switch,
         } => {
             info!("Pulse method: Fixed ({:.2}V, {:?})", voltage, polarity);
-            if let Some(switch) = random_switch {
-                info!(
-                    "Random polarity switching: every {} pulses",
-                    switch.switch_every_n_pulses
-                );
+            if let Some(switch) = random_polarity_switch {
+                if switch.enabled {
+                    info!(
+                        "Random polarity switching: every {} pulses",
+                        switch.switch_every_n_pulses
+                    );
+                } else {
+                    info!("Random polarity switching: disabled");
+                }
             }
         }
         PulseMethod::Stepping {
@@ -108,7 +112,7 @@ fn log_pulse_method(method: &PulseMethod) {
             voltage_steps,
             threshold_value,
             polarity,
-            random_switch,
+            random_polarity_switch,
             ..
         } => {
             info!(
@@ -116,47 +120,57 @@ fn log_pulse_method(method: &PulseMethod) {
                 voltage_bounds.0, voltage_bounds.1, voltage_steps, polarity
             );
             info!("Threshold value: {:.3}", threshold_value);
-            if let Some(switch) = random_switch {
-                info!(
-                    "Random polarity switching: every {} pulses",
-                    switch.switch_every_n_pulses
-                );
+            if let Some(switch) = random_polarity_switch {
+                if switch.enabled {
+                    info!(
+                        "Random polarity switching: every {} pulses",
+                        switch.switch_every_n_pulses
+                    );
+                } else {
+                    info!("Random polarity switching: disabled");
+                }
             }
         }
         PulseMethod::Linear {
             voltage_bounds,
             linear_clamp,
             polarity,
-            random_switch,
+            random_polarity_switch,
         } => {
             info!(
                 "Pulse method: Linear (voltage: {:.2}V to {:.2}V, freq_shift range: {:.2} to {:.2} Hz, {:?})",
                 voltage_bounds.0, voltage_bounds.1, linear_clamp.0, linear_clamp.1, polarity
             );
-            if let Some(switch) = random_switch {
-                info!(
-                    "Random polarity switching: every {} pulses",
-                    switch.switch_every_n_pulses
-                );
+            if let Some(switch) = random_polarity_switch {
+                if switch.enabled {
+                    info!(
+                        "Random polarity switching: every {} pulses",
+                        switch.switch_every_n_pulses
+                    );
+                } else {
+                    info!("Random polarity switching: disabled");
+                }
             }
         }
     }
 }
 
 /// Log startup information
-fn log_startup_info(config: &AppConfig, config_path: &Option<PathBuf>) {
+fn log_startup_info(config: &AppConfig, config_path: &PathBuf) {
     info!("=== Rusty Tip Preparation Tool ===");
-    info!(
-        "Configuration: {}",
-        config_path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "defaults".to_string())
-    );
+    info!("Configuration: {}", config_path.display());
     info!(
         "Nanonis: {}:{}",
         config.nanonis.host_ip, config.nanonis.control_ports[0]
     );
+
+    // Log layout and settings files from config
+    if let Some(ref layout) = config.nanonis.layout_file {
+        info!("Layout file: {}", layout);
+    }
+    if let Some(ref settings) = config.nanonis.settings_file {
+        info!("Settings file: {}", settings);
+    }
 }
 
 /// Log tip controller configuration
@@ -184,6 +198,14 @@ fn log_tip_config(config: &TipControllerConfig) {
             .map(|d| format!("{} seconds", d.as_secs()))
             .unwrap_or_else(|| "unlimited".to_string())
     );
+
+    // Log layout and settings files if specified
+    if let Some(ref layout_file) = config.layout_file {
+        info!("Layout file: {}", layout_file);
+    }
+    if let Some(ref settings_file) = config.settings_file {
+        info!("Settings file: {}", settings_file);
+    }
 
     log_pulse_method(&config.pulse_method);
 }
@@ -257,13 +279,18 @@ fn create_tip_controller_config(
             config.tip_prep.sharp_tip_bounds[1],
         ),
         pulse_method: config.pulse_method.clone(),
-        allowed_change_for_stable: config.tip_prep.stable_tip_allowed_change,
-        check_stability: config.tip_prep.check_stability,
+        allowed_change_for_stable: config.tip_prep.stability.stable_tip_allowed_change,
+        check_stability: config.tip_prep.stability.check_stability,
         max_cycles: config.tip_prep.max_cycles,
         max_duration: config
             .tip_prep
             .max_duration_secs
             .map(Duration::from_secs),
+        stability_config: config.tip_prep.stability.clone(),
+        layout_file: config.nanonis.layout_file.clone(),
+        settings_file: config.nanonis.settings_file.clone(),
+        initial_bias_v: config.tip_prep.initial_bias_v,
+        initial_z_setpoint_a: config.tip_prep.initial_z_setpoint_a,
     }
 }
 
@@ -310,18 +337,12 @@ fn run_and_report(
     result
 }
 
-/// Windows: Wait for user confirmation before proceeding
-#[cfg(windows)]
+/// Wait for user confirmation before proceeding
 fn wait_for_user_confirmation() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("Press Enter to start tip preparation (or Ctrl+C to cancel)...");
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn wait_for_user_confirmation() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
