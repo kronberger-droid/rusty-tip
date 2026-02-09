@@ -1,6 +1,6 @@
 [package]
 name = "rusty-tip"
-version = "0.0.3"
+version = "0.1.0"
 edition = "2021"
 description = "Rust library for Nanonis SPM system control via TCP"
 repository = "https://github.com/kronberger-droid/rusty-tip"
@@ -49,3 +49,8 @@ toml = { version = "0.8", optional = true }
 [features]
 default = []
 gui = ["eframe", "egui_plot", "rfd", "toml"]
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
