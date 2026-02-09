@@ -1,4 +1,5 @@
 use crate::config::{BiasSweepPolarity, StabilityConfig};
+use crossbeam_channel::Sender;
 use log::info;
 use nanonis_rs::signals::SignalIndex;
 use rusty_tip::action_driver::ActionDriver;
@@ -43,6 +44,43 @@ pub enum TipShape {
     Blunt,
     Sharp,
     Stable,
+}
+
+/// Current action being performed by the controller
+#[derive(Debug, Clone, PartialEq)]
+pub enum ControllerAction {
+    Idle,
+    Initializing,
+    Approaching,
+    MeasuringSignal,
+    Pulsing,
+    StabilityCheck,
+    Repositioning,
+    Completed,
+    Error(String),
+}
+
+impl Default for ControllerAction {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+/// Snapshot of the controller's current state for GUI display
+#[derive(Debug, Clone, Default)]
+pub struct ControllerState {
+    pub tip_shape: TipShape,
+    pub cycle_count: u32,
+    pub pulse_voltage: f32,
+    pub freq_shift: Option<f32>,
+    pub elapsed_secs: f64,
+    pub current_action: ControllerAction,
+}
+
+impl Default for TipShape {
+    fn default() -> Self {
+        Self::Blunt
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -309,6 +347,10 @@ pub struct TipController {
     // Polarity tracking
     base_polarity: PolaritySign,
     pulse_count_for_random: u32,
+
+    // State reporting for GUI
+    state_sender: Option<crossbeam_channel::Sender<ControllerState>>,
+    current_action: ControllerAction,
 }
 
 impl TipController {
@@ -341,7 +383,45 @@ impl TipController {
             shutdown_requested: None,
             base_polarity,
             pulse_count_for_random: 0,
+            state_sender: None,
+            current_action: ControllerAction::Idle,
         }
+    }
+
+    /// Set a channel to send state updates to (for GUI)
+    pub fn set_state_sender(&mut self, sender: Sender<ControllerState>) {
+        self.state_sender = Some(sender);
+    }
+
+    /// Get current controller state snapshot
+    pub fn snapshot(&self) -> ControllerState {
+        let elapsed_secs = self.loop_start_time
+            .map(|t| t.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
+
+        let freq_shift = self.get_last_signal(&self.config.freq_shift_signal);
+
+        ControllerState {
+            tip_shape: self.current_tip_shape,
+            cycle_count: self.cycle_count,
+            pulse_voltage: self.current_pulse_voltage,
+            freq_shift,
+            elapsed_secs,
+            current_action: self.current_action.clone(),
+        }
+    }
+
+    /// Send current state to the GUI (if connected)
+    fn send_state(&self) {
+        if let Some(sender) = &self.state_sender {
+            let _ = sender.try_send(self.snapshot());
+        }
+    }
+
+    /// Update current action and send state
+    fn set_action(&mut self, action: ControllerAction) {
+        self.current_action = action;
+        self.send_state();
     }
 
     /// Set shutdown flag for graceful termination
@@ -437,7 +517,7 @@ impl TipController {
     #[allow(dead_code)]
     pub fn get_last_signal(&self, signal: &Signal) -> Option<f32> {
         match self.get_signal_history(signal) {
-            Some(history) => history.iter().last().copied(),
+            Some(history) => history.front().copied(),
             None => None,
         }
     }
@@ -691,13 +771,16 @@ impl TipController {
 impl TipController {
     /// Main control loop - with pulse voltage stepping
     pub fn run(&mut self) -> Result<(), NanonisError> {
-        self.pre_loop_initialization()?;
+        // Start timing from the beginning (including initialization)
         self.loop_start_time = Some(std::time::Instant::now());
+        self.set_action(ControllerAction::Initializing);
+        self.pre_loop_initialization()?;
 
         while self.current_tip_shape != TipShape::Stable {
             // Check cycle limit
             if let Some(max) = self.max_cycles {
                 if self.cycle_count >= max as u32 {
+                    self.set_action(ControllerAction::Error("Max cycles exceeded".to_string()));
                     return Err(NanonisError::Timeout(format!(
                         "Max cycles ({}) exceeded",
                         max
@@ -709,6 +792,7 @@ impl TipController {
             if let Some(max_dur) = self.max_duration {
                 if let Some(start_time) = self.loop_start_time {
                     if start_time.elapsed() > max_dur {
+                        self.set_action(ControllerAction::Error("Max duration exceeded".to_string()));
                         return Err(NanonisError::Timeout(format!(
                             "Max duration ({:?}) exceeded",
                             max_dur
@@ -721,6 +805,7 @@ impl TipController {
             if let Some(flag) = &self.shutdown_requested {
                 if flag.load(Ordering::SeqCst) {
                     info!("Shutdown requested at cycle {}", self.cycle_count);
+                    self.set_action(ControllerAction::Idle);
                     return Err(NanonisError::Protocol(
                         "Shutdown requested".to_string(),
                     ));
@@ -729,6 +814,9 @@ impl TipController {
 
             // Execute one control cycle
             self.cycle_count += 1;
+
+            // Send state update every cycle for GUI responsiveness
+            self.send_state();
 
             // Periodic status report
             if self.cycle_count % STATUS_INTERVAL as u32 == 0 {
@@ -751,6 +839,7 @@ impl TipController {
                         "Cycle {}: running bad loop ==============",
                         self.cycle_count
                     );
+                    self.set_action(ControllerAction::Pulsing);
                     self.bad_loop()?;
                     continue;
                 }
@@ -759,6 +848,7 @@ impl TipController {
                         "Cycle {}: running good loop ==============",
                         self.cycle_count
                     );
+                    self.set_action(ControllerAction::StabilityCheck);
                     self.good_loop()?;
                     continue;
                 }
@@ -768,6 +858,7 @@ impl TipController {
                 }
             }
         }
+        self.set_action(ControllerAction::Completed);
         Ok(())
     }
 
