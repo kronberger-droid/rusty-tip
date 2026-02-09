@@ -4,7 +4,7 @@ Rust library and tools for automated STM/AFM tip preparation on Nanonis SPM syst
 
 ## Overview
 
-rusty-tip provides automated tip conditioning for Scanning Probe Microscopy (SPM) systems. It connects to Nanonis controllers via TCP and implements intelligent tip preparation algorithms with configurable pulse strategies and stability verification.
+rusty-tip provides automated tip conditioning for Scanning Probe Microscopy (SPM) systems. It connects to Nanonis controllers via TCP and implements tip preparation algorithms with configurable pulse strategies and stability verification.
 
 ## Features
 
