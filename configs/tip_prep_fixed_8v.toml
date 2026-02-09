@@ -81,5 +81,7 @@ switch_every_n_pulses = 5 # Every 2nd pulse uses opposite polarity
 
 # Optional: Custom TCP channel mapping
 [[tcp_channel_mapping]]
-nanonis_index = 76  # Frequency shift
-tcp_channel = 19    # use 21 - demo-mode and 19 - LT
+nanonis_index = 76  # Frequency shift (stays the same usually)
+# 11 to map User Output 4 for testing
+# 19 for LT
+tcp_channel = 11
