@@ -34,6 +34,7 @@
         # Development tools
         devTools = with pkgs; [
           cargo-expand
+          cargo-dist
           pkg-config
           gcc
         ];
@@ -98,7 +99,7 @@
           # Linux GUI build
           tip-prep-gui = pkgs.rustPlatform.buildRustPackage {
             pname = "tip-prep-gui";
-            version = "0.0.3";
+            version = "0.1.0";
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
 
@@ -116,7 +117,7 @@
           # Linux CLI build (no GUI)
           tip-prep = pkgs.rustPlatform.buildRustPackage {
             pname = "tip-prep";
-            version = "0.0.3";
+            version = "0.1.0";
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
 
@@ -130,7 +131,7 @@
           # Windows GUI build (cross-compiled)
           tip-prep-gui-windows = pkgs.pkgsCross.mingwW64.rustPlatform.buildRustPackage {
             pname = "tip-prep-gui";
-            version = "0.0.3";
+            version = "0.1.0";
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
 
