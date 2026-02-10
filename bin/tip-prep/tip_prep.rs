@@ -51,12 +51,20 @@ pub enum TipShape {
 pub enum ControllerAction {
     Idle,
     Initializing,
+    LoadingLayout,
+    LoadingSettings,
+    SettingBias,
+    SettingSetpoint,
     Approaching,
+    Withdrawing,
+    CenteringFreqShift,
     MeasuringSignal,
     Pulsing,
     StabilityCheck,
+    StabilitySweep { sweep: u32, total: u32 },
     Repositioning,
     Completed,
+    Stopped,
     Error(String),
 }
 
@@ -293,6 +301,8 @@ pub struct TipControllerConfig {
     pub initial_bias_v: f32,
     /// Initial Z-controller setpoint (A) set before the first approach
     pub initial_z_setpoint_a: f32,
+    /// Safe tip threshold (A) for safe tip configuration
+    pub safe_tip_threshold: f32,
 }
 
 impl Default for TipControllerConfig {
@@ -317,6 +327,7 @@ impl Default for TipControllerConfig {
             settings_file: None,
             initial_bias_v: -500e-3,
             initial_z_setpoint_a: 100e-12,
+            safe_tip_threshold: 1e-9,
         }
     }
 }
@@ -351,6 +362,7 @@ pub struct TipController {
     // State reporting for GUI
     state_sender: Option<crossbeam_channel::Sender<ControllerState>>,
     current_action: ControllerAction,
+    measured_freq_shift: Option<f32>,
 }
 
 impl TipController {
@@ -385,6 +397,7 @@ impl TipController {
             pulse_count_for_random: 0,
             state_sender: None,
             current_action: ControllerAction::Idle,
+            measured_freq_shift: None,
         }
     }
 
@@ -395,11 +408,12 @@ impl TipController {
 
     /// Get current controller state snapshot
     pub fn snapshot(&self) -> ControllerState {
-        let elapsed_secs = self.loop_start_time
+        let elapsed_secs = self
+            .loop_start_time
             .map(|t| t.elapsed().as_secs_f64())
             .unwrap_or(0.0);
 
-        let freq_shift = self.get_last_signal(&self.config.freq_shift_signal);
+        let freq_shift = self.measured_freq_shift;
 
         ControllerState {
             tip_shape: self.current_tip_shape,
@@ -780,7 +794,9 @@ impl TipController {
             // Check cycle limit
             if let Some(max) = self.max_cycles {
                 if self.cycle_count >= max as u32 {
-                    self.set_action(ControllerAction::Error("Max cycles exceeded".to_string()));
+                    self.set_action(ControllerAction::Error(
+                        "Max cycles exceeded".to_string(),
+                    ));
                     return Err(NanonisError::Timeout(format!(
                         "Max cycles ({}) exceeded",
                         max
@@ -792,7 +808,9 @@ impl TipController {
             if let Some(max_dur) = self.max_duration {
                 if let Some(start_time) = self.loop_start_time {
                     if start_time.elapsed() > max_dur {
-                        self.set_action(ControllerAction::Error("Max duration exceeded".to_string()));
+                        self.set_action(ControllerAction::Error(
+                            "Max duration exceeded".to_string(),
+                        ));
                         return Err(NanonisError::Timeout(format!(
                             "Max duration ({:?}) exceeded",
                             max_dur
@@ -805,7 +823,7 @@ impl TipController {
             if let Some(flag) = &self.shutdown_requested {
                 if flag.load(Ordering::SeqCst) {
                     info!("Shutdown requested at cycle {}", self.cycle_count);
-                    self.set_action(ControllerAction::Idle);
+                    self.set_action(ControllerAction::Stopped);
                     return Err(NanonisError::Protocol(
                         "Shutdown requested".to_string(),
                     ));
@@ -814,9 +832,7 @@ impl TipController {
 
             // Execute one control cycle
             self.cycle_count += 1;
-
-            // Send state update every cycle for GUI responsiveness
-            self.send_state();
+            self.measured_freq_shift = None;
 
             // Periodic status report
             if self.cycle_count % STATUS_INTERVAL as u32 == 0 {
@@ -841,7 +857,6 @@ impl TipController {
                     );
                     self.set_action(ControllerAction::Pulsing);
                     self.bad_loop()?;
-                    continue;
                 }
                 TipShape::Sharp => {
                     info!(
@@ -850,13 +865,15 @@ impl TipController {
                     );
                     self.set_action(ControllerAction::StabilityCheck);
                     self.good_loop()?;
-                    continue;
                 }
                 TipShape::Stable => {
                     info!("STABLE achieved after {} cycles!", self.cycle_count);
                     break;
                 }
             }
+
+            // Send state after the cycle so measured_freq_shift reflects any measurement taken
+            self.send_state();
         }
         self.set_action(ControllerAction::Completed);
         Ok(())
@@ -900,6 +917,7 @@ impl TipController {
 
         log::debug!("Repositioning...");
 
+        self.set_action(ControllerAction::Repositioning);
         self.driver
             .run(Action::SafeReposition {
                 x_steps: 3,
@@ -923,6 +941,7 @@ impl TipController {
         let amplitude_reached = true;
 
         if amplitude_reached {
+            self.set_action(ControllerAction::MeasuringSignal);
             let tip_state: TipState = self
                 .driver
                 .run(Action::CheckTipState {
@@ -947,6 +966,7 @@ impl TipController {
             {
                 let signal = self.config.freq_shift_signal.clone();
                 self.track_signal(&signal, freq_shift_value);
+                self.measured_freq_shift = Some(freq_shift_value);
             } else {
                 log::warn!(
                     "CheckTipState did not return frequency shift signal (index: {})",
@@ -966,12 +986,15 @@ impl TipController {
 
     /// Good loop - monitoring, increment good count
     fn good_loop(&mut self) -> Result<(), NanonisError> {
+        self.set_action(ControllerAction::StabilityCheck);
+
         let (confident_tip_shape, baseline_freq_shift) =
             self.pre_good_loop_check()?;
 
         if matches!(confident_tip_shape, TipShape::Blunt) {
             info!("Tip Shape was wrongly measured as good");
             self.current_tip_shape = TipShape::Blunt;
+            self.send_state();
             return Ok(());
         }
 
@@ -979,6 +1002,7 @@ impl TipController {
         if !self.config.check_stability {
             info!("Stability checking disabled - marking tip as stable");
             self.current_tip_shape = TipShape::Stable;
+            self.send_state();
             return Ok(());
         }
 
@@ -989,6 +1013,7 @@ impl TipController {
                     "No baseline freq_shift available for stability check"
                 );
                 self.current_tip_shape = TipShape::Blunt;
+                self.send_state();
                 return Ok(());
             }
         };
@@ -1055,6 +1080,7 @@ impl TipController {
         info!("Measuring final freq_shift after all sweeps");
 
         // Withdraw
+        self.set_action(ControllerAction::Withdrawing);
         self.driver
             .run(Action::Withdraw {
                 wait_until_finished: true,
@@ -1075,6 +1101,7 @@ impl TipController {
         );
 
         // Approach
+        self.set_action(ControllerAction::CenteringFreqShift);
         self.driver
             .run(Action::AutoApproach {
                 wait_until_finished: true,
@@ -1091,6 +1118,7 @@ impl TipController {
         std::thread::sleep(Duration::from_millis(POST_APPROACH_SETTLE_TIME_MS));
 
         // Read freq_shift
+        self.set_action(ControllerAction::MeasuringSignal);
         let tip_state: TipState = self
             .driver
             .run(Action::CheckTipState {
@@ -1111,6 +1139,11 @@ impl TipController {
                         .to_string(),
                 )
             })?;
+
+        // Track for signal history and mark as this cycle's measurement
+        let signal = self.config.freq_shift_signal.clone();
+        self.track_signal(&signal, final_freq_shift);
+        self.measured_freq_shift = Some(final_freq_shift);
 
         info!("Final freq_shift: {:.3} Hz", final_freq_shift);
         Ok(final_freq_shift)
@@ -1172,6 +1205,7 @@ impl TipController {
     ) -> Result<(), NanonisError> {
         info!("Preparing for sweep: withdrawing and repositioning, starting bias = {:.3}V", starting_bias);
 
+        self.set_action(ControllerAction::Withdrawing);
         self.driver
             .run(Action::Withdraw {
                 wait_until_finished: true,
@@ -1179,6 +1213,7 @@ impl TipController {
             })
             .go()?;
 
+        self.set_action(ControllerAction::Repositioning);
         self.driver
             .run(Action::MoveMotor3D {
                 displacement: MotorDisplacement::new(3, 3, -3),
@@ -1192,6 +1227,7 @@ impl TipController {
         self.driver.client_mut().bias_set(starting_bias)?;
         info!("Bias set to {:.3}V before approach", starting_bias);
 
+        self.set_action(ControllerAction::CenteringFreqShift);
         self.driver
             .run(Action::AutoApproach {
                 wait_until_finished: true,
@@ -1221,6 +1257,10 @@ impl TipController {
             Duration::from_secs(stability_config.max_duration_secs);
         let bias_steps = stability_config.bias_steps;
 
+        self.set_action(ControllerAction::StabilitySweep {
+            sweep: plan.index as u32,
+            total: plan.total as u32,
+        });
         info!(
             "Stability sweep {}/{}: {:.2}V to {:.2}V",
             plan.index, plan.total, plan.bias_range.0, plan.bias_range.1
@@ -1337,6 +1377,7 @@ impl TipController {
 
             self.execute_max_pulse()?;
 
+            self.set_action(ControllerAction::Repositioning);
             self.driver
                 .run(Action::SafeReposition {
                     x_steps: 3,
@@ -1371,6 +1412,7 @@ impl TipController {
                 ));
             }
 
+            self.set_action(ControllerAction::Repositioning);
             self.driver
                 .run(Action::SafeReposition {
                     x_steps: 3,
@@ -1385,6 +1427,7 @@ impl TipController {
                 ));
             }
 
+            self.set_action(ControllerAction::MeasuringSignal);
             let tip_state: TipState = self
                 .driver
                 .run(Action::CheckTipState {
@@ -1395,16 +1438,19 @@ impl TipController {
                 })
                 .expecting()?;
 
-            // Capture freq_shift from measured signals
+            // Capture freq_shift from measured signals and track it
             if let Some(freq_shift_value) = tip_state
                 .measured_signals
                 .get(&SignalIndex::new(self.config.freq_shift_signal.index))
                 .copied()
             {
                 last_freq_shift = Some(freq_shift_value);
+                let signal = self.config.freq_shift_signal.clone();
+                self.track_signal(&signal, freq_shift_value);
             }
 
             if matches!(tip_state.shape, rusty_tip::types::TipShape::Blunt) {
+                self.measured_freq_shift = last_freq_shift;
                 return Ok((TipShape::Blunt, None));
             }
         }
@@ -1420,10 +1466,11 @@ impl TipController {
         log::info!("Running pre loop initialization");
 
         // Load layout file if specified
-        if let Some(layout_path) = &self.config.layout_file {
+        if let Some(layout_path) = self.config.layout_file.clone() {
+            self.set_action(ControllerAction::LoadingLayout);
             // Convert to absolute path for Nanonis
             let abs_path =
-                Path::new(layout_path).canonicalize().map_err(|e| {
+                Path::new(&layout_path).canonicalize().map_err(|e| {
                     NanonisError::Protocol(format!(
                         "Layout file not found: {} ({})",
                         layout_path, e
@@ -1438,10 +1485,11 @@ impl TipController {
         }
 
         // Load settings file if specified
-        if let Some(settings_path) = &self.config.settings_file {
+        if let Some(settings_path) = self.config.settings_file.clone() {
+            self.set_action(ControllerAction::LoadingSettings);
             // Convert to absolute path for Nanonis
             let abs_path =
-                Path::new(settings_path).canonicalize().map_err(|e| {
+                Path::new(&settings_path).canonicalize().map_err(|e| {
                     NanonisError::Protocol(format!(
                         "Settings file not found: {} ({})",
                         settings_path, e
@@ -1455,10 +1503,12 @@ impl TipController {
             info!("Settings loaded successfully");
         }
 
+        self.set_action(ControllerAction::SettingBias);
         self.driver
             .client_mut()
             .bias_set(self.config.initial_bias_v)?;
 
+        self.set_action(ControllerAction::SettingSetpoint);
         self.driver
             .client_mut()
             .z_ctrl_setpoint_set(self.config.initial_z_setpoint_a)?;
@@ -1471,7 +1521,7 @@ impl TipController {
             .z_ctrl_home_props_set(2, home_position_m)?;
 
         // Set correct safe tip config
-        let safe_tip_threshold = 1e-9;
+        let safe_tip_threshold = self.config.safe_tip_threshold;
         self.driver.client_mut().safe_tip_props_set(
             false,
             true,
@@ -1526,6 +1576,7 @@ impl TipController {
         }
 
         info!("Executing Initial Approach");
+        self.set_action(ControllerAction::Approaching);
 
         self.driver
             .run(Action::AutoApproach {
