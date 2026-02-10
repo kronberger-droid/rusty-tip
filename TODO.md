@@ -2,7 +2,7 @@
 
 ## General
 
-- Scan
+- Reset Safe-tip on drop
 
 - Implement script for multiple different tip prep cycle testing
 
