@@ -6,23 +6,26 @@ mod tip_prep;
 
 mod app;
 
-use app::TipPrepApp;
+use app::{init_logging, TipPrepApp};
+use log::LevelFilter;
 
 fn main() -> eframe::Result<()> {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,zbus=warn,tracing=warn")
-    ).init();
+    let log_receiver = init_logging(LevelFilter::Info);
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([650.0, 600.0])
-            .with_min_inner_size([500.0, 400.0]),
+            .with_inner_size([800.0, 600.0])
+            .with_min_inner_size([600.0, 400.0]),
         ..Default::default()
     };
 
     eframe::run_native(
         "Rusty Tip Preparation",
         options,
-        Box::new(|cc| Ok(Box::new(TipPrepApp::new(cc)))),
+        Box::new(move |cc| {
+            let mut app = TipPrepApp::new(cc);
+            app.set_log_receiver(log_receiver);
+            Ok(Box::new(app))
+        }),
     )
 }

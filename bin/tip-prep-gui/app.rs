@@ -1,6 +1,8 @@
-use crossbeam_channel::{unbounded, Receiver};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use eframe::egui;
-use log::{error, info};
+use egui_plot::{Bar, BarChart, Plot};
+use log::{error, info, LevelFilter};
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -18,6 +20,56 @@ use crate::tip_prep::{
     ControllerAction, ControllerState, PolaritySign, PulseMethod, RandomPolaritySwitch,
     TipController, TipControllerConfig, TipShape,
 };
+
+// ============================================================================
+// Tee Writer - sends env_logger output to both stderr and GUI channel
+// ============================================================================
+
+struct TeeWriter {
+    sender: Sender<String>,
+    stderr: std::io::Stderr,
+}
+
+impl std::io::Write for TeeWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.stderr.write_all(buf)?;
+        if let Ok(s) = std::str::from_utf8(buf) {
+            let trimmed = s.trim_end_matches('\n');
+            if !trimmed.is_empty() {
+                let _ = self.sender.try_send(trimmed.to_string());
+            }
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stderr.flush()
+    }
+}
+
+pub fn init_logging(level: LevelFilter) -> Receiver<String> {
+    let (tx, rx) = unbounded();
+    let writer = TeeWriter {
+        sender: tx,
+        stderr: std::io::stderr(),
+    };
+
+    env_logger::Builder::new()
+        .filter_level(level)
+        .filter_module("winit", LevelFilter::Off)
+        .filter_module("eframe", LevelFilter::Off)
+        .filter_module("egui_glow", LevelFilter::Off)
+        .filter_module("wgpu", LevelFilter::Off)
+        .filter_module("naga", LevelFilter::Off)
+        .filter_module("zbus", LevelFilter::Off)
+        .filter_module("tracing", LevelFilter::Off)
+        .filter_module("accesskit", LevelFilter::Off)
+        .format_timestamp_millis()
+        .target(env_logger::Target::Pipe(Box::new(writer)))
+        .init();
+
+    rx
+}
 
 // ============================================================================
 // Tab System
@@ -90,6 +142,7 @@ pub struct EditableConfig {
     pub max_duration_secs: String,
     pub initial_bias_v: String,
     pub initial_z_setpoint_pa: String,
+    pub safe_tip_threshold_pa: String,
 
     // Stability
     pub check_stability: bool,
@@ -144,6 +197,7 @@ impl Default for EditableConfig {
             max_duration_secs: "12000".to_string(),
             initial_bias_v: "-500".to_string(),
             initial_z_setpoint_pa: "100".to_string(),
+            safe_tip_threshold_pa: "1000.0".to_string(),
             check_stability: true,
             stable_tip_allowed_change: "0.2".to_string(),
             bias_range_lower: "0.01".to_string(),
@@ -259,6 +313,7 @@ impl EditableConfig {
             max_duration_secs: app_config.tip_prep.max_duration_secs.map(|d| d.to_string()).unwrap_or_default(),
             initial_bias_v: (app_config.tip_prep.initial_bias_v * 1000.0).to_string(), // Convert to mV for display
             initial_z_setpoint_pa: (app_config.tip_prep.initial_z_setpoint_a * 1e12).to_string(), // Convert to pA
+            safe_tip_threshold_pa: (app_config.tip_prep.safe_tip_threshold * 1e12).to_string(), // Convert A to pA
             check_stability: app_config.tip_prep.stability.check_stability,
             stable_tip_allowed_change: app_config.tip_prep.stability.stable_tip_allowed_change.to_string(),
             bias_range_lower: app_config.tip_prep.stability.bias_range.0.to_string(),
@@ -304,6 +359,7 @@ impl EditableConfig {
         let max_duration_secs: Option<u64> = if self.max_duration_secs.is_empty() { None } else { Some(self.max_duration_secs.parse().map_err(|_| "Invalid max duration")?) };
         let initial_bias_mv: f32 = self.initial_bias_v.parse().map_err(|_| "Invalid initial bias")?;
         let initial_z_setpoint_pa: f32 = self.initial_z_setpoint_pa.parse().map_err(|_| "Invalid Z setpoint")?;
+        let safe_tip_threshold_pa: f32 = self.safe_tip_threshold_pa.parse().map_err(|_| "Invalid safe tip threshold")?;
 
         // Parse scan speed (nm/s to m/s)
         let scan_speed_m_s: Option<f32> = if self.scan_speed_nm_s.is_empty() {
@@ -390,6 +446,7 @@ impl EditableConfig {
                 },
                 initial_bias_v: initial_bias_mv / 1000.0, // Convert mV to V
                 initial_z_setpoint_a: initial_z_setpoint_pa * 1e-12, // Convert pA to A
+                safe_tip_threshold: safe_tip_threshold_pa * 1e-12, // Convert pA to A
             },
             pulse_method,
             tcp_channel_mapping: if self.tcp_channel_mappings.is_empty() {
@@ -435,8 +492,15 @@ pub struct TipPrepApp {
     // Persist last known freq shift (survives state updates that might have None)
     last_freq_shift: Option<f32>,
 
+    // History of freq_shift values for bar graph
+    freq_shift_history: VecDeque<f64>,
+
     // Messages
     message: Option<(String, bool)>, // (message, is_error)
+
+    // Log messages for display
+    log_messages: Vec<String>,
+    log_receiver: Option<Receiver<String>>,
 }
 
 impl TipPrepApp {
@@ -453,8 +517,15 @@ impl TipPrepApp {
             state_receiver: None,
             current_state: None,
             last_freq_shift: None,
+            freq_shift_history: VecDeque::with_capacity(100),
             message: None,
+            log_messages: Vec::new(),
+            log_receiver: None,
         }
+    }
+
+    pub fn set_log_receiver(&mut self, receiver: Receiver<String>) {
+        self.log_receiver = Some(receiver);
     }
 
     fn is_running(&self) -> bool {
@@ -535,16 +606,33 @@ impl TipPrepApp {
         self.start_time = Some(Instant::now());
         self.current_state = None;
         self.last_freq_shift = None;
+        self.freq_shift_history.clear();
+        self.log_messages.clear();
+        info!("Controller started");
         self.message = Some(("Controller started".to_string(), false));
     }
 
     fn poll_state(&mut self) {
+        // Poll log messages
+        if let Some(rx) = &self.log_receiver {
+            while let Ok(msg) = rx.try_recv() {
+                self.log_messages.push(msg);
+                // Keep log size reasonable
+                if self.log_messages.len() > 1000 {
+                    self.log_messages.drain(0..200);
+                }
+            }
+        }
+
+        // Poll controller state
         if let Some(rx) = &self.state_receiver {
-            // Get the latest state (drain queue, keep last)
             while let Ok(state) = rx.try_recv() {
-                // Persist freq_shift if present (don't overwrite with None)
                 if let Some(fs) = state.freq_shift {
                     self.last_freq_shift = Some(fs);
+                    if self.freq_shift_history.len() >= 100 {
+                        self.freq_shift_history.pop_front();
+                    }
+                    self.freq_shift_history.push_back(fs as f64);
                 }
                 self.current_state = Some(state);
             }
@@ -569,8 +657,27 @@ impl TipPrepApp {
                 self.state_receiver = None;
 
                 if matches!(self.run_status, RunStatus::Running) {
-                    self.run_status = RunStatus::Completed;
-                    self.message = Some(("Controller finished".to_string(), false));
+                    // Check the last action to determine final status
+                    match self.current_state.as_ref().map(|s| &s.current_action) {
+                        Some(ControllerAction::Completed) => {
+                            self.run_status = RunStatus::Completed;
+                            self.message = Some(("Tip preparation completed successfully".to_string(), false));
+                        }
+                        Some(ControllerAction::Stopped) => {
+                            self.run_status = RunStatus::Idle;
+                            self.message = Some(("Controller stopped by user".to_string(), false));
+                        }
+                        Some(ControllerAction::Error(e)) => {
+                            self.run_status = RunStatus::Error(e.clone());
+                            self.message = Some((format!("Error: {}", e), true));
+                        }
+                        _ => {
+                            // Thread finished but action wasn't Completed/Stopped/Error
+                            // This likely means an unexpected error occurred
+                            self.run_status = RunStatus::Error("Unexpected termination".to_string());
+                            self.message = Some(("Controller terminated unexpectedly".to_string(), true));
+                        }
+                    }
                 }
             }
         }
@@ -585,18 +692,28 @@ impl TipPrepApp {
         }
     }
 
-    fn action_text(&self) -> &str {
+    fn action_text(&self) -> String {
         match self.current_state.as_ref().map(|s| &s.current_action) {
-            Some(ControllerAction::Idle) => "Idle",
-            Some(ControllerAction::Initializing) => "Initializing...",
-            Some(ControllerAction::Approaching) => "Approaching",
-            Some(ControllerAction::MeasuringSignal) => "Measuring Signal",
-            Some(ControllerAction::Pulsing) => "Pulsing",
-            Some(ControllerAction::StabilityCheck) => "Stability Check",
-            Some(ControllerAction::Repositioning) => "Repositioning",
-            Some(ControllerAction::Completed) => "Completed",
-            Some(ControllerAction::Error(_)) => "Error",
-            None => "-",
+            Some(ControllerAction::Idle) => "Idle".to_string(),
+            Some(ControllerAction::Initializing) => "Initializing...".to_string(),
+            Some(ControllerAction::LoadingLayout) => "Loading layout...".to_string(),
+            Some(ControllerAction::LoadingSettings) => "Loading settings...".to_string(),
+            Some(ControllerAction::SettingBias) => "Setting bias...".to_string(),
+            Some(ControllerAction::SettingSetpoint) => "Setting setpoint...".to_string(),
+            Some(ControllerAction::Approaching) => "Approaching".to_string(),
+            Some(ControllerAction::Withdrawing) => "Withdrawing".to_string(),
+            Some(ControllerAction::CenteringFreqShift) => "Centering freq shift".to_string(),
+            Some(ControllerAction::MeasuringSignal) => "Measuring signal".to_string(),
+            Some(ControllerAction::Pulsing) => "Pulsing".to_string(),
+            Some(ControllerAction::StabilityCheck) => "Stability check".to_string(),
+            Some(ControllerAction::StabilitySweep { sweep, total }) => {
+                format!("Stability sweep {}/{}", sweep, total)
+            }
+            Some(ControllerAction::Repositioning) => "Repositioning".to_string(),
+            Some(ControllerAction::Completed) => "Completed".to_string(),
+            Some(ControllerAction::Stopped) => "Stopped".to_string(),
+            Some(ControllerAction::Error(e)) => format!("Error: {}", e),
+            None => "-".to_string(),
         }
     }
 
@@ -620,95 +737,148 @@ impl TipPrepApp {
     }
 
     fn render_control_tab(&mut self, ui: &mut egui::Ui) {
-        // Status display
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.set_min_width(450.0);
-            egui::Grid::new("status_grid")
-                .num_columns(2)
-                .spacing([40.0, 4.0])
-                .show(ui, |ui| {
-                    ui.label("Status:");
-                    let status_color = match &self.run_status {
-                        RunStatus::Running => egui::Color32::YELLOW,
-                        RunStatus::Completed => egui::Color32::GREEN,
-                        RunStatus::Error(_) => egui::Color32::RED,
-                        RunStatus::Idle => egui::Color32::GRAY,
-                    };
-                    ui.colored_label(status_color, self.status_text());
-                    ui.end_row();
-
-                    ui.label("Current Action:");
-                    ui.label(self.action_text());
-                    ui.end_row();
-
-                    ui.label("Tip Shape:");
-                    let shape_color = match self.current_state.as_ref().map(|s| s.tip_shape) {
-                        Some(TipShape::Blunt) => egui::Color32::RED,
-                        Some(TipShape::Sharp) => egui::Color32::YELLOW,
-                        Some(TipShape::Stable) => egui::Color32::GREEN,
-                        None => egui::Color32::GRAY,
-                    };
-                    ui.colored_label(shape_color, self.tip_shape_text());
-                    ui.end_row();
-
-                    ui.label("Cycle Count:");
-                    ui.label(
-                        self.current_state
-                            .as_ref()
-                            .map(|s| s.cycle_count.to_string())
-                            .unwrap_or_else(|| "-".to_string()),
-                    );
-                    ui.end_row();
-
-                    ui.label("Freq Shift:");
-                    ui.label(
-                        self.current_state
-                            .as_ref()
-                            .and_then(|s| s.freq_shift)
-                            .or(self.last_freq_shift)
-                            .map(|f| format!("{:.2} Hz", f))
-                            .unwrap_or_else(|| "-".to_string()),
-                    );
-                    ui.end_row();
-
-                    ui.label("Pulse Voltage:");
-                    ui.label(
-                        self.current_state
-                            .as_ref()
-                            .map(|s| format!("{:.2} V", s.pulse_voltage))
-                            .unwrap_or_else(|| "-".to_string()),
-                    );
-                    ui.end_row();
-
-                    ui.label("Elapsed:");
-                    ui.label(self.elapsed_text());
-                    ui.end_row();
-                });
-        });
-
-        ui.add_space(10.0);
-
-        // Message display
-        if let Some((ref msg, is_error)) = self.message {
-            if is_error {
-                ui.colored_label(egui::Color32::RED, msg);
-            } else {
-                ui.colored_label(egui::Color32::GREEN, msg);
-            }
-            ui.add_space(5.0);
-        }
-
-        // Control buttons
         ui.horizontal(|ui| {
-            if ui.add_enabled(!self.is_running(), egui::Button::new("Start")).clicked() {
-                self.message = None;
-                self.start_controller();
-            }
+            // Left panel: Status and controls
+            ui.vertical(|ui| {
+                ui.set_min_width(280.0);
 
-            if ui.add_enabled(self.is_running(), egui::Button::new("Stop")).clicked() {
-                self.stop_controller();
-            }
+                // Status display
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    egui::Grid::new("status_grid")
+                        .num_columns(2)
+                        .spacing([20.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("Status:");
+                            let status_color = match &self.run_status {
+                                RunStatus::Running => egui::Color32::YELLOW,
+                                RunStatus::Completed => egui::Color32::GREEN,
+                                RunStatus::Error(_) => egui::Color32::RED,
+                                RunStatus::Idle => egui::Color32::GRAY,
+                            };
+                            ui.colored_label(status_color, self.status_text());
+                            ui.end_row();
+
+                            ui.label("Current Action:");
+                            ui.label(self.action_text());
+                            ui.end_row();
+
+                            ui.label("Tip Shape:");
+                            let shape_color = match self.current_state.as_ref().map(|s| s.tip_shape) {
+                                Some(TipShape::Blunt) => egui::Color32::RED,
+                                Some(TipShape::Sharp) => egui::Color32::YELLOW,
+                                Some(TipShape::Stable) => egui::Color32::GREEN,
+                                None => egui::Color32::GRAY,
+                            };
+                            ui.colored_label(shape_color, self.tip_shape_text());
+                            ui.end_row();
+
+                            ui.label("Cycle Count:");
+                            ui.label(
+                                self.current_state
+                                    .as_ref()
+                                    .map(|s| s.cycle_count.to_string())
+                                    .unwrap_or_else(|| "-".to_string()),
+                            );
+                            ui.end_row();
+
+                            ui.label("Freq Shift:");
+                            ui.label(
+                                self.current_state
+                                    .as_ref()
+                                    .and_then(|s| s.freq_shift)
+                                    .or(self.last_freq_shift)
+                                    .map(|f| format!("{:.2} Hz", f))
+                                    .unwrap_or_else(|| "-".to_string()),
+                            );
+                            ui.end_row();
+
+                            ui.label("Pulse Voltage:");
+                            ui.label(
+                                self.current_state
+                                    .as_ref()
+                                    .map(|s| format!("{:.2} V", s.pulse_voltage))
+                                    .unwrap_or_else(|| "-".to_string()),
+                            );
+                            ui.end_row();
+
+                            ui.label("Elapsed:");
+                            ui.label(self.elapsed_text());
+                            ui.end_row();
+                        });
+                });
+
+                ui.add_space(10.0);
+
+                // Message display
+                if let Some((ref msg, is_error)) = self.message {
+                    if is_error {
+                        ui.colored_label(egui::Color32::RED, msg);
+                    } else {
+                        ui.colored_label(egui::Color32::GREEN, msg);
+                    }
+                    ui.add_space(5.0);
+                }
+
+                // Control buttons
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!self.is_running(), egui::Button::new("Start")).clicked() {
+                        self.message = None;
+                        self.start_controller();
+                    }
+
+                    if ui.add_enabled(self.is_running(), egui::Button::new("Stop")).clicked() {
+                        self.stop_controller();
+                    }
+                });
+            });
+
+            ui.add_space(10.0);
+
+            // Right panel: Log window
+            ui.vertical(|ui| {
+                ui.set_min_width(300.0);
+                ui.label("Activity Log");
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(400.0)
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            ui.set_min_width(280.0);
+                            for msg in &self.log_messages {
+                                ui.label(egui::RichText::new(msg).monospace().size(11.0));
+                            }
+                            if self.log_messages.is_empty() {
+                                ui.colored_label(egui::Color32::GRAY, "No activity yet");
+                            }
+                        });
+                });
+
+                ui.add_space(5.0);
+                if ui.button("Clear Log").clicked() {
+                    self.log_messages.clear();
+                }
+            });
         });
+
+        // Freq shift history bar graph
+        ui.add_space(10.0);
+        ui.label("Freq Shift History");
+        let bars: Vec<Bar> = self
+            .freq_shift_history
+            .iter()
+            .enumerate()
+            .map(|(i, &val)| Bar::new(i as f64, val))
+            .collect();
+        let chart = BarChart::new("Freq Shift (Hz)", bars);
+        Plot::new("freq_shift_plot")
+            .height(150.0)
+            .allow_drag(false)
+            .allow_zoom(false)
+            .allow_scroll(false)
+            .y_axis_label("Hz")
+            .show(ui, |plot_ui| {
+                plot_ui.bar_chart(chart);
+            });
     }
 
     fn render_configuration_tab(&mut self, ui: &mut egui::Ui) {
@@ -839,6 +1009,10 @@ impl TipPrepApp {
 
                         ui.label("Initial Z Setpoint (pA):");
                         ui.add(egui::TextEdit::singleline(&mut self.config.initial_z_setpoint_pa).desired_width(80.0));
+                        ui.end_row();
+
+                        ui.label("Safe Tip Threshold (pA):");
+                        ui.add(egui::TextEdit::singleline(&mut self.config.safe_tip_threshold_pa).desired_width(80.0));
                         ui.end_row();
                     });
             });
@@ -1134,6 +1308,7 @@ fn run_controller(
         settings_file: config.nanonis.settings_file.clone(),
         initial_bias_v: config.tip_prep.initial_bias_v,
         initial_z_setpoint_a: config.tip_prep.initial_z_setpoint_a,
+        safe_tip_threshold: config.tip_prep.safe_tip_threshold,
     };
 
     // Create controller and run
@@ -1150,10 +1325,9 @@ impl eframe::App for TipPrepApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.check_controller_status();
 
-        // Request repaint while running
-        if self.is_running() {
-            ctx.request_repaint_after(Duration::from_millis(500));
-        }
+        // Request periodic repaint to prevent "waiting for idle" messages
+        // and keep UI responsive during controller operation
+        ctx.request_repaint_after(Duration::from_millis(100));
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Rusty Tip Preparation");
