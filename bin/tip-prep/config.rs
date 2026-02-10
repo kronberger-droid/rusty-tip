@@ -163,6 +163,10 @@ fn default_initial_z_setpoint_a() -> f32 {
     100e-12
 }
 
+fn default_safe_tip_threshold() -> f32 {
+    1e-9
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TipPrepConfig {
     pub sharp_tip_bounds: [f32; 2],
@@ -177,6 +181,9 @@ pub struct TipPrepConfig {
     /// Initial Z-controller setpoint (A) set before the first approach. Default: 100 pA
     #[serde(default = "default_initial_z_setpoint_a")]
     pub initial_z_setpoint_a: f32,
+    /// Safe tip threshold (A) for safe tip configuration. Default: 1 nA
+    #[serde(default = "default_safe_tip_threshold")]
+    pub safe_tip_threshold: f32,
 }
 
 impl Default for NanonisConfig {
@@ -225,6 +232,7 @@ impl Default for TipPrepConfig {
             stability: StabilityConfig::default(),
             initial_bias_v: default_initial_bias_v(),
             initial_z_setpoint_a: default_initial_z_setpoint_a(),
+            safe_tip_threshold: default_safe_tip_threshold(),
         }
     }
 }

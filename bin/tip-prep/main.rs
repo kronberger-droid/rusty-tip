@@ -291,6 +291,7 @@ fn create_tip_controller_config(
         settings_file: config.nanonis.settings_file.clone(),
         initial_bias_v: config.tip_prep.initial_bias_v,
         initial_z_setpoint_a: config.tip_prep.initial_z_setpoint_a,
+        safe_tip_threshold: config.tip_prep.safe_tip_threshold,
     }
 }
 
