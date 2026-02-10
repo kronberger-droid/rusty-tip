@@ -149,14 +149,14 @@
 
         # Clean development shell for Linux development (with GUI support)
         devShells.default = pkgs.mkShell {
-          name = "rust dev shell (Linux + GUI)";
+          name = "rusty-tip-dev";
           buildInputs = rustDeps ++ guiDeps;
           shellHook = baseShellHook + guiShellHook;
         };
 
         # Windows cross-compilation shell
         devShells.windows = pkgs.mkShell {
-          name = "rust dev shell (Windows cross-compile)";
+          name = "rusty-tip-windows";
           buildInputs = rustDeps ++ windowsTools;
           shellHook =
             baseShellHook
