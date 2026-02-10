@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    ops::DerefMut,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -1681,17 +1680,17 @@ impl ActionDriver {
                         self.client_mut().safe_tip_on_off_set(true)?;
                     }
 
-                    self.check_safetip_status()?;
+                    self.check_safetip_status("after enabling safe tip")?;
 
                     // Home 50nm away from the surface
                     self.client_mut().z_ctrl_home()?;
 
-                    self.check_safetip_status()?;
+                    self.check_safetip_status("after z_ctrl_home")?;
 
                     // Sleep for 0.5 secs
                     std::thread::sleep(Duration::from_millis(500));
 
-                    self.check_safetip_status()?;
+                    self.check_safetip_status("after 500ms settle")?;
 
                     // Center the freq shift
                     if let Err(e) = self.center_freq_shift() {
@@ -1699,12 +1698,12 @@ impl ActionDriver {
                         // Continue anyway, this is not critical
                     }
 
-                    self.check_safetip_status()?;
+                    self.check_safetip_status("after center_freq_shift")?;
 
                     // Approach again
                     self.auto_approach(wait_until_finished, timeout)?;
 
-                    self.check_safetip_status()?;
+                    self.check_safetip_status("after final auto_approach")?;
 
                     // Toggle of the safe tip
                     if let Ok(safetip_state) =
@@ -2607,36 +2606,25 @@ impl ActionDriver {
                     chrono::Utc::now().to_rfc3339(),
                 );
 
-                // Log measured signal values for analysis
+                // Log a concise summary; full details at debug level
                 let signal_values_str = measured_signals
                     .iter()
                     .map(|(signal_idx, value)| {
-                        format!("signal_{}={:.6e}", signal_idx.get(), value)
+                        format!("signal_{}={:.3}", signal_idx.get(), value)
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                // Extract read method and dataset info from metadata for environment log
-                let read_method = metadata
-                    .get("read_method")
-                    .cloned()
-                    .unwrap_or_else(|| "unknown".to_string());
-                let dataset_size = metadata
-                    .get("dataset_size")
-                    .cloned()
-                    .unwrap_or_else(|| "unknown".to_string());
+                log::info!(
+                    "CheckTipState: shape={:?}, signals=[{}]",
+                    tip_shape,
+                    signal_values_str
+                );
 
-                let stable_signal_info = if !recent_signals.is_empty() {
-                    format!(
-                        ", recent_stable_data=true (count={})",
-                        recent_signals.len()
-                    )
-                } else {
-                    ", recent_stable_data=false".to_string()
-                };
-
-                log::info!("CheckTipState result: shape={:?}, read_method={}, dataset_size={}, measured_signals=[{}]{}",
-                    tip_shape, read_method, dataset_size, signal_values_str, stable_signal_info);
+                log::debug!("CheckTipState detail: read_method={}, dataset_size={}, recent_stable_count={}",
+                    metadata.get("read_method").map(|s| s.as_str()).unwrap_or("unknown"),
+                    metadata.get("dataset_size").map(|s| s.as_str()).unwrap_or("unknown"),
+                    recent_signals.len());
 
                 Ok(ActionResult::TipState(TipState {
                     shape: tip_shape,
@@ -3174,12 +3162,12 @@ impl ActionDriver {
         }
     }
 
-    fn check_safetip_status(&mut self) -> Result<(), NanonisError> {
+    fn check_safetip_status(&mut self, context: &str) -> Result<(), NanonisError> {
         if let Ok(status) = self.client_mut().z_ctrl_status_get() {
             if matches!(status, nanonis_rs::z_ctrl::ZControllerStatus::SafeTip)
             {
                 return Err(NanonisError::Protocol(
-                    "SafeTip triggert, abort!".to_string(),
+                    format!("SafeTip triggered ({}), abort!", context),
                 ));
             }
         }
@@ -3241,7 +3229,7 @@ impl ActionDriver {
         let start_time = Instant::now();
         let mut collected_data = Vec::with_capacity(data_points);
 
-        log::info!(
+        log::debug!(
             "Collecting {} new data points for signal channel {} with timeout {:.1}s",
             data_points,
             signal_channel_idx,
@@ -4211,6 +4199,12 @@ impl Drop for ActionDriver {
                 "Stopped TCP buffering, collected {} frames",
                 final_data.len()
             );
+        }
+
+        // Disable safe tip protection before cleanup
+        log::info!("Disabling safe tip protection...");
+        if let Err(e) = self.client_mut().safe_tip_on_off_set(false) {
+            log::warn!("Failed to disable safe tip: {}", e);
         }
 
         // Perform safe shutdown sequence with blocking operations
