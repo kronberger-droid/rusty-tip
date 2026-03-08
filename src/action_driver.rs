@@ -18,38 +18,13 @@ use crate::{
         ExpectFromAction,
     },
     buffered_tcp_reader::BufferedTCPReader,
+    controller_types::TipStateConfig,
     signal_registry::SignalRegistry,
     types::{DataToGet, OsciData, SignalStats, TriggerConfig},
     utils::{poll_until, poll_with_timeout, PollError},
     MotorGroup, NanonisClient, NanonisError, Position, PulseMode, ScanAction,
     ScanDirection, Signal, TipShaperConfig, ZControllerHold,
 };
-
-// ========================================================================
-// TIP STATE CHECKING CONSTANTS
-// ========================================================================
-
-/// Maximum standard deviation for stable signal (Hz)
-/// This checks the noise level in the signal
-/// Typical values: 0.3-0.5 for frequency shift signals with moderate noise
-/// Increased to 1.0 for noisy signals - adjust based on your actual noise level
-const TIP_STATE_MAX_STD_DEV: f32 = 1.0;
-
-/// Maximum slope for stable signal (Hz per sample)
-/// This checks for drift/trend in the signal
-/// Slope is calculated via linear regression over the data window
-/// Typical values: 0.001-0.01 depending on your signal drift rate
-/// Increased to 0.01 for drifting signals - adjust based on your actual drift
-const TIP_STATE_MAX_SLOPE: f32 = 0.01;
-
-/// Duration of data collection for tip state checking (milliseconds)
-const TIP_STATE_DATA_COLLECTION_DURATION_MS: u64 = 500;
-
-/// Timeout for stable signal reading during tip state check (seconds)
-const TIP_STATE_READ_TIMEOUT_SECS: u64 = 15;
-
-/// Number of retries for stable signal reading during tip state check
-const TIP_STATE_READ_RETRY_COUNT: u32 = 3;
 
 /// Configuration for TCP Logger integration with always-buffer support
 #[derive(Debug, Clone)]
@@ -395,6 +370,7 @@ pub struct ActionDriverBuilder {
     action_logger_config: Option<(std::path::PathBuf, usize, bool)>, // (file_path, buffer_size, final_format_json)
     custom_tcp_mapping: Option<Vec<(u8, u8)>>, // Custom Nanonis to TCP channel mapping
     shutdown_flag: Option<Arc<AtomicBool>>,    // Graceful shutdown support
+    tip_state_config: TipStateConfig,
 }
 
 impl ActionDriverBuilder {
@@ -409,6 +385,7 @@ impl ActionDriverBuilder {
             action_logger_config: None,
             custom_tcp_mapping: None,
             shutdown_flag: None,
+            tip_state_config: TipStateConfig::default(),
         }
     }
 
@@ -535,6 +512,12 @@ impl ActionDriverBuilder {
         self
     }
 
+    /// Configure tip state checking parameters
+    pub fn with_tip_state_config(mut self, config: TipStateConfig) -> Self {
+        self.tip_state_config = config;
+        self
+    }
+
     /// Build the ActionDriver with configured parameters and optional automatic buffering
     pub fn build(self) -> Result<ActionDriver, NanonisError> {
         let mut client = {
@@ -630,6 +613,7 @@ impl ActionDriverBuilder {
             signal_registry,
             recent_stable_signals: std::collections::VecDeque::new(),
             shutdown_flag: self.shutdown_flag,
+            tip_state_config: self.tip_state_config,
         })
     }
 }
@@ -659,6 +643,8 @@ pub struct ActionDriver {
     )>,
     /// Shutdown flag for graceful termination of long-running operations
     shutdown_flag: Option<Arc<AtomicBool>>,
+    /// Configuration for tip state checking
+    tip_state_config: TipStateConfig,
 }
 
 impl ActionDriver {
@@ -689,6 +675,7 @@ impl ActionDriver {
             signal_registry,
             recent_stable_signals: std::collections::VecDeque::new(),
             shutdown_flag: None,
+            tip_state_config: TipStateConfig::default(),
         }
     }
 
@@ -1951,9 +1938,7 @@ impl ActionDriver {
                         // Calculate samples needed for configured data collection duration
                         let data_points = self
                             .calculate_samples_for_duration(
-                                Duration::from_millis(
-                                    TIP_STATE_DATA_COLLECTION_DURATION_MS,
-                                ),
+                                self.tip_state_config.data_collection_duration,
                             )
                             .unwrap_or(100); // Fallback to 100 if TCP not configured
 
@@ -1963,11 +1948,11 @@ impl ActionDriver {
                                 data_points: Some(data_points),
                                 use_new_data: true, // Get fresh data for tip state checking
                                 stability_method: crate::actions::SignalStabilityMethod::Combined {
-                                    max_std_dev: TIP_STATE_MAX_STD_DEV,
-                                    max_slope: TIP_STATE_MAX_SLOPE,
+                                    max_std_dev: self.tip_state_config.max_std_dev,
+                                    max_slope: self.tip_state_config.max_slope,
                                 },
-                                timeout: Duration::from_secs(TIP_STATE_READ_TIMEOUT_SECS),
-                                retry_count: Some(TIP_STATE_READ_RETRY_COUNT),
+                                timeout: self.tip_state_config.read_timeout,
+                                retry_count: Some(self.tip_state_config.read_retry_count),
                             })
                             .execute();
 
@@ -2158,9 +2143,7 @@ impl ActionDriver {
                         // Calculate samples needed for configured data collection duration
                         let data_points = self
                             .calculate_samples_for_duration(
-                                Duration::from_millis(
-                                    TIP_STATE_DATA_COLLECTION_DURATION_MS,
-                                ),
+                                self.tip_state_config.data_collection_duration,
                             )
                             .unwrap_or(100); // Fallback to 100 if TCP not configured
 
@@ -2173,11 +2156,11 @@ impl ActionDriver {
                                     use_new_data: true, // Get fresh data for tip state checking
                                     stability_method:
                                         crate::actions::SignalStabilityMethod::Combined {
-                                            max_std_dev: TIP_STATE_MAX_STD_DEV,
-                                            max_slope: TIP_STATE_MAX_SLOPE,
+                                            max_std_dev: self.tip_state_config.max_std_dev,
+                                            max_slope: self.tip_state_config.max_slope,
                                         },
-                                    timeout: Duration::from_secs(TIP_STATE_READ_TIMEOUT_SECS),
-                                    retry_count: Some(TIP_STATE_READ_RETRY_COUNT),
+                                    timeout: self.tip_state_config.read_timeout,
+                                    retry_count: Some(self.tip_state_config.read_retry_count),
                                 })
                                 .execute();
 

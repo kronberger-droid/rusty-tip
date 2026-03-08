@@ -1,8 +1,6 @@
-// Include shared modules from tip-prep
+// Include shared config module from tip-prep
 #[path = "../tip-prep/config.rs"]
 mod config;
-#[path = "../tip-prep/tip_prep.rs"]
-mod tip_prep;
 
 mod app;
 

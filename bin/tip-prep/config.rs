@@ -2,7 +2,7 @@ use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use crate::tip_prep::PulseMethod;
+use rusty_tip::{PulseMethod, StabilityConfig};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TcpChannelMapping {
@@ -26,7 +26,8 @@ impl AppConfig {
     /// Validate all configuration values
     pub fn validate(&self) -> Result<(), ConfigError> {
         // Validate stability config
-        self.tip_prep.stability.validate()?;
+        self.tip_prep.stability.validate()
+            .map_err(ConfigError::Message)?;
 
         // Validate pulse method
         self.pulse_method.validate()
@@ -66,95 +67,6 @@ pub struct ConsoleConfig {
     pub verbosity: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum BiasSweepPolarity {
-    /// Sweep from upper_bound toward lower_bound (toward zero)
-    Positive,
-    /// Sweep from -upper_bound toward -lower_bound (toward zero)
-    Negative,
-    /// Two sweeps: positive first (toward zero), then negative (toward zero)
-    #[default]
-    Both,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct StabilityConfig {
-    /// Whether to perform stability checking
-    /// When true, performs a scan with bias sweep to verify tip stability
-    /// When false, only checks if tip is sharp based on bounds
-    pub check_stability: bool,
-    /// Maximum allowed change in signal for tip to be considered stable (in Hz)
-    /// During the bias sweep, if the signal changes more than this threshold,
-    /// the tip is considered unstable
-    pub stable_tip_allowed_change: f32,
-    /// Bias voltage range for stability sweep (lower, upper) in V
-    /// Must be positive magnitude-only; polarity_mode determines sign
-    pub bias_range: (f32, f32),
-    /// Number of steps in the bias sweep
-    pub bias_steps: u16,
-    /// Time to wait at each step in ms
-    pub step_period_ms: u64,
-    /// Maximum duration for stability check in seconds
-    pub max_duration_secs: u64,
-    /// Polarity mode for bias sweep
-    #[serde(default)]
-    pub polarity_mode: BiasSweepPolarity,
-    /// Scan speed for stability check in m/s (None = use current scan speed)
-    pub scan_speed_m_s: Option<f32>,
-}
-
-impl Default for StabilityConfig {
-    fn default() -> Self {
-        Self {
-            check_stability: true,
-            stable_tip_allowed_change: 0.2,
-            bias_range: (0.01, 2.0), // Strictly positive range
-            bias_steps: 1000,
-            step_period_ms: 200,
-            max_duration_secs: 100,
-            polarity_mode: BiasSweepPolarity::Both,
-            scan_speed_m_s: Some(5e-9), // 5 nm/s default
-        }
-    }
-}
-
-impl StabilityConfig {
-    /// Validate configuration values
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        // Validate bias_range: lower bound must be >= 0, upper bound must be > 0
-        if self.bias_range.0 <= 0.0 || self.bias_range.1 <= 0.0 {
-            return Err(ConfigError::Message(format!(
-                "bias_range must be strictly positive (got [{}, {}]). Use polarity_mode to control sign.",
-                self.bias_range.0, self.bias_range.1
-            )));
-        }
-        if self.bias_range.0 >= self.bias_range.1 {
-            return Err(ConfigError::Message(format!(
-                "bias_range: lower bound ({}) must be less than upper bound ({})",
-                self.bias_range.0, self.bias_range.1
-            )));
-        }
-
-        // Validate stable_tip_allowed_change is positive
-        if self.stable_tip_allowed_change <= 0.0 {
-            return Err(ConfigError::Message(format!(
-                "stable_tip_allowed_change must be positive, got: {}",
-                self.stable_tip_allowed_change
-            )));
-        }
-
-        // Validate bias_steps is non-zero
-        if self.bias_steps == 0 {
-            return Err(ConfigError::Message(
-                "bias_steps must be greater than zero".to_string()
-            ));
-        }
-
-        Ok(())
-    }
-}
-
 fn default_initial_bias_v() -> f32 {
     -500e-3
 }
@@ -165,6 +77,66 @@ fn default_initial_z_setpoint_a() -> f32 {
 
 fn default_safe_tip_threshold() -> f32 {
     1e-9
+}
+
+fn default_pulse_width_ms() -> u64 {
+    50
+}
+
+fn default_post_approach_settle_ms() -> u64 {
+    2000
+}
+
+fn default_post_reposition_settle_ms() -> u64 {
+    1000
+}
+
+fn default_buffer_clear_wait_ms() -> u64 {
+    500
+}
+
+fn default_post_pulse_settle_ms() -> u64 {
+    1000
+}
+
+fn default_reposition_steps() -> [i16; 2] {
+    [3, 3]
+}
+
+fn default_status_interval() -> usize {
+    10
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TimingConfig {
+    #[serde(default = "default_pulse_width_ms")]
+    pub pulse_width_ms: u64,
+    #[serde(default = "default_post_approach_settle_ms")]
+    pub post_approach_settle_ms: u64,
+    #[serde(default = "default_post_reposition_settle_ms")]
+    pub post_reposition_settle_ms: u64,
+    #[serde(default = "default_buffer_clear_wait_ms")]
+    pub buffer_clear_wait_ms: u64,
+    #[serde(default = "default_post_pulse_settle_ms")]
+    pub post_pulse_settle_ms: u64,
+    #[serde(default = "default_reposition_steps")]
+    pub reposition_steps: [i16; 2],
+    #[serde(default = "default_status_interval")]
+    pub status_interval: usize,
+}
+
+impl Default for TimingConfig {
+    fn default() -> Self {
+        Self {
+            pulse_width_ms: default_pulse_width_ms(),
+            post_approach_settle_ms: default_post_approach_settle_ms(),
+            post_reposition_settle_ms: default_post_reposition_settle_ms(),
+            buffer_clear_wait_ms: default_buffer_clear_wait_ms(),
+            post_pulse_settle_ms: default_post_pulse_settle_ms(),
+            reposition_steps: default_reposition_steps(),
+            status_interval: default_status_interval(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -184,6 +156,9 @@ pub struct TipPrepConfig {
     /// Safe tip threshold (A) for safe tip configuration. Default: 1 nA
     #[serde(default = "default_safe_tip_threshold")]
     pub safe_tip_threshold: f32,
+    /// Timing and step configuration for the tip controller
+    #[serde(default)]
+    pub timing: TimingConfig,
 }
 
 impl Default for NanonisConfig {
@@ -233,6 +208,7 @@ impl Default for TipPrepConfig {
             initial_bias_v: default_initial_bias_v(),
             initial_z_setpoint_a: default_initial_z_setpoint_a(),
             safe_tip_threshold: default_safe_tip_threshold(),
+            timing: TimingConfig::default(),
         }
     }
 }

@@ -1,5 +1,4 @@
 mod config;
-mod tip_prep;
 
 use chrono::Utc;
 use clap::Parser;
@@ -7,6 +6,8 @@ use env_logger::Env;
 use log::{error, info, LevelFilter};
 use rusty_tip::Signal;
 use rusty_tip::{ActionDriver, TCPReaderConfig};
+use rusty_tip::{PulseMethod, TipController, TipControllerConfig};
+use rusty_tip::error::{Error, RunOutcome};
 use std::{
     fs,
     io,
@@ -19,7 +20,6 @@ use std::{
 };
 
 use crate::config::{load_config_or_default, AppConfig};
-use crate::tip_prep::{PulseMethod, TipController, TipControllerConfig};
 
 #[cfg(windows)]
 use std::ffi::OsString;
@@ -292,6 +292,16 @@ fn create_tip_controller_config(
         initial_bias_v: config.tip_prep.initial_bias_v,
         initial_z_setpoint_a: config.tip_prep.initial_z_setpoint_a,
         safe_tip_threshold: config.tip_prep.safe_tip_threshold,
+        pulse_width: Duration::from_millis(config.tip_prep.timing.pulse_width_ms),
+        post_approach_settle: Duration::from_millis(config.tip_prep.timing.post_approach_settle_ms),
+        post_reposition_settle: Duration::from_millis(config.tip_prep.timing.post_reposition_settle_ms),
+        buffer_clear_wait: Duration::from_millis(config.tip_prep.timing.buffer_clear_wait_ms),
+        post_pulse_settle: Duration::from_millis(config.tip_prep.timing.post_pulse_settle_ms),
+        reposition_steps: (
+            config.tip_prep.timing.reposition_steps[0],
+            config.tip_prep.timing.reposition_steps[1],
+        ),
+        status_interval: config.tip_prep.timing.status_interval,
     }
 }
 
@@ -312,21 +322,29 @@ fn setup_shutdown_handler() -> Arc<AtomicBool> {
 /// Run tip preparation and report results
 fn run_and_report(
     mut controller: TipController,
-    shutdown_flag: Arc<AtomicBool>,
+    _shutdown_flag: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting tip preparation process...");
 
     let result = match controller.run() {
-        Ok(()) => {
-            if shutdown_flag.load(Ordering::SeqCst) {
-                info!("✓ Tip preparation stopped by user");
-            } else {
-                info!("✓ Tip preparation completed successfully!");
-            }
+        Ok(RunOutcome::Completed) => {
+            info!("Tip preparation completed successfully!");
             Ok(())
         }
+        Ok(RunOutcome::StoppedByUser) => {
+            info!("Tip preparation stopped by user");
+            Ok(())
+        }
+        Err(Error::CycleLimit(n)) => {
+            error!("Tip preparation stopped: max cycles ({}) exceeded", n);
+            Err(Error::CycleLimit(n).into())
+        }
+        Err(Error::TimedOut(d)) => {
+            error!("Tip preparation stopped: max duration ({:.0}s) exceeded", d.as_secs_f64());
+            Err(Error::TimedOut(d).into())
+        }
         Err(e) => {
-            error!("✗ Tip preparation failed: {}", e);
+            error!("Tip preparation failed: {}", e);
             Err(e.into())
         }
     };

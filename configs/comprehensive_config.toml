@@ -114,6 +114,43 @@ max_duration_secs = 12000
 # initial_z_setpoint_a = 50e-12  # Alternative: Lower setpoint
 
 # =============================================================================
+# TIMING & STEP CONFIGURATION
+# =============================================================================
+# Controls pulse width, settle times, repositioning steps, and status interval.
+# All values shown below are the defaults; omit the entire section to use them.
+
+# [tip_prep.timing]
+# # Pulse width in milliseconds
+# pulse_width_ms = 50
+# # pulse_width_ms = 100  # Alternative: Longer pulses
+#
+# # Wait time (ms) after approach for signal to stabilize before first measurement
+# post_approach_settle_ms = 2000
+# # post_approach_settle_ms = 3000  # Alternative: Longer settle
+#
+# # Wait time (ms) after reposition for signal to stabilize
+# post_reposition_settle_ms = 1000
+# # post_reposition_settle_ms = 2000  # Alternative: Longer settle
+#
+# # Wait time (ms) after clearing TCP buffer to accumulate fresh data
+# buffer_clear_wait_ms = 500
+# # buffer_clear_wait_ms = 1000  # Alternative: Longer wait
+#
+# # Wait time (ms) after a bias pulse for signal to settle
+# post_pulse_settle_ms = 1000
+# # post_pulse_settle_ms = 500   # Alternative: Shorter settle
+# # post_pulse_settle_ms = 2000  # Alternative: Longer settle
+#
+# # Number of motor steps for repositioning [x, y]
+# reposition_steps = [3, 3]
+# # reposition_steps = [5, 5]  # Alternative: Larger repositioning
+#
+# # Report progress every N cycles
+# status_interval = 10
+# # status_interval = 5   # Alternative: More frequent updates
+# # status_interval = 50  # Alternative: Less frequent updates
+
+# =============================================================================
 # STABILITY CHECK CONFIGURATION
 # =============================================================================
 [tip_prep.stability]

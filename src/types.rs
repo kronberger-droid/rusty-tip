@@ -20,8 +20,9 @@ pub use nanonis_rs::z_ctrl::ZControllerHold;
 use std::time::{Duration, Instant};
 
 /// Simple tip shape - matches original controller
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub enum TipShape {
+    #[default]
     Blunt,
     Sharp,
     Stable,

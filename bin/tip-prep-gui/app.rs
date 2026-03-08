@@ -11,14 +11,15 @@ use std::time::{Duration, Instant};
 
 use rusty_tip::{ActionDriver, Signal, TCPReaderConfig};
 
-// Re-use modules from tip-prep binary
 use crate::config::{
-    load_config, AppConfig, BiasSweepPolarity, ConsoleConfig, DataAcquisitionConfig,
-    ExperimentLoggingConfig, NanonisConfig, StabilityConfig, TcpChannelMapping, TipPrepConfig,
+    load_config, AppConfig, ConsoleConfig, DataAcquisitionConfig,
+    ExperimentLoggingConfig, NanonisConfig, TcpChannelMapping, TimingConfig,
+    TipPrepConfig,
 };
-use crate::tip_prep::{
-    ControllerAction, ControllerState, PolaritySign, PulseMethod, RandomPolaritySwitch,
-    TipController, TipControllerConfig, TipShape,
+use rusty_tip::{
+    BiasSweepPolarity, ControllerAction, ControllerState, PolaritySign,
+    PulseMethod, RandomPolaritySwitch, StabilityConfig, TipController,
+    TipControllerConfig, TipShape,
 };
 
 // ============================================================================
@@ -447,6 +448,7 @@ impl EditableConfig {
                 initial_bias_v: initial_bias_mv / 1000.0, // Convert mV to V
                 initial_z_setpoint_a: initial_z_setpoint_pa * 1e-12, // Convert pA to A
                 safe_tip_threshold: safe_tip_threshold_pa * 1e-12, // Convert pA to A
+                timing: TimingConfig::default(),
             },
             pulse_method,
             tcp_channel_mapping: if self.tcp_channel_mappings.is_empty() {
@@ -1309,6 +1311,16 @@ fn run_controller(
         initial_bias_v: config.tip_prep.initial_bias_v,
         initial_z_setpoint_a: config.tip_prep.initial_z_setpoint_a,
         safe_tip_threshold: config.tip_prep.safe_tip_threshold,
+        pulse_width: Duration::from_millis(config.tip_prep.timing.pulse_width_ms),
+        post_approach_settle: Duration::from_millis(config.tip_prep.timing.post_approach_settle_ms),
+        post_reposition_settle: Duration::from_millis(config.tip_prep.timing.post_reposition_settle_ms),
+        buffer_clear_wait: Duration::from_millis(config.tip_prep.timing.buffer_clear_wait_ms),
+        post_pulse_settle: Duration::from_millis(config.tip_prep.timing.post_pulse_settle_ms),
+        reposition_steps: (
+            config.tip_prep.timing.reposition_steps[0],
+            config.tip_prep.timing.reposition_steps[1],
+        ),
+        status_interval: config.tip_prep.timing.status_interval,
     };
 
     // Create controller and run
