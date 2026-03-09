@@ -15,7 +15,7 @@ use ndarray::Array1;
 use crate::{
     actions::{
         Action, ActionChain, ActionLogEntry, ActionLogResult, ActionResult,
-        ExpectFromAction,
+        ExpectFromAction, SequenceViolation,
     },
     buffered_tcp_reader::BufferedTCPReader,
     controller_types::TipStateConfig,
@@ -25,6 +25,19 @@ use crate::{
     MotorGroup, NanonisClient, NanonisError, Position, PulseMode, ScanAction,
     ScanDirection, Signal, TipShaperConfig, ZControllerHold,
 };
+
+/// Format validation violations into a human-readable error message
+fn format_violations(violations: &[SequenceViolation]) -> String {
+    let mut msg = format!(
+        "Action chain safety validation failed ({} violation{}):",
+        violations.len(),
+        if violations.len() == 1 { "" } else { "s" }
+    );
+    for v in violations {
+        msg.push_str(&format!("\n  - {}", v));
+    }
+    msg
+}
 
 /// Configuration for TCP Logger integration with always-buffer support
 #[derive(Debug, Clone)]
@@ -1207,6 +1220,10 @@ impl ActionDriver {
                 "TCP buffering not active".to_string(),
             ));
         }
+
+        // Validate via a temporary ActionChain (validation is enabled by default)
+        let temp_chain = ActionChain::new(actions.clone());
+        Self::validate_chain(&temp_chain)?;
 
         let chain_start = Instant::now();
         let mut action_results = Vec::with_capacity(actions.len());
@@ -3644,12 +3661,23 @@ impl ActionDriver {
         ))
     }
 
+    /// Validate an action chain if validation is enabled, returning an error on violations.
+    fn validate_chain(chain: &ActionChain) -> Result<(), NanonisError> {
+        if chain.validation_enabled() {
+            if let Err(violations) = chain.validate() {
+                return Err(NanonisError::Protocol(format_violations(&violations)));
+            }
+        }
+        Ok(())
+    }
+
     /// Execute a chain of actions sequentially
     pub fn execute_chain(
         &mut self,
         chain: impl Into<ActionChain>,
     ) -> Result<Vec<ActionResult>, NanonisError> {
         let chain = chain.into();
+        Self::validate_chain(&chain)?;
         let mut results = Vec::with_capacity(chain.len());
 
         for action in chain.into_iter() {
@@ -3675,6 +3703,9 @@ impl ActionDriver {
         chain: impl Into<ActionChain>,
     ) -> Result<Vec<ActionResult>, (Vec<ActionResult>, NanonisError)> {
         let chain = chain.into();
+        if let Err(e) = Self::validate_chain(&chain) {
+            return Err((Vec::new(), e));
+        }
         let mut results = Vec::new();
 
         for action in chain.into_iter() {
@@ -3708,6 +3739,7 @@ impl ActionDriver {
         chain: impl Into<ActionChain>,
     ) -> Result<Vec<ActionResult>, NanonisError> {
         let chain = chain.into();
+        Self::validate_chain(&chain)?;
         let start_time = chrono::Utc::now();
         let start_instant = std::time::Instant::now();
 
@@ -3966,6 +3998,7 @@ impl ActionDriver {
         chain: impl Into<ActionChain>,
     ) -> Result<(Vec<ActionResult>, ExecutionStats), NanonisError> {
         let chain = chain.into();
+        Self::validate_chain(&chain)?;
         let start_time = std::time::Instant::now();
         let mut results = Vec::with_capacity(chain.len());
         let mut successful = 0;

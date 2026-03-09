@@ -14,7 +14,7 @@ pub use action_driver::{
     stability, ActionDriver, ActionDriverBuilder, ExecutionResult,
     ExecutionStats, TCPReaderConfig,
 };
-pub use actions::{Action, ActionChain, ActionLogEntry, ActionResult};
+pub use actions::{Action, ActionChain, ActionLogEntry, ActionResult, SequenceViolation, TipPosture};
 pub use controller_types::{
     BiasSweepPolarity, ControllerAction, ControllerState, PolaritySign,
     PulseMethod, RandomPolaritySwitch, StabilityConfig, TipControllerConfig,

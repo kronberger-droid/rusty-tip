@@ -1053,6 +1053,88 @@ impl Action {
     }
 }
 
+// === Safety Validation Types ===
+
+/// Physical state of the tip relative to the surface.
+/// Used for static safety validation of action sequences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TipPosture {
+    /// Tip is in tunneling/contact range (after approach)
+    Approached,
+    /// Tip is retracted from the surface (after withdraw)
+    Withdrawn,
+}
+
+impl std::fmt::Display for TipPosture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TipPosture::Approached => write!(f, "Approached"),
+            TipPosture::Withdrawn => write!(f, "Withdrawn"),
+        }
+    }
+}
+
+/// A safety violation detected in an action sequence
+#[derive(Debug, Clone)]
+pub struct SequenceViolation {
+    /// Index of the violating action in the chain
+    pub index: usize,
+    /// Description of the violating action
+    pub action: String,
+    /// What posture this action requires
+    pub expected: TipPosture,
+    /// What posture the preceding actions leave
+    pub actual: TipPosture,
+}
+
+impl std::fmt::Display for SequenceViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Unsafe action at index {}: \"{}\" requires tip {} but tip is {}",
+            self.index, self.action, self.expected, self.actual
+        )
+    }
+}
+
+// === Safety Precondition/Postcondition Methods ===
+
+impl Action {
+    /// What tip posture this action requires to be safe.
+    /// Returns None if the action has no posture requirement.
+    pub fn requires(&self) -> Option<TipPosture> {
+        match self {
+            // Surface-contact operations require approached tip
+            Action::BiasPulse { .. }
+            | Action::TipShaper { .. }
+            | Action::PulseRetract { .. }
+            | Action::CheckTipState { .. }
+            | Action::CheckTipStability { .. }
+            | Action::ReadStableSignal { .. } => Some(TipPosture::Approached),
+
+            // Motor operations require withdrawn tip
+            Action::MoveMotorAxis { .. }
+            | Action::MoveMotor3D { .. }
+            | Action::MoveMotorClosedLoop { .. } => Some(TipPosture::Withdrawn),
+
+            // Everything else is posture-agnostic
+            _ => None,
+        }
+    }
+
+    /// What tip posture the system is in after this action completes.
+    /// Returns None if this action doesn't change the posture.
+    pub fn produces(&self) -> Option<TipPosture> {
+        match self {
+            Action::AutoApproach { .. } => Some(TipPosture::Approached),
+            Action::Withdraw { .. } => Some(TipPosture::Withdrawn),
+            // SafeReposition internally withdraws, moves, then approaches
+            Action::SafeReposition { .. } => Some(TipPosture::Approached),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1076,6 +1158,8 @@ mod tests {
 pub struct ActionChain {
     actions: Vec<Action>,
     name: Option<String>,
+    /// Whether to run safety validation before execution (default: true)
+    validate: bool,
 }
 
 impl ActionChain {
@@ -1084,6 +1168,7 @@ impl ActionChain {
         Self {
             actions,
             name: None,
+            validate: true,
         }
     }
 
@@ -1097,6 +1182,7 @@ impl ActionChain {
         Self {
             actions,
             name: Some(name.into()),
+            validate: true,
         }
     }
 
@@ -1227,6 +1313,58 @@ impl ActionChain {
             format!("{} ({} actions)", name, self.len())
         } else {
             format!("Action chain with {} actions", self.len())
+        }
+    }
+
+    // === Safety Validation ===
+
+    /// Whether this chain has validation enabled
+    pub fn validation_enabled(&self) -> bool {
+        self.validate
+    }
+
+    /// Skip safety validation when executing this chain.
+    /// Use when the chain starts mid-sequence with known posture.
+    pub fn skip_validation(mut self) -> Self {
+        self.validate = false;
+        self
+    }
+
+    /// Validate the action sequence for safety.
+    /// Performs a linear scan tracking tip posture through the chain,
+    /// checking that each action's preconditions are met.
+    ///
+    /// Returns Ok(()) if the sequence is safe, or Err with all violations found.
+    pub fn validate(&self) -> Result<(), Vec<SequenceViolation>> {
+        let mut posture: Option<TipPosture> = None;
+        let mut violations = Vec::new();
+
+        for (index, action) in self.actions.iter().enumerate() {
+            // Check precondition
+            if let Some(required) = action.requires() {
+                if let Some(current) = posture {
+                    if current != required {
+                        violations.push(SequenceViolation {
+                            index,
+                            action: action.description(),
+                            expected: required,
+                            actual: current,
+                        });
+                    }
+                }
+                // If posture is None (unknown), we don't flag -- can't prove it's wrong
+            }
+
+            // Update posture from postcondition
+            if let Some(produced) = action.produces() {
+                posture = Some(produced);
+            }
+        }
+
+        if violations.is_empty() {
+            Ok(())
+        } else {
+            Err(violations)
         }
     }
 
@@ -1652,6 +1790,154 @@ mod chain_tests {
         }
 
         accepts_into_action_chain(vec_actions);
+    }
+
+    // === Safety Validation Tests ===
+
+    #[test]
+    fn test_safe_chain_validates() {
+        let chain = ActionChain::new(vec![
+            Action::Withdraw {
+                wait_until_finished: true,
+                timeout: Duration::from_secs(5),
+            },
+            Action::MoveMotorAxis {
+                direction: MotorDirection::XPlus,
+                steps: 10,
+                blocking: true,
+            },
+            Action::AutoApproach {
+                wait_until_finished: true,
+                timeout: Duration::from_secs(300),
+                center_freq_shift: false,
+            },
+            Action::BiasPulse {
+                wait_until_done: true,
+                pulse_width: Duration::from_millis(100),
+                bias_value_v: 3.0,
+                z_controller_hold: 1,
+                pulse_mode: 0,
+            },
+        ]);
+        assert!(chain.validate().is_ok());
+    }
+
+    #[test]
+    fn test_motor_without_withdraw_fails() {
+        let chain = ActionChain::new(vec![
+            Action::AutoApproach {
+                wait_until_finished: true,
+                timeout: Duration::from_secs(300),
+                center_freq_shift: false,
+            },
+            Action::MoveMotor3D {
+                displacement: crate::types::MotorDisplacement {
+                    x: 10,
+                    y: 0,
+                    z: 0,
+                },
+                blocking: true,
+            },
+        ]);
+        let err = chain.validate().unwrap_err();
+        assert_eq!(err.len(), 1);
+        assert_eq!(err[0].index, 1);
+        assert_eq!(err[0].expected, TipPosture::Withdrawn);
+        assert_eq!(err[0].actual, TipPosture::Approached);
+    }
+
+    #[test]
+    fn test_pulse_while_withdrawn_fails() {
+        let chain = ActionChain::new(vec![
+            Action::Withdraw {
+                wait_until_finished: true,
+                timeout: Duration::from_secs(5),
+            },
+            Action::BiasPulse {
+                wait_until_done: true,
+                pulse_width: Duration::from_millis(100),
+                bias_value_v: 3.0,
+                z_controller_hold: 1,
+                pulse_mode: 0,
+            },
+        ]);
+        let err = chain.validate().unwrap_err();
+        assert_eq!(err.len(), 1);
+        assert_eq!(err[0].index, 1);
+        assert_eq!(err[0].expected, TipPosture::Approached);
+        assert_eq!(err[0].actual, TipPosture::Withdrawn);
+    }
+
+    #[test]
+    fn test_safe_reposition_produces_approached() {
+        let chain = ActionChain::new(vec![
+            Action::SafeReposition {
+                x_steps: 10,
+                y_steps: 5,
+            },
+            Action::CheckTipState {
+                method: crate::actions::TipCheckMethod::SignalBounds {
+                    signal: Signal::new("Current".to_string(), 0, None).unwrap(),
+                    bounds: (0.0, 1.0),
+                },
+            },
+        ]);
+        assert!(chain.validate().is_ok());
+    }
+
+    #[test]
+    fn test_unknown_posture_no_false_positive() {
+        // BiasPulse as first action -- posture unknown, should not flag
+        let chain = ActionChain::new(vec![Action::BiasPulse {
+            wait_until_done: true,
+            pulse_width: Duration::from_millis(100),
+            bias_value_v: 3.0,
+            z_controller_hold: 1,
+            pulse_mode: 0,
+        }]);
+        assert!(chain.validate().is_ok());
+    }
+
+    #[test]
+    fn test_skip_validation() {
+        // This chain has a violation but skip_validation should make validate() still work
+        // (skip_validation only affects execution, not the validate() method itself)
+        let chain = ActionChain::new(vec![
+            Action::AutoApproach {
+                wait_until_finished: true,
+                timeout: Duration::from_secs(300),
+                center_freq_shift: false,
+            },
+            Action::MoveMotorAxis {
+                direction: MotorDirection::XPlus,
+                steps: 10,
+                blocking: true,
+            },
+        ]);
+        // validate() still catches the issue
+        assert!(chain.validate().is_err());
+        // But skip_validation disables it for execution
+        let skipped = chain.skip_validation();
+        assert!(!skipped.validation_enabled());
+    }
+
+    #[test]
+    fn test_wait_preserves_posture() {
+        let chain = ActionChain::new(vec![
+            Action::Withdraw {
+                wait_until_finished: true,
+                timeout: Duration::from_secs(5),
+            },
+            Action::Wait {
+                duration: Duration::from_millis(500),
+            },
+            Action::MoveMotorAxis {
+                direction: MotorDirection::XPlus,
+                steps: 10,
+                blocking: true,
+            },
+        ]);
+        assert!(chain.validate().is_ok());
     }
 }
 
