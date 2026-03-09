@@ -45,6 +45,21 @@ pub trait Action: Send + Sync {
 
     /// Execute this action against the provided context
     fn execute(&self, ctx: &mut ActionContext) -> Result<ActionOutput>;
+
+    /// Execute and store the result under the action's name.
+    /// Overwrites any previous value stored under that key.
+    fn execute_and_store_as(&self, ctx: &mut ActionContext) -> Result<ActionOutput> {
+        let output = self.execute(ctx)?;
+        ctx.store.set(self.name(), &output);
+        Ok(output)
+    }
+
+    /// Execute and store the result under a custom key.
+    fn execute_and_store(&self, ctx: &mut ActionContext, key: &str) -> Result<ActionOutput> {
+        let output = self.execute(ctx)?;
+        ctx.store.set(key, &output);
+        Ok(output)
+    }
 }
 
 /// Create an ActionRegistry pre-loaded with all built-in actions.
