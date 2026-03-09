@@ -1,6 +1,7 @@
 pub mod action;
 pub mod action_driver;
 pub mod event;
+pub mod workflow;
 pub mod actions;
 pub mod buffered_tcp_reader;
 pub mod controller_types;
