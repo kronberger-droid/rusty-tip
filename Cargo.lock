@@ -1729,8 +1729,6 @@ dependencies = [
 [[package]]
 name = "nanonis-rs"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bf31a731cd569d0cce55d7fa9069cf12cff269cc1b7819e32045e04befd96ae"
 dependencies = [
  "byteorder",
  "log",

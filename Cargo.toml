@@ -21,7 +21,7 @@ path = "bin/tip-prep-gui/main.rs"
 required-features = ["gui"]
 
 [dependencies]
-nanonis-rs = "0.2.0"
+nanonis-rs = { version = "0.2.0", path = "../nanonis-rs" }
 byteorder = "1.5"
 thiserror = "1.0"
 log = "0.4"
