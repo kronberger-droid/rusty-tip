@@ -32,6 +32,11 @@ impl DataStore {
         serde_json::from_value(val.clone()).ok()
     }
 
+    /// Get the raw JSON value by key without deserialization.
+    pub fn get_raw(&self, key: &str) -> Option<&serde_json::Value> {
+        self.values.get(key)
+    }
+
     /// Remove a value by key, returning the raw JSON if it existed.
     pub fn remove(&mut self, key: &str) -> Option<serde_json::Value> {
         self.values.remove(key)
