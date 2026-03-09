@@ -16,6 +16,10 @@ name = "tip-prep"
 path = "bin/tip-prep/main.rs"
 
 [[bin]]
+name = "tip-prep-v2"
+path = "bin/tip-prep-v2/main.rs"
+
+[[bin]]
 name = "tip-prep-gui"
 path = "bin/tip-prep-gui/main.rs"
 required-features = ["gui"]
