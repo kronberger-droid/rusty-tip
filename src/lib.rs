@@ -1,11 +1,15 @@
+pub mod action;
 pub mod action_driver;
 pub mod actions;
 pub mod buffered_tcp_reader;
 pub mod controller_types;
 pub mod error;
 pub mod logger;
+pub mod nanonis_controller;
 pub mod plotting;
 pub mod signal_registry;
+pub mod spm_controller;
+pub mod spm_error;
 pub mod tip_controller;
 pub mod types;
 pub mod utils;
@@ -39,12 +43,14 @@ pub use nanonis_rs::{
 
 // Re-export nanonis-rs motor types
 pub use nanonis_rs::motor::{
-    Amplitude, Frequency, MotorAxis, MotorDirection, MotorGroup,
-    MotorMovement, MovementMode, Position3D, StepCount,
+    Amplitude, Frequency, MotorAxis, MotorDirection, MotorGroup, MotorMovement,
+    MovementMode, Position3D, StepCount,
 };
 
 // Re-export nanonis-rs scan types
-pub use nanonis_rs::scan::{ScanAction, ScanConfig, ScanDirection, ScanFrame, ScanPropsBuilder};
+pub use nanonis_rs::scan::{
+    ScanAction, ScanConfig, ScanDirection, ScanFrame, ScanPropsBuilder,
+};
 
 // Re-export nanonis-rs oscilloscope types
 pub use nanonis_rs::oscilloscope::{
