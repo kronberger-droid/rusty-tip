@@ -13,13 +13,18 @@ use std::{
 
 use rusty_tip::action::{ActionContext, ActionOutput};
 use rusty_tip::action::bias::{BiasPulse, SetBias};
+use rusty_tip::action::motor::MoveMotor3D;
+use rusty_tip::action::pll::CenterFreqShift;
 use rusty_tip::action::signals::ReadSignal;
-use rusty_tip::action::z_controller::{AutoApproach, SetZSetpoint, Withdraw};
 use rusty_tip::action::util::Wait;
+use rusty_tip::action::z_controller::{AutoApproach, SetZSetpoint, Withdraw};
+use rusty_tip::PolaritySign;
 use rusty_tip::action::Action;
 use rusty_tip::action::DataStore;
 use rusty_tip::event::{ConsoleLogger, EventAccumulator, EventBus, FileLogger};
 use rusty_tip::nanonis_controller::NanonisController;
+use rusty_tip::signal_registry::SignalRegistry;
+use rusty_tip::spm_controller::SpmController;
 use rusty_tip::workflow::ShutdownFlag;
 
 use crate::config::{load_config, AppConfig};
@@ -62,8 +67,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .address(&config.nanonis.host_ip)
         .port(config.nanonis.control_ports[0])
         .build()?;
-    let controller = NanonisController::new(client);
+    let mut controller = NanonisController::new(client);
     info!("Connected to Nanonis system");
+
+    // Build signal registry
+    let signal_names = controller.signal_names()?;
+    let registry = build_signal_registry(&signal_names, &config);
+    let freq_shift_signal = registry
+        .get_by_name("freq shift")
+        .ok_or("Frequency shift signal not found in registry")?;
+    info!(
+        "Frequency shift signal: index {}{}",
+        freq_shift_signal.index,
+        freq_shift_signal
+            .tcp_channel
+            .map(|ch| format!(", TCP channel {}", ch))
+            .unwrap_or_default()
+    );
+    let freq_shift_index = freq_shift_signal.index as u32;
 
     // Setup event bus
     let events = setup_event_bus(&config)?;
@@ -75,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wait_for_user_confirmation()?;
 
     // Run tip preparation
-    let result = run_tip_prep(controller, &events, &shutdown, &config);
+    let result = run_tip_prep(controller, &events, &shutdown, &config, freq_shift_index);
 
     match &result {
         Ok(Outcome::Completed) => info!("Tip preparation completed successfully!"),
@@ -107,6 +128,7 @@ fn run_tip_prep(
     events: &EventBus,
     shutdown: &ShutdownFlag,
     config: &AppConfig,
+    freq_shift_index: u32,
 ) -> Result<Outcome, Box<dyn std::error::Error>> {
     let mut store = DataStore::new();
     let mut ctx = ActionContext {
@@ -128,15 +150,13 @@ fn run_tip_prep(
     .execute(&mut ctx)?;
 
     AutoApproach::default().execute(&mut ctx)?;
+    CenterFreqShift.execute(&mut ctx)?;
 
     Wait {
         duration_ms: config.tip_prep.timing.post_approach_settle_ms,
     }
     .execute(&mut ctx)?;
 
-    // Find the frequency shift signal index
-    // TODO: look up by name from signal registry once integrated
-    let freq_shift_index = 0_u32;
     let bounds = (
         config.tip_prep.sharp_tip_bounds[0] as f64,
         config.tip_prep.sharp_tip_bounds[1] as f64,
@@ -148,6 +168,7 @@ fn run_tip_prep(
         .max_duration_secs
         .map(Duration::from_secs);
     let start_time = std::time::Instant::now();
+    let mut pulse_state = PulseState::new(config);
 
     // Main loop: Blunt -> Sharp
     // (Stability checking will be added as a composite action later)
@@ -173,9 +194,23 @@ fn run_tip_prep(
             );
         }
 
-        // Pulse
+        // Read signal before pulse (for pulse strategy decisions)
+        let output = ReadSignal {
+            index: freq_shift_index,
+            ..Default::default()
+        }
+        .execute_and_store(&mut ctx, "freq_shift")?;
+
+        let current_freq_shift = match output {
+            ActionOutput::Value(v) => Some(v),
+            _ => None,
+        };
+
+        // Pulse with strategy-determined voltage (magnitude + polarity sign)
+        pulse_state.update_voltage(config, current_freq_shift);
+        let pulse_voltage = pulse_state.signed_voltage();
         BiasPulse {
-            voltage: get_pulse_voltage(config, cycle),
+            voltage: pulse_voltage,
             duration_ms: config.tip_prep.timing.pulse_width_ms,
             ..Default::default()
         }
@@ -186,7 +221,7 @@ fn run_tip_prep(
         }
         .execute(&mut ctx)?;
 
-        // Read signal and check tip state
+        // Read signal after pulse and check tip state
         let output = ReadSignal {
             index: freq_shift_index,
             ..Default::default()
@@ -201,47 +236,292 @@ fn run_tip_prep(
                     "Tip sharp at cycle {} (freq_shift={:.3} Hz)",
                     cycle, freq_shift
                 );
-                // TODO: stability checking goes here
-                // For now, sharp = done
-                return Ok(Outcome::Completed);
+
+                if !config.tip_prep.stability.check_stability {
+                    info!("Stability checking disabled - accepting sharp tip");
+                    return Ok(Outcome::Completed);
+                }
+
+                // Simplified stability confirmation: re-read 3 times to verify
+                // Full bias sweep stability check will be added later
+                let confirmed = confirm_sharp(
+                    &mut ctx,
+                    freq_shift_index,
+                    bounds,
+                    config,
+                )?;
+
+                if confirmed {
+                    info!("Tip confirmed stable after re-checks");
+                    return Ok(Outcome::Completed);
+                }
+
+                info!("Tip sharpness not confirmed - continuing");
             }
         }
 
-        // Reposition for next cycle
-        // TODO: replace with SafeReposition composite action
-        Withdraw::default().execute(&mut ctx)?;
-
-        Wait {
-            duration_ms: config.tip_prep.timing.post_reposition_settle_ms,
-        }
-        .execute(&mut ctx)?;
-
-        AutoApproach::default().execute(&mut ctx)?;
-
-        Wait {
-            duration_ms: config.tip_prep.timing.post_approach_settle_ms,
-        }
-        .execute(&mut ctx)?;
+        // Reposition for next cycle (withdraw + motor move + approach)
+        reposition(
+            &mut ctx,
+            config.tip_prep.timing.reposition_steps,
+            config.tip_prep.timing.post_reposition_settle_ms,
+            config.tip_prep.timing.post_approach_settle_ms,
+        )?;
     }
 
     Ok(Outcome::CycleLimit(max_cycles))
 }
 
-/// Get pulse voltage for the current cycle.
+/// Withdraw, move motor to a new XY position, and re-approach.
 ///
-/// Currently only supports fixed voltage from config.
-/// Stepping and linear strategies will be added as a PulseStrategy action.
-fn get_pulse_voltage(config: &AppConfig, _cycle: usize) -> f64 {
-    match &config.pulse_method {
-        rusty_tip::PulseMethod::Fixed { voltage, .. } => *voltage as f64,
-        rusty_tip::PulseMethod::Stepping { voltage_bounds, .. } => voltage_bounds.0 as f64,
-        rusty_tip::PulseMethod::Linear { voltage_bounds, .. } => voltage_bounds.0 as f64,
+/// This mirrors the old SafeReposition: withdraw -> motor move (x, y, z=-3) -> settle -> approach -> center -> settle.
+fn reposition(
+    ctx: &mut ActionContext,
+    reposition_steps: [i16; 2],
+    post_reposition_settle_ms: u64,
+    post_approach_settle_ms: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    Withdraw::default().execute(ctx)?;
+
+    MoveMotor3D {
+        x: reposition_steps[0],
+        y: reposition_steps[1],
+        z: -3,
+        wait: true,
+    }
+    .execute(ctx)?;
+
+    Wait {
+        duration_ms: post_reposition_settle_ms,
+    }
+    .execute(ctx)?;
+
+    AutoApproach::default().execute(ctx)?;
+    CenterFreqShift.execute(ctx)?;
+
+    Wait {
+        duration_ms: post_approach_settle_ms,
+    }
+    .execute(ctx)?;
+
+    Ok(())
+}
+
+/// Simplified stability confirmation: reposition and re-read freq_shift 3 times.
+/// All readings must fall within sharp bounds.
+///
+/// Repositioning between each read is critical: a sharp reading at one spot
+/// could be a sample artifact, not an actually sharp tip.
+///
+/// Full bias sweep stability check (from StabilityConfig) will be added later.
+fn confirm_sharp(
+    ctx: &mut ActionContext,
+    freq_shift_index: u32,
+    bounds: (f64, f64),
+    config: &AppConfig,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    const CONFIRMATION_READS: usize = 3;
+
+    for i in 0..CONFIRMATION_READS {
+        reposition(
+            ctx,
+            config.tip_prep.timing.reposition_steps,
+            config.tip_prep.timing.post_reposition_settle_ms,
+            config.tip_prep.timing.post_approach_settle_ms,
+        )?;
+
+        let output = ReadSignal {
+            index: freq_shift_index,
+            ..Default::default()
+        }
+        .execute(ctx)?;
+
+        if let ActionOutput::Value(fs) = output {
+            let in_bounds = fs >= bounds.0 && fs <= bounds.1;
+            info!(
+                "Stability check {}/{}: freq_shift={:.3} Hz, in_bounds={}",
+                i + 1,
+                CONFIRMATION_READS,
+                fs,
+                in_bounds
+            );
+            if !in_bounds {
+                return Ok(false);
+            }
+        }
+    }
+
+    Ok(true)
+}
+
+/// Mutable state for pulse voltage strategies that evolve across cycles.
+struct PulseState {
+    current_voltage: f64,
+    cycles_without_change: usize,
+    last_freq_shift: Option<f64>,
+    /// Base polarity from config
+    base_polarity: PolaritySign,
+    /// Pulse counter for random polarity switching
+    pulse_count: u32,
+    /// Random polarity switch config (cloned from PulseMethod)
+    random_switch: Option<rusty_tip::RandomPolaritySwitch>,
+}
+
+impl PulseState {
+    fn new(config: &AppConfig) -> Self {
+        let (initial_voltage, base_polarity, random_switch) = match &config.pulse_method {
+            rusty_tip::PulseMethod::Fixed {
+                voltage,
+                polarity,
+                random_polarity_switch,
+            } => (*voltage as f64, *polarity, random_polarity_switch.clone()),
+            rusty_tip::PulseMethod::Stepping {
+                voltage_bounds,
+                polarity,
+                random_polarity_switch,
+                ..
+            } => (voltage_bounds.0 as f64, *polarity, random_polarity_switch.clone()),
+            rusty_tip::PulseMethod::Linear {
+                voltage_bounds,
+                polarity,
+                random_polarity_switch,
+                ..
+            } => (voltage_bounds.0 as f64, *polarity, random_polarity_switch.clone()),
+        };
+        Self {
+            current_voltage: initial_voltage,
+            cycles_without_change: 0,
+            last_freq_shift: None,
+            base_polarity,
+            pulse_count: 0,
+            random_switch,
+        }
+    }
+
+    /// Get the signed voltage for the next pulse.
+    ///
+    /// Applies polarity sign and random polarity switching to the magnitude.
+    fn signed_voltage(&mut self) -> f64 {
+        self.pulse_count += 1;
+
+        let effective_polarity = if self.should_use_opposite_polarity() {
+            self.base_polarity.opposite()
+        } else {
+            self.base_polarity
+        };
+
+        let sign = match effective_polarity {
+            PolaritySign::Positive => 1.0,
+            PolaritySign::Negative => -1.0,
+        };
+
+        sign * self.current_voltage
+    }
+
+    fn should_use_opposite_polarity(&self) -> bool {
+        if let Some(ref switch) = self.random_switch {
+            switch.enabled
+                && self.pulse_count > 0
+                && self.pulse_count % switch.switch_every_n_pulses == 0
+        } else {
+            false
+        }
+    }
+
+    /// Update pulse voltage magnitude based on the latest freq_shift reading.
+    fn update_voltage(&mut self, config: &AppConfig, freq_shift: Option<f64>) {
+        match &config.pulse_method {
+            rusty_tip::PulseMethod::Fixed { .. } => {
+                // Fixed: voltage never changes
+            }
+
+            rusty_tip::PulseMethod::Stepping {
+                voltage_bounds,
+                voltage_steps,
+                cycles_before_step,
+                threshold_value,
+                ..
+            } => {
+                let (significant, positive_change) = match (freq_shift, self.last_freq_shift) {
+                    (Some(current), Some(previous)) => {
+                        let change = current - previous;
+                        (change.abs() > *threshold_value as f64, change >= 0.0)
+                    }
+                    _ => (true, true),
+                };
+
+                if significant && positive_change {
+                    // Positive change: tip is improving, reset to minimum voltage
+                    self.cycles_without_change = 0;
+                    self.current_voltage = voltage_bounds.0 as f64;
+                } else if significant {
+                    // Negative significant change: increment counter
+                    self.cycles_without_change += 1;
+                } else {
+                    // No significant change: increment counter
+                    self.cycles_without_change += 1;
+                }
+
+                if self.cycles_without_change >= *cycles_before_step as usize {
+                    let step_size = (voltage_bounds.1 - voltage_bounds.0) as f64
+                        / *voltage_steps as f64;
+                    let new_voltage =
+                        (self.current_voltage + step_size).min(voltage_bounds.1 as f64);
+                    if new_voltage > self.current_voltage {
+                        info!(
+                            "Stepping pulse voltage: {:.3}V -> {:.3}V",
+                            self.current_voltage, new_voltage
+                        );
+                        self.current_voltage = new_voltage;
+                    }
+                    self.cycles_without_change = 0;
+                }
+
+                self.last_freq_shift = freq_shift;
+            }
+
+            rusty_tip::PulseMethod::Linear {
+                voltage_bounds,
+                linear_clamp,
+                ..
+            } => {
+                if let Some(fs) = freq_shift {
+                    if fs < linear_clamp.0 as f64 || fs > linear_clamp.1 as f64 {
+                        self.current_voltage = voltage_bounds.1 as f64;
+                    } else {
+                        let slope = (voltage_bounds.1 - voltage_bounds.0) as f64
+                            / (linear_clamp.1 - linear_clamp.0) as f64;
+                        let intercept = voltage_bounds.0 as f64 - slope * linear_clamp.0 as f64;
+                        self.current_voltage = slope * fs + intercept;
+                    }
+                }
+
+                self.last_freq_shift = freq_shift;
+            }
+        }
     }
 }
 
 // ============================================================================
 // Setup helpers
 // ============================================================================
+
+fn build_signal_registry(signal_names: &[String], config: &AppConfig) -> SignalRegistry {
+    let mut builder = SignalRegistry::builder().with_standard_map();
+
+    if let Some(ref mappings) = config.tcp_channel_mapping {
+        let tcp_map: Vec<(u8, u8)> = mappings
+            .iter()
+            .map(|m| (m.nanonis_index, m.tcp_channel))
+            .collect();
+        builder = builder.add_tcp_map(&tcp_map);
+    }
+
+    builder
+        .from_signal_names(signal_names)
+        .create_aliases()
+        .build()
+}
 
 fn setup_event_bus(config: &AppConfig) -> Result<EventBus, Box<dyn std::error::Error>> {
     let mut events = EventBus::new();
