@@ -3,7 +3,7 @@ use std::time::Duration;
 use nanonis_rs::{
     motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D},
     oscilloscope::{OsciData, TriggerConfig},
-    scan::{ScanAction, ScanDirection},
+    scan::{ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder},
     tcplog::TCPLogStatus,
     tip_recovery::TipShaperConfig,
     Position,
@@ -118,6 +118,10 @@ pub trait SpmController: Send {
         direction: ScanDirection,
     ) -> Result<()>;
     fn scan_status(&mut self) -> Result<bool>;
+    fn scan_props_get(&mut self) -> Result<ScanProps>;
+    fn scan_props_set(&mut self, props: ScanPropsBuilder) -> Result<()>;
+    fn scan_speed_get(&mut self) -> Result<ScanConfig>;
+    fn scan_speed_set(&mut self, config: ScanConfig) -> Result<()>;
 
     // -- Oscilloscope --
     // Combines channel set + trigger config + run + data get
