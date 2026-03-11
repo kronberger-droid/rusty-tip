@@ -3,7 +3,7 @@ use std::time::Duration;
 use nanonis_rs::{
     motor::{MotorDirection, MotorDisplacement, MotorGroup, MovementMode, Position3D},
     oscilloscope::OsciData,
-    scan::{ScanAction, ScanDirection},
+    scan::{ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder},
     tip_recovery::TipShaperConfig,
     NanonisClient, Position,
 };
@@ -252,6 +252,22 @@ impl SpmController for NanonisController {
 
     fn scan_status(&mut self) -> Result<bool> {
         Ok(self.client.scan_status_get()?)
+    }
+
+    fn scan_props_get(&mut self) -> Result<ScanProps> {
+        Ok(self.client.scan_props_get()?)
+    }
+
+    fn scan_props_set(&mut self, props: ScanPropsBuilder) -> Result<()> {
+        Ok(self.client.scan_props_set(props)?)
+    }
+
+    fn scan_speed_get(&mut self) -> Result<ScanConfig> {
+        Ok(self.client.scan_speed_get()?)
+    }
+
+    fn scan_speed_set(&mut self, config: ScanConfig) -> Result<()> {
+        Ok(self.client.scan_config_set(config)?)
     }
 
     // -- Oscilloscope --
