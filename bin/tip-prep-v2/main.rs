@@ -15,10 +15,11 @@ use rusty_tip::action::{ActionContext, ActionOutput};
 use rusty_tip::action::bias::{BiasPulse, SetBias};
 use rusty_tip::action::motor::MoveMotor3D;
 use rusty_tip::action::pll::CenterFreqShift;
+use rusty_tip::action::scan::{ScanActionParam, ScanControl, ScanDirectionParam};
 use rusty_tip::action::signals::ReadSignal;
 use rusty_tip::action::util::Wait;
 use rusty_tip::action::z_controller::{AutoApproach, SetZSetpoint, Withdraw};
-use rusty_tip::PolaritySign;
+use rusty_tip::{BiasSweepPolarity, PolaritySign};
 use rusty_tip::action::Action;
 use rusty_tip::action::DataStore;
 use rusty_tip::event::{ConsoleLogger, EventAccumulator, EventBus, FileLogger};
@@ -237,26 +238,25 @@ fn run_tip_prep(
                     cycle, freq_shift
                 );
 
-                if !config.tip_prep.stability.check_stability {
-                    info!("Stability checking disabled - accepting sharp tip");
-                    return Ok(Outcome::Completed);
-                }
-
-                // Simplified stability confirmation: re-read 3 times to verify
-                // Full bias sweep stability check will be added later
-                let confirmed = confirm_sharp(
+                match check_stability(
                     &mut ctx,
                     freq_shift_index,
                     bounds,
                     config,
-                )?;
-
-                if confirmed {
-                    info!("Tip confirmed stable after re-checks");
-                    return Ok(Outcome::Completed);
+                    shutdown,
+                    &mut pulse_state,
+                )? {
+                    StabilityOutcome::Stable => {
+                        info!("Tip confirmed stable!");
+                        return Ok(Outcome::Completed);
+                    }
+                    StabilityOutcome::NotSharp => {
+                        info!("Tip not confirmed sharp - continuing");
+                    }
+                    StabilityOutcome::Unstable => {
+                        info!("Stability check failed - reset to blunt, continuing");
+                    }
                 }
-
-                info!("Tip sharpness not confirmed - continuing");
             }
         }
 
@@ -307,28 +307,36 @@ fn reposition(
     Ok(())
 }
 
-/// Simplified stability confirmation: reposition and re-read freq_shift 3 times.
-/// All readings must fall within sharp bounds.
+/// Pre-stability confirmation: reposition and re-read freq_shift 3 times.
+/// All readings must fall within sharp bounds to confirm the tip is actually sharp
+/// (not just a sample artifact at one location).
 ///
-/// Repositioning between each read is critical: a sharp reading at one spot
-/// could be a sample artifact, not an actually sharp tip.
-///
-/// Full bias sweep stability check (from StabilityConfig) will be added later.
+/// Returns (confirmed_sharp, baseline_freq_shift).
 fn confirm_sharp(
     ctx: &mut ActionContext,
     freq_shift_index: u32,
     bounds: (f64, f64),
     config: &AppConfig,
-) -> Result<bool, Box<dyn std::error::Error>> {
+    shutdown: &ShutdownFlag,
+) -> Result<(bool, Option<f64>), Box<dyn std::error::Error>> {
     const CONFIRMATION_READS: usize = 3;
+    let mut last_freq_shift = None;
 
     for i in 0..CONFIRMATION_READS {
+        if shutdown.is_requested() {
+            return Err("Shutdown requested during confirmation".into());
+        }
+
         reposition(
             ctx,
             config.tip_prep.timing.reposition_steps,
             config.tip_prep.timing.post_reposition_settle_ms,
             config.tip_prep.timing.post_approach_settle_ms,
         )?;
+
+        if shutdown.is_requested() {
+            return Err("Shutdown requested during confirmation".into());
+        }
 
         let output = ReadSignal {
             index: freq_shift_index,
@@ -339,19 +347,416 @@ fn confirm_sharp(
         if let ActionOutput::Value(fs) = output {
             let in_bounds = fs >= bounds.0 && fs <= bounds.1;
             info!(
-                "Stability check {}/{}: freq_shift={:.3} Hz, in_bounds={}",
+                "Confirmation {}/{}: freq_shift={:.3} Hz, in_bounds={}",
                 i + 1,
                 CONFIRMATION_READS,
                 fs,
                 in_bounds
             );
             if !in_bounds {
-                return Ok(false);
+                return Ok((false, None));
+            }
+            last_freq_shift = Some(fs);
+        }
+    }
+
+    Ok((true, last_freq_shift))
+}
+
+// ============================================================================
+// Stability sweep
+// ============================================================================
+
+/// A single bias sweep plan.
+struct SweepPlan {
+    starting_bias: f64,
+    bias_range: (f64, f64),
+    index: usize,
+    total: usize,
+}
+
+/// Build sweep plans based on polarity mode.
+fn build_sweep_plans(config: &AppConfig) -> Vec<SweepPlan> {
+    let sc = &config.tip_prep.stability;
+    let range = sc.bias_range;
+
+    match sc.polarity_mode {
+        BiasSweepPolarity::Positive => vec![SweepPlan {
+            starting_bias: range.1 as f64,
+            bias_range: (range.1 as f64, range.0 as f64),
+            index: 1,
+            total: 1,
+        }],
+        BiasSweepPolarity::Negative => vec![SweepPlan {
+            starting_bias: -(range.1 as f64),
+            bias_range: (-(range.1 as f64), -(range.0 as f64)),
+            index: 1,
+            total: 1,
+        }],
+        BiasSweepPolarity::Both => vec![
+            SweepPlan {
+                starting_bias: range.1 as f64,
+                bias_range: (range.1 as f64, range.0 as f64),
+                index: 1,
+                total: 2,
+            },
+            SweepPlan {
+                starting_bias: -(range.1 as f64),
+                bias_range: (-(range.1 as f64), -(range.0 as f64)),
+                index: 2,
+                total: 2,
+            },
+        ],
+    }
+}
+
+/// Prepare for a stability sweep: withdraw, motor move, set bias, approach.
+fn prepare_for_sweep(
+    ctx: &mut ActionContext,
+    plan: &SweepPlan,
+    config: &AppConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    Withdraw::default().execute(ctx)?;
+
+    MoveMotor3D {
+        x: config.tip_prep.timing.reposition_steps[0],
+        y: config.tip_prep.timing.reposition_steps[1],
+        z: -3,
+        wait: true,
+    }
+    .execute(ctx)?;
+
+    Wait { duration_ms: 200 }.execute(ctx)?;
+
+    SetBias {
+        voltage: plan.starting_bias,
+    }
+    .execute(ctx)?;
+
+    AutoApproach::default().execute(ctx)?;
+    CenterFreqShift.execute(ctx)?;
+
+    Wait {
+        duration_ms: config.tip_prep.timing.post_approach_settle_ms,
+    }
+    .execute(ctx)?;
+
+    Ok(())
+}
+
+/// Execute a single stability sweep: start scan, step bias through range,
+/// read freq_shift at each step via ReadSignal.
+fn execute_stability_sweep(
+    ctx: &mut ActionContext,
+    plan: &SweepPlan,
+    config: &AppConfig,
+    shutdown: &ShutdownFlag,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let sc = &config.tip_prep.stability;
+
+    info!(
+        "Sweep {}/{}: bias {:.2}V -> {:.2}V",
+        plan.index, plan.total, plan.bias_range.0, plan.bias_range.1
+    );
+
+    // Configure scan for stability check: continuous + bouncy
+    use nanonis_rs::scan::ScanPropsBuilder;
+    let original_props = ctx.controller.scan_props_get()?;
+    ctx.controller.scan_props_set(
+        ScanPropsBuilder::new()
+            .continuous_scan(true)
+            .bouncy_scan(true),
+    )?;
+
+    // Start scan
+    ScanControl {
+        action: ScanActionParam::Start,
+        direction: ScanDirectionParam::Down,
+    }
+    .execute(ctx)?;
+
+    // Wait for scan to actually start (max 5 seconds)
+    let mut scan_started = false;
+    for _ in 0..50 {
+        if shutdown.is_requested() {
+            let _ = ScanControl {
+                action: ScanActionParam::Stop,
+                direction: ScanDirectionParam::Up,
+            }
+            .execute(ctx);
+            restore_scan_props(ctx, &original_props);
+            return Err("Shutdown requested".into());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        if ctx.controller.scan_status()? {
+            scan_started = true;
+            break;
+        }
+    }
+
+    if !scan_started {
+        restore_scan_props(ctx, &original_props);
+        return Err("Scan failed to start within 5 seconds".into());
+    }
+
+    // Step bias through range
+    let bias_step_size =
+        (plan.bias_range.1 - plan.bias_range.0) / sc.bias_steps as f64;
+    let mut current_bias = plan.bias_range.0;
+    let step_duration = Duration::from_millis(sc.step_period_ms);
+
+    for step in 0..sc.bias_steps {
+        if shutdown.is_requested() {
+            let _ = ScanControl {
+                action: ScanActionParam::Stop,
+                direction: ScanDirectionParam::Up,
+            }
+            .execute(ctx);
+            restore_scan_props(ctx, &original_props);
+            return Err("Shutdown requested".into());
+        }
+
+        SetBias {
+            voltage: current_bias,
+        }
+        .execute(ctx)?;
+
+        log::debug!(
+            "Step {}/{}: bias={:.3}V",
+            step + 1,
+            sc.bias_steps,
+            current_bias
+        );
+
+        // Interruptible sleep
+        interruptible_sleep(step_duration, shutdown)?;
+
+        current_bias += bias_step_size;
+    }
+
+    info!("Bias sweep completed");
+
+    // Stop scan
+    let _ = ScanControl {
+        action: ScanActionParam::Stop,
+        direction: ScanDirectionParam::Up,
+    }
+    .execute(ctx);
+
+    // Restore scan properties
+    restore_scan_props(ctx, &original_props);
+
+    Ok(())
+}
+
+/// Restore scan properties after stability sweep.
+fn restore_scan_props(ctx: &mut ActionContext, original: &nanonis_rs::scan::ScanProps) {
+    let builder = original.to_builder();
+    if let Err(e) = ctx.controller.scan_props_set(builder) {
+        log::error!("Failed to restore scan properties: {}", e);
+    }
+}
+
+/// After all sweeps: withdraw, restore initial bias, approach, read freq_shift.
+fn measure_final_freq_shift(
+    ctx: &mut ActionContext,
+    config: &AppConfig,
+    freq_shift_index: u32,
+) -> Result<Option<f64>, Box<dyn std::error::Error>> {
+    info!("Measuring final freq_shift after sweeps");
+
+    Withdraw::default().execute(ctx)?;
+    Wait { duration_ms: 200 }.execute(ctx)?;
+
+    SetBias {
+        voltage: config.tip_prep.initial_bias_v as f64,
+    }
+    .execute(ctx)?;
+
+    AutoApproach::default().execute(ctx)?;
+    CenterFreqShift.execute(ctx)?;
+
+    Wait {
+        duration_ms: config.tip_prep.timing.post_approach_settle_ms,
+    }
+    .execute(ctx)?;
+
+    let output = ReadSignal {
+        index: freq_shift_index,
+        ..Default::default()
+    }
+    .execute(ctx)?;
+
+    match output {
+        ActionOutput::Value(v) => Ok(Some(v)),
+        _ => Ok(None),
+    }
+}
+
+/// Full stability check: confirm sharpness, then run bias sweeps,
+/// then compare baseline vs final freq_shift.
+///
+/// Returns Ok(true) if tip is stable, Ok(false) if not.
+fn check_stability(
+    ctx: &mut ActionContext,
+    freq_shift_index: u32,
+    bounds: (f64, f64),
+    config: &AppConfig,
+    shutdown: &ShutdownFlag,
+    pulse_state: &mut PulseState,
+) -> Result<StabilityOutcome, Box<dyn std::error::Error>> {
+    // Step 1: Confirm sharpness with repositioning (3 reads)
+    let (confirmed, baseline) = confirm_sharp(ctx, freq_shift_index, bounds, config, shutdown)?;
+
+    if !confirmed {
+        info!("Tip not confirmed sharp during pre-check");
+        return Ok(StabilityOutcome::NotSharp);
+    }
+
+    if !config.tip_prep.stability.check_stability {
+        info!("Stability checking disabled - accepting sharp tip");
+        return Ok(StabilityOutcome::Stable);
+    }
+
+    let baseline = match baseline {
+        Some(v) => v,
+        None => {
+            error!("No baseline freq_shift available");
+            return Ok(StabilityOutcome::NotSharp);
+        }
+    };
+
+    info!("Baseline freq_shift: {:.3} Hz", baseline);
+
+    // Step 2: Save and set scan speed
+    let original_speed = if config.tip_prep.stability.scan_speed_m_s.is_some() {
+        match ctx.controller.scan_speed_get() {
+            Ok(speed) => Some(speed),
+            Err(e) => {
+                log::warn!("Could not read scan speed: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(target_speed) = config.tip_prep.stability.scan_speed_m_s {
+        if let Some(ref orig) = original_speed {
+            let mut new_config = *orig;
+            new_config.forward_linear_speed_m_s = target_speed;
+            new_config.backward_linear_speed_m_s = target_speed;
+            new_config.keep_parameter_constant = 1; // keep linear speed constant
+            if let Err(e) = ctx.controller.scan_speed_set(new_config) {
+                log::warn!("Failed to set scan speed: {}", e);
+            } else {
+                info!("Set scan speed to {:.2e} m/s for stability check", target_speed);
             }
         }
     }
 
-    Ok(true)
+    // Step 3: Run sweep plans
+    let sweep_plans = build_sweep_plans(config);
+    info!(
+        "Starting stability check: {:?} polarity, {} sweep(s)",
+        config.tip_prep.stability.polarity_mode,
+        sweep_plans.len()
+    );
+
+    for plan in &sweep_plans {
+        if shutdown.is_requested() {
+            restore_scan_speed(ctx, original_speed);
+            return Err("Shutdown requested".into());
+        }
+
+        prepare_for_sweep(ctx, plan, config)?;
+        execute_stability_sweep(ctx, plan, config, shutdown)?;
+    }
+
+    // Step 4: Restore scan speed
+    restore_scan_speed(ctx, original_speed);
+
+    // Step 5: Measure final freq_shift
+    let final_fs = measure_final_freq_shift(ctx, config, freq_shift_index)?;
+
+    let final_fs = match final_fs {
+        Some(v) => v,
+        None => {
+            error!("Failed to read final freq_shift");
+            return Ok(StabilityOutcome::NotSharp);
+        }
+    };
+
+    // Step 6: Compare
+    let change = (final_fs - baseline).abs();
+    let threshold = config.tip_prep.stability.stable_tip_allowed_change as f64;
+    let is_stable = change <= threshold;
+
+    info!(
+        "Stability: baseline={:.3} Hz, final={:.3} Hz, change={:.3} Hz, threshold={:.3} Hz, stable={}",
+        baseline, final_fs, change, threshold, is_stable
+    );
+
+    if is_stable {
+        Ok(StabilityOutcome::Stable)
+    } else {
+        // Fire max pulse and reset to blunt
+        info!("Stability failed - executing max voltage pulse");
+        let max_voltage = pulse_state.signed_voltage().abs().max(
+            match &config.pulse_method {
+                rusty_tip::PulseMethod::Fixed { voltage, .. } => *voltage as f64,
+                rusty_tip::PulseMethod::Stepping { voltage_bounds, .. } => voltage_bounds.1 as f64,
+                rusty_tip::PulseMethod::Linear { voltage_bounds, .. } => voltage_bounds.1 as f64,
+            },
+        );
+        BiasPulse {
+            voltage: max_voltage,
+            duration_ms: config.tip_prep.timing.pulse_width_ms,
+            ..Default::default()
+        }
+        .execute(ctx)?;
+
+        reposition(
+            ctx,
+            config.tip_prep.timing.reposition_steps,
+            config.tip_prep.timing.post_reposition_settle_ms,
+            config.tip_prep.timing.post_approach_settle_ms,
+        )?;
+
+        Ok(StabilityOutcome::Unstable)
+    }
+}
+
+fn restore_scan_speed(ctx: &mut ActionContext, original: Option<nanonis_rs::scan::ScanConfig>) {
+    if let Some(config) = original {
+        if let Err(e) = ctx.controller.scan_speed_set(config) {
+            log::error!("Failed to restore scan speed: {}", e);
+        }
+    }
+}
+
+/// Sleep in small chunks so shutdown can interrupt.
+fn interruptible_sleep(
+    duration: Duration,
+    shutdown: &ShutdownFlag,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let chunk = Duration::from_millis(10);
+    let mut remaining = duration;
+    while remaining > Duration::ZERO {
+        if shutdown.is_requested() {
+            return Err("Shutdown requested".into());
+        }
+        let sleep_for = remaining.min(chunk);
+        std::thread::sleep(sleep_for);
+        remaining = remaining.saturating_sub(sleep_for);
+    }
+    Ok(())
+}
+
+enum StabilityOutcome {
+    Stable,
+    NotSharp,
+    Unstable,
 }
 
 /// Mutable state for pulse voltage strategies that evolve across cycles.
