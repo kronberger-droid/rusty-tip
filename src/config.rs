@@ -2,7 +2,7 @@ use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use rusty_tip::{PulseMethod, StabilityConfig};
+use crate::controller_types::{PulseMethod, StabilityConfig};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TcpChannelMapping {
@@ -200,6 +200,9 @@ impl Default for TipPrepConfig {
     }
 }
 
+/// Load configuration from a required config file path.
+///
+/// Returns an error if the file does not exist or is invalid.
 pub fn load_config(config_path: &Path) -> Result<AppConfig, ConfigError> {
     let mut builder = Config::builder();
 
@@ -222,4 +225,80 @@ pub fn load_config(config_path: &Path) -> Result<AppConfig, ConfigError> {
     let app_config = config.try_deserialize::<AppConfig>()?;
     app_config.validate()?;
     Ok(app_config)
+}
+
+/// Load configuration with optional path and fallback behavior.
+///
+/// - If a path is provided and the file exists, loads from that file.
+/// - If a path is provided but the file doesn't exist, returns an error.
+/// - If no path is provided, tries common locations, then falls back to defaults.
+pub fn load_config_with_fallback(config_path: Option<&Path>) -> Result<AppConfig, ConfigError> {
+    let mut builder = Config::builder();
+    let mut config_file_found = false;
+
+    if let Some(path) = config_path {
+        if path.exists() {
+            builder = builder.add_source(File::from(path));
+            config_file_found = true;
+        } else {
+            return Err(ConfigError::Message(format!(
+                "Config file not found: {}",
+                path.display()
+            )));
+        }
+    } else {
+        let possible_paths = [
+            "config.toml",
+            "base_config.toml",
+            "examples/base_config.toml",
+        ];
+
+        for path in &possible_paths {
+            if Path::new(path).exists() {
+                builder = builder.add_source(File::with_name(path));
+                config_file_found = true;
+                break;
+            }
+        }
+    }
+
+    if !config_file_found {
+        builder = builder.add_source(Config::try_from(&AppConfig::default())?);
+    }
+
+    builder = builder.add_source(
+        Environment::with_prefix("RUSTY_TIP")
+            .separator("__")
+            .try_parsing(true),
+    );
+
+    let config = builder.build()?;
+    let app_config = config.try_deserialize::<AppConfig>()?;
+    app_config.validate()?;
+    Ok(app_config)
+}
+
+/// Load configuration with error handling for CLI use.
+///
+/// If a config path is provided and loading fails, this function will panic.
+/// If no config path is provided, falls back to defaults.
+pub fn load_config_or_default(config_path: Option<&Path>) -> AppConfig {
+    match load_config_with_fallback(config_path) {
+        Ok(config) => {
+            log::info!("Configuration loaded successfully");
+            config
+        }
+        Err(e) => {
+            if config_path.is_some() {
+                panic!(
+                    "Failed to load configuration: {}\n\
+                    Please fix the configuration file or remove the --config argument to use defaults.",
+                    e
+                );
+            } else {
+                log::warn!("No configuration file found, using defaults");
+                AppConfig::default()
+            }
+        }
+    }
 }

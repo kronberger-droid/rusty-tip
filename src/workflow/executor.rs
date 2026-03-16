@@ -414,6 +414,9 @@ mod tests {
         fn set_z_home(&mut self, _m: nanonis_rs::z_ctrl::ZHomeMode, _p: f64) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
+        fn go_z_home(&mut self) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
         fn get_position(&mut self, _w: bool) -> crate::spm_controller::Result<Position> {
             Err(SpmError::Unsupported("mock".into()))
         }
@@ -466,6 +469,12 @@ mod tests {
             Err(SpmError::Unsupported("mock".into()))
         }
         fn safe_tip_status(&mut self) -> crate::spm_controller::Result<(bool, bool, f64)> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn safe_tip_set_enabled(&mut self, _e: bool) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn safe_tip_enabled(&mut self) -> crate::spm_controller::Result<bool> {
             Err(SpmError::Unsupported("mock".into()))
         }
         fn data_stream_configure(&mut self, _c: &[i32], _o: i32) -> crate::spm_controller::Result<()> {

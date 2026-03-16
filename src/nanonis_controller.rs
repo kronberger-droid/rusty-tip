@@ -413,6 +413,10 @@ impl SpmController for NanonisController {
             .map_err(Into::into)
     }
 
+    fn go_z_home(&mut self) -> Result<()> {
+        Ok(self.client.z_ctrl_home()?)
+    }
+
     // -- Piezo Positioning (FolMe) --
 
     fn get_position(&mut self, wait_for_newest: bool) -> Result<Position> {
@@ -598,6 +602,14 @@ impl SpmController for NanonisController {
             .safe_tip_props_get()
             .map_err(SpmError::from)?;
         Ok((recovery, pause, threshold as f64))
+    }
+
+    fn safe_tip_set_enabled(&mut self, enabled: bool) -> Result<()> {
+        Ok(self.client.safe_tip_on_off_set(enabled)?)
+    }
+
+    fn safe_tip_enabled(&mut self) -> Result<bool> {
+        Ok(self.client.safe_tip_on_off_get()?)
     }
 
     // -- Data Stream (TCP Logger) --

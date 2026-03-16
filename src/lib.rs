@@ -1,7 +1,9 @@
 pub mod action;
 pub mod action_driver;
 pub mod analyzer;
+pub mod config;
 pub mod event;
+pub mod tip_prep;
 pub mod workflow;
 pub mod actions;
 pub mod buffered_tcp_reader;
