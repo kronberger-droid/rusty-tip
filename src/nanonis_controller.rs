@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use nanonis_rs::{
@@ -10,17 +11,62 @@ use nanonis_rs::{
 
 use std::collections::HashSet;
 
-use crate::spm_controller::{AcquisitionMode, Capability, DataStreamStatus, Result, SpmController, TriggerSetup};
+use crate::buffered_tcp_reader::BufferedTCPReader;
+use crate::spm_controller::{AcquisitionMode, Capability, DataStreamStatus, Result, SpmController, TriggerSetup, ZHomeMode};
 use crate::spm_error::SpmError;
 use crate::utils::{poll_until, PollError};
 
+/// Configuration consumed by `NanonisController::prepare()`.
+///
+/// Captures all the vendor-specific setup values that `prepare` needs so
+/// the binary doesn't have to poke the controller directly.
+pub struct NanonisSetupConfig {
+    /// Nanonis layout file to load (absolute or relative path). `None` to skip.
+    pub layout_file: Option<String>,
+    /// Nanonis settings file to load. `None` to skip.
+    pub settings_file: Option<String>,
+    /// Z-controller home mode.
+    pub z_home_mode: ZHomeMode,
+    /// Z-controller home position in metres.
+    pub z_home_position_m: f64,
+    /// Safe-tip current threshold in amperes.
+    pub safe_tip_threshold_a: f64,
+    /// Which User Output index to toggle for the TCP channel list refresh
+    /// workaround.  `None` skips the workaround entirely.  Default is
+    /// `Some(3)`.  Pick an output that is not driving anything critical.
+    pub tcp_refresh_output: Option<i32>,
+}
+
+impl Default for NanonisSetupConfig {
+    fn default() -> Self {
+        Self {
+            layout_file: None,
+            settings_file: None,
+            z_home_mode: ZHomeMode::Absolute,
+            z_home_position_m: 50e-9,
+            safe_tip_threshold_a: 1e-9,
+            tcp_refresh_output: Some(3),
+        }
+    }
+}
+
 pub struct NanonisController {
     client: NanonisClient,
+    setup: NanonisSetupConfig,
+    tcp_reader: Option<BufferedTCPReader>,
+    /// Maps Nanonis signal index -> position in SignalFrame.data array.
+    /// Set by the caller via `set_channel_mapping` before starting the TCP reader.
+    signal_to_data_position: HashMap<u32, usize>,
 }
 
 impl NanonisController {
-    pub fn new(client: NanonisClient) -> Self {
-        Self { client }
+    pub fn new(client: NanonisClient, setup: NanonisSetupConfig) -> Self {
+        Self {
+            client,
+            setup,
+            tcp_reader: None,
+            signal_to_data_position: HashMap::new(),
+        }
     }
 
     /// Access the underlying NanonisClient directly for operations
@@ -31,6 +77,101 @@ impl NanonisController {
 
     pub fn client_mut(&mut self) -> &mut NanonisClient {
         &mut self.client
+    }
+
+    /// Set the mapping from Nanonis signal indices to TCP data array positions.
+    ///
+    /// The caller should compute this from their `SignalRegistry`: for each signal
+    /// of interest, find its `tcp_channel` and then its position in the configured
+    /// channel list (the order passed to `data_stream_configure`).
+    pub fn set_channel_mapping(&mut self, mapping: HashMap<u32, usize>) {
+        self.signal_to_data_position = mapping;
+        log::debug!(
+            "Channel mapping set: {} signals mapped to data positions",
+            self.signal_to_data_position.len()
+        );
+    }
+
+    /// Start the background TCP data stream for stable signal reading.
+    ///
+    /// Call `set_channel_mapping` and `data_stream_configure` before this.
+    /// Connects to the TCP logger data port and spawns the background
+    /// buffering thread.
+    pub fn start_tcp_reader(
+        &mut self,
+        host: &str,
+        data_port: u16,
+        buffer_size: usize,
+    ) -> Result<()> {
+        if self.tcp_reader.is_some() {
+            log::warn!("TCP reader already running, stopping previous instance");
+            self.stop_tcp_reader()?;
+        }
+
+        let num_channels = self.signal_to_data_position.len() as u32;
+
+        if num_channels == 0 {
+            return Err(SpmError::Protocol(
+                "No channels configured. Call set_channel_mapping before start_tcp_reader".into(),
+            ));
+        }
+
+        let reader = BufferedTCPReader::new(
+            host,
+            data_port,
+            buffer_size,
+            num_channels,
+            1.0,
+        )
+        .map_err(|e| SpmError::Protocol(format!("Failed to start TCP reader: {}", e)))?;
+
+        self.tcp_reader = Some(reader);
+        log::info!(
+            "TCP reader started on {}:{} with {} channels",
+            host, data_port, num_channels
+        );
+        Ok(())
+    }
+
+    /// Stop the background TCP reader if running.
+    pub fn stop_tcp_reader(&mut self) -> Result<()> {
+        if let Some(mut reader) = self.tcp_reader.take() {
+            reader
+                .stop()
+                .map_err(|e| SpmError::Protocol(format!("Failed to stop TCP reader: {}", e)))?;
+        }
+        Ok(())
+    }
+
+    /// Clear the TCP reader buffer (discard stale data before a fresh measurement).
+    pub fn clear_tcp_buffer(&self) {
+        if let Some(reader) = &self.tcp_reader {
+            reader.clear_buffer();
+        }
+    }
+
+    /// Nanonis workaround: toggle a User Output mode to force the TCP
+    /// channel list to refresh.  Works around a known Nanonis bug where
+    /// signal slot assignments are stale until any User Output is modified.
+    ///
+    /// `output_index` selects which User Output to toggle.  Pick one that
+    /// is not driving anything critical (default: 3).
+    fn refresh_tcp_channel_list(&mut self, output_index: i32) -> Result<()> {
+        use nanonis_rs::user_out::OutputMode;
+
+        let current_mode = self.client.user_out_mode_get(output_index)
+            .map_err(|e| SpmError::Protocol(format!("user_out_mode_get failed: {}", e)))?;
+        let toggle_to = match current_mode {
+            OutputMode::UserOutput => OutputMode::Monitor,
+            OutputMode::Monitor => OutputMode::CalcSignal,
+            _ => OutputMode::Monitor,
+        };
+        self.client.user_out_mode_set(output_index, toggle_to)
+            .map_err(|e| SpmError::Protocol(format!("user_out_mode_set failed: {}", e)))?;
+        self.client.user_out_mode_set(output_index, current_mode)
+            .map_err(|e| SpmError::Protocol(format!("user_out_mode_set failed: {}", e)))?;
+        log::debug!("TCP channel list refresh workaround applied (output {})", output_index);
+        Ok(())
     }
 }
 
@@ -47,7 +188,63 @@ impl SpmController for NanonisController {
             Capability::TipShaper,
             Capability::Pll,
             Capability::DataStream,
+            Capability::SafeTip,
         ])
+    }
+
+    // -- Lifecycle --
+
+    fn prepare(&mut self) -> Result<()> {
+        // Load layout file if specified
+        if let Some(ref path) = self.setup.layout_file {
+            let abs = std::path::Path::new(path)
+                .canonicalize()
+                .map_err(|e| SpmError::Protocol(format!("Layout file not found: {} ({})", path, e)))?;
+            self.client.util_layout_load(&abs.to_string_lossy(), false)?;
+            log::info!("Layout loaded: {}", abs.display());
+        }
+
+        // Load settings file if specified
+        if let Some(ref path) = self.setup.settings_file {
+            let abs = std::path::Path::new(path)
+                .canonicalize()
+                .map_err(|e| SpmError::Protocol(format!("Settings file not found: {} ({})", path, e)))?;
+            self.client.util_settings_load(&abs.to_string_lossy(), false)?;
+            log::info!("Settings loaded: {}", abs.display());
+        }
+
+        // Z-controller home position
+        self.set_z_home(self.setup.z_home_mode, self.setup.z_home_position_m)?;
+        log::info!(
+            "Z home: mode={:?}, pos={:.0} nm",
+            self.setup.z_home_mode,
+            self.setup.z_home_position_m * 1e9
+        );
+
+        // Safe-tip protection (auto_recovery off, auto_pause_scan on)
+        self.safe_tip_configure(false, true, self.setup.safe_tip_threshold_a)?;
+        log::info!("Safe-tip threshold: {:.2e} A", self.setup.safe_tip_threshold_a);
+
+        // Nanonis workaround: toggle a User Output mode to refresh TCP channel list
+        if let Some(output_index) = self.setup.tcp_refresh_output {
+            self.refresh_tcp_channel_list(output_index)?;
+        }
+
+        Ok(())
+    }
+
+    fn teardown(&mut self) {
+        if let Err(e) = self.data_stream_stop() {
+            log::debug!("Data stream stop: {}", e);
+        }
+        if let Err(e) = self.stop_tcp_reader() {
+            log::debug!("TCP reader stop: {}", e);
+        }
+        // Restore threshold from config rather than zeroing it -- if this
+        // partially succeeds, the hardware stays at a safe protection level.
+        if let Err(e) = self.safe_tip_configure(false, false, self.setup.safe_tip_threshold_a) {
+            log::warn!("Failed to disable safe tip: {}", e);
+        }
     }
 
     // -- Signals --
@@ -159,6 +356,12 @@ impl SpmController for NanonisController {
         Ok(self.client.z_ctrl_setpoint_set(setpoint as f32)?)
     }
 
+    fn set_z_home(&mut self, mode: ZHomeMode, position: f64) -> Result<()> {
+        self.client
+            .z_ctrl_home_props_set(mode, position as f32)
+            .map_err(Into::into)
+    }
+
     // -- Piezo Positioning (FolMe) --
 
     fn get_position(&mut self, wait_for_newest: bool) -> Result<Position> {
@@ -185,9 +388,6 @@ impl SpmController for NanonisController {
         displacement: MotorDisplacement,
         wait: bool,
     ) -> Result<()> {
-        // Decompose 3D displacement into sequential single-axis moves.
-        // Each axis is moved independently since motor_start_move only
-        // handles one axis at a time.
         if displacement.x != 0 {
             let dir = if displacement.x > 0 {
                 MotorDirection::XPlus
@@ -320,6 +520,26 @@ impl SpmController for NanonisController {
         Ok(self.client.pll_freq_shift_auto_center(1)?)
     }
 
+    // -- Safe Tip --
+
+    fn safe_tip_configure(
+        &mut self,
+        auto_recovery: bool,
+        auto_pause_scan: bool,
+        threshold: f64,
+    ) -> Result<()> {
+        self.client
+            .safe_tip_props_set(auto_recovery, auto_pause_scan, threshold as f32)
+            .map_err(Into::into)
+    }
+
+    fn safe_tip_status(&mut self) -> Result<(bool, bool, f64)> {
+        let (recovery, pause, threshold) = self.client
+            .safe_tip_props_get()
+            .map_err(SpmError::from)?;
+        Ok((recovery, pause, threshold as f64))
+    }
+
     // -- Data Stream (TCP Logger) --
 
     fn data_stream_configure(&mut self, channels: &[i32], oversampling: i32) -> Result<()> {
@@ -338,5 +558,79 @@ impl SpmController for NanonisController {
 
     fn data_stream_status(&mut self) -> Result<DataStreamStatus> {
         Ok(self.client.tcplog_status_get()?)
+    }
+
+    fn clear_data_buffer(&mut self) {
+        self.clear_tcp_buffer();
+    }
+
+    // -- Stable Signal Reading (TCP stream override) --
+
+    fn read_stable_signal(
+        &mut self,
+        index: u32,
+        num_samples: usize,
+    ) -> Result<f64> {
+        let reader = match &self.tcp_reader {
+            Some(r) => r,
+            None => {
+                // Fall back to polling read_signal if no TCP reader
+                log::debug!("No TCP reader available, falling back to polling read_signal");
+                let mut sum = 0.0;
+                for _ in 0..num_samples {
+                    sum += self.read_signal(index, true)?;
+                }
+                return Ok(sum / num_samples as f64);
+            }
+        };
+
+        let &data_position = self.signal_to_data_position.get(&index).ok_or_else(|| {
+            SpmError::Protocol(format!(
+                "Signal index {} has no TCP channel mapping. \
+                 Call set_channel_mapping with a mapping that includes this signal.",
+                index
+            ))
+        })?;
+
+        // Collect frames from the TCP stream
+        let timeout = Duration::from_secs(5);
+        let start = std::time::Instant::now();
+        let mut collected: Vec<f32> = Vec::with_capacity(num_samples);
+
+        while collected.len() < num_samples && start.elapsed() < timeout {
+            let frames = reader.get_recent_data(Duration::from_millis(100));
+            for frame in frames {
+                if collected.len() >= num_samples {
+                    break;
+                }
+                if let Some(&value) = frame.signal_frame.data.get(data_position) {
+                    collected.push(value);
+                }
+            }
+            if collected.len() < num_samples {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+
+        if collected.is_empty() {
+            return Err(SpmError::Timeout(
+                "No TCP stream data collected within timeout".into(),
+            ));
+        }
+
+        let mean = collected.iter().map(|&v| v as f64).sum::<f64>() / collected.len() as f64;
+
+        log::debug!(
+            "read_stable_signal: index={}, collected={}/{} samples, mean={:.6}",
+            index, collected.len(), num_samples, mean
+        );
+
+        Ok(mean)
+    }
+}
+
+impl Drop for NanonisController {
+    fn drop(&mut self) {
+        self.teardown();
     }
 }

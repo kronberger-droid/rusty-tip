@@ -24,6 +24,9 @@ pub enum SpmError {
     /// Operation not supported by the current controller
     #[error("Unsupported: {0}")]
     Unsupported(String),
+    /// Clean shutdown requested by user (e.g. Ctrl+C)
+    #[error("Shutdown requested by user")]
+    ShutdownRequested,
 }
 
 impl From<nanonis_rs::NanonisError> for SpmError {
