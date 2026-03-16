@@ -43,10 +43,17 @@ pub struct NanonisConfig {
     pub settings_file: Option<String>,
 }
 
+fn default_stable_signal_samples() -> usize {
+    100
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DataAcquisitionConfig {
     pub data_port: u16,
     pub sample_rate: u32,
+    /// Number of TCP stream samples to average for a stable signal read.
+    #[serde(default = "default_stable_signal_samples")]
+    pub stable_signal_samples: usize,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -156,6 +163,7 @@ impl Default for DataAcquisitionConfig {
         Self {
             data_port: 6590,
             sample_rate: 2000,
+            stable_signal_samples: default_stable_signal_samples(),
         }
     }
 }

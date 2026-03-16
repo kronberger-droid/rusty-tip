@@ -1,6 +1,7 @@
 use crossbeam_channel::Sender;
 use log::info;
 use nanonis_rs::signals::SignalIndex;
+use nanonis_rs::z_ctrl::ZHomeMode;
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1202,7 +1203,7 @@ impl TipController {
         let home_position_m = 50e-9;
         self.driver
             .client_mut()
-            .z_ctrl_home_props_set(2, home_position_m)?;
+            .z_ctrl_home_props_set(ZHomeMode::Absolute, home_position_m)?;
 
         // Set correct safe tip config
         let safe_tip_threshold = self.config.safe_tip_threshold;

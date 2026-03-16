@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+pub use nanonis_rs::z_ctrl::ZHomeMode;
+
 use nanonis_rs::{
     motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D},
     oscilloscope::{OsciData, TriggerConfig},
@@ -46,6 +48,8 @@ pub enum Capability {
     Pll,
     /// High-throughput data streaming (data_stream_*)
     DataStream,
+    /// Tip-crash protection (safe_tip_configure, safe_tip_status)
+    SafeTip,
 }
 
 /// What data the oscilloscope should return
@@ -61,6 +65,19 @@ pub enum AcquisitionMode {
 pub trait SpmController: Send {
     /// Report which capabilities this controller supports.
     fn capabilities(&self) -> HashSet<Capability>;
+
+    // -- Lifecycle --
+
+    /// One-time hardware setup: load configuration, set safe operating
+    /// defaults, apply vendor-specific workarounds.  Called once before
+    /// the main experiment loop.  Default is a no-op.
+    fn prepare(&mut self) -> Result<()> { Ok(()) }
+
+    /// Best-effort resource cleanup: stop data streams, disable safety
+    /// overrides, release hardware locks.  Implementations should log
+    /// errors internally rather than propagating, since teardown must
+    /// not short-circuit.  Default is a no-op.
+    fn teardown(&mut self) {}
 
     // -- Signals --
     fn read_signal(&mut self, index: u32, wait_for_newest: bool)
@@ -87,6 +104,7 @@ pub trait SpmController: Send {
     fn withdraw(&mut self, wait: bool, timeout: Duration) -> Result<()>;
     fn auto_approach(&mut self, wait: bool, timeout: Duration) -> Result<()>;
     fn set_z_setpoint(&mut self, setpoint: f64) -> Result<()>;
+    fn set_z_home(&mut self, mode: ZHomeMode, position: f64) -> Result<()>;
 
     // -- Piezo Positioning (FolMe) --
     fn get_position(&mut self, wait_for_newest: bool) -> Result<Position>;
@@ -144,6 +162,15 @@ pub trait SpmController: Send {
     // -- PLL --
     fn pll_center_freq_shift(&mut self) -> Result<()>;
 
+    // -- Safe Tip --
+    fn safe_tip_configure(
+        &mut self,
+        auto_recovery: bool,
+        auto_pause_scan: bool,
+        threshold: f64,
+    ) -> Result<()>;
+    fn safe_tip_status(&mut self) -> Result<(bool, bool, f64)>;
+
     // -- TCP Logger --
     fn data_stream_configure(
         &mut self,
@@ -153,4 +180,31 @@ pub trait SpmController: Send {
     fn data_stream_start(&mut self) -> Result<()>;
     fn data_stream_stop(&mut self) -> Result<()>;
     fn data_stream_status(&mut self) -> Result<DataStreamStatus>;
+
+    /// Discard any buffered data samples so the next read_stable_signal
+    /// returns only fresh post-operation data.  Default is a no-op for
+    /// controllers without internal buffering.
+    fn clear_data_buffer(&mut self) {}
+
+    // -- Stable Signal Reading --
+
+    /// Read a noise-reduced signal value by averaging multiple samples.
+    ///
+    /// The default implementation polls `read_signal` in a loop, which works
+    /// but is slow and subject to aliasing.  Implementations with access to a
+    /// high-throughput data stream (e.g. Nanonis TCP logger) should override
+    /// this to collect frames from the stream instead.
+    ///
+    /// `index` is the same signal index used by `read_signal`.
+    fn read_stable_signal(
+        &mut self,
+        index: u32,
+        num_samples: usize,
+    ) -> Result<f64> {
+        let mut sum = 0.0;
+        for _ in 0..num_samples {
+            sum += self.read_signal(index, true)?;
+        }
+        Ok(sum / num_samples as f64)
+    }
 }
