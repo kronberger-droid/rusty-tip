@@ -57,6 +57,9 @@ pub struct NanonisController {
     /// Maps Nanonis signal index -> position in SignalFrame.data array.
     /// Set by the caller via `set_channel_mapping` before starting the TCP reader.
     signal_to_data_position: HashMap<u32, usize>,
+    /// Number of channels configured in the TCP data stream.
+    /// Set by `data_stream_configure`, used by `start_tcp_reader`.
+    configured_channel_count: Option<u32>,
     /// Guards against double-teardown (manual call + Drop).
     torn_down: bool,
 }
@@ -68,6 +71,7 @@ impl NanonisController {
             setup,
             tcp_reader: None,
             signal_to_data_position: HashMap::new(),
+            configured_channel_count: None,
             torn_down: false,
         }
     }
@@ -83,6 +87,9 @@ impl NanonisController {
     }
 
     /// Collect `num_samples` data points from the TCP stream for a given data position.
+    ///
+    /// Uses timestamp tracking to avoid re-reading already-seen frames.
+    /// Warns if fewer samples than requested were collected within the timeout.
     fn collect_tcp_samples(
         reader: &BufferedTCPReader,
         data_position: usize,
@@ -92,18 +99,22 @@ impl NanonisController {
         let start = std::time::Instant::now();
         let mut collected: Vec<f32> = Vec::with_capacity(num_samples);
 
+        // Track the timestamp of the last consumed frame to avoid duplicates.
+        let mut cursor = std::time::Instant::now();
+
         while collected.len() < num_samples && start.elapsed() < timeout {
-            let frames = reader.get_recent_data(Duration::from_millis(100));
-            for frame in frames {
-                if collected.len() >= num_samples {
-                    break;
-                }
+            let new_frames = reader.get_data_since(cursor);
+            for frame in &new_frames {
+                cursor = frame.timestamp + Duration::from_nanos(1);
                 if let Some(&value) = frame.signal_frame.data.get(data_position) {
                     collected.push(value);
+                    if collected.len() >= num_samples {
+                        break;
+                    }
                 }
             }
             if collected.len() < num_samples {
-                std::thread::sleep(Duration::from_millis(50));
+                std::thread::sleep(Duration::from_millis(10));
             }
         }
 
@@ -111,6 +122,14 @@ impl NanonisController {
             return Err(SpmError::Timeout(
                 "No TCP stream data collected within timeout".into(),
             ));
+        }
+
+        if collected.len() < num_samples {
+            log::warn!(
+                "TCP sample collection: requested {} samples but only got {} within timeout",
+                num_samples,
+                collected.len()
+            );
         }
 
         Ok(collected)
@@ -145,11 +164,15 @@ impl NanonisController {
             self.stop_tcp_reader()?;
         }
 
-        let num_channels = self.signal_to_data_position.len() as u32;
+        let num_channels = self.configured_channel_count.ok_or_else(|| {
+            SpmError::Protocol(
+                "No channels configured. Call data_stream_configure before start_tcp_reader".into(),
+            )
+        })?;
 
         if num_channels == 0 {
             return Err(SpmError::Protocol(
-                "No channels configured. Call set_channel_mapping before start_tcp_reader".into(),
+                "Channel count is zero. Configure at least one channel".into(),
             ));
         }
 
@@ -655,6 +678,7 @@ impl SpmController for NanonisController {
     fn data_stream_configure(&mut self, channels: &[i32], oversampling: i32) -> Result<()> {
         self.client.tcplog_chs_set(channels.to_vec())?;
         self.client.tcplog_oversampl_set(oversampling)?;
+        self.configured_channel_count = Some(channels.len() as u32);
         Ok(())
     }
 
