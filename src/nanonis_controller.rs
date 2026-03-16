@@ -12,7 +12,7 @@ use nanonis_rs::{
 use std::collections::HashSet;
 
 use crate::buffered_tcp_reader::BufferedTCPReader;
-use crate::spm_controller::{AcquisitionMode, Capability, DataStreamStatus, Result, SpmController, TriggerSetup, ZHomeMode};
+use crate::spm_controller::{AcquisitionMode, Capability, DataStreamStatus, Result, SpmController, TriggerSetup, ZControllerStatus, ZHomeMode};
 use crate::spm_error::SpmError;
 use crate::utils::{poll_until, PollError};
 
@@ -415,6 +415,10 @@ impl SpmController for NanonisController {
 
     fn go_z_home(&mut self) -> Result<()> {
         Ok(self.client.z_ctrl_home()?)
+    }
+
+    fn z_controller_status(&mut self) -> Result<ZControllerStatus> {
+        Ok(self.client.z_ctrl_status_get()?)
     }
 
     // -- Piezo Positioning (FolMe) --

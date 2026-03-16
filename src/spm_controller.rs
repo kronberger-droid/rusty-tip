@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-pub use nanonis_rs::z_ctrl::ZHomeMode;
+pub use nanonis_rs::z_ctrl::{ZControllerStatus, ZHomeMode};
 
 use nanonis_rs::{
     motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D},
@@ -108,6 +108,8 @@ pub trait SpmController: Send {
     fn set_z_home(&mut self, mode: ZHomeMode, position: f64) -> Result<()>;
     /// Move the tip to the configured z-home position.
     fn go_z_home(&mut self) -> Result<()>;
+    /// Query the current z-controller status.
+    fn z_controller_status(&mut self) -> Result<ZControllerStatus>;
 
     // -- Piezo Positioning (FolMe) --
     fn get_position(&mut self, wait_for_newest: bool) -> Result<Position>;
