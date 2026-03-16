@@ -1,7 +1,3 @@
-// Include shared config module from tip-prep
-#[path = "../tip-prep/config.rs"]
-mod config;
-
 mod app;
 
 use app::{init_logging, TipPrepApp};

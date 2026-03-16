@@ -106,6 +106,8 @@ pub trait SpmController: Send {
     fn auto_approach(&mut self, wait: bool, timeout: Duration) -> Result<()>;
     fn set_z_setpoint(&mut self, setpoint: f64) -> Result<()>;
     fn set_z_home(&mut self, mode: ZHomeMode, position: f64) -> Result<()>;
+    /// Move the tip to the configured z-home position.
+    fn go_z_home(&mut self) -> Result<()>;
 
     // -- Piezo Positioning (FolMe) --
     fn get_position(&mut self, wait_for_newest: bool) -> Result<Position>;
@@ -184,6 +186,10 @@ pub trait SpmController: Send {
         threshold: f64,
     ) -> Result<()>;
     fn safe_tip_status(&mut self) -> Result<(bool, bool, f64)>;
+    /// Enable or disable the safe-tip crash protection.
+    fn safe_tip_set_enabled(&mut self, enabled: bool) -> Result<()>;
+    /// Check whether safe-tip crash protection is currently enabled.
+    fn safe_tip_enabled(&mut self) -> Result<bool>;
 
     // -- TCP Logger --
     fn data_stream_configure(

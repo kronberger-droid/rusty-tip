@@ -1,5 +1,3 @@
-mod config;
-
 use chrono::Utc;
 use clap::Parser;
 use env_logger::Env;
@@ -7,6 +5,7 @@ use log::{error, info, LevelFilter};
 use rusty_tip::Signal;
 use rusty_tip::{ActionDriver, TCPReaderConfig};
 use rusty_tip::{PulseMethod, TipController, TipControllerConfig};
+use rusty_tip::config::{load_config_or_default, AppConfig};
 use rusty_tip::error::{Error, RunOutcome};
 use std::{
     fs,
@@ -18,8 +17,6 @@ use std::{
     },
     time::Duration,
 };
-
-use crate::config::{load_config_or_default, AppConfig};
 
 #[cfg(windows)]
 use std::ffi::OsString;
