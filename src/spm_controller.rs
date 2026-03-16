@@ -208,30 +208,44 @@ pub trait SpmController: Send {
     /// controllers without internal buffering.
     fn clear_data_buffer(&mut self) {}
 
-    // -- Stable Signal Reading --
+    // -- Signal Reading --
 
-    /// Read a noise-reduced signal value by averaging multiple samples.
+    /// Collect raw signal samples for analysis or averaging.
     ///
+    /// Returns up to `num_samples` data points for the given signal.
     /// The default implementation polls `read_signal` in a loop, which works
     /// but is slow and subject to aliasing.  Implementations with access to a
     /// high-throughput data stream (e.g. Nanonis TCP logger) should override
     /// this to collect frames from the stream instead.
     ///
     /// `index` is the same signal index used by `read_signal`.
+    fn read_signal_samples(
+        &mut self,
+        index: u32,
+        num_samples: usize,
+    ) -> Result<Vec<f64>> {
+        if num_samples == 0 {
+            return Err(crate::spm_error::SpmError::Protocol(
+                "read_signal_samples: num_samples must be > 0".into(),
+            ));
+        }
+        let mut samples = Vec::with_capacity(num_samples);
+        for _ in 0..num_samples {
+            samples.push(self.read_signal(index, true)?);
+        }
+        Ok(samples)
+    }
+
+    /// Read a noise-reduced signal value by averaging multiple samples.
+    ///
+    /// Convenience wrapper around `read_signal_samples` that returns the mean.
     fn read_stable_signal(
         &mut self,
         index: u32,
         num_samples: usize,
     ) -> Result<f64> {
-        if num_samples == 0 {
-            return Err(crate::spm_error::SpmError::Protocol(
-                "read_stable_signal: num_samples must be > 0".into(),
-            ));
-        }
-        let mut sum = 0.0;
-        for _ in 0..num_samples {
-            sum += self.read_signal(index, true)?;
-        }
-        Ok(sum / num_samples as f64)
+        let samples = self.read_signal_samples(index, num_samples)?;
+        let mean = samples.iter().sum::<f64>() / samples.len() as f64;
+        Ok(mean)
     }
 }

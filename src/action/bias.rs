@@ -108,6 +108,12 @@ pub struct SafeSetBias {
     pub voltage: f64,
 }
 
+impl Default for SafeSetBias {
+    fn default() -> Self {
+        Self { voltage: 0.0 }
+    }
+}
+
 impl Action for SafeSetBias {
     fn name(&self) -> &str {
         "safe_set_bias"

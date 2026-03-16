@@ -74,12 +74,14 @@ pub fn builtin_registry() -> ActionRegistry {
     // Bias
     r.register::<bias::ReadBias>();
     r.register::<bias::SetBias>();
+    r.register::<bias::SafeSetBias>();
     r.register::<bias::BiasPulse>();
 
     // Signals
     r.register::<signals::ReadSignal>();
     r.register::<signals::ReadSignals>();
     r.register::<signals::ReadSignalNames>();
+    r.register::<signals::ReadStableSignal>();
 
     // Z-Controller
     r.register::<z_controller::Withdraw>();

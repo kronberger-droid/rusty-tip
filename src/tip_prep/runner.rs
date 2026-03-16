@@ -4,8 +4,8 @@ use serde::Serialize;
 
 use crate::action::bias::{BiasPulse, SetBias};
 use crate::action::motor::{MoveMotor3D, Reposition};
-
 use crate::action::scan::{ScanActionParam, ScanControl, ScanDirectionParam};
+use crate::action::signals::ReadStableSignal;
 use crate::action::util::Wait;
 use crate::action::z_controller::{CalibratedApproach, SetZSetpoint, Withdraw};
 use crate::action::{Action, ActionContext, ActionOutput, DataStore};
@@ -170,10 +170,7 @@ fn run_tip_prep_inner(
     };
 
     // Check if tip is already sharp after initial approach
-    let num_samples = config.data_acquisition.stable_signal_samples;
-    let initial_fs = ctx
-        .controller
-        .read_stable_signal(freq_shift_index, num_samples)?;
+    let initial_fs = read_stable(&mut ctx, config, freq_shift_index)?;
     let initial_sharp = initial_fs >= bounds.0 && initial_fs <= bounds.1;
     log::info!(
         "Initial tip state: freq_shift={:.3} Hz, sharp={}",
@@ -208,8 +205,6 @@ fn run_tip_prep_inner(
     // Main loop: pulse -> settle -> reposition -> measure -> check sharp
     // Matches V1 ordering: minimize time at pulsed position to avoid
     // unintended tip changes from continued surface interaction.
-    let num_samples = config.data_acquisition.stable_signal_samples;
-
     for cycle in 1..=max_cycles {
         if shutdown.is_requested() {
             return Ok(Outcome::StoppedByUser);
@@ -273,9 +268,7 @@ fn run_tip_prep_inner(
         )?;
 
         // Measure at new position (after reposition)
-        let freq_shift = ctx
-            .controller
-            .read_stable_signal(freq_shift_index, num_samples)?;
+        let freq_shift = read_stable(&mut ctx, config, freq_shift_index)?;
         let is_sharp = freq_shift >= bounds.0 && freq_shift <= bounds.1;
 
         // Emit state snapshot for GUI observers
@@ -381,10 +374,7 @@ fn confirm_sharp(
             return Err(SpmError::ShutdownRequested.into());
         }
 
-        let num_samples = config.data_acquisition.stable_signal_samples;
-        let fs = ctx
-            .controller
-            .read_stable_signal(freq_shift_index, num_samples)?;
+        let fs = read_stable(ctx, config, freq_shift_index)?;
         let in_bounds = fs >= bounds.0 && fs <= bounds.1;
         log::info!(
             "Confirmation {}/{}: freq_shift={:.3} Hz, in_bounds={}",
@@ -503,9 +493,8 @@ fn check_stability(
     // Step 5: Measure final freq_shift
     let final_fs = measure_final_freq_shift(
         ctx,
-        &config.tip_prep,
+        config,
         freq_shift_index,
-        config.data_acquisition.stable_signal_samples,
     )?;
 
     let final_fs = match final_fs {
@@ -666,6 +655,42 @@ fn execute_stability_sweep(
             .bouncy_scan(true),
     )?;
 
+    // Run the sweep in an inner function so we can unconditionally clean up
+    let result = execute_stability_sweep_inner(ctx, plan, sc, shutdown);
+
+    // Always stop scan and restore properties, regardless of how the sweep ended
+    let _ = ScanControl {
+        action: ScanActionParam::Stop,
+        direction: ScanDirectionParam::Up,
+    }
+    .execute(ctx);
+    restore_scan_props(ctx, &original_props);
+
+    // Propagate the inner result; on success, do the post-sweep safety sequence
+    result?;
+
+    // Withdraw before changing bias (tip is still on surface after sweep)
+    execute_logged(&Withdraw::default(), ctx)?;
+    execute_logged(&Wait { duration_ms: 200 }, ctx)?;
+
+    // Restore bias to sweep starting value (not the last stepped value near 0V)
+    execute_logged(
+        &SetBias {
+            voltage: plan.starting_bias,
+        },
+        ctx,
+    )?;
+
+    Ok(())
+}
+
+/// Inner sweep loop — separated so the caller can guarantee scan stop + props restore.
+fn execute_stability_sweep_inner(
+    ctx: &mut ActionContext,
+    plan: &SweepPlan,
+    sc: &crate::controller_types::StabilityConfig,
+    shutdown: &ShutdownFlag,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Start scan
     execute_logged(
         &ScanControl {
@@ -679,12 +704,6 @@ fn execute_stability_sweep(
     let mut scan_started = false;
     for _ in 0..50 {
         if shutdown.is_requested() {
-            let _ = ScanControl {
-                action: ScanActionParam::Stop,
-                direction: ScanDirectionParam::Up,
-            }
-            .execute(ctx);
-            restore_scan_props(ctx, &original_props);
             return Err(SpmError::ShutdownRequested.into());
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -695,7 +714,6 @@ fn execute_stability_sweep(
     }
 
     if !scan_started {
-        restore_scan_props(ctx, &original_props);
         return Err("Scan failed to start within 5 seconds".into());
     }
 
@@ -707,12 +725,6 @@ fn execute_stability_sweep(
 
     for step in 0..sc.bias_steps {
         if shutdown.is_requested() {
-            let _ = ScanControl {
-                action: ScanActionParam::Stop,
-                direction: ScanDirectionParam::Up,
-            }
-            .execute(ctx);
-            restore_scan_props(ctx, &original_props);
             return Err(SpmError::ShutdownRequested.into());
         }
 
@@ -731,29 +743,6 @@ fn execute_stability_sweep(
     }
 
     log::info!("Bias sweep completed");
-
-    // Stop scan
-    let _ = ScanControl {
-        action: ScanActionParam::Stop,
-        direction: ScanDirectionParam::Up,
-    }
-    .execute(ctx);
-
-    // Withdraw before changing bias (tip is still on surface after sweep)
-    execute_logged(&Withdraw::default(), ctx)?;
-    execute_logged(&Wait { duration_ms: 200 }, ctx)?;
-
-    // Restore bias to sweep starting value (not the last stepped value near 0V)
-    execute_logged(
-        &SetBias {
-            voltage: plan.starting_bias,
-        },
-        ctx,
-    )?;
-
-    // Restore scan properties
-    restore_scan_props(ctx, &original_props);
-
     Ok(())
 }
 
@@ -769,9 +758,8 @@ fn restore_scan_props(
 
 fn measure_final_freq_shift(
     ctx: &mut ActionContext,
-    tip_prep: &TipPrepConfig,
+    config: &AppConfig,
     freq_shift_index: u32,
-    stable_signal_samples: usize,
 ) -> Result<Option<f64>, Box<dyn std::error::Error>> {
     log::info!("Measuring final freq_shift after sweeps");
 
@@ -780,7 +768,7 @@ fn measure_final_freq_shift(
 
     execute_logged(
         &SetBias {
-            voltage: tip_prep.initial_bias_v as f64,
+            voltage: config.tip_prep.initial_bias_v as f64,
         },
         ctx,
     )?;
@@ -789,14 +777,12 @@ fn measure_final_freq_shift(
 
     execute_logged(
         &Wait {
-            duration_ms: tip_prep.timing.post_approach_settle_ms,
+            duration_ms: config.tip_prep.timing.post_approach_settle_ms,
         },
         ctx,
     )?;
 
-    let fs = ctx
-        .controller
-        .read_stable_signal(freq_shift_index, stable_signal_samples)?;
+    let fs = read_stable(ctx, config, freq_shift_index)?;
     Ok(Some(fs))
 }
 
@@ -853,5 +839,27 @@ pub fn execute_logged(
                 .emit(Event::action_failed(&name, &e.to_string(), start.elapsed()));
             Err(e)
         }
+    }
+}
+
+/// Build a ReadStableSignal action from config and execute it, returning the f64 value.
+fn read_stable(
+    ctx: &mut ActionContext,
+    config: &AppConfig,
+    freq_shift_index: u32,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    let output = execute_logged(
+        &ReadStableSignal {
+            index: freq_shift_index,
+            num_samples: config.data_acquisition.stable_signal_samples,
+            max_std_dev: config.data_acquisition.max_std_dev,
+            max_slope: config.data_acquisition.max_slope,
+            max_retries: config.data_acquisition.stable_read_retries,
+        },
+        ctx,
+    )?;
+    match output {
+        ActionOutput::Value(v) => Ok(v),
+        other => Err(format!("ReadStableSignal returned unexpected output: {:?}", other).into()),
     }
 }
