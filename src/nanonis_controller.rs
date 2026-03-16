@@ -59,6 +59,10 @@ pub struct NanonisController {
     signal_to_data_position: HashMap<u32, usize>,
     /// Guards against double-teardown (manual call + Drop).
     torn_down: bool,
+    /// Stability criteria for `read_stable_signal`.
+    stable_max_std_dev: f64,
+    stable_max_slope: f64,
+    stable_retries: usize,
 }
 
 impl NanonisController {
@@ -69,7 +73,22 @@ impl NanonisController {
             tcp_reader: None,
             signal_to_data_position: HashMap::new(),
             torn_down: false,
+            stable_max_std_dev: 1.0,
+            stable_max_slope: 0.01,
+            stable_retries: 3,
         }
+    }
+
+    /// Configure stability criteria for `read_stable_signal`.
+    ///
+    /// A reading is considered stable when its standard deviation is at most
+    /// `max_std_dev` and its linear regression slope is at most `max_slope`.
+    /// If the reading is not stable, it is retried up to `retries` times
+    /// with exponential backoff (100ms, 200ms, 400ms, ...).
+    pub fn set_stability_criteria(&mut self, max_std_dev: f64, max_slope: f64, retries: usize) {
+        self.stable_max_std_dev = max_std_dev;
+        self.stable_max_slope = max_slope;
+        self.stable_retries = retries;
     }
 
     /// Access the underlying NanonisClient directly for operations
@@ -80,6 +99,79 @@ impl NanonisController {
 
     pub fn client_mut(&mut self) -> &mut NanonisClient {
         &mut self.client
+    }
+
+    /// Collect `num_samples` data points from the TCP stream for a given data position.
+    fn collect_tcp_samples(
+        reader: &BufferedTCPReader,
+        data_position: usize,
+        num_samples: usize,
+    ) -> Result<Vec<f32>> {
+        let timeout = Duration::from_secs(5);
+        let start = std::time::Instant::now();
+        let mut collected: Vec<f32> = Vec::with_capacity(num_samples);
+
+        while collected.len() < num_samples && start.elapsed() < timeout {
+            let frames = reader.get_recent_data(Duration::from_millis(100));
+            for frame in frames {
+                if collected.len() >= num_samples {
+                    break;
+                }
+                if let Some(&value) = frame.signal_frame.data.get(data_position) {
+                    collected.push(value);
+                }
+            }
+            if collected.len() < num_samples {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+
+        if collected.is_empty() {
+            return Err(SpmError::Timeout(
+                "No TCP stream data collected within timeout".into(),
+            ));
+        }
+
+        Ok(collected)
+    }
+
+    /// Compute mean, standard deviation, and linear regression slope from sample data.
+    fn compute_stability_metrics(data: &[f32]) -> (f64, f64, f64) {
+        let n = data.len() as f64;
+        let mean = data.iter().map(|&v| v as f64).sum::<f64>() / n;
+
+        if data.len() < 2 {
+            return (mean, 0.0, 0.0);
+        }
+
+        // Standard deviation
+        let variance = data
+            .iter()
+            .map(|&v| {
+                let d = v as f64 - mean;
+                d * d
+            })
+            .sum::<f64>()
+            / (n - 1.0);
+        let std_dev = variance.sqrt();
+
+        // Linear regression slope
+        let x_mean = (n - 1.0) / 2.0;
+        let mut numerator = 0.0;
+        let mut denominator = 0.0;
+        for (i, &v) in data.iter().enumerate() {
+            let x_diff = i as f64 - x_mean;
+            let y_diff = v as f64 - mean;
+            numerator += x_diff * y_diff;
+            denominator += x_diff * x_diff;
+        }
+        let slope = if denominator > 0.0 {
+            numerator / denominator
+        } else {
+            0.0
+        };
+
+        (mean, std_dev, slope)
     }
 
     /// Set the mapping from Nanonis signal indices to TCP data array positions.
@@ -673,40 +765,44 @@ impl SpmController for NanonisController {
             ))
         })?;
 
-        // Collect frames from the TCP stream
-        let timeout = Duration::from_secs(5);
-        let start = std::time::Instant::now();
-        let mut collected: Vec<f32> = Vec::with_capacity(num_samples);
+        let max_std_dev = self.stable_max_std_dev;
+        let max_slope = self.stable_max_slope;
+        let max_retries = self.stable_retries;
 
-        while collected.len() < num_samples && start.elapsed() < timeout {
-            let frames = reader.get_recent_data(Duration::from_millis(100));
-            for frame in frames {
-                if collected.len() >= num_samples {
-                    break;
-                }
-                if let Some(&value) = frame.signal_frame.data.get(data_position) {
-                    collected.push(value);
-                }
+        for attempt in 0..=max_retries {
+            let collected = Self::collect_tcp_samples(reader, data_position, num_samples)?;
+
+            let (mean, std_dev, slope) = Self::compute_stability_metrics(&collected);
+
+            let noise_ok = std_dev <= max_std_dev;
+            let drift_ok = slope.abs() <= max_slope;
+
+            if noise_ok && drift_ok {
+                log::debug!(
+                    "read_stable_signal: index={}, samples={}, mean={:.6}, std_dev={:.4}, slope={:.6} (stable, attempt {})",
+                    index, collected.len(), mean, std_dev, slope, attempt
+                );
+                return Ok(mean);
             }
-            if collected.len() < num_samples {
-                std::thread::sleep(Duration::from_millis(50));
+
+            if attempt < max_retries {
+                let backoff_ms = 100 * (1 << attempt); // 100, 200, 400, 800, ...
+                log::debug!(
+                    "read_stable_signal: not stable (std_dev={:.4}/{:.4}, slope={:.6}/{:.6}), retry {} in {}ms",
+                    std_dev, max_std_dev, slope.abs(), max_slope, attempt + 1, backoff_ms
+                );
+                std::thread::sleep(Duration::from_millis(backoff_ms));
+            } else {
+                // All retries exhausted — return mean anyway (best-effort, like V1 fallback)
+                log::warn!(
+                    "read_stable_signal: signal not stable after {} retries (std_dev={:.4}, slope={:.6}), using mean={:.6}",
+                    max_retries, std_dev, slope, mean
+                );
+                return Ok(mean);
             }
         }
 
-        if collected.is_empty() {
-            return Err(SpmError::Timeout(
-                "No TCP stream data collected within timeout".into(),
-            ));
-        }
-
-        let mean = collected.iter().map(|&v| v as f64).sum::<f64>() / collected.len() as f64;
-
-        log::debug!(
-            "read_stable_signal: index={}, collected={}/{} samples, mean={:.6}",
-            index, collected.len(), num_samples, mean
-        );
-
-        Ok(mean)
+        unreachable!()
     }
 }
 

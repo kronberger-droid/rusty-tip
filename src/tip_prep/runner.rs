@@ -205,7 +205,11 @@ fn run_tip_prep_inner(
         }
     }
 
-    // Main loop: pulse -> check -> reposition
+    // Main loop: pulse -> settle -> reposition -> measure -> check sharp
+    // Matches V1 ordering: minimize time at pulsed position to avoid
+    // unintended tip changes from continued surface interaction.
+    let num_samples = config.data_acquisition.stable_signal_samples;
+
     for cycle in 1..=max_cycles {
         if shutdown.is_requested() {
             return Ok(Outcome::StoppedByUser);
@@ -226,15 +230,7 @@ fn run_tip_prep_inner(
             );
         }
 
-        // Read stable signal before pulse
-        let num_samples = config.data_acquisition.stable_signal_samples;
-        let current_freq_shift = Some(
-            ctx.controller
-                .read_stable_signal(freq_shift_index, num_samples)?,
-        );
-
-        // Pulse with strategy-determined voltage
-        pulse_state.update_voltage(&config.pulse_method, current_freq_shift);
+        // Pulse with current voltage (determined by previous cycle's update)
         let pulse_voltage = pulse_state.signed_voltage();
         log::info!(
             "Executing pulse #{}: {:.3}V ({} method, {:?}{})",
@@ -264,7 +260,19 @@ fn run_tip_prep_inner(
             &mut ctx,
         )?;
 
-        // Read stable signal after pulse and check tip state
+        // Reposition immediately: get away from pulse site
+        execute_logged(
+            &Reposition {
+                x_steps: config.tip_prep.timing.reposition_steps[0],
+                y_steps: config.tip_prep.timing.reposition_steps[1],
+                post_move_settle_ms: config.tip_prep.timing.post_reposition_settle_ms,
+                post_approach_settle_ms: config.tip_prep.timing.post_approach_settle_ms,
+                ..Default::default()
+            },
+            &mut ctx,
+        )?;
+
+        // Measure at new position (after reposition)
         let freq_shift = ctx
             .controller
             .read_stable_signal(freq_shift_index, num_samples)?;
@@ -313,17 +321,8 @@ fn run_tip_prep_inner(
             }
         }
 
-        // Reposition for next cycle
-        execute_logged(
-            &Reposition {
-                x_steps: config.tip_prep.timing.reposition_steps[0],
-                y_steps: config.tip_prep.timing.reposition_steps[1],
-                post_move_settle_ms: config.tip_prep.timing.post_reposition_settle_ms,
-                post_approach_settle_ms: config.tip_prep.timing.post_approach_settle_ms,
-                ..Default::default()
-            },
-            &mut ctx,
-        )?;
+        // Update voltage strategy for next cycle (uses post-reposition measurement)
+        pulse_state.update_voltage(&config.pulse_method, Some(freq_shift));
     }
 
     Ok(Outcome::CycleLimit(max_cycles))
@@ -739,6 +738,18 @@ fn execute_stability_sweep(
         direction: ScanDirectionParam::Up,
     }
     .execute(ctx);
+
+    // Withdraw before changing bias (tip is still on surface after sweep)
+    execute_logged(&Withdraw::default(), ctx)?;
+    execute_logged(&Wait { duration_ms: 200 }, ctx)?;
+
+    // Restore bias to sweep starting value (not the last stepped value near 0V)
+    execute_logged(
+        &SetBias {
+            voltage: plan.starting_bias,
+        },
+        ctx,
+    )?;
 
     // Restore scan properties
     restore_scan_props(ctx, &original_props);

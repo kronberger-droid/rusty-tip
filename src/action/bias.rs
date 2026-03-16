@@ -68,7 +68,7 @@ impl Default for BiasPulse {
             voltage: 0.0,
             duration_ms: 100,
             z_hold: true,
-            absolute: false,
+            absolute: true,
         }
     }
 }
