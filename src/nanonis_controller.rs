@@ -57,6 +57,8 @@ pub struct NanonisController {
     /// Maps Nanonis signal index -> position in SignalFrame.data array.
     /// Set by the caller via `set_channel_mapping` before starting the TCP reader.
     signal_to_data_position: HashMap<u32, usize>,
+    /// Guards against double-teardown (manual call + Drop).
+    torn_down: bool,
 }
 
 impl NanonisController {
@@ -66,6 +68,7 @@ impl NanonisController {
             setup,
             tcp_reader: None,
             signal_to_data_position: HashMap::new(),
+            torn_down: false,
         }
     }
 
@@ -175,6 +178,34 @@ impl NanonisController {
     }
 }
 
+/// Validate that an f64 value is finite and representable as f32.
+///
+/// Rejects NaN, infinity, and values that overflow f32.  Warns if the
+/// value underflows to zero or becomes subnormal in f32, since this
+/// almost always indicates a unit mismatch in SPM parameters.
+fn validate_f32(value: f64, name: &str) -> Result<f32> {
+    if !value.is_finite() {
+        return Err(SpmError::Protocol(format!(
+            "{} must be finite, got {}",
+            name, value
+        )));
+    }
+    let v = value as f32;
+    if !v.is_finite() {
+        return Err(SpmError::Protocol(format!(
+            "{} value {} overflows f32",
+            name, value
+        )));
+    }
+    if value != 0.0 && (v == 0.0 || v.is_subnormal()) {
+        log::warn!(
+            "{} value {} underflows to f32 {} (possible unit mismatch?)",
+            name, value, v
+        );
+    }
+    Ok(v)
+}
+
 impl SpmController for NanonisController {
     fn capabilities(&self) -> HashSet<Capability> {
         HashSet::from([
@@ -234,28 +265,44 @@ impl SpmController for NanonisController {
     }
 
     fn teardown(&mut self) {
+        if self.torn_down {
+            return;
+        }
+        self.torn_down = true;
+
         if let Err(e) = self.data_stream_stop() {
-            log::debug!("Data stream stop: {}", e);
+            log::warn!("Data stream stop: {}", e);
         }
         if let Err(e) = self.stop_tcp_reader() {
-            log::debug!("TCP reader stop: {}", e);
+            log::warn!("TCP reader stop: {}", e);
         }
-        // Restore threshold from config rather than zeroing it -- if this
-        // partially succeeds, the hardware stays at a safe protection level.
+        // Disable safe-tip overrides entirely: auto_recovery=false,
+        // auto_pause_scan=false.  Keep the threshold from config so if
+        // the user re-enables safe-tip manually, it starts at a known level.
         if let Err(e) = self.safe_tip_configure(false, false, self.setup.safe_tip_threshold_a) {
-            log::warn!("Failed to disable safe tip: {}", e);
+            log::warn!("Failed to reset safe-tip config: {}", e);
         }
     }
 
     // -- Signals --
 
     fn read_signal(&mut self, index: u32, wait_for_newest: bool) -> Result<f64> {
-        let val = self.client.signal_val_get(index as u8, wait_for_newest)?;
+        let index_u8 = u8::try_from(index).map_err(|_| {
+            SpmError::Protocol(format!("Signal index {} exceeds u8 range (max 255)", index))
+        })?;
+        let val = self.client.signal_val_get(index_u8, wait_for_newest)?;
         Ok(val as f64)
     }
 
     fn read_signals(&mut self, indices: &[u32], wait_for_newest: bool) -> Result<Vec<f64>> {
-        let indices_i32: Vec<i32> = indices.iter().map(|&i| i as i32).collect();
+        let indices_i32: Vec<i32> = indices
+            .iter()
+            .map(|&i| {
+                i32::try_from(i).map_err(|_| {
+                    SpmError::Protocol(format!("Signal index {} exceeds i32 range", i))
+                })
+            })
+            .collect::<Result<Vec<i32>>>()?;
         let vals = self.client.signals_vals_get(indices_i32, wait_for_newest)?;
         Ok(vals.into_iter().map(|v| v as f64).collect())
     }
@@ -271,7 +318,8 @@ impl SpmController for NanonisController {
     }
 
     fn set_bias(&mut self, voltage: f64) -> Result<()> {
-        Ok(self.client.bias_set(voltage as f32)?)
+        let v = validate_f32(voltage, "bias voltage")?;
+        Ok(self.client.bias_set(v)?)
     }
 
     fn bias_pulse(
@@ -283,10 +331,11 @@ impl SpmController for NanonisController {
     ) -> Result<()> {
         let z_controller_hold: u16 = if z_hold { 1 } else { 0 };
         let pulse_mode: u16 = if absolute { 2 } else { 1 };
+        let v = validate_f32(voltage, "pulse voltage")?;
         Ok(self.client.bias_pulse(
             true, // always wait for pulse to complete
             width.as_secs_f32(),
-            voltage as f32,
+            v,
             z_controller_hold,
             pulse_mode,
         )?)
@@ -353,12 +402,14 @@ impl SpmController for NanonisController {
     }
 
     fn set_z_setpoint(&mut self, setpoint: f64) -> Result<()> {
-        Ok(self.client.z_ctrl_setpoint_set(setpoint as f32)?)
+        let s = validate_f32(setpoint, "Z setpoint")?;
+        Ok(self.client.z_ctrl_setpoint_set(s)?)
     }
 
     fn set_z_home(&mut self, mode: ZHomeMode, position: f64) -> Result<()> {
+        let p = validate_f32(position, "Z home position")?;
         self.client
-            .z_ctrl_home_props_set(mode, position as f32)
+            .z_ctrl_home_props_set(mode, p)
             .map_err(Into::into)
     }
 
@@ -470,6 +521,14 @@ impl SpmController for NanonisController {
         Ok(self.client.scan_config_set(config)?)
     }
 
+    fn scan_frame_data_grab(
+        &mut self,
+        channel_index: u32,
+        forward: bool,
+    ) -> Result<(String, Vec<Vec<f32>>, bool)> {
+        Ok(self.client.scan_frame_data_grab(channel_index, forward)?)
+    }
+
     // -- Oscilloscope --
 
     fn osci_read(
@@ -528,8 +587,9 @@ impl SpmController for NanonisController {
         auto_pause_scan: bool,
         threshold: f64,
     ) -> Result<()> {
+        let t = validate_f32(threshold, "safe-tip threshold")?;
         self.client
-            .safe_tip_props_set(auto_recovery, auto_pause_scan, threshold as f32)
+            .safe_tip_props_set(auto_recovery, auto_pause_scan, t)
             .map_err(Into::into)
     }
 
@@ -571,6 +631,11 @@ impl SpmController for NanonisController {
         index: u32,
         num_samples: usize,
     ) -> Result<f64> {
+        if num_samples == 0 {
+            return Err(SpmError::Protocol(
+                "read_stable_signal: num_samples must be > 0".into(),
+            ));
+        }
         let reader = match &self.tcp_reader {
             Some(r) => r,
             None => {

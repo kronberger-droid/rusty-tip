@@ -7,12 +7,8 @@ use crate::spm_controller::Capability;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadPosition {
-    #[serde(default = "default_true")]
+    #[serde(default = "super::default_true")]
     pub wait_for_newest: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl Default for ReadPosition {
@@ -46,7 +42,7 @@ impl Action for ReadPosition {
 pub struct SetPosition {
     pub x: f64,
     pub y: f64,
-    #[serde(default = "default_true")]
+    #[serde(default = "super::default_true")]
     pub wait: bool,
 }
 

@@ -187,6 +187,8 @@ pub enum StepOutcome {
     Completed(ActionOutput),
     /// Workflow was shut down gracefully.
     Shutdown,
+    /// Loop reached max iterations without exit condition being met.
+    CycleLimit { label: Option<String>, max: u32 },
 }
 
 /// Final result of a workflow run.

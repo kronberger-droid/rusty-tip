@@ -168,3 +168,158 @@ mod duration_ms_serde {
         ser.serialize_f64(dur.as_secs_f64() * 1000.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    // -- Event construction tests --
+
+    #[test]
+    fn event_action_started_has_timestamp() {
+        let event = Event::action_started("read_bias", serde_json::json!({}));
+        match event {
+            Event::ActionStarted { action, timestamp, .. } => {
+                assert_eq!(action, "read_bias");
+                assert!(timestamp.elapsed().unwrap().as_secs() < 1);
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn event_action_completed_converts_output() {
+        let output = ActionOutput::Value(3.14);
+        let event = Event::action_completed("read_bias", &output, Duration::from_millis(50));
+        match event {
+            Event::ActionCompleted { output, duration, .. } => {
+                assert!((output.as_f64().unwrap() - 3.14).abs() < 1e-10);
+                assert!(duration.as_millis() == 50);
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn event_action_completed_unit_is_null() {
+        let event = Event::action_completed("wait", &ActionOutput::Unit, Duration::ZERO);
+        match event {
+            Event::ActionCompleted { output, .. } => {
+                assert!(output.is_null());
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn event_action_failed() {
+        let event = Event::action_failed("set_bias", "timeout", Duration::from_millis(100));
+        match event {
+            Event::ActionFailed { action, error, .. } => {
+                assert_eq!(action, "set_bias");
+                assert_eq!(error, "timeout");
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn event_data_collected() {
+        let event = Event::data_collected("z_height", serde_json::json!(1.23));
+        match event {
+            Event::DataCollected { label, value, .. } => {
+                assert_eq!(label, "z_height");
+                assert!((value.as_f64().unwrap() - 1.23).abs() < 1e-10);
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn event_custom() {
+        let event = Event::custom("workflow_started", serde_json::json!({"name": "prep"}));
+        match event {
+            Event::Custom { kind, data } => {
+                assert_eq!(kind, "workflow_started");
+                assert_eq!(data["name"], "prep");
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    // -- Serialization tests --
+
+    #[test]
+    fn event_serializes_to_json() {
+        let event = Event::action_started("read_bias", serde_json::json!({}));
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"action_started\""));
+        assert!(json.contains("\"action\":\"read_bias\""));
+        assert!(json.contains("\"timestamp\""));
+    }
+
+    #[test]
+    fn duration_serializes_as_milliseconds() {
+        let event = Event::action_completed(
+            "test",
+            &ActionOutput::Unit,
+            Duration::from_millis(1234),
+        );
+        let json = serde_json::to_value(&event).unwrap();
+        let dur_ms = json["duration"].as_f64().unwrap();
+        assert!((dur_ms - 1234.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn timestamp_serializes_as_unix_epoch() {
+        let event = Event::action_started("test", serde_json::json!({}));
+        let json = serde_json::to_value(&event).unwrap();
+        let ts = json["timestamp"].as_f64().unwrap();
+        // Should be a reasonable Unix timestamp (after year 2020)
+        assert!(ts > 1_577_836_800.0, "Timestamp {} too small", ts);
+    }
+
+    // -- EventBus tests --
+
+    struct CountingObserver {
+        count: Arc<AtomicUsize>,
+    }
+
+    impl Observer for CountingObserver {
+        fn on_event(&self, _event: &Event) {
+            self.count.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn event_bus_broadcasts_to_all_observers() {
+        let count1 = Arc::new(AtomicUsize::new(0));
+        let count2 = Arc::new(AtomicUsize::new(0));
+
+        let mut bus = EventBus::new();
+        bus.add_observer(Box::new(CountingObserver { count: count1.clone() }));
+        bus.add_observer(Box::new(CountingObserver { count: count2.clone() }));
+
+        bus.emit(Event::custom("test", serde_json::json!({})));
+        bus.emit(Event::custom("test2", serde_json::json!({})));
+
+        assert_eq!(count1.load(Ordering::SeqCst), 2);
+        assert_eq!(count2.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn event_bus_empty_does_not_panic() {
+        let bus = EventBus::new();
+        bus.emit(Event::custom("test", serde_json::json!({})));
+        // No panic = pass
+    }
+
+    #[test]
+    fn null_emitter_does_not_panic() {
+        let emitter = NullEmitter;
+        emitter.emit(Event::custom("test", serde_json::json!({})));
+    }
+}

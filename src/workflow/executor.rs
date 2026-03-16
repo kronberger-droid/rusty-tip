@@ -80,6 +80,17 @@ impl WorkflowExecutor {
                 ));
                 Ok(WorkflowOutcome::StoppedByUser)
             }
+            Ok(StepOutcome::CycleLimit { label, max }) => {
+                self.events.emit(Event::custom(
+                    "workflow_cycle_limit",
+                    serde_json::json!({
+                        "name": &workflow.name,
+                        "loop_label": label,
+                        "max_iterations": max,
+                    }),
+                ));
+                Ok(WorkflowOutcome::CycleLimit { label, max })
+            }
             Err(e) => {
                 self.events.emit(Event::custom(
                     "workflow_failed",
@@ -111,6 +122,7 @@ impl WorkflowExecutor {
                     match self.execute_step(step)? {
                         StepOutcome::Completed(output) => last_output = output,
                         StepOutcome::Shutdown => return Ok(StepOutcome::Shutdown),
+                        outcome @ StepOutcome::CycleLimit { .. } => return Ok(outcome),
                     }
                 }
                 Ok(StepOutcome::Completed(last_output))
@@ -134,11 +146,11 @@ impl WorkflowExecutor {
                 body,
                 until,
                 max_iterations,
-                label: _,
+                label,
             } => {
                 for _i in 0..*max_iterations {
                     match self.execute_step(body)? {
-                        StepOutcome::Completed(_) => {}
+                        StepOutcome::Completed(_) | StepOutcome::CycleLimit { .. } => {}
                         StepOutcome::Shutdown => return Ok(StepOutcome::Shutdown),
                     }
                     if let Some(condition) = until {
@@ -147,16 +159,32 @@ impl WorkflowExecutor {
                         }
                     }
                 }
+                // If an exit condition was set and never met, report CycleLimit
+                if until.is_some() {
+                    return Ok(StepOutcome::CycleLimit {
+                        label: label.clone(),
+                        max: *max_iterations,
+                    });
+                }
                 Ok(StepOutcome::Completed(ActionOutput::Unit))
             }
 
             Step::SetVar { key, value } => {
-                self.store.set(key, value);
+                self.store.set(key, value)?;
                 Ok(StepOutcome::Completed(ActionOutput::Unit))
             }
 
             Step::Wait { duration_ms } => {
-                std::thread::sleep(std::time::Duration::from_millis(*duration_ms));
+                let deadline = std::time::Instant::now()
+                    + std::time::Duration::from_millis(*duration_ms);
+                let poll = std::time::Duration::from_millis(50);
+                while std::time::Instant::now() < deadline {
+                    if self.shutdown.is_requested() {
+                        return Ok(StepOutcome::Shutdown);
+                    }
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    std::thread::sleep(poll.min(remaining));
+                }
                 Ok(StepOutcome::Completed(ActionOutput::Unit))
             }
         }
@@ -170,6 +198,21 @@ impl WorkflowExecutor {
         store_as: Option<&str>,
     ) -> Result<StepOutcome, SpmError> {
         let action = self.registry.create(action_name, params.clone())?;
+
+        // Check required capabilities before running
+        let required = action.requires();
+        if !required.is_empty() {
+            let caps = self.controller.capabilities();
+            for cap in &required {
+                if !caps.contains(cap) {
+                    return Err(SpmError::Unsupported(format!(
+                        "Action '{}' requires {:?}, which the controller does not support",
+                        action.name(),
+                        cap,
+                    )));
+                }
+            }
+        }
 
         // Emit start event
         self.events
@@ -188,9 +231,10 @@ impl WorkflowExecutor {
                 self.events
                     .emit(Event::action_completed(action.name(), &output, duration));
 
-                // Store result
-                let key = store_as.unwrap_or(action.name());
-                self.store.set(key, &output);
+                // Store result only when explicitly requested
+                if let Some(key) = store_as {
+                    self.store.set(key, &output)?;
+                }
 
                 Ok(StepOutcome::Completed(output))
             }
@@ -260,7 +304,7 @@ impl WorkflowExecutor {
 
     /// Resolve a variable name to an f64 from the DataStore.
     ///
-    /// Handles both raw f64 values and ActionOutput::Value stored by actions.
+    /// Handles both raw f64 values and `ActionOutput::Value` stored by actions.
     fn resolve_variable(&self, name: &str) -> Result<f64, SpmError> {
         let json = self
             .store
@@ -272,11 +316,28 @@ impl WorkflowExecutor {
             return Ok(v);
         }
 
-        // Try ActionOutput::Value (tagged as {"type":"value","0": n})
-        if let Some(obj) = json.as_object() {
-            if obj.get("type").and_then(|t| t.as_str()) == Some("value") {
-                if let Some(v) = obj.get("0").and_then(|v| v.as_f64()) {
-                    return Ok(v);
+        // Try deserializing as ActionOutput
+        if let Ok(output) = serde_json::from_value::<ActionOutput>(json.clone()) {
+            match output {
+                ActionOutput::Value(v) => return Ok(v),
+                ActionOutput::Values(_) => {
+                    return Err(SpmError::Workflow(format!(
+                        "Variable '{}' holds a Values array, not a single number. \
+                         Use a specific signal key instead.",
+                        name,
+                    )));
+                }
+                ActionOutput::Data(_) => {
+                    return Err(SpmError::Workflow(format!(
+                        "Variable '{}' holds structured Data, not a numeric value",
+                        name,
+                    )));
+                }
+                ActionOutput::Unit => {
+                    return Err(SpmError::Workflow(format!(
+                        "Variable '{}' holds Unit (no value) -- the action produced no output",
+                        name,
+                    )));
                 }
             }
         }
@@ -285,5 +346,676 @@ impl WorkflowExecutor {
             "Variable '{}' is not a numeric value: {}",
             name, json
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::action::{Action, ActionContext, ActionOutput, ActionRegistry};
+    use crate::event::ChannelForwarder;
+    use crate::spm_controller::{
+        AcquisitionMode, Capability, DataStreamStatus, SpmController, TriggerSetup,
+    };
+    use crate::workflow::{CompareOp, Condition, Step, Workflow, WorkflowOutcome};
+    use nanonis_rs::oscilloscope::OsciData;
+    use nanonis_rs::scan::{ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder};
+    use nanonis_rs::tip_recovery::TipShaperConfig;
+    use nanonis_rs::{motor::*, Position};
+    use serde::{Deserialize, Serialize};
+    use std::collections::HashSet;
+    use std::time::Duration;
+
+    // ── Mock controller ────────────────────────────────────────────
+
+    struct MockController {
+        bias: f64,
+    }
+
+    impl MockController {
+        fn new() -> Self {
+            Self { bias: 0.0 }
+        }
+    }
+
+    impl SpmController for MockController {
+        fn capabilities(&self) -> HashSet<Capability> {
+            [Capability::Bias, Capability::Signals].into()
+        }
+
+        fn read_signal(&mut self, index: u32, _wait: bool) -> crate::spm_controller::Result<f64> {
+            Ok(index as f64 * 0.1)
+        }
+        fn read_signals(&mut self, indices: &[u32], _wait: bool) -> crate::spm_controller::Result<Vec<f64>> {
+            Ok(indices.iter().map(|&i| i as f64 * 0.1).collect())
+        }
+        fn signal_names(&mut self) -> crate::spm_controller::Result<Vec<String>> {
+            Ok(vec!["Z".into(), "Current".into()])
+        }
+        fn get_bias(&mut self) -> crate::spm_controller::Result<f64> {
+            Ok(self.bias)
+        }
+        fn set_bias(&mut self, voltage: f64) -> crate::spm_controller::Result<()> {
+            self.bias = voltage;
+            Ok(())
+        }
+        fn bias_pulse(&mut self, _v: f64, _w: Duration, _z: bool, _a: bool) -> crate::spm_controller::Result<()> {
+            Ok(())
+        }
+        fn withdraw(&mut self, _w: bool, _t: Duration) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn auto_approach(&mut self, _w: bool, _t: Duration) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn set_z_setpoint(&mut self, _s: f64) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn set_z_home(&mut self, _m: nanonis_rs::z_ctrl::ZHomeMode, _p: f64) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn get_position(&mut self, _w: bool) -> crate::spm_controller::Result<Position> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn set_position(&mut self, _p: Position, _w: bool) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn move_motor(&mut self, _d: MotorDirection, _s: u16, _w: bool) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn move_motor_3d(&mut self, _d: MotorDisplacement, _w: bool) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn move_motor_closed_loop(&mut self, _t: Position3D, _m: MovementMode) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn stop_motor(&mut self) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn scan_action(&mut self, _a: ScanAction, _d: ScanDirection) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn scan_status(&mut self) -> crate::spm_controller::Result<bool> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn scan_props_get(&mut self) -> crate::spm_controller::Result<ScanProps> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn scan_props_set(&mut self, _p: ScanPropsBuilder) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn scan_speed_get(&mut self) -> crate::spm_controller::Result<ScanConfig> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn scan_speed_set(&mut self, _c: ScanConfig) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn scan_frame_data_grab(&mut self, _c: u32, _f: bool) -> crate::spm_controller::Result<(String, Vec<Vec<f32>>, bool)> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn osci_read(&mut self, _c: i32, _t: Option<&TriggerSetup>, _m: AcquisitionMode) -> crate::spm_controller::Result<OsciData> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn tip_shaper(&mut self, _c: &TipShaperConfig, _w: bool, _t: Duration) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn pll_center_freq_shift(&mut self) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn safe_tip_configure(&mut self, _a: bool, _p: bool, _t: f64) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn safe_tip_status(&mut self) -> crate::spm_controller::Result<(bool, bool, f64)> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn data_stream_configure(&mut self, _c: &[i32], _o: i32) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn data_stream_start(&mut self) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn data_stream_stop(&mut self) -> crate::spm_controller::Result<()> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+        fn data_stream_status(&mut self) -> crate::spm_controller::Result<DataStreamStatus> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
+    }
+
+    // ── Test action for the registry ───────────────────────────────
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct IncrementAction;
+
+    impl Action for IncrementAction {
+        fn name(&self) -> &str { "increment" }
+        fn description(&self) -> &str { "Increment 'counter' in the store" }
+        fn execute(&self, ctx: &mut ActionContext) -> std::result::Result<ActionOutput, SpmError> {
+            let current: f64 = ctx.store.get("counter").unwrap_or(0.0);
+            let next = current + 1.0;
+            ctx.store.set("counter", &next)?;
+            Ok(ActionOutput::Value(next))
+        }
+    }
+
+    // ── Helper ─────────────────────────────────────────────────────
+
+    fn make_executor() -> WorkflowExecutor {
+        let mut reg = ActionRegistry::new();
+        reg.register::<IncrementAction>();
+        reg.register::<crate::action::bias::ReadBias>();
+        reg.register::<crate::action::bias::SetBias>();
+        reg.register::<crate::action::util::Wait>();
+        WorkflowExecutor::new(reg, Box::new(MockController::new()))
+    }
+
+    // ── Basic execution ────────────────────────────────────────────
+
+    #[test]
+    fn run_empty_workflow() {
+        let mut exec = make_executor();
+        let wf = Workflow::new("empty", "Does nothing");
+        let result = exec.run(&wf).unwrap();
+        assert!(matches!(result, WorkflowOutcome::Completed));
+    }
+
+    #[test]
+    fn run_single_do_step() {
+        let mut exec = make_executor();
+        let wf = Workflow::new("test", "Read bias")
+            .step(Step::action("read_bias", serde_json::Value::Null));
+        let result = exec.run(&wf).unwrap();
+        assert!(matches!(result, WorkflowOutcome::Completed));
+        // Without store_as, result should NOT be stored
+        assert!(!exec.store().contains("read_bias"));
+    }
+
+    #[test]
+    fn do_step_stores_result_under_custom_key() {
+        let mut exec = make_executor();
+        let wf = Workflow::new("test", "")
+            .step(Step::action_store(
+                "read_bias",
+                serde_json::Value::Null,
+                "initial_bias",
+            ));
+        exec.run(&wf).unwrap();
+        assert!(exec.store().contains("initial_bias"));
+    }
+
+    #[test]
+    fn do_step_unknown_action_fails() {
+        let mut exec = make_executor();
+        let wf = Workflow::new("test", "")
+            .step(Step::action("nonexistent", serde_json::Value::Null));
+        let result = exec.run(&wf);
+        assert!(result.is_err());
+    }
+
+    // ── Sequence ───────────────────────────────────────────────────
+
+    #[test]
+    fn sequence_runs_all_steps() {
+        let mut exec = make_executor();
+        let wf = Workflow::new("test", "")
+            .step(Step::sequence(vec![
+                Step::action("increment", serde_json::Value::Null),
+                Step::action("increment", serde_json::Value::Null),
+                Step::action("increment", serde_json::Value::Null),
+            ]));
+        exec.run(&wf).unwrap();
+        let counter: f64 = exec.store().get("counter").unwrap();
+        assert!((counter - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn sequence_stops_on_error() {
+        let mut exec = make_executor();
+        let wf = Workflow::new("test", "")
+            .step(Step::sequence(vec![
+                Step::action("increment", serde_json::Value::Null),
+                Step::action("nonexistent", serde_json::Value::Null),
+                Step::action("increment", serde_json::Value::Null), // should not run
+            ]));
+        assert!(exec.run(&wf).is_err());
+        let counter: f64 = exec.store().get("counter").unwrap();
+        assert!((counter - 1.0).abs() < 1e-10, "Only first increment should have run");
+    }
+
+    // ── SetVar ─────────────────────────────────────────────────────
+
+    #[test]
+    fn setvar_stores_literal() {
+        let mut exec = make_executor();
+        let wf = Workflow::new("test", "")
+            .step(Step::SetVar {
+                key: "threshold".into(),
+                value: serde_json::json!(0.5),
+            });
+        exec.run(&wf).unwrap();
+        let val: f64 = exec.store().get("threshold").unwrap();
+        assert!((val - 0.5).abs() < 1e-10);
+    }
+
+    // ── Conditionals ───────────────────────────────────────────────
+
+    #[test]
+    fn if_true_branch() {
+        let mut exec = make_executor();
+        exec.store_mut().set("x", &5.0f64).unwrap();
+        let wf = Workflow::new("test", "")
+            .step(Step::If {
+                condition: Condition::Compare {
+                    variable: "x".into(),
+                    operator: CompareOp::Gt,
+                    threshold: 3.0,
+                },
+                then: Box::new(Step::SetVar {
+                    key: "result".into(),
+                    value: serde_json::json!("big"),
+                }),
+                otherwise: Some(Box::new(Step::SetVar {
+                    key: "result".into(),
+                    value: serde_json::json!("small"),
+                })),
+            });
+        exec.run(&wf).unwrap();
+        let result: String = exec.store().get("result").unwrap();
+        assert_eq!(result, "big");
+    }
+
+    #[test]
+    fn if_false_branch() {
+        let mut exec = make_executor();
+        exec.store_mut().set("x", &1.0f64).unwrap();
+        let wf = Workflow::new("test", "")
+            .step(Step::If {
+                condition: Condition::Compare {
+                    variable: "x".into(),
+                    operator: CompareOp::Gt,
+                    threshold: 3.0,
+                },
+                then: Box::new(Step::SetVar {
+                    key: "result".into(),
+                    value: serde_json::json!("big"),
+                }),
+                otherwise: Some(Box::new(Step::SetVar {
+                    key: "result".into(),
+                    value: serde_json::json!("small"),
+                })),
+            });
+        exec.run(&wf).unwrap();
+        let result: String = exec.store().get("result").unwrap();
+        assert_eq!(result, "small");
+    }
+
+    #[test]
+    fn if_no_otherwise_does_nothing() {
+        let mut exec = make_executor();
+        exec.store_mut().set("x", &1.0f64).unwrap();
+        let wf = Workflow::new("test", "")
+            .step(Step::If {
+                condition: Condition::Compare {
+                    variable: "x".into(),
+                    operator: CompareOp::Gt,
+                    threshold: 99.0,
+                },
+                then: Box::new(Step::SetVar {
+                    key: "result".into(),
+                    value: serde_json::json!("ran"),
+                }),
+                otherwise: None,
+            });
+        exec.run(&wf).unwrap();
+        assert!(!exec.store().contains("result"));
+    }
+
+    // ── Conditions ─────────────────────────────────────────────────
+
+    #[test]
+    fn condition_compare_all_operators() {
+        let mut exec = make_executor();
+        exec.store_mut().set("x", &5.0f64).unwrap();
+
+        let test = |op: CompareOp, thresh: f64| -> bool {
+            let cond = Condition::Compare {
+                variable: "x".into(),
+                operator: op,
+                threshold: thresh,
+            };
+            exec.evaluate_condition(&cond).unwrap()
+        };
+
+        assert!(test(CompareOp::Lt, 10.0));
+        assert!(!test(CompareOp::Lt, 3.0));
+        assert!(test(CompareOp::Le, 5.0));
+        assert!(test(CompareOp::Eq, 5.0));
+        assert!(!test(CompareOp::Eq, 5.1));
+        assert!(test(CompareOp::Ge, 5.0));
+        assert!(test(CompareOp::Gt, 3.0));
+        assert!(!test(CompareOp::Gt, 5.0));
+        assert!(test(CompareOp::Ne, 3.0));
+        assert!(!test(CompareOp::Ne, 5.0));
+    }
+
+    #[test]
+    fn condition_in_range() {
+        let mut exec = make_executor();
+        exec.store_mut().set("x", &5.0f64).unwrap();
+
+        let in_range = Condition::InRange { variable: "x".into(), min: 3.0, max: 7.0 };
+        assert!(exec.evaluate_condition(&in_range).unwrap());
+
+        let out_of_range = Condition::InRange { variable: "x".into(), min: 6.0, max: 10.0 };
+        assert!(!exec.evaluate_condition(&out_of_range).unwrap());
+    }
+
+    #[test]
+    fn condition_and() {
+        let mut exec = make_executor();
+        exec.store_mut().set("x", &5.0f64).unwrap();
+
+        let both_true = Condition::And {
+            conditions: vec![
+                Condition::Compare { variable: "x".into(), operator: CompareOp::Gt, threshold: 3.0 },
+                Condition::Compare { variable: "x".into(), operator: CompareOp::Lt, threshold: 10.0 },
+            ],
+        };
+        assert!(exec.evaluate_condition(&both_true).unwrap());
+
+        let one_false = Condition::And {
+            conditions: vec![
+                Condition::Compare { variable: "x".into(), operator: CompareOp::Gt, threshold: 3.0 },
+                Condition::Compare { variable: "x".into(), operator: CompareOp::Lt, threshold: 2.0 },
+            ],
+        };
+        assert!(!exec.evaluate_condition(&one_false).unwrap());
+    }
+
+    #[test]
+    fn condition_or() {
+        let mut exec = make_executor();
+        exec.store_mut().set("x", &5.0f64).unwrap();
+
+        let one_true = Condition::Or {
+            conditions: vec![
+                Condition::Compare { variable: "x".into(), operator: CompareOp::Gt, threshold: 99.0 },
+                Condition::Compare { variable: "x".into(), operator: CompareOp::Lt, threshold: 10.0 },
+            ],
+        };
+        assert!(exec.evaluate_condition(&one_true).unwrap());
+
+        let both_false = Condition::Or {
+            conditions: vec![
+                Condition::Compare { variable: "x".into(), operator: CompareOp::Gt, threshold: 99.0 },
+                Condition::Compare { variable: "x".into(), operator: CompareOp::Lt, threshold: 1.0 },
+            ],
+        };
+        assert!(!exec.evaluate_condition(&both_false).unwrap());
+    }
+
+    #[test]
+    fn condition_not() {
+        let mut exec = make_executor();
+        exec.store_mut().set("x", &5.0f64).unwrap();
+
+        let neg = Condition::Not {
+            condition: Box::new(Condition::Compare {
+                variable: "x".into(),
+                operator: CompareOp::Gt,
+                threshold: 10.0,
+            }),
+        };
+        assert!(exec.evaluate_condition(&neg).unwrap());
+    }
+
+    #[test]
+    fn condition_missing_variable_fails() {
+        let exec = make_executor();
+        let cond = Condition::Compare {
+            variable: "nonexistent".into(),
+            operator: CompareOp::Gt,
+            threshold: 0.0,
+        };
+        assert!(exec.evaluate_condition(&cond).is_err());
+    }
+
+    // ── Loops ──────────────────────────────────────────────────────
+
+    #[test]
+    fn loop_runs_to_max_iterations() {
+        let mut exec = make_executor();
+        let wf = Workflow::new("test", "")
+            .step(Step::repeat(
+                Step::action("increment", serde_json::Value::Null),
+                5,
+            ));
+        exec.run(&wf).unwrap();
+        let counter: f64 = exec.store().get("counter").unwrap();
+        assert!((counter - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn loop_exits_on_condition() {
+        let mut exec = make_executor();
+        let wf = Workflow::new("test", "")
+            .step(Step::repeat_until(
+                Step::action("increment", serde_json::Value::Null),
+                Condition::Compare {
+                    variable: "counter".into(),
+                    operator: CompareOp::Ge,
+                    threshold: 3.0,
+                },
+                100,
+            ));
+        exec.run(&wf).unwrap();
+        let counter: f64 = exec.store().get("counter").unwrap();
+        assert!((counter - 3.0).abs() < 1e-10);
+    }
+
+    // ── Shutdown ───────────────────────────────────────────────────
+
+    #[test]
+    fn shutdown_stops_workflow() {
+        let mut exec = make_executor();
+        exec.shutdown_flag().request();
+        let wf = Workflow::new("test", "")
+            .step(Step::action("increment", serde_json::Value::Null));
+        let result = exec.run(&wf).unwrap();
+        assert!(matches!(result, WorkflowOutcome::StoppedByUser));
+        // The action should not have run
+        assert!(!exec.store().contains("counter"));
+    }
+
+    #[test]
+    fn shutdown_mid_sequence() {
+        let flag = ShutdownFlag::new();
+        let mut exec = make_executor();
+        exec.set_shutdown_flag(flag.clone());
+
+        // Pre-set counter so increment will set it to 1, then we request shutdown
+        // We can't easily test mid-sequence shutdown without threads,
+        // but we can test that the flag is checked between steps
+        // by requesting shutdown and checking it stops
+        let wf = Workflow::new("test", "")
+            .step(Step::sequence(vec![
+                Step::action("increment", serde_json::Value::Null),
+                Step::action("increment", serde_json::Value::Null),
+            ]));
+
+        // Request shutdown before running
+        flag.request();
+        let result = exec.run(&wf).unwrap();
+        assert!(matches!(result, WorkflowOutcome::StoppedByUser));
+    }
+
+    // ── Events ─────────────────────────────────────────────────────
+
+    fn collect_events(rx: &crossbeam_channel::Receiver<Event>) -> Vec<Event> {
+        let mut events = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            events.push(e);
+        }
+        events
+    }
+
+    #[test]
+    fn executor_emits_workflow_events() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut exec = make_executor();
+        exec.add_observer(Box::new(ChannelForwarder::new(tx)));
+
+        let wf = Workflow::new("test_wf", "")
+            .step(Step::action("read_bias", serde_json::Value::Null));
+        exec.run(&wf).unwrap();
+
+        let events = collect_events(&rx);
+        // Should have: workflow_started, action_started, action_completed, workflow_completed
+        assert!(
+            events.len() >= 4,
+            "Expected at least 4 events, got {}",
+            events.len()
+        );
+
+        // Check workflow_started is first
+        match &events[0] {
+            Event::Custom { kind, data } => {
+                assert_eq!(kind, "workflow_started");
+                assert_eq!(data["name"], "test_wf");
+            }
+            _ => panic!("First event should be workflow_started"),
+        }
+
+        // Check workflow_completed is last
+        match events.last().unwrap() {
+            Event::Custom { kind, .. } => assert_eq!(kind, "workflow_completed"),
+            _ => panic!("Last event should be workflow_completed"),
+        }
+    }
+
+    #[test]
+    fn executor_emits_action_events() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut exec = make_executor();
+        exec.add_observer(Box::new(ChannelForwarder::new(tx)));
+
+        let wf = Workflow::new("test", "")
+            .step(Step::action("read_bias", serde_json::Value::Null));
+        exec.run(&wf).unwrap();
+
+        let events = collect_events(&rx);
+        let has_action_started = events.iter().any(|e| matches!(e, Event::ActionStarted { action, .. } if action == "read_bias"));
+        let has_action_completed = events.iter().any(|e| matches!(e, Event::ActionCompleted { action, .. } if action == "read_bias"));
+        assert!(has_action_started, "Should emit ActionStarted");
+        assert!(has_action_completed, "Should emit ActionCompleted");
+    }
+
+    #[test]
+    fn executor_emits_failure_event() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut exec = make_executor();
+        exec.add_observer(Box::new(ChannelForwarder::new(tx)));
+
+        let wf = Workflow::new("test", "")
+            .step(Step::action("nonexistent", serde_json::Value::Null));
+        let _ = exec.run(&wf); // will fail
+
+        let events = collect_events(&rx);
+        let has_workflow_failed = events.iter().any(|e| matches!(e, Event::Custom { kind, .. } if kind == "workflow_failed"));
+        assert!(has_workflow_failed, "Should emit workflow_failed event");
+    }
+
+    // ── Resolve variable ───────────────────────────────────────────
+
+    #[test]
+    fn resolve_raw_f64() {
+        let mut exec = make_executor();
+        exec.store_mut().set("x", &3.14f64).unwrap();
+        let val = exec.resolve_variable("x").unwrap();
+        assert!((val - 3.14).abs() < 1e-10);
+    }
+
+    #[test]
+    fn resolve_action_output_value() {
+        let mut exec = make_executor();
+        // ActionOutput::Value serializes as {"type":"value","data":2.72}
+        let output = ActionOutput::Value(2.72);
+        exec.store_mut().set("x", &output).unwrap();
+        let val = exec.resolve_variable("x").unwrap();
+        assert!((val - 2.72).abs() < 1e-10);
+    }
+
+    #[test]
+    fn resolve_non_numeric_fails() {
+        let mut exec = make_executor();
+        exec.store_mut().set("x", &"not a number".to_string()).unwrap();
+        assert!(exec.resolve_variable("x").is_err());
+    }
+
+    // ── Workflow serialization ─────────────────────────────────────
+
+    #[test]
+    fn workflow_roundtrips_through_json() {
+        let wf = Workflow::new("test", "A test workflow")
+            .step(Step::action("read_bias", serde_json::Value::Null))
+            .step(Step::repeat_until(
+                Step::action("increment", serde_json::Value::Null),
+                Condition::Compare {
+                    variable: "counter".into(),
+                    operator: CompareOp::Ge,
+                    threshold: 10.0,
+                },
+                100,
+            ));
+
+        let json = serde_json::to_string(&wf).unwrap();
+        let wf2: Workflow = serde_json::from_str(&json).unwrap();
+        assert_eq!(wf2.name, "test");
+        assert_eq!(wf2.steps.len(), 2);
+    }
+
+    #[test]
+    fn step_convenience_constructors() {
+        let action = Step::action("read_bias", serde_json::Value::Null);
+        assert!(matches!(action, Step::Do { action, .. } if action == "read_bias"));
+
+        let action_store = Step::action_store("read_bias", serde_json::json!({}), "bias");
+        assert!(matches!(action_store, Step::Do { store_as: Some(key), .. } if key == "bias"));
+
+        let seq = Step::sequence(vec![]);
+        assert!(matches!(seq, Step::Sequence { .. }));
+
+        let repeat = Step::repeat(Step::wait(10), 5);
+        assert!(matches!(repeat, Step::Loop { max_iterations: 5, .. }));
+
+        let wait = Step::wait(100);
+        assert!(matches!(wait, Step::Wait { duration_ms: 100 }));
+    }
+
+    // ── Wait step ──────────────────────────────────────────────────
+
+    #[test]
+    fn wait_step_completes() {
+        let mut exec = make_executor();
+        let wf = Workflow::new("test", "")
+            .step(Step::Wait { duration_ms: 1 }); // 1ms
+        let start = std::time::Instant::now();
+        exec.run(&wf).unwrap();
+        assert!(start.elapsed().as_millis() >= 1);
+    }
+
+    // ── Integration: set bias then read it back ────────────────────
+
+    #[test]
+    fn set_and_read_bias_workflow() {
+        let mut exec = make_executor();
+        let wf = Workflow::new("bias_test", "Set bias then read it")
+            .step(Step::action("set_bias", serde_json::json!({"voltage": 1.5})))
+            .step(Step::action_store("read_bias", serde_json::Value::Null, "final_bias"));
+        exec.run(&wf).unwrap();
+
+        // The result is stored by the executor via DataStore::set with ActionOutput.
+        // Verify the key exists
+        assert!(exec.store().contains("final_bias"));
     }
 }

@@ -55,15 +55,12 @@ impl Action for SetBias {
 pub struct BiasPulse {
     pub voltage: f64,
     pub duration_ms: u64,
-    #[serde(default = "default_true")]
+    #[serde(default = "super::default_true")]
     pub z_hold: bool,
     #[serde(default)]
     pub absolute: bool,
 }
 
-fn default_true() -> bool {
-    true
-}
 
 impl Default for BiasPulse {
     fn default() -> Self {

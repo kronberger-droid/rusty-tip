@@ -1,5 +1,6 @@
 pub mod action;
 pub mod action_driver;
+pub mod analyzer;
 pub mod event;
 pub mod workflow;
 pub mod actions;
