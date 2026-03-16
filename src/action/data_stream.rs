@@ -93,8 +93,12 @@ impl Action for ReadDataStreamStatus {
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let status = ctx.controller.data_stream_status()?;
-        Ok(ActionOutput::Data(
-            serde_json::to_value(status).unwrap_or(serde_json::json!("unknown")),
-        ))
+        let json = serde_json::to_value(status).map_err(|e| {
+            crate::spm_error::SpmError::Protocol(format!(
+                "Failed to serialize data stream status: {}",
+                e
+            ))
+        })?;
+        Ok(ActionOutput::Data(json))
     }
 }

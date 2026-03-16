@@ -9,12 +9,8 @@ use crate::spm_controller::Capability;
 pub struct MoveMotor {
     pub direction: MotorDirectionParam,
     pub steps: u16,
-    #[serde(default = "default_true")]
+    #[serde(default = "super::default_true")]
     pub wait: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// Serializable motor direction that maps to nanonis-rs MotorDirection.
@@ -75,7 +71,7 @@ pub struct MoveMotor3D {
     pub x: i16,
     pub y: i16,
     pub z: i16,
-    #[serde(default = "default_true")]
+    #[serde(default = "super::default_true")]
     pub wait: bool,
 }
 

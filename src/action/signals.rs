@@ -6,13 +6,10 @@ use crate::spm_controller::Capability;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadSignal {
     pub index: u32,
-    #[serde(default = "default_true")]
+    #[serde(default = "super::default_true")]
     pub wait_for_newest: bool,
 }
 
-fn default_true() -> bool {
-    true
-}
 
 impl Default for ReadSignal {
     fn default() -> Self {
@@ -42,7 +39,7 @@ impl Action for ReadSignal {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadSignals {
     pub indices: Vec<u32>,
-    #[serde(default = "default_true")]
+    #[serde(default = "super::default_true")]
     pub wait_for_newest: bool,
 }
 
@@ -67,6 +64,13 @@ impl Action for ReadSignals {
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let vals = ctx.controller.read_signals(&self.indices, self.wait_for_newest)?;
+        if vals.len() != self.indices.len() {
+            return Err(crate::spm_error::SpmError::Protocol(format!(
+                "read_signals: requested {} indices but got {} values",
+                self.indices.len(),
+                vals.len(),
+            )));
+        }
         let labeled: Vec<(String, f64)> = self
             .indices
             .iter()
@@ -92,6 +96,9 @@ impl Action for ReadSignalNames {
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let names = ctx.controller.signal_names()?;
-        Ok(ActionOutput::Data(serde_json::to_value(names).unwrap()))
+        let json = serde_json::to_value(names).map_err(|e| {
+            crate::spm_error::SpmError::Protocol(format!("Failed to serialize signal names: {}", e))
+        })?;
+        Ok(ActionOutput::Data(json))
     }
 }

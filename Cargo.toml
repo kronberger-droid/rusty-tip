@@ -20,6 +20,10 @@ name = "tip-prep-v2"
 path = "bin/tip-prep-v2/main.rs"
 
 [[bin]]
+name = "cuox-finder"
+path = "bin/cuox-finder/main.rs"
+
+[[bin]]
 name = "tip-prep-gui"
 path = "bin/tip-prep-gui/main.rs"
 required-features = ["gui"]
@@ -40,6 +44,8 @@ parking_lot = "0.12"
 config = { version = "0.15.18", features = [ "toml" ] }
 clap = { version = "4.5.53", features = ["derive"] }
 crossbeam-channel = "0.5"
+rayon = "1.10"
+image = "0.25"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["consoleapi", "processenv", "wincon", "handleapi", "winbase"] }

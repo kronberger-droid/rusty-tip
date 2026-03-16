@@ -48,3 +48,64 @@ impl Default for ShutdownFlag {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn starts_not_requested() {
+        let flag = ShutdownFlag::new();
+        assert!(!flag.is_requested());
+    }
+
+    #[test]
+    fn request_sets_flag() {
+        let flag = ShutdownFlag::new();
+        flag.request();
+        assert!(flag.is_requested());
+    }
+
+    #[test]
+    fn reset_clears_flag() {
+        let flag = ShutdownFlag::new();
+        flag.request();
+        flag.reset();
+        assert!(!flag.is_requested());
+    }
+
+    #[test]
+    fn clone_shares_state() {
+        let flag = ShutdownFlag::new();
+        let flag2 = flag.clone();
+        flag.request();
+        assert!(flag2.is_requested());
+    }
+
+    #[test]
+    fn from_arc_shares_state() {
+        let raw = Arc::new(AtomicBool::new(false));
+        let flag = ShutdownFlag::from_arc(raw.clone());
+        raw.store(true, Ordering::SeqCst);
+        assert!(flag.is_requested());
+    }
+
+    #[test]
+    fn arc_returns_shared_reference() {
+        let flag = ShutdownFlag::new();
+        let arc = flag.arc();
+        flag.request();
+        assert!(arc.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn thread_safety() {
+        let flag = ShutdownFlag::new();
+        let flag2 = flag.clone();
+        let handle = std::thread::spawn(move || {
+            flag2.request();
+        });
+        handle.join().unwrap();
+        assert!(flag.is_requested());
+    }
+}

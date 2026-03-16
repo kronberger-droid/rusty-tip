@@ -22,6 +22,11 @@ pub use store::DataStore;
 use crate::spm_controller::Capability;
 use crate::spm_error::SpmError;
 
+/// Shared serde default for boolean fields that should default to `true`.
+pub(crate) fn default_true() -> bool {
+    true
+}
+
 type Result<T> = std::result::Result<T, SpmError>;
 
 /// Every SPM operation implements this trait.
@@ -50,14 +55,14 @@ pub trait Action: Send + Sync {
     /// Overwrites any previous value stored under that key.
     fn execute_and_store_as(&self, ctx: &mut ActionContext) -> Result<ActionOutput> {
         let output = self.execute(ctx)?;
-        ctx.store.set(self.name(), &output);
+        ctx.store.set(self.name(), &output)?;
         Ok(output)
     }
 
     /// Execute and store the result under a custom key.
     fn execute_and_store(&self, ctx: &mut ActionContext, key: &str) -> Result<ActionOutput> {
         let output = self.execute(ctx)?;
-        ctx.store.set(key, &output);
+        ctx.store.set(key, &output)?;
         Ok(output)
     }
 }
@@ -94,6 +99,7 @@ pub fn builtin_registry() -> ActionRegistry {
     // Scanning
     r.register::<scan::ScanControl>();
     r.register::<scan::ReadScanStatus>();
+    r.register::<scan::GrabScanFrame>();
 
     // Oscilloscope
     r.register::<oscilloscope::OsciRead>();

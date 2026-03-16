@@ -64,14 +64,10 @@ impl TipShaperParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TipShape {
     pub config: TipShaperParams,
-    #[serde(default = "default_true")]
+    #[serde(default = "super::default_true")]
     pub wait: bool,
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn default_timeout_ms() -> u64 {

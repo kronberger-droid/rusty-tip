@@ -445,7 +445,7 @@ impl BufferedTCPReader {
     /// }
     /// ```
     pub fn has_frames(&self, min_count: usize) -> bool {
-        self.frame_count() > min_count
+        self.frame_count() >= min_count
     }
 
     /// Clear all buffered data

@@ -53,6 +53,7 @@ pub enum Capability {
 }
 
 /// What data the oscilloscope should return
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcquisitionMode {
     /// Return current buffer contents immediately
     Current,
@@ -141,6 +142,19 @@ pub trait SpmController: Send {
     fn scan_speed_get(&mut self) -> Result<ScanConfig>;
     fn scan_speed_set(&mut self, config: ScanConfig) -> Result<()>;
 
+    /// Grab pixel data from a completed (or in-progress) scan frame.
+    ///
+    /// Returns `(channel_name, data_2d, scan_direction_up)` where `data_2d`
+    /// is a row-major `Vec<Vec<f32>>` (rows x cols).
+    ///
+    /// - `channel_index`: which scan buffer channel to read (0-based)
+    /// - `forward`: `true` for the forward scan direction, `false` for backward
+    fn scan_frame_data_grab(
+        &mut self,
+        channel_index: u32,
+        forward: bool,
+    ) -> Result<(String, Vec<Vec<f32>>, bool)>;
+
     // -- Oscilloscope --
     // Combines channel set + trigger config + run + data get
     fn osci_read(
@@ -201,6 +215,11 @@ pub trait SpmController: Send {
         index: u32,
         num_samples: usize,
     ) -> Result<f64> {
+        if num_samples == 0 {
+            return Err(crate::spm_error::SpmError::Protocol(
+                "read_stable_signal: num_samples must be > 0".into(),
+            ));
+        }
         let mut sum = 0.0;
         for _ in 0..num_samples {
             sum += self.read_signal(index, true)?;
