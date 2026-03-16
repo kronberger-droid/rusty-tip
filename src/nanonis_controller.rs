@@ -59,10 +59,6 @@ pub struct NanonisController {
     signal_to_data_position: HashMap<u32, usize>,
     /// Guards against double-teardown (manual call + Drop).
     torn_down: bool,
-    /// Stability criteria for `read_stable_signal`.
-    stable_max_std_dev: f64,
-    stable_max_slope: f64,
-    stable_retries: usize,
 }
 
 impl NanonisController {
@@ -73,22 +69,7 @@ impl NanonisController {
             tcp_reader: None,
             signal_to_data_position: HashMap::new(),
             torn_down: false,
-            stable_max_std_dev: 1.0,
-            stable_max_slope: 0.01,
-            stable_retries: 3,
         }
-    }
-
-    /// Configure stability criteria for `read_stable_signal`.
-    ///
-    /// A reading is considered stable when its standard deviation is at most
-    /// `max_std_dev` and its linear regression slope is at most `max_slope`.
-    /// If the reading is not stable, it is retried up to `retries` times
-    /// with exponential backoff (100ms, 200ms, 400ms, ...).
-    pub fn set_stability_criteria(&mut self, max_std_dev: f64, max_slope: f64, retries: usize) {
-        self.stable_max_std_dev = max_std_dev;
-        self.stable_max_slope = max_slope;
-        self.stable_retries = retries;
     }
 
     /// Access the underlying NanonisClient directly for operations
@@ -133,45 +114,6 @@ impl NanonisController {
         }
 
         Ok(collected)
-    }
-
-    /// Compute mean, standard deviation, and linear regression slope from sample data.
-    fn compute_stability_metrics(data: &[f32]) -> (f64, f64, f64) {
-        let n = data.len() as f64;
-        let mean = data.iter().map(|&v| v as f64).sum::<f64>() / n;
-
-        if data.len() < 2 {
-            return (mean, 0.0, 0.0);
-        }
-
-        // Standard deviation
-        let variance = data
-            .iter()
-            .map(|&v| {
-                let d = v as f64 - mean;
-                d * d
-            })
-            .sum::<f64>()
-            / (n - 1.0);
-        let std_dev = variance.sqrt();
-
-        // Linear regression slope
-        let x_mean = (n - 1.0) / 2.0;
-        let mut numerator = 0.0;
-        let mut denominator = 0.0;
-        for (i, &v) in data.iter().enumerate() {
-            let x_diff = i as f64 - x_mean;
-            let y_diff = v as f64 - mean;
-            numerator += x_diff * y_diff;
-            denominator += x_diff * x_diff;
-        }
-        let slope = if denominator > 0.0 {
-            numerator / denominator
-        } else {
-            0.0
-        };
-
-        (mean, std_dev, slope)
     }
 
     /// Set the mapping from Nanonis signal indices to TCP data array positions.
@@ -732,16 +674,16 @@ impl SpmController for NanonisController {
         self.clear_tcp_buffer();
     }
 
-    // -- Stable Signal Reading (TCP stream override) --
+    // -- Signal Reading (TCP stream override) --
 
-    fn read_stable_signal(
+    fn read_signal_samples(
         &mut self,
         index: u32,
         num_samples: usize,
-    ) -> Result<f64> {
+    ) -> Result<Vec<f64>> {
         if num_samples == 0 {
             return Err(SpmError::Protocol(
-                "read_stable_signal: num_samples must be > 0".into(),
+                "read_signal_samples: num_samples must be > 0".into(),
             ));
         }
         let reader = match &self.tcp_reader {
@@ -749,11 +691,11 @@ impl SpmController for NanonisController {
             None => {
                 // Fall back to polling read_signal if no TCP reader
                 log::debug!("No TCP reader available, falling back to polling read_signal");
-                let mut sum = 0.0;
+                let mut samples = Vec::with_capacity(num_samples);
                 for _ in 0..num_samples {
-                    sum += self.read_signal(index, true)?;
+                    samples.push(self.read_signal(index, true)?);
                 }
-                return Ok(sum / num_samples as f64);
+                return Ok(samples);
             }
         };
 
@@ -765,44 +707,8 @@ impl SpmController for NanonisController {
             ))
         })?;
 
-        let max_std_dev = self.stable_max_std_dev;
-        let max_slope = self.stable_max_slope;
-        let max_retries = self.stable_retries;
-
-        for attempt in 0..=max_retries {
-            let collected = Self::collect_tcp_samples(reader, data_position, num_samples)?;
-
-            let (mean, std_dev, slope) = Self::compute_stability_metrics(&collected);
-
-            let noise_ok = std_dev <= max_std_dev;
-            let drift_ok = slope.abs() <= max_slope;
-
-            if noise_ok && drift_ok {
-                log::debug!(
-                    "read_stable_signal: index={}, samples={}, mean={:.6}, std_dev={:.4}, slope={:.6} (stable, attempt {})",
-                    index, collected.len(), mean, std_dev, slope, attempt
-                );
-                return Ok(mean);
-            }
-
-            if attempt < max_retries {
-                let backoff_ms = 100 * (1 << attempt); // 100, 200, 400, 800, ...
-                log::debug!(
-                    "read_stable_signal: not stable (std_dev={:.4}/{:.4}, slope={:.6}/{:.6}), retry {} in {}ms",
-                    std_dev, max_std_dev, slope.abs(), max_slope, attempt + 1, backoff_ms
-                );
-                std::thread::sleep(Duration::from_millis(backoff_ms));
-            } else {
-                // All retries exhausted — return mean anyway (best-effort, like V1 fallback)
-                log::warn!(
-                    "read_stable_signal: signal not stable after {} retries (std_dev={:.4}, slope={:.6}), using mean={:.6}",
-                    max_retries, std_dev, slope, mean
-                );
-                return Ok(mean);
-            }
-        }
-
-        unreachable!()
+        let collected = Self::collect_tcp_samples(reader, data_position, num_samples)?;
+        Ok(collected.into_iter().map(|v| v as f64).collect())
     }
 }
 

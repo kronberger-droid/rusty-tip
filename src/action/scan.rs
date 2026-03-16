@@ -121,6 +121,7 @@ impl Action for GrabScanFrame {
             "data": data,
             "direction_up": direction_up,
         });
+        ctx.store.set("scan_frame", &ActionOutput::Data(result.clone()))?;
         Ok(ActionOutput::Data(result))
     }
 }
