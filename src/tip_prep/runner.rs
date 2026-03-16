@@ -666,11 +666,16 @@ fn execute_stability_sweep(
     .execute(ctx);
     restore_scan_props(ctx, &original_props);
 
-    // Propagate the inner result; on success, do the post-sweep safety sequence
+    // Always withdraw — tip is on the surface after the sweep regardless of
+    // whether it completed or was interrupted. This must happen before
+    // propagating any error to avoid leaving the tip engaged.
+    if let Err(e) = execute_logged(&Withdraw::default(), ctx) {
+        log::error!("Post-sweep withdraw failed: {}", e);
+    }
+
+    // Now propagate sweep errors (shutdown, SetBias failure, etc.)
     result?;
 
-    // Withdraw before changing bias (tip is still on surface after sweep)
-    execute_logged(&Withdraw::default(), ctx)?;
     execute_logged(&Wait { duration_ms: 200 }, ctx)?;
 
     // Restore bias to sweep starting value (not the last stepped value near 0V)
