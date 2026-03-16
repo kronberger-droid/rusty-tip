@@ -11,14 +11,61 @@ Rust library and tools for automated STM/AFM tip preparation on Nanonis SPM syst
 
 rusty-tip provides automated tip conditioning for Scanning Probe Microscopy (SPM) systems. It connects to Nanonis controllers via TCP and implements tip preparation algorithms with configurable pulse strategies and stability verification.
 
+The library is built around a hardware abstraction trait (`SpmController`) and a composable action system, making it possible to script arbitrary SPM workflows or integrate with external tooling.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Binaries                                               │
+│  tip-prep-v2 (CLI)  ·  tip-prep-gui (eframe/egui)      │
+└────────────┬────────────────────────────┬───────────────┘
+             │                            │
+┌────────────▼────────────────────────────▼───────────────┐
+│  Library (rusty-tip)                                    │
+│                                                         │
+│  ┌──────────────┐  ┌──────────┐  ┌──────────────────┐  │
+│  │ tip_prep     │  │ workflow │  │ analyzer         │  │
+│  │  runner      │  │  executor│  │  CuOx detector   │  │
+│  │  pulse_state │  │  steps   │  │  adapter         │  │
+│  └──────┬───────┘  └────┬─────┘  └────────┬─────────┘  │
+│         │               │                 │             │
+│  ┌──────▼───────────────▼─────────────────▼─────────┐  │
+│  │  Action System (28 built-in actions)              │  │
+│  │  ActionRegistry · ActionContext · DataStore       │  │
+│  └──────────────────────┬────────────────────────────┘  │
+│                         │                               │
+│  ┌──────────────────────▼────────────────────────────┐  │
+│  │  SpmController trait                              │  │
+│  │  signals · bias · z-controller · motor · scan     │  │
+│  │  oscilloscope · PLL · safe-tip · data stream      │  │
+│  └──────────────────────┬────────────────────────────┘  │
+│                         │                               │
+│  ┌──────────────────────▼────────────────────────────┐  │
+│  │  EventBus (observer pattern)                      │  │
+│  │  ChannelForwarder · FileLogger · Accumulator      │  │
+│  └───────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
+             │
+┌────────────▼────────────────────────────────────────────┐
+│  NanonisController (SpmController impl)                 │
+│  nanonis-rs TCP client · BufferedTCPReader              │
+└─────────────────────────────────────────────────────────┘
+```
+
 ## Features
 
-- **Automated Tip Preparation** - State machine that detects tip quality and applies conditioning pulses
+- **Hardware Abstraction** - `SpmController` trait decouples logic from hardware; implement it for any SPM system
+- **Composable Actions** - 28 built-in actions (bias, signals, motor, scan, PLL, etc.) registered in an `ActionRegistry` with serde-based parameterization
+- **Automated Tip Preparation** - Pulse-and-check algorithm with configurable strategies and stability verification
 - **Multiple Pulse Strategies** - Fixed voltage, adaptive stepping, or linear mapping based on signal response
-- **Stability Verification** - Optional bias sweep testing to confirm tip stability
-- **Real-time Monitoring** - TCP data logging with signal history tracking
-- **CLI and GUI Applications** - Both command-line and graphical interfaces
-- **Configurable** - TOML configuration with environment variable overrides
+- **Stability Verification** - Bias sweep testing with statistical signal analysis (std deviation + linear regression slope)
+- **Event System** - Observer-based event bus for logging, GUI updates, and external monitoring
+- **Workflow Engine** - Declarative workflow DSL with loops, conditions, and variable store
+- **Image Analysis** - CuOx row detector with projection-based band detection
+- **Real-time Monitoring** - TCP data stream with background buffering and timestamp-based sample collection
+- **CLI and GUI** - Command-line and graphical (eframe/egui) interfaces
+- **Configurable** - TOML configuration with all parameters exposed
 
 ## Installation
 
@@ -28,10 +75,6 @@ Download from [GitHub Releases](https://github.com/kronberger-droid/rusty-tip/re
 
 - **Linux**: `rusty-tip-x86_64-unknown-linux-gnu.tar.xz`
 - **Windows**: `rusty-tip-x86_64-pc-windows-msvc.zip`
-
-Each archive contains:
-- `tip-prep` / `tip-prep.exe` - Command-line tool
-- `tip-prep-gui` / `tip-prep-gui.exe` - Graphical interface
 
 ### From Source
 
@@ -51,22 +94,18 @@ cargo add rusty-tip
 
 ## Usage
 
-### CLI (tip-prep)
+### CLI (tip-prep-v2)
 
 ```bash
-tip-prep --config path/to/config.toml
-tip-prep --config config.toml --log-level debug
+tip-prep-v2 --config path/to/config.toml
+tip-prep-v2 --config config.toml --log-level debug
 ```
-
-Options:
-- `--config <FILE>` - Path to TOML configuration file (required)
-- `--log-level <LEVEL>` - Override log level: trace, debug, info, warn, error
 
 ### GUI (tip-prep-gui)
 
-Launch the application and load a configuration file via the file dialog. The interface provides:
+Launch the application and load a configuration file. The interface provides:
 
-- **Control Tab** - Start/stop preparation, live status display
+- **Control Tab** - Start/stop preparation, live freq-shift and voltage plots, event stream
 - **Configuration Tab** - Edit all parameters before running
 
 ## Configuration
@@ -139,6 +178,20 @@ step_period_ms = 200
 polarity_mode = "both"           # "positive", "negative", or "both"
 ```
 
+### Data Acquisition
+
+Configure the TCP data stream and stable signal reading:
+
+```toml
+[data_acquisition]
+data_port = 6590
+sample_rate = 2000
+stable_signal_samples = 100   # Samples per stability read
+max_std_dev = 1.0              # Max std deviation for "stable"
+max_slope = 0.01               # Max linear regression slope for "stable"
+stable_read_retries = 3        # Retries with exponential backoff
+```
+
 ### Full Configuration Reference
 
 ```toml
@@ -151,6 +204,10 @@ settings_file = "./settings.ini"  # Optional
 [data_acquisition]
 data_port = 6590
 sample_rate = 2000
+stable_signal_samples = 100
+max_std_dev = 1.0
+max_slope = 0.01
+stable_read_retries = 3
 
 [experiment_logging]
 enabled = true
@@ -165,6 +222,15 @@ max_cycles = 10000
 max_duration_secs = 12000
 initial_bias_v = -0.5
 initial_z_setpoint_a = 100e-12
+
+[tip_prep.timing]
+pulse_width_ms = 50
+post_approach_settle_ms = 2000
+post_reposition_settle_ms = 1000
+post_pulse_settle_ms = 1000
+buffer_clear_wait_ms = 500
+reposition_steps = [3, 3]
+status_interval = 10
 
 [tip_prep.stability]
 check_stability = true
@@ -181,50 +247,147 @@ polarity_mode = "both"
 
 ## Library Usage
 
+### Action System
+
+The V2 API uses trait-based actions executed against an `SpmController`:
+
 ```rust
-use rusty_tip::{ActionDriver, Action, NanonisClient};
+use rusty_tip::action::{builtin_registry, ActionContext, DataStore};
+use rusty_tip::action::bias::{SetBias, BiasPulse};
+use rusty_tip::action::signals::ReadStableSignal;
+use rusty_tip::action::z_controller::Withdraw;
+use rusty_tip::event::EventBus;
 
-// Connect to Nanonis
-let client = NanonisClient::new("127.0.0.1", 6501)?;
-let mut driver = ActionDriver::new(client);
-
-// Execute actions
-driver.execute(Action::ReadBias)?;
-driver.execute(Action::SetBias { voltage: -0.5 })?;
-driver.execute(Action::AutoApproach { center_freq_shift: true })?;
-driver.execute(Action::BiasPulse {
+// Actions are structs with serde parameters
+let set_bias = SetBias { voltage: -0.5 };
+let pulse = BiasPulse {
     voltage: 4.0,
-    duration_ms: 10,
+    duration_ms: 50,
     z_hold: true,
-})?;
+    absolute: true,
+};
+let stable_read = ReadStableSignal {
+    index: 0,
+    num_samples: 100,
+    max_std_dev: 1.0,
+    max_slope: 0.01,
+    max_retries: 3,
+};
+
+// Execute against a controller
+let mut store = DataStore::new();
+let events = EventBus::new();
+let mut ctx = ActionContext {
+    controller: &mut *controller,
+    store: &mut store,
+    events: &events,
+};
+set_bias.execute(&mut ctx)?;
+pulse.execute(&mut ctx)?;
 ```
 
-### Available Actions
+### SpmController Trait
+
+Implement `SpmController` for your hardware:
+
+```rust
+use rusty_tip::spm_controller::{SpmController, Capability};
+use std::collections::HashSet;
+
+struct MyController { /* ... */ }
+
+impl SpmController for MyController {
+    fn capabilities(&self) -> HashSet<Capability> {
+        [Capability::Bias, Capability::Signals, Capability::ZController]
+            .into_iter().collect()
+    }
+
+    fn get_bias(&mut self) -> Result<f64> { /* ... */ }
+    fn set_bias(&mut self, voltage: f64) -> Result<()> { /* ... */ }
+    // ... implement methods for your hardware
+}
+```
+
+### Built-in Actions
 
 | Category | Actions |
 |----------|---------|
-| Signals | ReadSignal, ReadSignals, ReadSignalNames, ReadBias, SetBias |
-| Positioning | ReadPiezoPosition, SetPiezoPosition, MovePiezoRelative, MoveMotor3D |
-| High-level | AutoApproach, Withdraw, SafeReposition, BiasPulse, TipShaper |
-| Analysis | CheckTipState, CheckTipStability, GetStableSignal |
-| Scanning | ScanControl, ReadScanStatus |
-| Oscilloscope | ReadOsci |
+| **Bias** | ReadBias, SetBias, SafeSetBias, BiasPulse |
+| **Signals** | ReadSignal, ReadSignals, ReadSignalNames, ReadStableSignal |
+| **Z-Controller** | Withdraw, AutoApproach, CalibratedApproach, SetZSetpoint |
+| **Position** | ReadPosition, SetPosition |
+| **Motor** | MoveMotor, MoveMotor3D, MoveMotorClosedLoop, StopMotor, Reposition |
+| **Scanning** | ScanControl, ReadScanStatus, GrabScanFrame |
+| **Oscilloscope** | OsciRead |
+| **Tip Shaper** | TipShape |
+| **PLL** | CenterFreqShift |
+| **Data Stream** | ConfigureDataStream, StartDataStream, StopDataStream, ReadDataStreamStatus |
+| **Utility** | Wait |
+
+### Workflow Engine
+
+Define workflows as JSON/TOML-serializable step trees:
+
+```rust
+use rusty_tip::workflow::{Workflow, Step, Condition, CompareOp};
+
+let workflow = Workflow::new("pulse_and_check", "Apply pulse then verify")
+    .step(Step::sequence(vec![
+        Step::action("set_bias", serde_json::json!({ "voltage": -0.5 })),
+        Step::action("bias_pulse", serde_json::json!({
+            "voltage": 4.0,
+            "duration_ms": 50,
+        })),
+        Step::action("read_stable_signal", serde_json::json!({
+            "index": 0,
+            "num_samples": 100,
+        })),
+    ]));
+```
+
+### Tip Preparation
+
+Run the full tip-prep algorithm from the library:
+
+```rust
+use rusty_tip::tip_prep::run_tip_prep;
+use rusty_tip::config::load_config;
+use rusty_tip::event::EventBus;
+use rusty_tip::workflow::ShutdownFlag;
+
+let config = load_config("config.toml")?;
+let events = EventBus::new();
+let shutdown = ShutdownFlag::new();
+
+let outcome = run_tip_prep(
+    controller,       // Box<dyn SpmController>
+    &events,
+    &shutdown,
+    &config,
+    freq_shift_index, // signal index for frequency shift
+)?;
+```
 
 ## How It Works
 
-The tip preparation follows a state machine:
+The tip preparation algorithm:
 
-1. **Blunt** - Tip quality below threshold
-   - Apply voltage pulse
-   - Reposition (withdraw, move, approach)
-   - Check if now sharp
-
-2. **Sharp** - Tip quality within bounds
-   - Verify with multiple repositions
-   - If stability checking enabled: perform bias sweep
-   - If stable, mark complete; otherwise pulse and return to Blunt
-
-3. **Stable** - Preparation complete
+1. **Initialize** - Set bias, setpoint, calibrated approach
+2. **Pulse Loop** (per cycle):
+   - Apply voltage pulse (absolute, z-hold)
+   - Settle briefly
+   - Reposition (withdraw, motor move, calibrated approach)
+   - Measure frequency shift at new position (stable read with retries)
+   - If sharp: run confirmation + stability check
+   - Update voltage strategy for next cycle
+3. **Confirmation** - 3x reposition-and-measure to verify sharpness persists
+4. **Stability Check** (optional):
+   - Start continuous scan
+   - Sweep bias through configured range
+   - Withdraw and restore bias after sweep
+   - Measure final frequency shift
+   - Compare to baseline; if drift exceeds threshold, fire max pulse and restart
+5. **Cleanup** - Withdraw tip, teardown controller
 
 ## Requirements
 
