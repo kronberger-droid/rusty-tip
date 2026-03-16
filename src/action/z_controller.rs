@@ -205,25 +205,33 @@ impl Action for CalibratedApproach {
             ctx.controller.safe_tip_set_enabled(true)?;
         }
 
-        // 4. Small withdraw to z-home (~50nm above surface)
-        ctx.controller.go_z_home()?;
+        // Steps 4-7 wrapped so safe-tip is always restored on exit
+        let result = (|| -> super::Result<()> {
+            // 4. Small withdraw to z-home (~50nm above surface)
+            ctx.controller.go_z_home()?;
 
-        // 5. Settle
-        Wait { duration_ms: 500 }.execute(ctx)?;
+            // 5. Settle
+            Wait { duration_ms: 500 }.execute(ctx)?;
 
-        // 6. Center freq shift (non-fatal if it fails)
-        if let Err(e) = CenterFreqShift.execute(ctx) {
-            log::warn!("Failed to center frequency shift: {} (continuing)", e);
-        }
+            // 6. Center freq shift (non-fatal if it fails)
+            if let Err(e) = CenterFreqShift.execute(ctx) {
+                log::warn!("Failed to center frequency shift: {} (continuing)", e);
+            }
 
-        // 7. Final approach with centered freq shift
-        ctx.controller.auto_approach(self.wait, timeout)?;
+            // 7. Final approach with centered freq shift
+            ctx.controller.auto_approach(self.wait, timeout)?;
 
-        // 8. Restore safe-tip state
+            Ok(())
+        })();
+
+        // 8. Always restore safe-tip state before propagating errors
         if !was_enabled {
-            ctx.controller.safe_tip_set_enabled(false)?;
+            if let Err(e) = ctx.controller.safe_tip_set_enabled(false) {
+                log::error!("Failed to restore safe-tip state: {}", e);
+            }
         }
 
+        result?;
         Ok(ActionOutput::Unit)
     }
 }

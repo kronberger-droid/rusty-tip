@@ -89,13 +89,14 @@ impl NanonisController {
     /// Collect `num_samples` data points from the TCP stream for a given data position.
     ///
     /// Uses timestamp tracking to avoid re-reading already-seen frames.
-    /// Warns if fewer samples than requested were collected within the timeout.
+    /// Timeout scales with sample count (minimum 5s, +1s per 100 samples).
     fn collect_tcp_samples(
         reader: &BufferedTCPReader,
         data_position: usize,
         num_samples: usize,
     ) -> Result<Vec<f32>> {
-        let timeout = Duration::from_secs(5);
+        let timeout_secs = 5 + (num_samples as u64 / 100);
+        let timeout = Duration::from_secs(timeout_secs);
         let start = std::time::Instant::now();
         let mut collected: Vec<f32> = Vec::with_capacity(num_samples);
 
@@ -676,6 +677,11 @@ impl SpmController for NanonisController {
     // -- Data Stream (TCP Logger) --
 
     fn data_stream_configure(&mut self, channels: &[i32], oversampling: i32) -> Result<()> {
+        if channels.is_empty() {
+            return Err(SpmError::Protocol(
+                "data_stream_configure: at least one channel is required".into(),
+            ));
+        }
         self.client.tcplog_chs_set(channels.to_vec())?;
         self.client.tcplog_oversampl_set(oversampling)?;
         self.configured_channel_count = Some(channels.len() as u32);

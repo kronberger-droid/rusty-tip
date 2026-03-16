@@ -150,7 +150,8 @@ impl WorkflowExecutor {
             } => {
                 for _i in 0..*max_iterations {
                     match self.execute_step(body)? {
-                        StepOutcome::Completed(_) | StepOutcome::CycleLimit { .. } => {}
+                        StepOutcome::Completed(_) => {}
+                        outcome @ StepOutcome::CycleLimit { .. } => return Ok(outcome),
                         StepOutcome::Shutdown => return Ok(StepOutcome::Shutdown),
                     }
                     if let Some(condition) = until {
