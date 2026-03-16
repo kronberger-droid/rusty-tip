@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use nanonis_rs::motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D};
 
 use crate::action::{Action, ActionContext, ActionOutput};
+use crate::action::util::Wait;
+use crate::action::z_controller::{CalibratedApproach, Withdraw};
 use crate::spm_controller::Capability;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -182,6 +184,76 @@ impl Action for StopMotor {
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         ctx.controller.stop_motor()?;
+        Ok(ActionOutput::Unit)
+    }
+}
+
+/// Composite action: withdraw, move motor, settle, and do a calibrated approach.
+///
+/// Sequence:
+/// 1. Withdraw from surface
+/// 2. Move motor 3D (x, y steps + z retract)
+/// 3. Wait for settle
+/// 4. Calibrated approach (approach, small withdraw, center freq shift, re-approach)
+/// 5. Wait for post-approach settle
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Reposition {
+    pub x_steps: i16,
+    pub y_steps: i16,
+    #[serde(default = "default_z_retract")]
+    pub z_retract: i16,
+    #[serde(default = "default_settle_ms")]
+    pub post_move_settle_ms: u64,
+    #[serde(default = "default_settle_ms")]
+    pub post_approach_settle_ms: u64,
+}
+
+fn default_z_retract() -> i16 {
+    -3
+}
+
+fn default_settle_ms() -> u64 {
+    500
+}
+
+impl Default for Reposition {
+    fn default() -> Self {
+        Self {
+            x_steps: 0,
+            y_steps: 0,
+            z_retract: -3,
+            post_move_settle_ms: 500,
+            post_approach_settle_ms: 500,
+        }
+    }
+}
+
+impl Action for Reposition {
+    fn name(&self) -> &str {
+        "reposition"
+    }
+    fn description(&self) -> &str {
+        "Withdraw, move motor, and do a calibrated approach at the new position"
+    }
+    fn requires(&self) -> Vec<Capability> {
+        vec![Capability::ZController, Capability::Motor, Capability::Pll]
+    }
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+        Withdraw::default().execute(ctx)?;
+
+        let displacement = MotorDisplacement {
+            x: self.x_steps,
+            y: self.y_steps,
+            z: self.z_retract,
+        };
+        ctx.controller.move_motor_3d(displacement, true)?;
+
+        Wait { duration_ms: self.post_move_settle_ms }.execute(ctx)?;
+
+        CalibratedApproach::default().execute(ctx)?;
+
+        Wait { duration_ms: self.post_approach_settle_ms }.execute(ctx)?;
+
         Ok(ActionOutput::Unit)
     }
 }

@@ -417,6 +417,9 @@ mod tests {
         fn go_z_home(&mut self) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
+        fn z_controller_status(&mut self) -> crate::spm_controller::Result<crate::spm_controller::ZControllerStatus> {
+            Err(SpmError::Unsupported("mock".into()))
+        }
         fn get_position(&mut self, _w: bool) -> crate::spm_controller::Result<Position> {
             Err(SpmError::Unsupported("mock".into()))
         }

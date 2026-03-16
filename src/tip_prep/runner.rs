@@ -3,7 +3,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::action::bias::{BiasPulse, SetBias};
-use crate::action::motor::MoveMotor3D;
+use crate::action::motor::{MoveMotor3D, Reposition};
 
 use crate::action::scan::{ScanActionParam, ScanControl, ScanDirectionParam};
 use crate::action::util::Wait;
@@ -314,11 +314,15 @@ fn run_tip_prep_inner(
         }
 
         // Reposition for next cycle
-        reposition(
+        execute_logged(
+            &Reposition {
+                x_steps: config.tip_prep.timing.reposition_steps[0],
+                y_steps: config.tip_prep.timing.reposition_steps[1],
+                post_move_settle_ms: config.tip_prep.timing.post_reposition_settle_ms,
+                post_approach_settle_ms: config.tip_prep.timing.post_approach_settle_ms,
+                ..Default::default()
+            },
             &mut ctx,
-            config.tip_prep.timing.reposition_steps,
-            config.tip_prep.timing.post_reposition_settle_ms,
-            config.tip_prep.timing.post_approach_settle_ms,
         )?;
     }
 
@@ -330,8 +334,7 @@ fn run_tip_prep_inner(
 // ============================================================================
 
 fn cleanup(controller: &mut dyn SpmController, events: &EventBus) {
-    controller.teardown();
-
+    // Withdraw first while safe-tip protection is still active
     let mut store = DataStore::new();
     let mut ctx = ActionContext {
         controller,
@@ -341,47 +344,8 @@ fn cleanup(controller: &mut dyn SpmController, events: &EventBus) {
     if let Err(e) = execute_logged(&Withdraw::default(), &mut ctx) {
         log::warn!("Cleanup withdrawal failed: {}", e);
     }
-}
 
-// ============================================================================
-// Reposition
-// ============================================================================
-
-fn reposition(
-    ctx: &mut ActionContext,
-    reposition_steps: [i16; 2],
-    post_reposition_settle_ms: u64,
-    post_approach_settle_ms: u64,
-) -> Result<(), Box<dyn std::error::Error>> {
-    execute_logged(&Withdraw::default(), ctx)?;
-
-    execute_logged(
-        &MoveMotor3D {
-            x: reposition_steps[0],
-            y: reposition_steps[1],
-            z: -3,
-            wait: true,
-        },
-        ctx,
-    )?;
-
-    execute_logged(
-        &Wait {
-            duration_ms: post_reposition_settle_ms,
-        },
-        ctx,
-    )?;
-
-    execute_logged(&CalibratedApproach::default(), ctx)?;
-
-    execute_logged(
-        &Wait {
-            duration_ms: post_approach_settle_ms,
-        },
-        ctx,
-    )?;
-
-    Ok(())
+    controller.teardown();
 }
 
 // ============================================================================
@@ -403,11 +367,15 @@ fn confirm_sharp(
             return Err(SpmError::ShutdownRequested.into());
         }
 
-        reposition(
+        execute_logged(
+            &Reposition {
+                x_steps: config.tip_prep.timing.reposition_steps[0],
+                y_steps: config.tip_prep.timing.reposition_steps[1],
+                post_move_settle_ms: config.tip_prep.timing.post_reposition_settle_ms,
+                post_approach_settle_ms: config.tip_prep.timing.post_approach_settle_ms,
+                ..Default::default()
+            },
             ctx,
-            config.tip_prep.timing.reposition_steps,
-            config.tip_prep.timing.post_reposition_settle_ms,
-            config.tip_prep.timing.post_approach_settle_ms,
         )?;
 
         if shutdown.is_requested() {
@@ -583,11 +551,15 @@ fn check_stability(
             ctx,
         )?;
 
-        reposition(
+        execute_logged(
+            &Reposition {
+                x_steps: config.tip_prep.timing.reposition_steps[0],
+                y_steps: config.tip_prep.timing.reposition_steps[1],
+                post_move_settle_ms: config.tip_prep.timing.post_reposition_settle_ms,
+                post_approach_settle_ms: config.tip_prep.timing.post_approach_settle_ms,
+                ..Default::default()
+            },
             ctx,
-            config.tip_prep.timing.reposition_steps,
-            config.tip_prep.timing.post_reposition_settle_ms,
-            config.tip_prep.timing.post_approach_settle_ms,
         )?;
 
         Ok(StabilityOutcome::Unstable)

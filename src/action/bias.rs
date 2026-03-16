@@ -3,7 +3,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::action::{Action, ActionContext, ActionOutput};
-use crate::spm_controller::Capability;
+use crate::spm_controller::{Capability, ZControllerStatus};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReadBias;
@@ -90,6 +90,57 @@ impl Action for BiasPulse {
             self.z_hold,
             self.absolute,
         )?;
+        Ok(ActionOutput::Unit)
+    }
+}
+
+/// Set bias voltage, withdrawing first if the polarity would cross zero
+/// while the tip is approached.
+///
+/// If the z-controller is active (tip on surface) and the new voltage has
+/// a different sign than the current bias, the sequence becomes:
+/// 1. Withdraw
+/// 2. Set bias
+///
+/// Otherwise behaves identically to `SetBias`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SafeSetBias {
+    pub voltage: f64,
+}
+
+impl Action for SafeSetBias {
+    fn name(&self) -> &str {
+        "safe_set_bias"
+    }
+    fn description(&self) -> &str {
+        "Set bias voltage, withdrawing first if polarity crosses zero while approached"
+    }
+    fn requires(&self) -> Vec<Capability> {
+        vec![Capability::Bias, Capability::ZController]
+    }
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+        let current_bias = ctx.controller.get_bias()?;
+        let crosses_zero = current_bias.signum() != self.voltage.signum()
+            && !(current_bias == 0.0 && self.voltage == 0.0);
+
+        if crosses_zero {
+            let is_approached = ctx
+                .controller
+                .z_controller_status()
+                .map(|s| matches!(s, ZControllerStatus::On))
+                .unwrap_or(false);
+
+            if is_approached {
+                log::info!(
+                    "Bias change {:.3}V -> {:.3}V crosses zero while approached — withdrawing first",
+                    current_bias, self.voltage
+                );
+                ctx.controller
+                    .withdraw(true, Duration::from_secs(5))?;
+            }
+        }
+
+        ctx.controller.set_bias(self.voltage)?;
         Ok(ActionOutput::Unit)
     }
 }
