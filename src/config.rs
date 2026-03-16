@@ -47,6 +47,18 @@ fn default_stable_signal_samples() -> usize {
     100
 }
 
+fn default_max_std_dev() -> f64 {
+    1.0
+}
+
+fn default_max_slope() -> f64 {
+    0.01
+}
+
+fn default_stable_read_retries() -> usize {
+    3
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DataAcquisitionConfig {
     pub data_port: u16,
@@ -54,6 +66,15 @@ pub struct DataAcquisitionConfig {
     /// Number of TCP stream samples to average for a stable signal read.
     #[serde(default = "default_stable_signal_samples")]
     pub stable_signal_samples: usize,
+    /// Maximum standard deviation for a signal to be considered stable (Hz).
+    #[serde(default = "default_max_std_dev")]
+    pub max_std_dev: f64,
+    /// Maximum linear regression slope for a signal to be considered stable (Hz/sample).
+    #[serde(default = "default_max_slope")]
+    pub max_slope: f64,
+    /// Number of retries with exponential backoff when signal is not stable.
+    #[serde(default = "default_stable_read_retries")]
+    pub stable_read_retries: usize,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -164,6 +185,9 @@ impl Default for DataAcquisitionConfig {
             data_port: 6590,
             sample_rate: 2000,
             stable_signal_samples: default_stable_signal_samples(),
+            max_std_dev: default_max_std_dev(),
+            max_slope: default_max_slope(),
+            stable_read_retries: default_stable_read_retries(),
         }
     }
 }

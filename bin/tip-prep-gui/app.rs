@@ -583,6 +583,7 @@ impl EditableConfig {
                 data_port,
                 sample_rate,
                 stable_signal_samples,
+                ..Default::default()
             },
             experiment_logging: ExperimentLoggingConfig {
                 enabled: self.logging_enabled,
@@ -1731,6 +1732,11 @@ fn run_controller(
         ..Default::default()
     };
     let mut controller = NanonisController::new(client, setup);
+    controller.set_stability_criteria(
+        config.data_acquisition.max_std_dev,
+        config.data_acquisition.max_slope,
+        config.data_acquisition.stable_read_retries,
+    );
     info!("Connected to Nanonis system");
 
     // Build signal registry
