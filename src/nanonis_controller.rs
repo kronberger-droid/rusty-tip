@@ -387,8 +387,16 @@ impl SpmController for NanonisController {
         z_hold: bool,
         absolute: bool,
     ) -> Result<()> {
-        let z_controller_hold: u16 = if z_hold { 1 } else { 0 };
-        let pulse_mode: u16 = if absolute { 2 } else { 1 };
+        let z_controller_hold = if z_hold {
+            nanonis_rs::z_ctrl::ZControllerHold::Hold
+        } else {
+            nanonis_rs::z_ctrl::ZControllerHold::NoChange
+        };
+        let pulse_mode = if absolute {
+            nanonis_rs::bias::PulseMode::Absolute
+        } else {
+            nanonis_rs::bias::PulseMode::Relative
+        };
         let v = validate_f32(voltage, "pulse voltage")?;
         Ok(self.client.bias_pulse(
             true, // always wait for pulse to complete

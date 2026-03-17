@@ -1,7 +1,7 @@
 [package]
 name = "rusty-tip"
 version = "0.2.0"
-edition = "2021"
+edition = "2024"
 description = "Rust library for Nanonis SPM system control via TCP"
 repository = "https://github.com/kronberger-droid/rusty-tip"
 license = "MIT"
@@ -29,7 +29,7 @@ path = "bin/tip-prep-gui/main.rs"
 required-features = ["gui"]
 
 [dependencies]
-nanonis-rs = { version = "0.2.0", path = "../nanonis-rs" }
+nanonis-rs = { version = "0.2.2", path = "../nanonis-rs" }
 byteorder = "1.5"
 thiserror = "1.0"
 log = "0.4"
