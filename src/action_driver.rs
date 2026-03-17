@@ -1168,7 +1168,7 @@ impl ActionDriver {
     pub fn stop_tcp_buffering(
         &mut self,
     ) -> Result<Vec<crate::types::TimestampedSignalFrame>, NanonisError> {
-        if let Some(mut reader) = self.tcp_reader.take() {
+        match self.tcp_reader.take() { Some(mut reader) => {
             let final_data = reader.get_all_data();
             reader.stop()?;
             log::info!(
@@ -1176,9 +1176,9 @@ impl ActionDriver {
                 final_data.len()
             );
             Ok(final_data)
-        } else {
+        } _ => {
             Ok(Vec::new())
-        }
+        }}
     }
 
     /// Execute action chain with time-windowed data collection
@@ -1802,8 +1802,8 @@ impl ActionDriver {
                     wait_until_done,
                     pulse_width.as_secs_f32(),
                     bias_value_v,
-                    hold_enum.into(),
-                    mode_enum.into(),
+                    hold_enum,
+                    mode_enum,
                 )?;
 
                 Ok(ActionResult::Success)

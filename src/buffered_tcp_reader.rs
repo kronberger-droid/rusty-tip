@@ -478,16 +478,16 @@ impl BufferedTCPReader {
     /// - Called automatically when BufferedTCPReader is dropped
     pub fn stop(&mut self) -> Result<(), NanonisError> {
         self.shutdown_signal.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.buffering_thread.take() {
+        match self.buffering_thread.take() { Some(handle) => {
             match handle.join() {
                 Ok(result) => result,
                 Err(_) => Err(NanonisError::Protocol(
                     "Buffering thread panicked".to_string(),
                 )),
             }
-        } else {
+        } _ => {
             Ok(())
-        }
+        }}
     }
 }
 
