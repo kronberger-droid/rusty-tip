@@ -8,7 +8,7 @@
 use crate::types::TimestampedSignalFrame;
 use crate::NanonisError;
 use nanonis_rs::TCPLoggerStream;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -56,6 +56,9 @@ pub struct BufferedTCPReader {
     num_channels: u32,
     /// Oversampling rate (configuration parameter)
     oversampling: f32,
+    /// Error from the TCP stream reader thread, if it died unexpectedly.
+    /// Set by the buffering thread when it detects the stream disconnected.
+    stream_error: Arc<Mutex<Option<String>>>,
 }
 
 impl BufferedTCPReader {
@@ -86,7 +89,7 @@ impl BufferedTCPReader {
         oversampling: f32,
     ) -> Result<Self, NanonisError> {
         let tcp_stream = TCPLoggerStream::new(host, port)?;
-        let tcp_receiver = tcp_stream.spawn_background_reader();
+        let (tcp_receiver, stream_handle) = tcp_stream.spawn_background_reader();
 
         let buffer =
             Arc::new(RwLock::new(VecDeque::with_capacity(buffer_size)));
@@ -95,12 +98,17 @@ impl BufferedTCPReader {
         let shutdown_signal = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown_signal.clone();
 
+        let stream_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let stream_error_clone = stream_error.clone();
+
         let start_time = Instant::now();
 
         // Don't block waiting for first frame - let background thread handle it
         // The TCP logger might not be started yet when this constructor runs
 
-        let buffering_thread = thread::spawn(
+        let buffering_thread = thread::Builder::new()
+            .name("tcp-logger-buffer".into())
+            .spawn(
             move || -> Result<(), NanonisError> {
                 log::debug!("Started buffering thread for TCP logger data");
 
@@ -132,14 +140,29 @@ impl BufferedTCPReader {
                             continue;
                         }
                         Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            log::info!("TCP logger stream disconnected ending buffering");
+                            // The stream reader thread exited. Join it to
+                            // find out why and surface the error.
+                            match stream_handle.join() {
+                                Ok(Ok(())) => {
+                                    log::info!("TCP logger stream closed cleanly");
+                                }
+                                Ok(Err(e)) => {
+                                    log::error!("TCP logger stream error: {e}");
+                                    *stream_error_clone.lock() = Some(e.to_string());
+                                }
+                                Err(_) => {
+                                    log::error!("TCP logger stream thread panicked");
+                                    *stream_error_clone.lock() =
+                                        Some("stream reader thread panicked".into());
+                                }
+                            }
                             break;
                         }
                     }
                 }
                 Ok(())
             },
-        );
+        ).expect("failed to spawn tcp-logger-buffer thread");
 
         Ok(Self {
             buffer,
@@ -149,6 +172,7 @@ impl BufferedTCPReader {
             shutdown_signal,
             num_channels,
             oversampling,
+            stream_error,
         })
     }
 
@@ -165,6 +189,14 @@ impl BufferedTCPReader {
         self.buffering_thread
             .as_ref()
             .is_some_and(|h| !h.is_finished())
+    }
+
+    /// Returns the error message from the TCP stream reader thread, if it
+    /// died unexpectedly (e.g., due to a connection reset or read timeout).
+    ///
+    /// Returns `None` if the stream is still running or shut down cleanly.
+    pub fn stream_error(&self) -> Option<String> {
+        self.stream_error.lock().clone()
     }
 
     /// Get current buffer utilization as a percentage
