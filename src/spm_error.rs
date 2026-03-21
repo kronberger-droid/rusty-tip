@@ -29,6 +29,14 @@ pub enum SpmError {
     ShutdownRequested,
 }
 
+impl SpmError {
+    /// Returns `true` if this error indicates a broken or timed-out connection
+    /// where a reconnect might help.
+    pub fn is_connection_error(&self) -> bool {
+        matches!(self, SpmError::Io { .. } | SpmError::Timeout(_))
+    }
+}
+
 impl From<nanonis_rs::NanonisError> for SpmError {
     fn from(value: nanonis_rs::NanonisError) -> Self {
         match value {
