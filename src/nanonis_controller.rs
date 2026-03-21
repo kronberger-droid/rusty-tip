@@ -342,6 +342,17 @@ impl SpmController for NanonisController {
         }
     }
 
+    fn is_connected(&self) -> bool {
+        !self.client.is_poisoned()
+    }
+
+    fn reconnect(&mut self) -> Result<()> {
+        log::info!("Attempting to reconnect to Nanonis...");
+        self.client.reconnect()?;
+        log::info!("Reconnected successfully");
+        Ok(())
+    }
+
     // -- Signals --
 
     fn read_signal(&mut self, index: u32, wait_for_newest: bool) -> Result<f64> {

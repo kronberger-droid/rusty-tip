@@ -80,6 +80,20 @@ pub trait SpmController: Send {
     /// not short-circuit.  Default is a no-op.
     fn teardown(&mut self) {}
 
+    /// Returns `true` if the connection is healthy and commands can be sent.
+    ///
+    /// A return value of `false` indicates the connection was poisoned by a
+    /// previous I/O error and [`reconnect()`](Self::reconnect) must be called
+    /// before further use.
+    fn is_connected(&self) -> bool { true }
+
+    /// Re-establish the connection to the hardware controller.
+    ///
+    /// Call this after an I/O error has poisoned the connection. The default
+    /// implementation is a no-op (always succeeds), suitable for mock
+    /// controllers in tests.
+    fn reconnect(&mut self) -> Result<()> { Ok(()) }
+
     // -- Signals --
     fn read_signal(&mut self, index: u32, wait_for_newest: bool)
         -> Result<f64>;
