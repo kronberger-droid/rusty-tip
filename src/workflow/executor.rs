@@ -255,6 +255,36 @@ impl WorkflowExecutor {
                     &e.to_string(),
                     duration,
                 ));
+
+                // On connection errors, attempt to restore the link so that
+                // subsequent workflow steps (or a loop retry) can proceed.
+                // We do NOT retry the failed action -- it may have been a
+                // write that partially executed.
+                if e.is_connection_error() && !self.controller.is_connected() {
+                    log::warn!("Connection lost during '{}', attempting reconnect...", action.name());
+                    match self.controller.reconnect() {
+                        Ok(()) => {
+                            log::info!("Reconnected successfully after '{}' failure", action.name());
+                            self.events.emit(Event::custom(
+                                "connection_restored",
+                                serde_json::json!({
+                                    "after_action": action.name(),
+                                }),
+                            ));
+                        }
+                        Err(re) => {
+                            log::error!("Reconnect failed: {re}");
+                            self.events.emit(Event::custom(
+                                "reconnect_failed",
+                                serde_json::json!({
+                                    "after_action": action.name(),
+                                    "error": re.to_string(),
+                                }),
+                            ));
+                        }
+                    }
+                }
+
                 Err(e)
             }
         }
