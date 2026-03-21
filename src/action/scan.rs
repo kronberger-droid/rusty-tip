@@ -92,7 +92,6 @@ pub struct GrabScanFrame {
     pub forward: bool,
 }
 
-
 impl Default for GrabScanFrame {
     fn default() -> Self {
         Self {

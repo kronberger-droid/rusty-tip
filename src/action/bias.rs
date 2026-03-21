@@ -61,7 +61,6 @@ pub struct BiasPulse {
     pub absolute: bool,
 }
 
-
 impl Default for BiasPulse {
     fn default() -> Self {
         Self {

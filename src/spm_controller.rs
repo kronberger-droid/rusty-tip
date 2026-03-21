@@ -239,7 +239,7 @@ pub trait SpmController: Send {
         num_samples: usize,
     ) -> Result<Vec<f64>> {
         if num_samples == 0 {
-            return Err(crate::spm_error::SpmError::Protocol(
+            return Err(SpmError::Protocol(
                 "read_signal_samples: num_samples must be > 0".into(),
             ));
         }

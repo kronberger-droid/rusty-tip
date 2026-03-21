@@ -12,7 +12,6 @@ pub struct ReadSignal {
     pub wait_for_newest: bool,
 }
 
-
 impl Default for ReadSignal {
     fn default() -> Self {
         Self {
