@@ -152,12 +152,19 @@ impl BufferedTCPReader {
         })
     }
 
-    /// Check if the background buffering thread is still active
+    /// Check if the background buffering thread is still active.
     ///
-    /// # Returns
-    /// `true` if buffering is active, `false` if stopped or failed
+    /// Returns `false` if shutdown was requested OR if the background
+    /// thread exited on its own (e.g., due to a TCP stream error).
     pub fn is_buffering(&self) -> bool {
-        !self.shutdown_signal.load(Ordering::Relaxed)
+        if self.shutdown_signal.load(Ordering::Relaxed) {
+            return false;
+        }
+        // The thread may have died (stream error, disconnect) without
+        // the shutdown signal being set. Check the JoinHandle directly.
+        self.buffering_thread
+            .as_ref()
+            .is_some_and(|h| !h.is_finished())
     }
 
     /// Get current buffer utilization as a percentage

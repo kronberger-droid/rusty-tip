@@ -203,6 +203,10 @@ impl Action for ReadStableSignal {
 
 /// Compute mean, standard deviation, and linear regression slope from sample data.
 pub(crate) fn compute_stability_metrics(data: &[f64]) -> (f64, f64, f64) {
+    if data.is_empty() {
+        return (f64::NAN, 0.0, 0.0);
+    }
+
     let n = data.len() as f64;
     let mean = data.iter().sum::<f64>() / n;
 
