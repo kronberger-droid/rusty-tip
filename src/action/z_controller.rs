@@ -131,7 +131,7 @@ impl Action for ZHome {
 }
 
 /// Enable or disable safe-tip crash protection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SafeTipSet {
     pub enabled: bool,
 }

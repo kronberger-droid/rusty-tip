@@ -96,9 +96,10 @@ impl StabilityConfig {
 // POLARITY
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PolaritySign {
+    #[default]
     Positive,
     Negative,
 }
@@ -109,12 +110,6 @@ impl PolaritySign {
             PolaritySign::Positive => PolaritySign::Negative,
             PolaritySign::Negative => PolaritySign::Positive,
         }
-    }
-}
-
-impl Default for PolaritySign {
-    fn default() -> Self {
-        Self::Positive
     }
 }
 
@@ -290,8 +285,9 @@ impl Default for PulseMethod {
 // ============================================================================
 
 /// Current action being performed by the controller
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum ControllerAction {
+    #[default]
     Idle,
     Initializing,
     LoadingLayout,
@@ -309,12 +305,6 @@ pub enum ControllerAction {
     Completed,
     Stopped,
     Error(String),
-}
-
-impl Default for ControllerAction {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 /// Snapshot of the controller's current state for GUI display

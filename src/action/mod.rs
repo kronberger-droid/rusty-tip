@@ -87,6 +87,9 @@ pub fn builtin_registry() -> ActionRegistry {
     r.register::<z_controller::Withdraw>();
     r.register::<z_controller::AutoApproach>();
     r.register::<z_controller::SetZSetpoint>();
+    r.register::<z_controller::ZHome>();
+    r.register::<z_controller::SafeTipSet>();
+    r.register::<z_controller::CalibratedApproach>();
 
     // Piezo Position
     r.register::<position::ReadPosition>();
@@ -97,6 +100,7 @@ pub fn builtin_registry() -> ActionRegistry {
     r.register::<motor::MoveMotor3D>();
     r.register::<motor::MoveMotorClosedLoop>();
     r.register::<motor::StopMotor>();
+    r.register::<motor::Reposition>();
 
     // Scanning
     r.register::<scan::ScanControl>();

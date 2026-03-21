@@ -236,24 +236,13 @@ impl SignalRegistryBuilder {
     pub fn from_signal_names(mut self, signal_names: &[String]) -> Self {
         for (index, name) in signal_names.iter().enumerate() {
             let clean_name = name.split('(').next().unwrap().trim();
+            let tcp_channel = self.nanonis_to_tcp.get(&(index as u8)).copied();
 
-            let signal;
-
-            if let Some(tcp_channel) =
-                self.nanonis_to_tcp.get(&(index as u8)).copied()
-            {
-                signal = Signal {
-                    name: name.clone(),
-                    index: index as u8,
-                    tcp_channel: Some(tcp_channel),
-                };
-            } else {
-                signal = Signal {
-                    name: name.clone(),
-                    index: index as u8,
-                    tcp_channel: None,
-                };
-            }
+            let signal = Signal {
+                name: name.clone(),
+                index: index as u8,
+                tcp_channel,
+            };
             self.signals.insert(name.to_lowercase(), signal.clone());
 
             if clean_name != name {

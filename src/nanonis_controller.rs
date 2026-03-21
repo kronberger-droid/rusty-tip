@@ -501,9 +501,7 @@ impl SpmController for NanonisController {
 
     fn set_z_home(&mut self, mode: ZHomeMode, position: f64) -> Result<()> {
         let p = validate_f32(position, "Z home position")?;
-        self.client
-            .z_ctrl_home_props_set(mode, p)
-            .map_err(Into::into)
+        Ok(self.client.z_ctrl_home_props_set(mode, p)?)
     }
 
     fn go_z_home(&mut self) -> Result<()> {
@@ -540,44 +538,21 @@ impl SpmController for NanonisController {
         displacement: MotorDisplacement,
         wait: bool,
     ) -> Result<()> {
-        if displacement.x != 0 {
-            let dir = if displacement.x > 0 {
-                MotorDirection::XPlus
-            } else {
-                MotorDirection::XMinus
-            };
-            self.client.motor_start_move(
-                dir,
-                displacement.x.unsigned_abs(),
-                MotorGroup::Group1,
-                wait,
-            )?;
-        }
-        if displacement.y != 0 {
-            let dir = if displacement.y > 0 {
-                MotorDirection::YPlus
-            } else {
-                MotorDirection::YMinus
-            };
-            self.client.motor_start_move(
-                dir,
-                displacement.y.unsigned_abs(),
-                MotorGroup::Group1,
-                wait,
-            )?;
-        }
-        if displacement.z != 0 {
-            let dir = if displacement.z > 0 {
-                MotorDirection::ZPlus
-            } else {
-                MotorDirection::ZMinus
-            };
-            self.client.motor_start_move(
-                dir,
-                displacement.z.unsigned_abs(),
-                MotorGroup::Group1,
-                wait,
-            )?;
+        let axes: [(i16, MotorDirection, MotorDirection); 3] = [
+            (displacement.x, MotorDirection::XPlus, MotorDirection::XMinus),
+            (displacement.y, MotorDirection::YPlus, MotorDirection::YMinus),
+            (displacement.z, MotorDirection::ZPlus, MotorDirection::ZMinus),
+        ];
+        for (steps, positive, negative) in axes {
+            if steps != 0 {
+                let dir = if steps > 0 { positive } else { negative };
+                self.client.motor_start_move(
+                    dir,
+                    steps.unsigned_abs(),
+                    MotorGroup::Group1,
+                    wait,
+                )?;
+            }
         }
         Ok(())
     }
@@ -689,15 +664,11 @@ impl SpmController for NanonisController {
         threshold: f64,
     ) -> Result<()> {
         let t = validate_f32(threshold, "safe-tip threshold")?;
-        self.client
-            .safe_tip_props_set(auto_recovery, auto_pause_scan, t)
-            .map_err(Into::into)
+        Ok(self.client.safe_tip_props_set(auto_recovery, auto_pause_scan, t)?)
     }
 
     fn safe_tip_status(&mut self) -> Result<(bool, bool, f64)> {
-        let (recovery, pause, threshold) = self.client
-            .safe_tip_props_get()
-            .map_err(SpmError::from)?;
+        let (recovery, pause, threshold) = self.client.safe_tip_props_get()?;
         Ok((recovery, pause, threshold as f64))
     }
 
