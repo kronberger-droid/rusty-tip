@@ -1,8 +1,8 @@
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -13,6 +13,8 @@ use nanonis_rs::signals::SignalIndex;
 use ndarray::Array1;
 
 use crate::{
+    MotorGroup, NanonisClient, NanonisError, Position, PulseMode, ScanAction,
+    ScanDirection, Signal, TipShaperConfig, ZControllerHold,
     actions::{
         Action, ActionChain, ActionLogEntry, ActionLogResult, ActionResult,
         ExpectFromAction,
@@ -21,10 +23,19 @@ use crate::{
     controller_types::TipStateConfig,
     signal_registry::SignalRegistry,
     types::{DataToGet, OsciData, SignalStats, TriggerConfig},
-    utils::{poll_until, poll_with_timeout, PollError},
-    MotorGroup, NanonisClient, NanonisError, Position, PulseMode, ScanAction,
-    ScanDirection, Signal, TipShaperConfig, ZControllerHold,
+    utils::{PollError, poll_until, poll_with_timeout},
 };
+
+/// Result of a stable signal read: (signal data, is_stable, stability metrics).
+type StableSignalReadResult = (Vec<f32>, bool, HashMap<String, f32>);
+
+/// Parameters for oscilloscope stability detection.
+struct OsciStabilityParams {
+    relative_threshold: f64,
+    absolute_threshold: f64,
+    min_window_percent: f64,
+    stability_fn: Option<fn(&[f64]) -> bool>,
+}
 
 /// Configuration for TCP Logger integration with always-buffer support
 #[derive(Debug, Clone)]
@@ -977,10 +988,12 @@ impl ActionDriver {
                                 }
                                 _ => self.execute_chain(actions.clone())?,
                             };
-                            vec![results
-                                .into_iter()
-                                .last()
-                                .unwrap_or(ActionResult::None)]
+                            vec![
+                                results
+                                    .into_iter()
+                                    .last()
+                                    .unwrap_or(ActionResult::None),
+                            ]
                         }
                         (ChainBehavior::Partial, _) => {
                             match self.execute_chain_partial(actions.clone()) {
@@ -1168,17 +1181,18 @@ impl ActionDriver {
     pub fn stop_tcp_buffering(
         &mut self,
     ) -> Result<Vec<crate::types::TimestampedSignalFrame>, NanonisError> {
-        match self.tcp_reader.take() { Some(mut reader) => {
-            let final_data = reader.get_all_data();
-            reader.stop()?;
-            log::info!(
-                "Manually stopped TCP buffering, collected {} frames",
-                final_data.len()
-            );
-            Ok(final_data)
-        } _ => {
-            Ok(Vec::new())
-        }}
+        match self.tcp_reader.take() {
+            Some(mut reader) => {
+                let final_data = reader.get_all_data();
+                reader.stop()?;
+                log::info!(
+                    "Manually stopped TCP buffering, collected {} frames",
+                    final_data.len()
+                );
+                Ok(final_data)
+            }
+            _ => Ok(Vec::new()),
+        }
     }
 
     /// Execute action chain with time-windowed data collection
@@ -1525,15 +1539,18 @@ impl ActionDriver {
 
                 match data_to_get {
                     crate::types::DataToGet::Stable { readings, timeout } => {
+                        let stability_params = OsciStabilityParams {
+                            relative_threshold: 0.01,
+                            absolute_threshold: 50e-15,
+                            min_window_percent: 0.8,
+                            stability_fn: is_stable,
+                        };
                         let osci_data = self
                             .find_stable_oscilloscope_data_with_fallback(
                                 data_to_get,
                                 readings,
                                 timeout,
-                                0.01,
-                                50e-15,
-                                0.8,
-                                is_stable,
+                                &stability_params,
                             )?;
                         Ok(ActionResult::OsciData(osci_data))
                     }
@@ -1920,13 +1937,16 @@ impl ActionDriver {
                         if let Some(ref tcp_reader) = self.tcp_reader {
                             let (frame_count, _max_capacity, time_span) =
                                 tcp_reader.buffer_stats();
-                            log::debug!("CheckTipState: TCP reader available with {} frames, timespan: {}ms", 
-                                frame_count, time_span.as_millis());
+                            log::debug!(
+                                "CheckTipState: TCP reader available with {} frames, timespan: {}ms",
+                                frame_count,
+                                time_span.as_millis()
+                            );
                         } else {
                             log::warn!(
                                 "CheckTipState: No TCP reader available for signal {}",
                                 signal.index
-                                );
+                            );
                         }
 
                         // Use ReadStableSignal instead of single instantaneous read
@@ -1963,7 +1983,10 @@ impl ActionDriver {
                                     ActionResult::StableSignal(stable_signal),
                                 ) => {
                                     // Use stable value from ReadStableSignal
-                                    log::debug!("CheckTipState: ReadStableSignal succeeded with {} data points", stable_signal.raw_data.len());
+                                    log::debug!(
+                                        "CheckTipState: ReadStableSignal succeeded with {} data points",
+                                        stable_signal.raw_data.len()
+                                    );
                                     (
                                         stable_signal.stable_value,
                                         stable_signal.raw_data,
@@ -1974,7 +1997,10 @@ impl ActionDriver {
                                     ActionResult::Values(values),
                                 ) => {
                                     // ReadStableSignal failed but returned raw data, use minimum as fallback
-                                    log::warn!("CheckTipState: ReadStableSignal failed but returned {} raw values, using minimum as fallback", values.len());
+                                    log::warn!(
+                                        "CheckTipState: ReadStableSignal failed but returned {} raw values, using minimum as fallback",
+                                        values.len()
+                                    );
                                     let raw_data: Vec<f32> = values
                                         .iter()
                                         .map(|&v| v as f32)
@@ -1987,7 +2013,9 @@ impl ActionDriver {
                                 }
                                 _ => {
                                     // Unexpected result type, fallback to single read
-                                    log::warn!("CheckTipState: ReadStableSignal returned unexpected result type, falling back to single read");
+                                    log::warn!(
+                                        "CheckTipState: ReadStableSignal returned unexpected result type, falling back to single read"
+                                    );
                                     let single_value = self
                                         .client
                                         .signal_val_get(signal.index, true)?;
@@ -2000,7 +2028,10 @@ impl ActionDriver {
                             },
                             Err(e) => {
                                 // Complete fallback to single read
-                                log::warn!("CheckTipState: ReadStableSignal failed with error: {}, falling back to single read", e);
+                                log::warn!(
+                                    "CheckTipState: ReadStableSignal failed with error: {}, falling back to single read",
+                                    e
+                                );
                                 let single_value = self
                                     .client
                                     .signal_val_get(signal.index, true)?;
@@ -2604,10 +2635,18 @@ impl ActionDriver {
                     signal_values_str
                 );
 
-                log::debug!("CheckTipState detail: read_method={}, dataset_size={}, recent_stable_count={}",
-                    metadata.get("read_method").map(|s| s.as_str()).unwrap_or("unknown"),
-                    metadata.get("dataset_size").map(|s| s.as_str()).unwrap_or("unknown"),
-                    recent_signals.len());
+                log::debug!(
+                    "CheckTipState detail: read_method={}, dataset_size={}, recent_stable_count={}",
+                    metadata
+                        .get("read_method")
+                        .map(|s| s.as_str())
+                        .unwrap_or("unknown"),
+                    metadata
+                        .get("dataset_size")
+                        .map(|s| s.as_str())
+                        .unwrap_or("unknown"),
+                    recent_signals.len()
+                );
 
                 Ok(ActionResult::TipState(TipState {
                     shape: tip_shape,
@@ -2725,7 +2764,9 @@ impl ActionDriver {
                         for _ in 0..50 {
                             // Check for shutdown request
                             if self.is_shutdown_requested() {
-                                log::info!("Shutdown requested while waiting for scan to start");
+                                log::info!(
+                                    "Shutdown requested while waiting for scan to start"
+                                );
                                 let _ = self.client.scan_action(
                                     ScanAction::Stop,
                                     ScanDirection::Up,
@@ -2759,7 +2800,11 @@ impl ActionDriver {
                         for step_num in 0..bias_steps {
                             // Check for shutdown request
                             if self.is_shutdown_requested() {
-                                log::info!("Shutdown requested during bias sweep at step {}/{}", step_num + 1, bias_steps);
+                                log::info!(
+                                    "Shutdown requested during bias sweep at step {}/{}",
+                                    step_num + 1,
+                                    bias_steps
+                                );
                                 let _ = self.client.scan_action(
                                     ScanAction::Stop,
                                     ScanDirection::Up,
@@ -2782,7 +2827,9 @@ impl ActionDriver {
                             let chunk_duration = step_duration / sleep_chunks;
                             for _ in 0..sleep_chunks {
                                 if self.is_shutdown_requested() {
-                                    log::info!("Shutdown requested during bias sweep step sleep");
+                                    log::info!(
+                                        "Shutdown requested during bias sweep step sleep"
+                                    );
                                     let _ = self.client.scan_action(
                                         ScanAction::Stop,
                                         ScanDirection::Up,
@@ -3145,14 +3192,17 @@ impl ActionDriver {
         }
     }
 
-    fn check_safetip_status(&mut self, context: &str) -> Result<(), NanonisError> {
-        if let Ok(status) = self.client_mut().z_ctrl_status_get() {
-            if matches!(status, nanonis_rs::z_ctrl::ZControllerStatus::SafeTip)
-            {
-                return Err(NanonisError::Protocol(
-                    format!("SafeTip triggered ({}), abort!", context),
-                ));
-            }
+    fn check_safetip_status(
+        &mut self,
+        context: &str,
+    ) -> Result<(), NanonisError> {
+        if let Ok(status) = self.client_mut().z_ctrl_status_get()
+            && matches!(status, nanonis_rs::z_ctrl::ZControllerStatus::SafeTip)
+        {
+            return Err(NanonisError::Protocol(format!(
+                "SafeTip triggered ({}), abort!",
+                context
+            )));
         }
 
         Ok(())
@@ -3166,10 +3216,7 @@ impl ActionDriver {
         use_new_data: bool,
         timeout: Duration,
         stability_method: &crate::actions::SignalStabilityMethod,
-    ) -> Result<
-        (Vec<f32>, bool, std::collections::HashMap<String, f32>),
-        NanonisError,
-    > {
+    ) -> Result<StableSignalReadResult, NanonisError> {
         // Collect signal data based on use_new_data flag
         let signal_data: Vec<f32> = if use_new_data {
             // Wait for new data with timeout
@@ -3473,10 +3520,7 @@ impl ActionDriver {
         _data_to_get: DataToGet,
         readings: u32,
         timeout: std::time::Duration,
-        relative_threshold: f64,
-        absolute_threshold: f64,
-        min_window_percent: f64,
-        stability_fn: Option<fn(&[f64]) -> bool>,
+        params: &OsciStabilityParams,
     ) -> Result<Option<OsciData>, NanonisError> {
         match poll_with_timeout(
             || {
@@ -3487,14 +3531,7 @@ impl ActionDriver {
 
                     if let Some(stable_osci_data) = self
                         .analyze_stability_window(
-                            t0,
-                            dt,
-                            size,
-                            data,
-                            relative_threshold,
-                            absolute_threshold,
-                            min_window_percent,
-                            stability_fn,
+                            t0, dt, size, data, params,
                         )?
                     {
                         return Ok(Some(stable_osci_data));
@@ -3524,12 +3561,9 @@ impl ActionDriver {
         dt: f64,
         size: i32,
         data: Vec<f64>,
-        relative_threshold: f64,
-        absolute_threshold: f64,
-        min_window_percent: f64,
-        stability_fn: Option<fn(&[f64]) -> bool>,
+        params: &OsciStabilityParams,
     ) -> Result<Option<OsciData>, NanonisError> {
-        let min_window = (size as f64 * min_window_percent) as usize;
+        let min_window = (size as f64 * params.min_window_percent) as usize;
         let mut start = 0;
         let mut end = size as usize;
 
@@ -3543,23 +3577,23 @@ impl ActionDriver {
             let relative_std = std_dev / mean.abs();
 
             // Use custom stability function if provided, otherwise default dual-threshold
-            let is_stable = if let Some(stability_fn) = stability_fn {
+            let is_stable = if let Some(stability_fn) = params.stability_fn {
                 stability_fn(window)
             } else {
                 // Default dual-threshold approach: relative OR absolute
-                let is_relative_stable = relative_std < relative_threshold;
-                let is_absolute_stable = std_dev < absolute_threshold;
+                let is_relative_stable = relative_std < params.relative_threshold;
+                let is_absolute_stable = std_dev < params.absolute_threshold;
                 is_relative_stable || is_absolute_stable
             };
 
             if is_stable {
                 let stable_data = window.to_vec();
-                let stability_method = if stability_fn.is_some() {
+                let stability_method = if params.stability_fn.is_some() {
                     "custom".to_string()
                 } else {
                     // Default dual-threshold logic
-                    let is_relative_stable = relative_std < relative_threshold;
-                    let is_absolute_stable = std_dev < absolute_threshold;
+                    let is_relative_stable = relative_std < params.relative_threshold;
+                    let is_absolute_stable = std_dev < params.absolute_threshold;
                     match (is_relative_stable, is_absolute_stable) {
                         (true, true) => "both".to_string(),
                         (true, false) => "relative".to_string(),
@@ -3607,20 +3641,14 @@ impl ActionDriver {
         data_to_get: DataToGet,
         readings: u32,
         timeout: std::time::Duration,
-        relative_threshold: f64,
-        absolute_threshold: f64,
-        min_window_percent: f64,
-        stability_fn: Option<fn(&[f64]) -> bool>,
+        params: &OsciStabilityParams,
     ) -> Result<OsciData, NanonisError> {
         // First try to find stable data
         if let Some(stable_osci_data) = self.find_stable_oscilloscope_data(
             data_to_get,
             readings,
             timeout,
-            relative_threshold,
-            absolute_threshold,
-            min_window_percent,
-            stability_fn,
+            params,
         )? {
             return Ok(stable_osci_data);
         }
@@ -4250,7 +4278,9 @@ mod tests {
             }
             Err(_) => {
                 // Expected when signals can't be discovered
-                println!("Signal discovery failed - this is expected without hardware");
+                println!(
+                    "Signal discovery failed - this is expected without hardware"
+                );
             }
         }
     }

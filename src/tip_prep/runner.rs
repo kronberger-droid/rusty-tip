@@ -64,7 +64,7 @@ struct SweepPlan {
 
 /// Run the full tip preparation algorithm.
 ///
-/// This is the top-level entry point that owns the controller lifecycle
+/// This is the top-level entry point that owns the controller life cycle
 /// (prepare/teardown). It calls `run_tip_prep_inner()` for the main loop,
 /// then always cleans up regardless of the outcome.
 pub fn run_tip_prep(
@@ -159,7 +159,8 @@ fn run_tip_prep_inner(
     );
 
     let max_cycles = config.tip_prep.max_cycles.unwrap_or(usize::MAX);
-    let max_duration = config.tip_prep.max_duration_secs.map(Duration::from_secs);
+    let max_duration =
+        config.tip_prep.max_duration_secs.map(Duration::from_secs);
     let start_time = std::time::Instant::now();
     let mut pulse_state = PulseState::new(&config.pulse_method);
 
@@ -179,7 +180,9 @@ fn run_tip_prep_inner(
     );
 
     if initial_sharp {
-        log::info!("Tip already sharp after approach - running stability check");
+        log::info!(
+            "Tip already sharp after approach - running stability check"
+        );
         match check_stability(
             &mut ctx,
             freq_shift_index,
@@ -210,10 +213,10 @@ fn run_tip_prep_inner(
             return Ok(Outcome::StoppedByUser);
         }
 
-        if let Some(max_dur) = max_duration {
-            if start_time.elapsed() > max_dur {
-                return Ok(Outcome::TimedOut(max_dur));
-            }
+        if let Some(max_dur) = max_duration
+            && start_time.elapsed() > max_dur
+        {
+            return Ok(Outcome::TimedOut(max_dur));
         }
 
         if cycle % config.tip_prep.timing.status_interval == 0 {
@@ -260,8 +263,14 @@ fn run_tip_prep_inner(
             &Reposition {
                 x_steps: config.tip_prep.timing.reposition_steps[0],
                 y_steps: config.tip_prep.timing.reposition_steps[1],
-                post_move_settle_ms: config.tip_prep.timing.post_reposition_settle_ms,
-                post_approach_settle_ms: config.tip_prep.timing.post_approach_settle_ms,
+                post_move_settle_ms: config
+                    .tip_prep
+                    .timing
+                    .post_reposition_settle_ms,
+                post_approach_settle_ms: config
+                    .tip_prep
+                    .timing
+                    .post_approach_settle_ms,
                 ..Default::default()
             },
             &mut ctx,
@@ -308,7 +317,9 @@ fn run_tip_prep_inner(
                     log::info!("Tip not confirmed sharp - continuing");
                 }
                 StabilityOutcome::Unstable => {
-                    log::info!("Stability check failed - reset to blunt, continuing");
+                    log::info!(
+                        "Stability check failed - reset to blunt, continuing"
+                    );
                     pulse_state.reset(&config.pulse_method);
                 }
             }
@@ -363,8 +374,14 @@ fn confirm_sharp(
             &Reposition {
                 x_steps: config.tip_prep.timing.reposition_steps[0],
                 y_steps: config.tip_prep.timing.reposition_steps[1],
-                post_move_settle_ms: config.tip_prep.timing.post_reposition_settle_ms,
-                post_approach_settle_ms: config.tip_prep.timing.post_approach_settle_ms,
+                post_move_settle_ms: config
+                    .tip_prep
+                    .timing
+                    .post_reposition_settle_ms,
+                post_approach_settle_ms: config
+                    .tip_prep
+                    .timing
+                    .post_approach_settle_ms,
                 ..Default::default()
             },
             ctx,
@@ -446,20 +463,20 @@ fn check_stability(
         None
     };
 
-    if let Some(target_speed) = config.tip_prep.stability.scan_speed_m_s {
-        if let Some(ref orig) = original_speed {
-            let mut new_config = *orig;
-            new_config.forward_linear_speed_m_s = target_speed;
-            new_config.backward_linear_speed_m_s = target_speed;
-            new_config.keep_parameter_constant = 1;
-            if let Err(e) = ctx.controller.scan_speed_set(new_config) {
-                log::warn!("Failed to set scan speed: {}", e);
-            } else {
-                log::info!(
-                    "Set scan speed to {:.2e} m/s for stability check",
-                    target_speed
-                );
-            }
+    if let Some(target_speed) = config.tip_prep.stability.scan_speed_m_s
+        && let Some(ref orig) = original_speed
+    {
+        let mut new_config = *orig;
+        new_config.forward_linear_speed_m_s = target_speed;
+        new_config.backward_linear_speed_m_s = target_speed;
+        new_config.keep_parameter_constant = 1;
+        if let Err(e) = ctx.controller.scan_speed_set(new_config) {
+            log::warn!("Failed to set scan speed: {}", e);
+        } else {
+            log::info!(
+                "Set scan speed to {:.2e} m/s for stability check",
+                target_speed
+            );
         }
     }
 
@@ -491,11 +508,7 @@ fn check_stability(
     restore_scan_speed(ctx, original_speed);
 
     // Step 5: Measure final freq_shift
-    let final_fs = measure_final_freq_shift(
-        ctx,
-        config,
-        freq_shift_index,
-    )?;
+    let final_fs = measure_final_freq_shift(ctx, config, freq_shift_index)?;
 
     let final_fs = match final_fs {
         Some(v) => v,
@@ -512,7 +525,11 @@ fn check_stability(
 
     log::info!(
         "Stability: baseline={:.3} Hz, final={:.3} Hz, change={:.3} Hz, threshold={:.3} Hz, stable={}",
-        baseline, final_fs, change, threshold, is_stable
+        baseline,
+        final_fs,
+        change,
+        threshold,
+        is_stable
     );
 
     if is_stable {
@@ -523,7 +540,8 @@ fn check_stability(
         Ok(StabilityOutcome::Stable)
     } else {
         // Fire max pulse and reset to blunt
-        let signed_max = pulse_state.fire_max_pulse_voltage(&config.pulse_method);
+        let signed_max =
+            pulse_state.fire_max_pulse_voltage(&config.pulse_method);
         log::info!(
             "Executing MAX pulse #{} due to stability failure: {:.3}V ({:?})",
             pulse_state.pulse_count,
@@ -543,8 +561,14 @@ fn check_stability(
             &Reposition {
                 x_steps: config.tip_prep.timing.reposition_steps[0],
                 y_steps: config.tip_prep.timing.reposition_steps[1],
-                post_move_settle_ms: config.tip_prep.timing.post_reposition_settle_ms,
-                post_approach_settle_ms: config.tip_prep.timing.post_approach_settle_ms,
+                post_move_settle_ms: config
+                    .tip_prep
+                    .timing
+                    .post_reposition_settle_ms,
+                post_approach_settle_ms: config
+                    .tip_prep
+                    .timing
+                    .post_approach_settle_ms,
                 ..Default::default()
             },
             ctx,
@@ -558,7 +582,10 @@ fn check_stability(
 // Stability sweep helpers
 // ============================================================================
 
-fn build_sweep_plans(tip_prep: &TipPrepConfig, _method: &PulseMethod) -> Vec<SweepPlan> {
+fn build_sweep_plans(
+    tip_prep: &TipPrepConfig,
+    _method: &PulseMethod,
+) -> Vec<SweepPlan> {
     let sc = &tip_prep.stability;
     let range = sc.bias_range;
 
@@ -733,7 +760,12 @@ fn execute_stability_sweep_inner(
             return Err(SpmError::ShutdownRequested.into());
         }
 
-        execute_logged(&SetBias { voltage: current_bias }, ctx)?;
+        execute_logged(
+            &SetBias {
+                voltage: current_bias,
+            },
+            ctx,
+        )?;
 
         log::debug!(
             "Step {}/{}: bias={:.3}V",
@@ -795,10 +827,10 @@ fn restore_scan_speed(
     ctx: &mut ActionContext,
     original: Option<nanonis_rs::scan::ScanConfig>,
 ) {
-    if let Some(config) = original {
-        if let Err(e) = ctx.controller.scan_speed_set(config) {
-            log::error!("Failed to restore scan speed: {}", e);
-        }
+    if let Some(config) = original
+        && let Err(e) = ctx.controller.scan_speed_set(config)
+    {
+        log::error!("Failed to restore scan speed: {}", e);
     }
 }
 
@@ -835,13 +867,19 @@ pub fn execute_logged(
         .emit(Event::action_started(&name, serde_json::json!({})));
     match action.execute(ctx) {
         Ok(output) => {
-            ctx.events
-                .emit(Event::action_completed(&name, &output, start.elapsed()));
+            ctx.events.emit(Event::action_completed(
+                &name,
+                &output,
+                start.elapsed(),
+            ));
             Ok(output)
         }
         Err(e) => {
-            ctx.events
-                .emit(Event::action_failed(&name, &e.to_string(), start.elapsed()));
+            ctx.events.emit(Event::action_failed(
+                &name,
+                &e.to_string(),
+                start.elapsed(),
+            ));
             Err(e)
         }
     }
@@ -865,6 +903,10 @@ fn read_stable(
     )?;
     match output {
         ActionOutput::Value(v) => Ok(v),
-        other => Err(format!("ReadStableSignal returned unexpected output: {:?}", other).into()),
+        other => Err(format!(
+            "ReadStableSignal returned unexpected output: {:?}",
+            other
+        )
+        .into()),
     }
 }

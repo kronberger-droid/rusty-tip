@@ -19,22 +19,22 @@ pub enum ActionOutput {
 
 #[cfg(test)]
 mod tests {
+    use core::f64;
+
     use super::*;
 
     #[test]
     fn value_serializes_tagged() {
-        let output = ActionOutput::Value(3.14);
+        let output = ActionOutput::Value(f64::consts::PI);
         let v = serde_json::to_value(&output).unwrap();
         assert_eq!(v["type"], "value");
-        assert_eq!(v["data"], 3.14);
+        assert_eq!(v["data"], f64::consts::PI);
     }
 
     #[test]
     fn values_serializes_tagged() {
-        let output = ActionOutput::Values(vec![
-            ("x".into(), 1.0),
-            ("y".into(), 2.0),
-        ]);
+        let output =
+            ActionOutput::Values(vec![("x".into(), 1.0), ("y".into(), 2.0)]);
         let v = serde_json::to_value(&output).unwrap();
         assert_eq!(v["type"], "values");
         assert!(v["data"].is_array());
