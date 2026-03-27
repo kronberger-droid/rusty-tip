@@ -122,12 +122,12 @@ impl Signal {
             )));
         }
 
-        if let Some(ch) = tcp_channel {
-            if ch > 23 {
-                return Err(NanonisError::Protocol(format!(
-                    "TCP Channel {ch} is out of range (0-23) "
-                )));
-            }
+        if let Some(ch) = tcp_channel
+            && ch > 23
+        {
+            return Err(NanonisError::Protocol(format!(
+                "TCP Channel {ch} is out of range (0-23) "
+            )));
         }
 
         Ok(Self {

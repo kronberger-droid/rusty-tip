@@ -25,12 +25,12 @@ impl FileLogger {
 
 impl Observer for FileLogger {
     fn on_event(&self, event: &Event) {
-        if let Ok(mut w) = self.writer.lock() {
-            if let Ok(json) = serde_json::to_string(event) {
-                let _ = writeln!(w, "{json}");
-                // BufWriter flushes automatically when its buffer fills
-                // or on drop -- no need to flush on every event.
-            }
+        if let Ok(mut w) = self.writer.lock()
+            && let Ok(json) = serde_json::to_string(event)
+        {
+            let _ = writeln!(w, "{json}");
+            // BufWriter flushes automatically when its buffer fills
+            // or on drop -- no need to flush on every event.
         }
     }
 }
@@ -247,7 +247,10 @@ mod tests {
             Event::Custom { kind, .. } => assert_eq!(kind, "first"),
             _ => panic!("Wrong variant"),
         }
-        assert!(rx.try_recv().is_err(), "Second event should have been dropped");
+        assert!(
+            rx.try_recv().is_err(),
+            "Second event should have been dropped"
+        );
     }
 
     // -- FileLogger --

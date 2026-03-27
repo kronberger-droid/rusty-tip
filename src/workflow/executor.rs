@@ -6,7 +6,8 @@ use crate::spm_controller::SpmController;
 use crate::spm_error::SpmError;
 
 use super::{
-    CompareOp, Condition, ShutdownFlag, Step, StepOutcome, Workflow, WorkflowOutcome,
+    CompareOp, Condition, ShutdownFlag, Step, StepOutcome, Workflow,
+    WorkflowOutcome,
 };
 
 /// Executes workflows by walking the Step tree.
@@ -23,7 +24,10 @@ pub struct WorkflowExecutor {
 }
 
 impl WorkflowExecutor {
-    pub fn new(registry: ActionRegistry, controller: Box<dyn SpmController>) -> Self {
+    pub fn new(
+        registry: ActionRegistry,
+        controller: Box<dyn SpmController>,
+    ) -> Self {
         Self {
             registry,
             controller,
@@ -54,7 +58,10 @@ impl WorkflowExecutor {
     }
 
     /// Execute a complete workflow.
-    pub fn run(&mut self, workflow: &Workflow) -> Result<WorkflowOutcome, SpmError> {
+    pub fn run(
+        &mut self,
+        workflow: &Workflow,
+    ) -> Result<WorkflowOutcome, SpmError> {
         self.events.emit(Event::custom(
             "workflow_started",
             serde_json::json!({ "name": &workflow.name }),
@@ -121,8 +128,12 @@ impl WorkflowExecutor {
                 for step in steps {
                     match self.execute_step(step)? {
                         StepOutcome::Completed(output) => last_output = output,
-                        StepOutcome::Shutdown => return Ok(StepOutcome::Shutdown),
-                        outcome @ StepOutcome::CycleLimit { .. } => return Ok(outcome),
+                        StepOutcome::Shutdown => {
+                            return Ok(StepOutcome::Shutdown);
+                        }
+                        outcome @ StepOutcome::CycleLimit { .. } => {
+                            return Ok(outcome);
+                        }
                     }
                 }
                 Ok(StepOutcome::Completed(last_output))
@@ -161,12 +172,14 @@ impl WorkflowExecutor {
                                 return Ok(outcome);
                             }
                         }
-                        StepOutcome::Shutdown => return Ok(StepOutcome::Shutdown),
-                    }
-                    if let Some(condition) = until {
-                        if self.evaluate_condition(condition)? {
-                            return Ok(StepOutcome::Completed(ActionOutput::Unit));
+                        StepOutcome::Shutdown => {
+                            return Ok(StepOutcome::Shutdown);
                         }
+                    }
+                    if let Some(condition) = until
+                        && self.evaluate_condition(condition)?
+                    {
+                        return Ok(StepOutcome::Completed(ActionOutput::Unit));
                     }
                 }
                 // If an exit condition was set and never met, report CycleLimit
@@ -192,7 +205,8 @@ impl WorkflowExecutor {
                     if self.shutdown.is_requested() {
                         return Ok(StepOutcome::Shutdown);
                     }
-                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    let remaining = deadline
+                        .saturating_duration_since(std::time::Instant::now());
                     std::thread::sleep(poll.min(remaining));
                 }
                 Ok(StepOutcome::Completed(ActionOutput::Unit))
@@ -238,8 +252,11 @@ impl WorkflowExecutor {
         match action.execute(&mut ctx) {
             Ok(output) => {
                 let duration = start.elapsed();
-                self.events
-                    .emit(Event::action_completed(action.name(), &output, duration));
+                self.events.emit(Event::action_completed(
+                    action.name(),
+                    &output,
+                    duration,
+                ));
 
                 // Store result only when explicitly requested
                 if let Some(key) = store_as {
@@ -291,7 +308,10 @@ impl WorkflowExecutor {
     }
 
     /// Evaluate a condition against the current DataStore.
-    fn evaluate_condition(&self, condition: &Condition) -> Result<bool, SpmError> {
+    fn evaluate_condition(
+        &self,
+        condition: &Condition,
+    ) -> Result<bool, SpmError> {
         match condition {
             Condition::Compare {
                 variable,
@@ -309,11 +329,7 @@ impl WorkflowExecutor {
                 })
             }
 
-            Condition::InRange {
-                variable,
-                min,
-                max,
-            } => {
+            Condition::InRange { variable, min, max } => {
                 let value: f64 = self.resolve_variable(variable)?;
                 Ok(value >= *min && value <= *max)
             }
@@ -346,10 +362,12 @@ impl WorkflowExecutor {
     ///
     /// Handles both raw f64 values and `ActionOutput::Value` stored by actions.
     fn resolve_variable(&self, name: &str) -> Result<f64, SpmError> {
-        let json = self
-            .store
-            .get_raw(name)
-            .ok_or_else(|| SpmError::Workflow(format!("Variable '{}' not found in store", name)))?;
+        let json = self.store.get_raw(name).ok_or_else(|| {
+            SpmError::Workflow(format!(
+                "Variable '{}' not found in store",
+                name
+            ))
+        })?;
 
         // Try direct f64
         if let Some(v) = json.as_f64() {
@@ -357,7 +375,8 @@ impl WorkflowExecutor {
         }
 
         // Try deserializing as ActionOutput
-        if let Ok(output) = serde_json::from_value::<ActionOutput>(json.clone()) {
+        if let Ok(output) = serde_json::from_value::<ActionOutput>(json.clone())
+        {
             match output {
                 ActionOutput::Value(v) => return Ok(v),
                 ActionOutput::Values(_) => {
@@ -395,15 +414,21 @@ mod tests {
     use crate::action::{Action, ActionContext, ActionOutput, ActionRegistry};
     use crate::event::ChannelForwarder;
     use crate::spm_controller::{
-        AcquisitionMode, Capability, DataStreamStatus, SpmController, TriggerSetup,
+        AcquisitionMode, Capability, DataStreamStatus, SpmController,
+        TriggerSetup,
     };
-    use crate::workflow::{CompareOp, Condition, Step, Workflow, WorkflowOutcome};
+    use crate::workflow::{
+        CompareOp, Condition, Step, Workflow, WorkflowOutcome,
+    };
     use nanonis_rs::oscilloscope::OsciData;
-    use nanonis_rs::scan::{ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder};
+    use nanonis_rs::scan::{
+        ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder,
+    };
     use nanonis_rs::tip_recovery::TipShaperConfig;
-    use nanonis_rs::{motor::*, Position};
+    use nanonis_rs::{Position, motor::*};
     use serde::{Deserialize, Serialize};
     use std::collections::HashSet;
+    use std::f64;
     use std::time::Duration;
 
     // ── Mock controller ────────────────────────────────────────────
@@ -423,104 +448,207 @@ mod tests {
             [Capability::Bias, Capability::Signals].into()
         }
 
-        fn read_signal(&mut self, index: u32, _wait: bool) -> crate::spm_controller::Result<f64> {
+        fn read_signal(
+            &mut self,
+            index: u32,
+            _wait: bool,
+        ) -> crate::spm_controller::Result<f64> {
             Ok(index as f64 * 0.1)
         }
-        fn read_signals(&mut self, indices: &[u32], _wait: bool) -> crate::spm_controller::Result<Vec<f64>> {
+        fn read_signals(
+            &mut self,
+            indices: &[u32],
+            _wait: bool,
+        ) -> crate::spm_controller::Result<Vec<f64>> {
             Ok(indices.iter().map(|&i| i as f64 * 0.1).collect())
         }
-        fn signal_names(&mut self) -> crate::spm_controller::Result<Vec<String>> {
+        fn signal_names(
+            &mut self,
+        ) -> crate::spm_controller::Result<Vec<String>> {
             Ok(vec!["Z".into(), "Current".into()])
         }
         fn get_bias(&mut self) -> crate::spm_controller::Result<f64> {
             Ok(self.bias)
         }
-        fn set_bias(&mut self, voltage: f64) -> crate::spm_controller::Result<()> {
+        fn set_bias(
+            &mut self,
+            voltage: f64,
+        ) -> crate::spm_controller::Result<()> {
             self.bias = voltage;
             Ok(())
         }
-        fn bias_pulse(&mut self, _v: f64, _w: Duration, _z: bool, _a: bool) -> crate::spm_controller::Result<()> {
+        fn bias_pulse(
+            &mut self,
+            _v: f64,
+            _w: Duration,
+            _z: bool,
+            _a: bool,
+        ) -> crate::spm_controller::Result<()> {
             Ok(())
         }
-        fn withdraw(&mut self, _w: bool, _t: Duration) -> crate::spm_controller::Result<()> {
+        fn withdraw(
+            &mut self,
+            _w: bool,
+            _t: Duration,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn auto_approach(&mut self, _w: bool, _t: Duration) -> crate::spm_controller::Result<()> {
+        fn auto_approach(
+            &mut self,
+            _w: bool,
+            _t: Duration,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn set_z_setpoint(&mut self, _s: f64) -> crate::spm_controller::Result<()> {
+        fn set_z_setpoint(
+            &mut self,
+            _s: f64,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn set_z_home(&mut self, _m: nanonis_rs::z_ctrl::ZHomeMode, _p: f64) -> crate::spm_controller::Result<()> {
+        fn set_z_home(
+            &mut self,
+            _m: nanonis_rs::z_ctrl::ZHomeMode,
+            _p: f64,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
         fn go_z_home(&mut self) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn z_controller_status(&mut self) -> crate::spm_controller::Result<crate::spm_controller::ZControllerStatus> {
+        fn z_controller_status(
+            &mut self,
+        ) -> crate::spm_controller::Result<
+            crate::spm_controller::ZControllerStatus,
+        > {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn get_position(&mut self, _w: bool) -> crate::spm_controller::Result<Position> {
+        fn get_position(
+            &mut self,
+            _w: bool,
+        ) -> crate::spm_controller::Result<Position> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn set_position(&mut self, _p: Position, _w: bool) -> crate::spm_controller::Result<()> {
+        fn set_position(
+            &mut self,
+            _p: Position,
+            _w: bool,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn move_motor(&mut self, _d: MotorDirection, _s: u16, _w: bool) -> crate::spm_controller::Result<()> {
+        fn move_motor(
+            &mut self,
+            _d: MotorDirection,
+            _s: u16,
+            _w: bool,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn move_motor_3d(&mut self, _d: MotorDisplacement, _w: bool) -> crate::spm_controller::Result<()> {
+        fn move_motor_3d(
+            &mut self,
+            _d: MotorDisplacement,
+            _w: bool,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn move_motor_closed_loop(&mut self, _t: Position3D, _m: MovementMode) -> crate::spm_controller::Result<()> {
+        fn move_motor_closed_loop(
+            &mut self,
+            _t: Position3D,
+            _m: MovementMode,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
         fn stop_motor(&mut self) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn scan_action(&mut self, _a: ScanAction, _d: ScanDirection) -> crate::spm_controller::Result<()> {
+        fn scan_action(
+            &mut self,
+            _a: ScanAction,
+            _d: ScanDirection,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
         fn scan_status(&mut self) -> crate::spm_controller::Result<bool> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn scan_props_get(&mut self) -> crate::spm_controller::Result<ScanProps> {
+        fn scan_props_get(
+            &mut self,
+        ) -> crate::spm_controller::Result<ScanProps> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn scan_props_set(&mut self, _p: ScanPropsBuilder) -> crate::spm_controller::Result<()> {
+        fn scan_props_set(
+            &mut self,
+            _p: ScanPropsBuilder,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn scan_speed_get(&mut self) -> crate::spm_controller::Result<ScanConfig> {
+        fn scan_speed_get(
+            &mut self,
+        ) -> crate::spm_controller::Result<ScanConfig> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn scan_speed_set(&mut self, _c: ScanConfig) -> crate::spm_controller::Result<()> {
+        fn scan_speed_set(
+            &mut self,
+            _c: ScanConfig,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn scan_frame_data_grab(&mut self, _c: u32, _f: bool) -> crate::spm_controller::Result<(String, Vec<Vec<f32>>, bool)> {
+        fn scan_frame_data_grab(
+            &mut self,
+            _c: u32,
+            _f: bool,
+        ) -> crate::spm_controller::Result<(String, Vec<Vec<f32>>, bool)>
+        {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn osci_read(&mut self, _c: i32, _t: Option<&TriggerSetup>, _m: AcquisitionMode) -> crate::spm_controller::Result<OsciData> {
+        fn osci_read(
+            &mut self,
+            _c: i32,
+            _t: Option<&TriggerSetup>,
+            _m: AcquisitionMode,
+        ) -> crate::spm_controller::Result<OsciData> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn tip_shaper(&mut self, _c: &TipShaperConfig, _w: bool, _t: Duration) -> crate::spm_controller::Result<()> {
+        fn tip_shaper(
+            &mut self,
+            _c: &TipShaperConfig,
+            _w: bool,
+            _t: Duration,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn pll_center_freq_shift(&mut self) -> crate::spm_controller::Result<()> {
+        fn pll_center_freq_shift(
+            &mut self,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn safe_tip_configure(&mut self, _a: bool, _p: bool, _t: f64) -> crate::spm_controller::Result<()> {
+        fn safe_tip_configure(
+            &mut self,
+            _a: bool,
+            _p: bool,
+            _t: f64,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn safe_tip_status(&mut self) -> crate::spm_controller::Result<(bool, bool, f64)> {
+        fn safe_tip_status(
+            &mut self,
+        ) -> crate::spm_controller::Result<(bool, bool, f64)> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn safe_tip_set_enabled(&mut self, _e: bool) -> crate::spm_controller::Result<()> {
+        fn safe_tip_set_enabled(
+            &mut self,
+            _e: bool,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
         fn safe_tip_enabled(&mut self) -> crate::spm_controller::Result<bool> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn data_stream_configure(&mut self, _c: &[i32], _o: i32) -> crate::spm_controller::Result<()> {
+        fn data_stream_configure(
+            &mut self,
+            _c: &[i32],
+            _o: i32,
+        ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
         fn data_stream_start(&mut self) -> crate::spm_controller::Result<()> {
@@ -529,7 +657,9 @@ mod tests {
         fn data_stream_stop(&mut self) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn data_stream_status(&mut self) -> crate::spm_controller::Result<DataStreamStatus> {
+        fn data_stream_status(
+            &mut self,
+        ) -> crate::spm_controller::Result<DataStreamStatus> {
             Err(SpmError::Unsupported("mock".into()))
         }
     }
@@ -540,9 +670,16 @@ mod tests {
     struct IncrementAction;
 
     impl Action for IncrementAction {
-        fn name(&self) -> &str { "increment" }
-        fn description(&self) -> &str { "Increment 'counter' in the store" }
-        fn execute(&self, ctx: &mut ActionContext) -> std::result::Result<ActionOutput, SpmError> {
+        fn name(&self) -> &str {
+            "increment"
+        }
+        fn description(&self) -> &str {
+            "Increment 'counter' in the store"
+        }
+        fn execute(
+            &self,
+            ctx: &mut ActionContext,
+        ) -> std::result::Result<ActionOutput, SpmError> {
             let current: f64 = ctx.store.get("counter").unwrap_or(0.0);
             let next = current + 1.0;
             ctx.store.set("counter", &next)?;
@@ -585,12 +722,11 @@ mod tests {
     #[test]
     fn do_step_stores_result_under_custom_key() {
         let mut exec = make_executor();
-        let wf = Workflow::new("test", "")
-            .step(Step::action_store(
-                "read_bias",
-                serde_json::Value::Null,
-                "initial_bias",
-            ));
+        let wf = Workflow::new("test", "").step(Step::action_store(
+            "read_bias",
+            serde_json::Value::Null,
+            "initial_bias",
+        ));
         exec.run(&wf).unwrap();
         assert!(exec.store().contains("initial_bias"));
     }
@@ -609,12 +745,11 @@ mod tests {
     #[test]
     fn sequence_runs_all_steps() {
         let mut exec = make_executor();
-        let wf = Workflow::new("test", "")
-            .step(Step::sequence(vec![
-                Step::action("increment", serde_json::Value::Null),
-                Step::action("increment", serde_json::Value::Null),
-                Step::action("increment", serde_json::Value::Null),
-            ]));
+        let wf = Workflow::new("test", "").step(Step::sequence(vec![
+            Step::action("increment", serde_json::Value::Null),
+            Step::action("increment", serde_json::Value::Null),
+            Step::action("increment", serde_json::Value::Null),
+        ]));
         exec.run(&wf).unwrap();
         let counter: f64 = exec.store().get("counter").unwrap();
         assert!((counter - 3.0).abs() < 1e-10);
@@ -623,15 +758,17 @@ mod tests {
     #[test]
     fn sequence_stops_on_error() {
         let mut exec = make_executor();
-        let wf = Workflow::new("test", "")
-            .step(Step::sequence(vec![
-                Step::action("increment", serde_json::Value::Null),
-                Step::action("nonexistent", serde_json::Value::Null),
-                Step::action("increment", serde_json::Value::Null), // should not run
-            ]));
+        let wf = Workflow::new("test", "").step(Step::sequence(vec![
+            Step::action("increment", serde_json::Value::Null),
+            Step::action("nonexistent", serde_json::Value::Null),
+            Step::action("increment", serde_json::Value::Null), // should not run
+        ]));
         assert!(exec.run(&wf).is_err());
         let counter: f64 = exec.store().get("counter").unwrap();
-        assert!((counter - 1.0).abs() < 1e-10, "Only first increment should have run");
+        assert!(
+            (counter - 1.0).abs() < 1e-10,
+            "Only first increment should have run"
+        );
     }
 
     // ── SetVar ─────────────────────────────────────────────────────
@@ -639,11 +776,10 @@ mod tests {
     #[test]
     fn setvar_stores_literal() {
         let mut exec = make_executor();
-        let wf = Workflow::new("test", "")
-            .step(Step::SetVar {
-                key: "threshold".into(),
-                value: serde_json::json!(0.5),
-            });
+        let wf = Workflow::new("test", "").step(Step::SetVar {
+            key: "threshold".into(),
+            value: serde_json::json!(0.5),
+        });
         exec.run(&wf).unwrap();
         let val: f64 = exec.store().get("threshold").unwrap();
         assert!((val - 0.5).abs() < 1e-10);
@@ -655,22 +791,21 @@ mod tests {
     fn if_true_branch() {
         let mut exec = make_executor();
         exec.store_mut().set("x", &5.0f64).unwrap();
-        let wf = Workflow::new("test", "")
-            .step(Step::If {
-                condition: Condition::Compare {
-                    variable: "x".into(),
-                    operator: CompareOp::Gt,
-                    threshold: 3.0,
-                },
-                then: Box::new(Step::SetVar {
-                    key: "result".into(),
-                    value: serde_json::json!("big"),
-                }),
-                otherwise: Some(Box::new(Step::SetVar {
-                    key: "result".into(),
-                    value: serde_json::json!("small"),
-                })),
-            });
+        let wf = Workflow::new("test", "").step(Step::If {
+            condition: Condition::Compare {
+                variable: "x".into(),
+                operator: CompareOp::Gt,
+                threshold: 3.0,
+            },
+            then: Box::new(Step::SetVar {
+                key: "result".into(),
+                value: serde_json::json!("big"),
+            }),
+            otherwise: Some(Box::new(Step::SetVar {
+                key: "result".into(),
+                value: serde_json::json!("small"),
+            })),
+        });
         exec.run(&wf).unwrap();
         let result: String = exec.store().get("result").unwrap();
         assert_eq!(result, "big");
@@ -680,22 +815,21 @@ mod tests {
     fn if_false_branch() {
         let mut exec = make_executor();
         exec.store_mut().set("x", &1.0f64).unwrap();
-        let wf = Workflow::new("test", "")
-            .step(Step::If {
-                condition: Condition::Compare {
-                    variable: "x".into(),
-                    operator: CompareOp::Gt,
-                    threshold: 3.0,
-                },
-                then: Box::new(Step::SetVar {
-                    key: "result".into(),
-                    value: serde_json::json!("big"),
-                }),
-                otherwise: Some(Box::new(Step::SetVar {
-                    key: "result".into(),
-                    value: serde_json::json!("small"),
-                })),
-            });
+        let wf = Workflow::new("test", "").step(Step::If {
+            condition: Condition::Compare {
+                variable: "x".into(),
+                operator: CompareOp::Gt,
+                threshold: 3.0,
+            },
+            then: Box::new(Step::SetVar {
+                key: "result".into(),
+                value: serde_json::json!("big"),
+            }),
+            otherwise: Some(Box::new(Step::SetVar {
+                key: "result".into(),
+                value: serde_json::json!("small"),
+            })),
+        });
         exec.run(&wf).unwrap();
         let result: String = exec.store().get("result").unwrap();
         assert_eq!(result, "small");
@@ -705,19 +839,18 @@ mod tests {
     fn if_no_otherwise_does_nothing() {
         let mut exec = make_executor();
         exec.store_mut().set("x", &1.0f64).unwrap();
-        let wf = Workflow::new("test", "")
-            .step(Step::If {
-                condition: Condition::Compare {
-                    variable: "x".into(),
-                    operator: CompareOp::Gt,
-                    threshold: 99.0,
-                },
-                then: Box::new(Step::SetVar {
-                    key: "result".into(),
-                    value: serde_json::json!("ran"),
-                }),
-                otherwise: None,
-            });
+        let wf = Workflow::new("test", "").step(Step::If {
+            condition: Condition::Compare {
+                variable: "x".into(),
+                operator: CompareOp::Gt,
+                threshold: 99.0,
+            },
+            then: Box::new(Step::SetVar {
+                key: "result".into(),
+                value: serde_json::json!("ran"),
+            }),
+            otherwise: None,
+        });
         exec.run(&wf).unwrap();
         assert!(!exec.store().contains("result"));
     }
@@ -755,10 +888,18 @@ mod tests {
         let mut exec = make_executor();
         exec.store_mut().set("x", &5.0f64).unwrap();
 
-        let in_range = Condition::InRange { variable: "x".into(), min: 3.0, max: 7.0 };
+        let in_range = Condition::InRange {
+            variable: "x".into(),
+            min: 3.0,
+            max: 7.0,
+        };
         assert!(exec.evaluate_condition(&in_range).unwrap());
 
-        let out_of_range = Condition::InRange { variable: "x".into(), min: 6.0, max: 10.0 };
+        let out_of_range = Condition::InRange {
+            variable: "x".into(),
+            min: 6.0,
+            max: 10.0,
+        };
         assert!(!exec.evaluate_condition(&out_of_range).unwrap());
     }
 
@@ -769,16 +910,32 @@ mod tests {
 
         let both_true = Condition::And {
             conditions: vec![
-                Condition::Compare { variable: "x".into(), operator: CompareOp::Gt, threshold: 3.0 },
-                Condition::Compare { variable: "x".into(), operator: CompareOp::Lt, threshold: 10.0 },
+                Condition::Compare {
+                    variable: "x".into(),
+                    operator: CompareOp::Gt,
+                    threshold: 3.0,
+                },
+                Condition::Compare {
+                    variable: "x".into(),
+                    operator: CompareOp::Lt,
+                    threshold: 10.0,
+                },
             ],
         };
         assert!(exec.evaluate_condition(&both_true).unwrap());
 
         let one_false = Condition::And {
             conditions: vec![
-                Condition::Compare { variable: "x".into(), operator: CompareOp::Gt, threshold: 3.0 },
-                Condition::Compare { variable: "x".into(), operator: CompareOp::Lt, threshold: 2.0 },
+                Condition::Compare {
+                    variable: "x".into(),
+                    operator: CompareOp::Gt,
+                    threshold: 3.0,
+                },
+                Condition::Compare {
+                    variable: "x".into(),
+                    operator: CompareOp::Lt,
+                    threshold: 2.0,
+                },
             ],
         };
         assert!(!exec.evaluate_condition(&one_false).unwrap());
@@ -791,16 +948,32 @@ mod tests {
 
         let one_true = Condition::Or {
             conditions: vec![
-                Condition::Compare { variable: "x".into(), operator: CompareOp::Gt, threshold: 99.0 },
-                Condition::Compare { variable: "x".into(), operator: CompareOp::Lt, threshold: 10.0 },
+                Condition::Compare {
+                    variable: "x".into(),
+                    operator: CompareOp::Gt,
+                    threshold: 99.0,
+                },
+                Condition::Compare {
+                    variable: "x".into(),
+                    operator: CompareOp::Lt,
+                    threshold: 10.0,
+                },
             ],
         };
         assert!(exec.evaluate_condition(&one_true).unwrap());
 
         let both_false = Condition::Or {
             conditions: vec![
-                Condition::Compare { variable: "x".into(), operator: CompareOp::Gt, threshold: 99.0 },
-                Condition::Compare { variable: "x".into(), operator: CompareOp::Lt, threshold: 1.0 },
+                Condition::Compare {
+                    variable: "x".into(),
+                    operator: CompareOp::Gt,
+                    threshold: 99.0,
+                },
+                Condition::Compare {
+                    variable: "x".into(),
+                    operator: CompareOp::Lt,
+                    threshold: 1.0,
+                },
             ],
         };
         assert!(!exec.evaluate_condition(&both_false).unwrap());
@@ -837,11 +1010,10 @@ mod tests {
     #[test]
     fn loop_runs_to_max_iterations() {
         let mut exec = make_executor();
-        let wf = Workflow::new("test", "")
-            .step(Step::repeat(
-                Step::action("increment", serde_json::Value::Null),
-                5,
-            ));
+        let wf = Workflow::new("test", "").step(Step::repeat(
+            Step::action("increment", serde_json::Value::Null),
+            5,
+        ));
         exec.run(&wf).unwrap();
         let counter: f64 = exec.store().get("counter").unwrap();
         assert!((counter - 5.0).abs() < 1e-10);
@@ -850,16 +1022,15 @@ mod tests {
     #[test]
     fn loop_exits_on_condition() {
         let mut exec = make_executor();
-        let wf = Workflow::new("test", "")
-            .step(Step::repeat_until(
-                Step::action("increment", serde_json::Value::Null),
-                Condition::Compare {
-                    variable: "counter".into(),
-                    operator: CompareOp::Ge,
-                    threshold: 3.0,
-                },
-                100,
-            ));
+        let wf = Workflow::new("test", "").step(Step::repeat_until(
+            Step::action("increment", serde_json::Value::Null),
+            Condition::Compare {
+                variable: "counter".into(),
+                operator: CompareOp::Ge,
+                threshold: 3.0,
+            },
+            100,
+        ));
         exec.run(&wf).unwrap();
         let counter: f64 = exec.store().get("counter").unwrap();
         assert!((counter - 3.0).abs() < 1e-10);
@@ -889,11 +1060,10 @@ mod tests {
         // We can't easily test mid-sequence shutdown without threads,
         // but we can test that the flag is checked between steps
         // by requesting shutdown and checking it stops
-        let wf = Workflow::new("test", "")
-            .step(Step::sequence(vec![
-                Step::action("increment", serde_json::Value::Null),
-                Step::action("increment", serde_json::Value::Null),
-            ]));
+        let wf = Workflow::new("test", "").step(Step::sequence(vec![
+            Step::action("increment", serde_json::Value::Null),
+            Step::action("increment", serde_json::Value::Null),
+        ]));
 
         // Request shutdown before running
         flag.request();
@@ -940,7 +1110,9 @@ mod tests {
 
         // Check workflow_completed is last
         match events.last().unwrap() {
-            Event::Custom { kind, .. } => assert_eq!(kind, "workflow_completed"),
+            Event::Custom { kind, .. } => {
+                assert_eq!(kind, "workflow_completed")
+            }
             _ => panic!("Last event should be workflow_completed"),
         }
     }
@@ -982,9 +1154,9 @@ mod tests {
     #[test]
     fn resolve_raw_f64() {
         let mut exec = make_executor();
-        exec.store_mut().set("x", &3.14f64).unwrap();
+        exec.store_mut().set("x", &f64::consts::PI).unwrap();
         let val = exec.resolve_variable("x").unwrap();
-        assert!((val - 3.14).abs() < 1e-10);
+        assert!((val - f64::consts::PI).abs() < 1e-10);
     }
 
     #[test]
@@ -1000,7 +1172,9 @@ mod tests {
     #[test]
     fn resolve_non_numeric_fails() {
         let mut exec = make_executor();
-        exec.store_mut().set("x", &"not a number".to_string()).unwrap();
+        exec.store_mut()
+            .set("x", &"not a number".to_string())
+            .unwrap();
         assert!(exec.resolve_variable("x").is_err());
     }
 
@@ -1029,16 +1203,27 @@ mod tests {
     #[test]
     fn step_convenience_constructors() {
         let action = Step::action("read_bias", serde_json::Value::Null);
-        assert!(matches!(action, Step::Do { action, .. } if action == "read_bias"));
+        assert!(
+            matches!(action, Step::Do { action, .. } if action == "read_bias")
+        );
 
-        let action_store = Step::action_store("read_bias", serde_json::json!({}), "bias");
-        assert!(matches!(action_store, Step::Do { store_as: Some(key), .. } if key == "bias"));
+        let action_store =
+            Step::action_store("read_bias", serde_json::json!({}), "bias");
+        assert!(
+            matches!(action_store, Step::Do { store_as: Some(key), .. } if key == "bias")
+        );
 
         let seq = Step::sequence(vec![]);
         assert!(matches!(seq, Step::Sequence { .. }));
 
         let repeat = Step::repeat(Step::wait(10), 5);
-        assert!(matches!(repeat, Step::Loop { max_iterations: 5, .. }));
+        assert!(matches!(
+            repeat,
+            Step::Loop {
+                max_iterations: 5,
+                ..
+            }
+        ));
 
         let wait = Step::wait(100);
         assert!(matches!(wait, Step::Wait { duration_ms: 100 }));
@@ -1049,8 +1234,7 @@ mod tests {
     #[test]
     fn wait_step_completes() {
         let mut exec = make_executor();
-        let wf = Workflow::new("test", "")
-            .step(Step::Wait { duration_ms: 1 }); // 1ms
+        let wf = Workflow::new("test", "").step(Step::Wait { duration_ms: 1 }); // 1ms
         let start = std::time::Instant::now();
         exec.run(&wf).unwrap();
         assert!(start.elapsed().as_millis() >= 1);
@@ -1062,8 +1246,15 @@ mod tests {
     fn set_and_read_bias_workflow() {
         let mut exec = make_executor();
         let wf = Workflow::new("bias_test", "Set bias then read it")
-            .step(Step::action("set_bias", serde_json::json!({"voltage": 1.5})))
-            .step(Step::action_store("read_bias", serde_json::Value::Null, "final_bias"));
+            .step(Step::action(
+                "set_bias",
+                serde_json::json!({"voltage": 1.5}),
+            ))
+            .step(Step::action_store(
+                "read_bias",
+                serde_json::Value::Null,
+                "final_bias",
+            ));
         exec.run(&wf).unwrap();
 
         // The result is stored by the executor via DataStore::set with ActionOutput.

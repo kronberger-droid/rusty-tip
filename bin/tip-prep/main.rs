@@ -1,19 +1,18 @@
 use chrono::Utc;
 use clap::Parser;
 use env_logger::Env;
-use log::{error, info, LevelFilter};
+use log::{LevelFilter, error, info};
 use rusty_tip::Signal;
+use rusty_tip::config::{AppConfig, load_config_or_default};
+use rusty_tip::error::{Error, RunOutcome};
 use rusty_tip::{ActionDriver, TCPReaderConfig};
 use rusty_tip::{PulseMethod, TipController, TipControllerConfig};
-use rusty_tip::config::{load_config_or_default, AppConfig};
-use rusty_tip::error::{Error, RunOutcome};
 use std::{
-    fs,
-    io,
-    path::PathBuf,
+    fs, io,
+    path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -136,7 +135,11 @@ fn log_pulse_method(method: &PulseMethod) {
         } => {
             info!(
                 "Pulse method: Linear (voltage: {:.2}V to {:.2}V, freq_shift range: {:.2} to {:.2} Hz, {:?})",
-                voltage_bounds.0, voltage_bounds.1, linear_clamp.0, linear_clamp.1, polarity
+                voltage_bounds.0,
+                voltage_bounds.1,
+                linear_clamp.0,
+                linear_clamp.1,
+                polarity
             );
             if let Some(switch) = random_polarity_switch {
                 if switch.enabled {
@@ -153,7 +156,7 @@ fn log_pulse_method(method: &PulseMethod) {
 }
 
 /// Log startup information
-fn log_startup_info(config: &AppConfig, config_path: &PathBuf) {
+fn log_startup_info(config: &AppConfig, config_path: &Path) {
     info!("=== Rusty Tip Preparation Tool ===");
     info!("Configuration: {}", config_path.display());
     info!(
@@ -276,7 +279,10 @@ fn create_tip_controller_config(
             config.tip_prep.sharp_tip_bounds[1],
         ),
         pulse_method: config.pulse_method.clone(),
-        allowed_change_for_stable: config.tip_prep.stability.stable_tip_allowed_change,
+        allowed_change_for_stable: config
+            .tip_prep
+            .stability
+            .stable_tip_allowed_change,
         check_stability: config.tip_prep.stability.check_stability,
         max_cycles: config.tip_prep.max_cycles,
         max_duration: config
@@ -289,11 +295,21 @@ fn create_tip_controller_config(
         initial_bias_v: config.tip_prep.initial_bias_v,
         initial_z_setpoint_a: config.tip_prep.initial_z_setpoint_a,
         safe_tip_threshold: config.tip_prep.safe_tip_threshold,
-        pulse_width: Duration::from_millis(config.tip_prep.timing.pulse_width_ms),
-        post_approach_settle: Duration::from_millis(config.tip_prep.timing.post_approach_settle_ms),
-        post_reposition_settle: Duration::from_millis(config.tip_prep.timing.post_reposition_settle_ms),
-        buffer_clear_wait: Duration::from_millis(config.tip_prep.timing.buffer_clear_wait_ms),
-        post_pulse_settle: Duration::from_millis(config.tip_prep.timing.post_pulse_settle_ms),
+        pulse_width: Duration::from_millis(
+            config.tip_prep.timing.pulse_width_ms,
+        ),
+        post_approach_settle: Duration::from_millis(
+            config.tip_prep.timing.post_approach_settle_ms,
+        ),
+        post_reposition_settle: Duration::from_millis(
+            config.tip_prep.timing.post_reposition_settle_ms,
+        ),
+        buffer_clear_wait: Duration::from_millis(
+            config.tip_prep.timing.buffer_clear_wait_ms,
+        ),
+        post_pulse_settle: Duration::from_millis(
+            config.tip_prep.timing.post_pulse_settle_ms,
+        ),
         reposition_steps: (
             config.tip_prep.timing.reposition_steps[0],
             config.tip_prep.timing.reposition_steps[1],
@@ -337,7 +353,10 @@ fn run_and_report(
             Err(Error::CycleLimit(n).into())
         }
         Err(Error::TimedOut(d)) => {
-            error!("Tip preparation stopped: max duration ({:.0}s) exceeded", d.as_secs_f64());
+            error!(
+                "Tip preparation stopped: max duration ({:.0}s) exceeded",
+                d.as_secs_f64()
+            );
             Err(Error::TimedOut(d).into())
         }
         Err(e) => {

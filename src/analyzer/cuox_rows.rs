@@ -106,11 +106,11 @@ impl Analyzer for CuoxRowDetector {
 
         // Step 3: Band detection
         let projection = project_at_angle(&score, angle_deg as f64);
-        let bands = detect_bands(&projection, self.threshold, self.min_band_width);
+        let bands =
+            detect_bands(&projection, self.threshold, self.min_band_width);
 
         // Step 4: Build output with image-space coordinates
-        let calibration_nm_per_px =
-            input.calibration_m_per_px.map(|m| m * 1e9);
+        let calibration_nm_per_px = input.calibration_m_per_px.map(|m| m * 1e9);
 
         let angle_rad = (angle_deg as f64).to_radians();
         let cos_a = angle_rad.cos();
@@ -118,20 +118,19 @@ impl Analyzer for CuoxRowDetector {
         let cy = rows as f64 / 2.0;
         let cx = cols as f64 / 2.0;
         let min_proj = compute_min_proj(rows, cols, cos_a, sin_a, cy, cx);
+        let geom = ProjectionGeometry {
+            rows, cols, cos_a, sin_a, cy, cx, min_proj,
+        };
 
         let bands_json: Vec<serde_json::Value> = bands
             .iter()
             .map(|b| {
-                let center_line = line_endpoints(
-                    b.center, rows, cols, cos_a, sin_a, cy, cx, min_proj,
-                );
-                let low_line = line_endpoints(
-                    b.edge_low as f64, rows, cols, cos_a, sin_a, cy, cx, min_proj,
-                );
+                let center_line = line_endpoints(b.center, &geom);
+                let low_line = line_endpoints(b.edge_low as f64, &geom);
                 // edge_high is exclusive (first bin outside band), so use
                 // edge_high - 1 for the last bin inside the band.
                 let high_line = line_endpoints(
-                    (b.edge_high.saturating_sub(1)) as f64, rows, cols, cos_a, sin_a, cy, cx, min_proj,
+                    (b.edge_high.saturating_sub(1)) as f64, &geom,
                 );
 
                 let mut obj = json!({
@@ -187,9 +186,9 @@ fn build_sat(img: &Array2<f32>) -> Array2<f64> {
     let mut sat = Array2::<f64>::zeros((rows + 1, cols + 1));
     for r in 0..rows {
         for c in 0..cols {
-            sat[[r + 1, c + 1]] = img[[r, c]] as f64 + sat[[r, c + 1]]
-                + sat[[r + 1, c]]
-                - sat[[r, c]];
+            sat[[r + 1, c + 1]] =
+                img[[r, c]] as f64 + sat[[r, c + 1]] + sat[[r + 1, c]]
+                    - sat[[r, c]];
         }
     }
     sat
@@ -212,8 +211,15 @@ fn build_sat_sq(img: &Array2<f32>) -> Array2<f64> {
 /// Query a SAT for the sum within a rectangle [r0..r1, c0..c1] (inclusive pixel coords).
 /// SAT is 1-indexed (row/col 0 is the padding row).
 #[inline]
-fn sat_query(sat: &Array2<f64>, r0: usize, c0: usize, r1: usize, c1: usize) -> f64 {
-    sat[[r1 + 1, c1 + 1]] - sat[[r0, c1 + 1]] - sat[[r1 + 1, c0]] + sat[[r0, c0]]
+fn sat_query(
+    sat: &Array2<f64>,
+    r0: usize,
+    c0: usize,
+    r1: usize,
+    c1: usize,
+) -> f64 {
+    sat[[r1 + 1, c1 + 1]] - sat[[r0, c1 + 1]] - sat[[r1 + 1, c0]]
+        + sat[[r0, c0]]
 }
 
 fn build_score_map(img: &Array2<f32>, var_radius: usize) -> Array2<f32> {
@@ -347,7 +353,12 @@ fn project_at_angle(img: &Array2<f32>, angle_deg: f64) -> Vec<f64> {
     // Compute projected coordinate range
     let mut min_proj = f64::MAX;
     let mut max_proj = f64::MIN;
-    for &(y, x) in &[(0.0, 0.0), (0.0, cols as f64), (rows as f64, 0.0), (rows as f64, cols as f64)] {
+    for &(y, x) in &[
+        (0.0, 0.0),
+        (0.0, cols as f64),
+        (rows as f64, 0.0),
+        (rows as f64, cols as f64),
+    ] {
         let p = (y - cy) * cos_a + (x - cx) * sin_a;
         min_proj = min_proj.min(p);
         max_proj = max_proj.max(p);
@@ -429,7 +440,11 @@ fn detect_angle(score: &Array2<f32>) -> f32 {
 
 // ── Step 3: Band detection ─────────────────────────────────────────
 
-fn detect_bands(projection: &[f64], threshold: f32, min_width: usize) -> Vec<Band> {
+fn detect_bands(
+    projection: &[f64],
+    threshold: f32,
+    min_width: usize,
+) -> Vec<Band> {
     if projection.is_empty() {
         return vec![];
     }
@@ -457,9 +472,9 @@ fn detect_bands(projection: &[f64], threshold: f32, min_width: usize) -> Vec<Ban
                 // Weighted center within the band
                 let mut weight_sum = 0.0;
                 let mut weighted_pos = 0.0;
-                for j in start..end {
-                    weight_sum += projection[j];
-                    weighted_pos += projection[j] * j as f64;
+                for (j, &val) in projection[start..end].iter().enumerate() {
+                    weight_sum += val;
+                    weighted_pos += val * (start + j) as f64;
                 }
                 let center = if weight_sum > 0.0 {
                     weighted_pos / weight_sum
@@ -512,15 +527,8 @@ fn compute_min_proj(
         .fold(f64::MAX, f64::min)
 }
 
-/// Compute the two endpoints where a line at a given projection coordinate
-/// intersects the image rectangle [0..rows, 0..cols].
-///
-/// The line is parameterized as:
-///   y = cy + d * cos_a + t * (-sin_a)
-///   x = cx + d * sin_a + t * cos_a
-/// where `d = proj_bin + min_proj` is the actual perpendicular distance.
-fn line_endpoints(
-    proj_bin: f64,
+/// Geometric context for projecting band lines onto an image.
+struct ProjectionGeometry {
     rows: usize,
     cols: usize,
     cos_a: f64,
@@ -528,10 +536,19 @@ fn line_endpoints(
     cy: f64,
     cx: f64,
     min_proj: f64,
-) -> Option<LineSegment> {
-    let d = proj_bin + min_proj;
-    let base_y = cy + d * cos_a;
-    let base_x = cx + d * sin_a;
+}
+
+/// Compute the two endpoints where a line at a given projection coordinate
+/// intersects the image rectangle [0..rows, 0..cols].
+///
+/// The line is parameterized as:
+///   y = cy + d * cos_a + t * (-sin_a)
+///   x = cx + d * sin_a + t * cos_a
+/// where `d = proj_bin + min_proj` is the actual perpendicular distance.
+fn line_endpoints(proj_bin: f64, geom: &ProjectionGeometry) -> Option<LineSegment> {
+    let d = proj_bin + geom.min_proj;
+    let base_y = geom.cy + d * geom.cos_a;
+    let base_x = geom.cx + d * geom.sin_a;
 
     // Direction along the band: dy/dt = -sin_a, dx/dt = cos_a
     // Clip the parametric line against the image rectangle.
@@ -539,10 +556,10 @@ fn line_endpoints(
     let mut t_max = f64::INFINITY;
 
     // Clip against y = 0 and y = rows
-    if sin_a.abs() > 1e-12 {
-        let t_y0 = (base_y - 0.0) / sin_a; // y = 0 => t = base_y / sin_a
-        let t_y1 = (base_y - rows as f64) / sin_a; // y = rows
-        let (lo, hi) = if sin_a > 0.0 {
+    if geom.sin_a.abs() > 1e-12 {
+        let t_y0 = (base_y - 0.0) / geom.sin_a; // y = 0 => t = base_y / sin_a
+        let t_y1 = (base_y - geom.rows as f64) / geom.sin_a; // y = rows
+        let (lo, hi) = if geom.sin_a > 0.0 {
             (t_y1, t_y0)
         } else {
             (t_y0, t_y1)
@@ -551,36 +568,34 @@ fn line_endpoints(
         t_max = t_max.min(hi);
     } else {
         // Line is horizontal (sin_a ~ 0), check if base_y is within bounds
-        if base_y < 0.0 || base_y > rows as f64 {
+        if base_y < 0.0 || base_y > geom.rows as f64 {
             return None;
         }
     }
 
     // Clip against x = 0 and x = cols
-    if cos_a.abs() > 1e-12 {
-        let t_x0 = (0.0 - base_x) / cos_a; // x = 0
-        let t_x1 = (cols as f64 - base_x) / cos_a; // x = cols
-        let (lo, hi) = if cos_a > 0.0 {
+    if geom.cos_a.abs() > 1e-12 {
+        let t_x0 = (0.0 - base_x) / geom.cos_a; // x = 0
+        let t_x1 = (geom.cols as f64 - base_x) / geom.cos_a; // x = cols
+        let (lo, hi) = if geom.cos_a > 0.0 {
             (t_x0, t_x1)
         } else {
             (t_x1, t_x0)
         };
         t_min = t_min.max(lo);
         t_max = t_max.min(hi);
-    } else {
-        if base_x < 0.0 || base_x > cols as f64 {
-            return None;
-        }
+    } else if base_x < 0.0 || base_x > geom.cols as f64 {
+        return None;
     }
 
     if t_min > t_max {
         return None;
     }
 
-    let start_y = base_y - t_min * sin_a;
-    let start_x = base_x + t_min * cos_a;
-    let end_y = base_y - t_max * sin_a;
-    let end_x = base_x + t_max * cos_a;
+    let start_y = base_y - t_min * geom.sin_a;
+    let start_x = base_x + t_min * geom.cos_a;
+    let end_y = base_y - t_max * geom.sin_a;
+    let end_x = base_x + t_max * geom.cos_a;
 
     Some(LineSegment {
         start: (start_y, start_x),
@@ -718,7 +733,10 @@ mod tests {
                 assert!(
                     (got - expected).abs() < 1e-10,
                     "Single pixel [{},{}]: expected {}, got {}",
-                    r, c, expected, got
+                    r,
+                    c,
+                    expected,
+                    got
                 );
             }
         }
@@ -757,7 +775,9 @@ mod tests {
 
     #[test]
     fn normalize_scales_to_unit() {
-        let mut map = Array2::from_shape_vec((2, 2), vec![2.0f32, 4.0, 6.0, 8.0]).unwrap();
+        let mut map =
+            Array2::from_shape_vec((2, 2), vec![2.0f32, 4.0, 6.0, 8.0])
+                .unwrap();
         normalize_map(&mut map);
         assert!((map[[1, 1]] - 1.0).abs() < 1e-6, "Max should be 1.0");
         assert!((map[[0, 0]] - 0.25).abs() < 1e-6, "2/8 = 0.25");
@@ -767,7 +787,10 @@ mod tests {
     fn normalize_zero_map_stays_zero() {
         let mut map = Array2::<f32>::zeros((3, 3));
         normalize_map(&mut map);
-        assert!(map.iter().all(|&v| v == 0.0), "All-zero map should stay zero");
+        assert!(
+            map.iter().all(|&v| v == 0.0),
+            "All-zero map should stay zero"
+        );
     }
 
     // ── Downsample tests ───────────────────────────────────────────
@@ -778,9 +801,7 @@ mod tests {
         let img = Array2::from_shape_vec(
             (4, 4),
             vec![
-                1.0, 2.0, 3.0, 4.0,
-                5.0, 6.0, 7.0, 8.0,
-                9.0, 10.0, 11.0, 12.0,
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
                 13.0, 14.0, 15.0, 16.0f32,
             ],
         )
@@ -819,7 +840,8 @@ mod tests {
         assert!(
             max_val > 0.5 && min_val < 0.2,
             "Projection should show contrast: max={}, min={}",
-            max_val, min_val
+            max_val,
+            min_val
         );
     }
 
@@ -839,7 +861,8 @@ mod tests {
         assert!(
             max_val > 0.5 && min_val < 0.2,
             "Projection should show contrast: max={}, min={}",
-            max_val, min_val
+            max_val,
+            min_val
         );
     }
 
@@ -851,11 +874,19 @@ mod tests {
         let img = Array2::from_elem((50, 50), 1.0f32);
         let proj_0 = project_at_angle(&img, 0.0);
         let var_0 = projection_variance(&proj_0);
-        assert!(var_0 < 1e-6, "Axis-aligned projection should have ~zero variance, got {}", var_0);
+        assert!(
+            var_0 < 1e-6,
+            "Axis-aligned projection should have ~zero variance, got {}",
+            var_0
+        );
 
         let proj_30 = project_at_angle(&img, 30.0);
         let var_30 = projection_variance(&proj_30);
-        assert!(var_30 < 0.1, "Off-axis projection variance should be small, got {}", var_30);
+        assert!(
+            var_30 < 0.1,
+            "Off-axis projection variance should be small, got {}",
+            var_30
+        );
     }
 
     // ── Projection variance tests ──────────────────────────────────
@@ -955,7 +986,11 @@ mod tests {
             profile[i] = 1.0;
         }
         let bands = detect_bands(&profile, 0.3, 5);
-        assert_eq!(bands.len(), 1, "Should detect band touching end of profile");
+        assert_eq!(
+            bands.len(),
+            1,
+            "Should detect band touching end of profile"
+        );
     }
 
     #[test]
@@ -998,7 +1033,11 @@ mod tests {
         }
         // At threshold=0.3, only the strong peak should survive
         let bands_high = detect_bands(&profile, 0.3, 5);
-        assert_eq!(bands_high.len(), 1, "High threshold should only find strong band");
+        assert_eq!(
+            bands_high.len(),
+            1,
+            "High threshold should only find strong band"
+        );
         // At threshold=0.1, both should be found
         let bands_low = detect_bands(&profile, 0.1, 5);
         assert_eq!(bands_low.len(), 2, "Low threshold should find both bands");
@@ -1012,7 +1051,11 @@ mod tests {
         let score = build_score_map(&img, 5);
         let max = score.iter().copied().fold(0.0f32, f32::max);
         // Uniform image has zero variance and zero deviation
-        assert!(max < 1e-6, "Uniform image should have near-zero score, got {}", max);
+        assert!(
+            max < 1e-6,
+            "Uniform image should have near-zero score, got {}",
+            max
+        );
     }
 
     #[test]
@@ -1028,7 +1071,8 @@ mod tests {
         assert!(
             edge_score > bg_score,
             "Band edge score ({}) should exceed background score ({})",
-            edge_score, bg_score
+            edge_score,
+            bg_score
         );
     }
 
@@ -1046,7 +1090,8 @@ mod tests {
         assert!(
             band_interior_score > bg_score,
             "Dark band interior ({}) should score higher than bright background ({})",
-            band_interior_score, bg_score
+            band_interior_score,
+            bg_score
         );
     }
 
@@ -1088,7 +1133,7 @@ mod tests {
         let output = detector.analyze(&input).unwrap();
         let angle = output.data["angle_deg"].as_f64().unwrap();
         assert!(
-            angle < 10.0 || angle > 170.0,
+            !(10.0..170.0).contains(&angle),
             "Horizontal bands: angle should be near 0/180, got {}",
             angle
         );
@@ -1145,15 +1190,22 @@ mod tests {
         let bands = output.data["bands"].as_array().unwrap();
         if !bands.is_empty() {
             let first = &bands[0];
-            assert!(first.get("center_nm").is_some(), "Should have center_nm field");
-            assert!(first.get("width_nm").is_some(), "Should have width_nm field");
+            assert!(
+                first.get("center_nm").is_some(),
+                "Should have center_nm field"
+            );
+            assert!(
+                first.get("width_nm").is_some(),
+                "Should have width_nm field"
+            );
             let width_px = first["width_px"].as_u64().unwrap() as f64;
             let width_nm = first["width_nm"].as_f64().unwrap();
             let expected_nm = width_px * 0.12;
             assert!(
                 (width_nm - expected_nm).abs() < 1e-6,
                 "width_nm ({}) should be width_px * 0.12 ({})",
-                width_nm, expected_nm
+                width_nm,
+                expected_nm
             );
         }
     }
@@ -1170,8 +1222,14 @@ mod tests {
         let bands = output.data["bands"].as_array().unwrap();
         if !bands.is_empty() {
             let first = &bands[0];
-            assert!(first.get("center_nm").is_none(), "Should not have center_nm without calibration");
-            assert!(first.get("width_nm").is_none(), "Should not have width_nm without calibration");
+            assert!(
+                first.get("center_nm").is_none(),
+                "Should not have center_nm without calibration"
+            );
+            assert!(
+                first.get("width_nm").is_none(),
+                "Should not have width_nm without calibration"
+            );
         }
     }
 
@@ -1226,8 +1284,9 @@ mod tests {
         let cos_a = 1.0; // 0 degrees
         let sin_a = 0.0;
         let min_proj = compute_min_proj(rows, cols, cos_a, sin_a, cy, cx);
+        let geom = ProjectionGeometry { rows, cols, cos_a, sin_a, cy, cx, min_proj };
 
-        let seg = line_endpoints(50.0, rows, cols, cos_a, sin_a, cy, cx, min_proj)
+        let seg = line_endpoints(50.0, &geom)
             .expect("Should produce a line segment");
 
         // Both endpoints should have same y, and x should span 0..cols
@@ -1256,8 +1315,9 @@ mod tests {
         let cos_a = angle_rad.cos();
         let sin_a = angle_rad.sin();
         let min_proj = compute_min_proj(rows, cols, cos_a, sin_a, cy, cx);
+        let geom = ProjectionGeometry { rows, cols, cos_a, sin_a, cy, cx, min_proj };
 
-        let seg = line_endpoints(30.0, rows, cols, cos_a, sin_a, cy, cx, min_proj)
+        let seg = line_endpoints(30.0, &geom)
             .expect("Should produce a line segment");
 
         // Both endpoints should have same x, and y should span 0..rows
@@ -1286,19 +1346,22 @@ mod tests {
         let cos_a = angle_rad.cos();
         let sin_a = angle_rad.sin();
         let min_proj = compute_min_proj(rows, cols, cos_a, sin_a, cy, cx);
+        let geom = ProjectionGeometry { rows, cols, cos_a, sin_a, cy, cx, min_proj };
 
         for bin in [10.0, 30.0, 50.0, 70.0] {
-            if let Some(seg) = line_endpoints(bin, rows, cols, cos_a, sin_a, cy, cx, min_proj) {
+            if let Some(seg) = line_endpoints(bin, &geom) {
                 for (y, x) in [seg.start, seg.end] {
                     assert!(
                         y >= -0.5 && y <= rows as f64 + 0.5,
                         "y={} out of bounds for bin {}",
-                        y, bin
+                        y,
+                        bin
                     );
                     assert!(
                         x >= -0.5 && x <= cols as f64 + 0.5,
                         "x={} out of bounds for bin {}",
-                        x, bin
+                        x,
+                        bin
                     );
                 }
             }
@@ -1314,9 +1377,13 @@ mod tests {
         let cos_a = 1.0;
         let sin_a = 0.0;
         let min_proj = compute_min_proj(rows, cols, cos_a, sin_a, cy, cx);
+        let geom = ProjectionGeometry { rows, cols, cos_a, sin_a, cy, cx, min_proj };
 
-        let result = line_endpoints(9999.0, rows, cols, cos_a, sin_a, cy, cx, min_proj);
-        assert!(result.is_none(), "Line far outside image should return None");
+        let result = line_endpoints(9999.0, &geom);
+        assert!(
+            result.is_none(),
+            "Line far outside image should return None"
+        );
     }
 
     #[test]
@@ -1337,16 +1404,36 @@ mod tests {
             let low_line = &band["edge_low_line"];
             let high_line = &band["edge_high_line"];
 
-            for (name, line) in [("center", center_line), ("low", low_line), ("high", high_line)] {
+            for (name, line) in [
+                ("center", center_line),
+                ("low", low_line),
+                ("high", high_line),
+            ] {
                 assert!(
                     !line.is_null(),
                     "{}_line should not be null for a detected band",
                     name
                 );
-                assert!(line["start"]["x"].is_f64(), "{}_line.start.x should be a number", name);
-                assert!(line["start"]["y"].is_f64(), "{}_line.start.y should be a number", name);
-                assert!(line["end"]["x"].is_f64(), "{}_line.end.x should be a number", name);
-                assert!(line["end"]["y"].is_f64(), "{}_line.end.y should be a number", name);
+                assert!(
+                    line["start"]["x"].is_f64(),
+                    "{}_line.start.x should be a number",
+                    name
+                );
+                assert!(
+                    line["start"]["y"].is_f64(),
+                    "{}_line.start.y should be a number",
+                    name
+                );
+                assert!(
+                    line["end"]["x"].is_f64(),
+                    "{}_line.end.x should be a number",
+                    name
+                );
+                assert!(
+                    line["end"]["y"].is_f64(),
+                    "{}_line.end.y should be a number",
+                    name
+                );
             }
         }
     }
@@ -1434,7 +1521,10 @@ mod tests {
         // (depending on how they project, but likely too narrow)
         // This is a regression guard more than a strict assertion
         let count = output.data["bands_count"].as_u64().unwrap();
-        assert!(count <= 2, "With high min_band_width, should reject most bands");
+        assert!(
+            count <= 2,
+            "With high min_band_width, should reject most bands"
+        );
     }
 
     #[test]

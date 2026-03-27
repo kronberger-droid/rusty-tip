@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::action::{Action, ActionContext, ActionOutput};
-use crate::action::util::Wait;
 use crate::action::pll::CenterFreqShift;
+use crate::action::util::Wait;
+use crate::action::{Action, ActionContext, ActionOutput};
 use crate::spm_controller::Capability;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,7 +215,10 @@ impl Action for CalibratedApproach {
 
             // 6. Center freq shift (non-fatal if it fails)
             if let Err(e) = CenterFreqShift.execute(ctx) {
-                log::warn!("Failed to center frequency shift: {} (continuing)", e);
+                log::warn!(
+                    "Failed to center frequency shift: {} (continuing)",
+                    e
+                );
             }
 
             // 7. Final approach with centered freq shift
@@ -225,10 +228,10 @@ impl Action for CalibratedApproach {
         })();
 
         // 8. Always restore safe-tip state before propagating errors
-        if !was_enabled {
-            if let Err(e) = ctx.controller.safe_tip_set_enabled(false) {
-                log::error!("Failed to restore safe-tip state: {}", e);
-            }
+        if !was_enabled
+            && let Err(e) = ctx.controller.safe_tip_set_enabled(false)
+        {
+            log::error!("Failed to restore safe-tip state: {}", e);
         }
 
         result?;
