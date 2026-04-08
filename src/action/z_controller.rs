@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::action::pll::CenterFreqShift;
 use crate::action::util::Wait;
 use crate::action::{Action, ActionContext, ActionOutput};
-use crate::spm_controller::Capability;
+use crate::machine_state::{ScanActivity, StateEffects, TipEngagement};
+use crate::spm_controller::{Capability, ZControllerStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Withdraw {
@@ -42,6 +43,12 @@ impl Action for Withdraw {
         ctx.controller
             .withdraw(self.wait, Duration::from_millis(self.timeout_ms))?;
         Ok(ActionOutput::Unit)
+    }
+
+    fn effects(&self) -> StateEffects {
+        StateEffects::none()
+            .set_tip(TipEngagement::Withdrawn)
+            .set_scan(ScanActivity::Stopped)
     }
 }
 
@@ -81,6 +88,12 @@ impl Action for AutoApproach {
             .auto_approach(self.wait, Duration::from_millis(self.timeout_ms))?;
         Ok(ActionOutput::Unit)
     }
+
+    fn effects(&self) -> StateEffects {
+        StateEffects::none()
+            .set_tip(TipEngagement::Approached)
+            .set_z_controller(ZControllerStatus::On)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +120,10 @@ impl Action for SetZSetpoint {
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         ctx.controller.set_z_setpoint(self.setpoint)?;
         Ok(ActionOutput::Unit)
+    }
+
+    fn effects(&self) -> StateEffects {
+        StateEffects::none().set_z_setpoint(self.setpoint)
     }
 }
 
@@ -150,6 +167,10 @@ impl Action for SafeTipSet {
         ctx.controller.safe_tip_set_enabled(self.enabled)?;
         Ok(ActionOutput::Unit)
     }
+
+    fn effects(&self) -> StateEffects {
+        StateEffects::none().set_safe_tip(self.enabled)
+    }
 }
 
 /// Composite action: approach and calibrate frequency shift for a valid reading.
@@ -190,6 +211,13 @@ impl Action for CalibratedApproach {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::ZController, Capability::Pll]
     }
+
+    fn effects(&self) -> StateEffects {
+        StateEffects::none()
+            .set_tip(TipEngagement::Approached)
+            .set_z_controller(ZControllerStatus::On)
+    }
+
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let timeout = Duration::from_millis(self.timeout_ms);
 

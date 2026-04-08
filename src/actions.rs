@@ -1,5 +1,5 @@
 use crate::{
-    types::{DataToGet, MotorDisplacement, OsciData, TipShape, TriggerConfig},
+    types::{DataToGet, MotorDisplacement, StableOsciData, TipShape, TriggerConfig},
     MotorDirection, MovementMode, Position, Position3D, ScanAction, Signal,
     TipShaperConfig,
 };
@@ -318,8 +318,8 @@ pub enum ActionResult {
     /// Position data (meaningful x,y structure)
     Position(Position),
 
-    /// Complex oscilloscope data (timing + data + metadata)
-    OsciData(OsciData),
+    /// Complex oscilloscope data (timing + data + stability metadata)
+    OsciData(StableOsciData),
 
     /// Operation completed successfully (no data returned)
     Success,
@@ -372,8 +372,8 @@ impl ActionResult {
         }
     }
 
-    /// Convert to OsciData if possible
-    pub fn as_osci_data(&self) -> Option<&OsciData> {
+    /// Convert to StableOsciData if possible
+    pub fn as_osci_data(&self) -> Option<&StableOsciData> {
         match self {
             ActionResult::OsciData(data) => Some(data),
             _ => None,
@@ -423,8 +423,8 @@ impl ActionResult {
     // === Action-Aware Type Extractors ===
     // These methods validate that the result type matches what the action should produce
 
-    /// Extract OsciData with action validation (panics on type mismatch)
-    pub fn expect_osci_data(self, action: &Action) -> OsciData {
+    /// Extract StableOsciData with action validation (panics on type mismatch)
+    pub fn expect_osci_data(self, action: &Action) -> StableOsciData {
         match (action, self) {
             (Action::ReadOsci { .. }, ActionResult::OsciData(data)) => data,
             (action, result) => panic!(
@@ -613,11 +613,11 @@ impl ActionResult {
 
     // === Safe Extraction Methods (non-panicking) ===
 
-    /// Try to extract OsciData with action validation
+    /// Try to extract StableOsciData with action validation
     pub fn try_into_osci_data(
         self,
         action: &Action,
-    ) -> Result<OsciData, String> {
+    ) -> Result<StableOsciData, String> {
         match (action, self) {
             (Action::ReadOsci { .. }, ActionResult::OsciData(data)) => Ok(data),
             (action, result) => Err(format!(
@@ -715,8 +715,8 @@ pub trait ExpectFromAction<T> {
     fn expect_from_action(self, action: &Action) -> T;
 }
 
-impl ExpectFromAction<OsciData> for ActionResult {
-    fn expect_from_action(self, action: &Action) -> OsciData {
+impl ExpectFromAction<StableOsciData> for ActionResult {
+    fn expect_from_action(self, action: &Action) -> StableOsciData {
         self.expect_osci_data(action)
     }
 }
@@ -1843,10 +1843,10 @@ impl ActionLogResult {
                 ActionLogResult::Position { x: pos.x, y: pos.y }
             }
             ActionResult::OsciData(osci_data) => ActionLogResult::OsciData {
-                t0: osci_data.t0,
-                dt: osci_data.dt,
-                size: osci_data.size,
-                data: osci_data.data.clone(),
+                t0: osci_data.osci.t0,
+                dt: osci_data.osci.dt,
+                size: osci_data.osci.size,
+                data: osci_data.osci.data.clone(),
                 signal_stats: osci_data.signal_stats.as_ref().map(|stats| {
                     LoggableSignalStats {
                         mean: stats.mean,

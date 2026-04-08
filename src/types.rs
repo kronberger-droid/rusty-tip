@@ -6,9 +6,63 @@ pub use nanonis_rs::motor::{
     MotorMovement, MovementMode, Position3D, StepCount,
 };
 pub use nanonis_rs::oscilloscope::{
-    OsciData, OsciTriggerMode, OscilloscopeIndex, OversamplingIndex, SampleCount, SignalStats,
+    OsciData, OsciTriggerMode, OscilloscopeIndex, OversamplingIndex, SampleCount,
     TimebaseIndex, TriggerConfig, TriggerLevel, TriggerMode, TriggerSlope,
 };
+
+/// Signal stability statistics for oscilloscope data analysis.
+///
+/// Previously lived in nanonis-rs but is application-level analysis,
+/// not protocol data. Used by the legacy `ActionDriver` stability checks.
+#[derive(Debug, Clone)]
+pub struct SignalStats {
+    pub mean: f64,
+    pub std_dev: f64,
+    pub relative_std: f64,
+    pub window_size: usize,
+    pub stability_method: String,
+}
+
+/// Extension trait adding stability analysis fields to `OsciData`.
+///
+/// The base `OsciData` in nanonis-rs is now a pure protocol type.
+/// Stability tracking is application-level and lives here.
+#[derive(Debug, Clone)]
+pub struct StableOsciData {
+    pub osci: OsciData,
+    pub signal_stats: Option<SignalStats>,
+    pub is_stable: bool,
+    pub fallback_value: Option<f64>,
+}
+
+impl StableOsciData {
+    pub fn stable(osci: OsciData) -> Self {
+        Self {
+            osci,
+            signal_stats: None,
+            is_stable: true,
+            fallback_value: None,
+        }
+    }
+
+    pub fn with_stats(osci: OsciData, stats: SignalStats) -> Self {
+        Self {
+            osci,
+            signal_stats: Some(stats),
+            is_stable: true,
+            fallback_value: None,
+        }
+    }
+
+    pub fn unstable_with_fallback(osci: OsciData, fallback: f64) -> Self {
+        Self {
+            osci,
+            signal_stats: None,
+            is_stable: false,
+            fallback_value: Some(fallback),
+        }
+    }
+}
 pub use nanonis_rs::Position;
 pub use nanonis_rs::bias::PulseMode;
 pub use nanonis_rs::scan::{ScanAction, ScanConfig, ScanDirection, ScanFrame};

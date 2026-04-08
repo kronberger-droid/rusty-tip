@@ -3,6 +3,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::action::{Action, ActionContext, ActionOutput};
+use crate::machine_state::ActionKind;
 use crate::spm_controller::Capability;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +36,10 @@ impl Action for ReadSignal {
         let val = ctx.controller.read_signal(self.index, self.wait_for_newest)?;
         Ok(ActionOutput::Value(val))
     }
+
+    fn kind(&self) -> ActionKind {
+        ActionKind::Query
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +67,10 @@ impl Action for ReadSignals {
     }
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Signals]
+    }
+
+    fn kind(&self) -> ActionKind {
+        ActionKind::Query
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let vals = ctx.controller.read_signals(&self.indices, self.wait_for_newest)?;
@@ -94,6 +103,10 @@ impl Action for ReadSignalNames {
     }
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Signals]
+    }
+
+    fn kind(&self) -> ActionKind {
+        ActionKind::Query
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let names = ctx.controller.signal_names()?;
@@ -161,11 +174,31 @@ impl Action for ReadStableSignal {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Signals]
     }
+
+    fn kind(&self) -> ActionKind {
+        ActionKind::Query
+    }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         for attempt in 0..=self.max_retries {
             let samples = ctx
                 .controller
                 .read_signal_samples(self.index, self.num_samples)?;
+
+            // Treat severely incomplete data as instability — thresholds were
+            // tuned for the configured sample count, so computing on too few
+            // samples would produce unreliable statistics.
+            if samples.len() < self.num_samples / 2 {
+                log::warn!(
+                    "ReadStableSignal: only got {}/{} samples, treating as unstable (attempt {})",
+                    samples.len(), self.num_samples, attempt
+                );
+                if attempt < self.max_retries {
+                    let backoff_ms = 100u64 * (1 << attempt);
+                    std::thread::sleep(Duration::from_millis(backoff_ms));
+                    continue;
+                }
+                // Fall through to compute on partial data as last resort
+            }
 
             let (mean, std_dev, slope) = compute_stability_metrics(&samples);
 

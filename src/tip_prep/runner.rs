@@ -510,14 +510,6 @@ fn check_stability(
     // Step 5: Measure final freq_shift
     let final_fs = measure_final_freq_shift(ctx, config, freq_shift_index)?;
 
-    let final_fs = match final_fs {
-        Some(v) => v,
-        None => {
-            log::error!("Failed to read final freq_shift");
-            return Ok(StabilityOutcome::NotSharp);
-        }
-    };
-
     // Step 6: Compare
     let change = (final_fs - baseline).abs();
     let threshold = config.tip_prep.stability.stable_tip_allowed_change as f64;
@@ -797,7 +789,7 @@ fn measure_final_freq_shift(
     ctx: &mut ActionContext,
     config: &AppConfig,
     freq_shift_index: u32,
-) -> Result<Option<f64>, Box<dyn std::error::Error>> {
+) -> Result<f64, Box<dyn std::error::Error>> {
     log::info!("Measuring final freq_shift after sweeps");
 
     execute_logged(&Withdraw::default(), ctx)?;
@@ -819,8 +811,7 @@ fn measure_final_freq_shift(
         ctx,
     )?;
 
-    let fs = read_stable(ctx, config, freq_shift_index)?;
-    Ok(Some(fs))
+    read_stable(ctx, config, freq_shift_index)
 }
 
 fn restore_scan_speed(

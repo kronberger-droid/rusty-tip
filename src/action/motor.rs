@@ -5,7 +5,8 @@ use nanonis_rs::motor::{MotorDirection, MotorDisplacement, MovementMode, Positio
 use crate::action::{Action, ActionContext, ActionOutput};
 use crate::action::util::Wait;
 use crate::action::z_controller::{CalibratedApproach, Withdraw};
-use crate::spm_controller::Capability;
+use crate::machine_state::{StateEffects, TipEngagement};
+use crate::spm_controller::{Capability, ZControllerStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MoveMotor {
@@ -238,6 +239,14 @@ impl Action for Reposition {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::ZController, Capability::Motor, Capability::Pll]
     }
+
+    fn effects(&self) -> StateEffects {
+        // Net effect: tip ends up approached after withdraw + move + approach
+        StateEffects::none()
+            .set_tip(TipEngagement::Approached)
+            .set_z_controller(ZControllerStatus::On)
+    }
+
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         Withdraw::default().execute(ctx)?;
 
