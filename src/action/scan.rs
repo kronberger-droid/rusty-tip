@@ -3,6 +3,10 @@ use serde::{Deserialize, Serialize};
 use nanonis_rs::scan::{ScanAction, ScanDirection};
 
 use crate::action::{Action, ActionContext, ActionOutput};
+use crate::machine_state::{
+    ActionKind, MachineState, ScanActivity, StateEffects, StateField,
+    StateRequirements, TipEngagement,
+};
 use crate::spm_controller::Capability;
 
 /// Serializable scan action that maps to nanonis-rs ScanAction.
@@ -75,6 +79,28 @@ impl Action for ScanControl {
             .scan_action(self.action.clone().into(), self.direction.clone().into())?;
         Ok(ActionOutput::Unit)
     }
+
+    fn expects(&self) -> StateRequirements {
+        match self.action {
+            ScanActionParam::Start | ScanActionParam::Resume => {
+                StateRequirements::none().tip(TipEngagement::Approached)
+            }
+            ScanActionParam::Stop | ScanActionParam::Pause => {
+                StateRequirements::none()
+            }
+        }
+    }
+
+    fn effects(&self) -> StateEffects {
+        match self.action {
+            ScanActionParam::Start | ScanActionParam::Resume => {
+                StateEffects::none().set_scan(ScanActivity::Running)
+            }
+            ScanActionParam::Stop | ScanActionParam::Pause => {
+                StateEffects::none().set_scan(ScanActivity::Stopped)
+            }
+        }
+    }
 }
 
 /// Grab 2D pixel data from a completed (or in-progress) scan frame.
@@ -141,5 +167,23 @@ impl Action for ReadScanStatus {
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let running = ctx.controller.scan_status()?;
         Ok(ActionOutput::Data(serde_json::json!({ "running": running })))
+    }
+
+    fn kind(&self) -> ActionKind {
+        ActionKind::Query
+    }
+    fn resolves(&self) -> Vec<StateField> {
+        vec![StateField::Scan]
+    }
+    fn apply_to_state(&self, output: &ActionOutput, state: &mut MachineState) {
+        if let ActionOutput::Data(json) = output
+            && let Some(running) = json.get("running").and_then(|v| v.as_bool())
+        {
+            state.scan.set(if running {
+                ScanActivity::Running
+            } else {
+                ScanActivity::Stopped
+            });
+        }
     }
 }

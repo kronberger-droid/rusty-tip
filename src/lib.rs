@@ -3,6 +3,7 @@ pub mod action_driver;
 pub mod analyzer;
 pub mod config;
 pub mod event;
+pub mod machine_state;
 pub mod tip_prep;
 pub mod workflow;
 pub mod actions;

@@ -22,9 +22,35 @@ use crate::{
     buffered_tcp_reader::BufferedTCPReader,
     controller_types::TipStateConfig,
     signal_registry::SignalRegistry,
-    types::{DataToGet, OsciData, SignalStats, TriggerConfig},
+    types::{
+        DataToGet, MotorDirection, MotorDisplacement, OsciData, SignalStats,
+        StableOsciData, TriggerConfig,
+    },
     utils::{PollError, poll_until, poll_with_timeout},
 };
+
+/// Convert a 3D displacement to an ordered sequence of motor movements.
+/// Safety ordering: Z-retract first, X/Y moves, Z-approach last.
+fn displacement_to_movements(d: &MotorDisplacement) -> Vec<(MotorDirection, u16)> {
+    let mut movements = Vec::new();
+    if d.z < 0 {
+        movements.push((MotorDirection::ZMinus, (-d.z) as u16));
+    }
+    if d.x > 0 {
+        movements.push((MotorDirection::XPlus, d.x as u16));
+    } else if d.x < 0 {
+        movements.push((MotorDirection::XMinus, (-d.x) as u16));
+    }
+    if d.y > 0 {
+        movements.push((MotorDirection::YPlus, d.y as u16));
+    } else if d.y < 0 {
+        movements.push((MotorDirection::YMinus, (-d.y) as u16));
+    }
+    if d.z > 0 {
+        movements.push((MotorDirection::ZPlus, d.z as u16));
+    }
+    movements
+}
 
 /// Result of a stable signal read: (signal data, is_stable, stability metrics).
 type StableSignalReadResult = (Vec<f32>, bool, HashMap<String, f32>);
@@ -1565,7 +1591,7 @@ impl ActionDriver {
                         let (t0, dt, size, data) =
                             self.client.osci1t_data_get(data_mode)?;
                         let osci_data =
-                            OsciData::new_stable(t0, dt, size, data);
+                            StableOsciData::stable(OsciData::new(t0, dt, size, data));
                         Ok(ActionResult::OsciData(osci_data))
                     }
                 }
@@ -1620,7 +1646,7 @@ impl ActionDriver {
                 blocking,
             } => {
                 // Convert 3D displacement to sequence of motor movements
-                let movements = displacement.to_motor_movements();
+                let movements = displacement_to_movements(&displacement);
 
                 // Execute each movement in sequence
                 for (direction, steps) in movements {
@@ -1750,7 +1776,7 @@ impl ActionDriver {
                 self.client.z_ctrl_withdraw(true, withdraw_timeout)?;
 
                 // 2. Move motor 3D (using the same logic as MoveMotor3D)
-                let movements = displacement.to_motor_movements();
+                let movements = displacement_to_movements(&displacement);
                 for (direction, steps) in movements {
                     self.client.motor_start_move(
                         direction,
@@ -3521,7 +3547,7 @@ impl ActionDriver {
         readings: u32,
         timeout: std::time::Duration,
         params: &OsciStabilityParams,
-    ) -> Result<Option<OsciData>, NanonisError> {
+    ) -> Result<Option<StableOsciData>, NanonisError> {
         match poll_with_timeout(
             || {
                 // Try to find stable data in a batch of readings
@@ -3562,7 +3588,7 @@ impl ActionDriver {
         size: i32,
         data: Vec<f64>,
         params: &OsciStabilityParams,
-    ) -> Result<Option<OsciData>, NanonisError> {
+    ) -> Result<Option<StableOsciData>, NanonisError> {
         let min_window = (size as f64 * params.min_window_percent) as usize;
         let mut start = 0;
         let mut end = size as usize;
@@ -3610,14 +3636,10 @@ impl ActionDriver {
                     stability_method,
                 };
 
-                let mut osci_data = OsciData::new_with_stats(
-                    t0,
-                    dt,
-                    stable_data.len() as i32,
-                    stable_data,
+                let osci_data = StableOsciData::with_stats(
+                    OsciData::new(t0, dt, stable_data.len() as i32, stable_data),
                     stats,
                 );
-                osci_data.is_stable = true; // Mark as stable since we found stable data
                 return Ok(Some(osci_data));
             }
 
@@ -3642,7 +3664,7 @@ impl ActionDriver {
         readings: u32,
         timeout: std::time::Duration,
         params: &OsciStabilityParams,
-    ) -> Result<OsciData, NanonisError> {
+    ) -> Result<StableOsciData, NanonisError> {
         // First try to find stable data
         if let Some(stable_osci_data) = self.find_stable_oscilloscope_data(
             data_to_get,
@@ -3663,11 +3685,8 @@ impl ActionDriver {
             0.0
         };
 
-        Ok(OsciData::new_unstable_with_fallback(
-            t0,
-            dt,
-            size,
-            data,
+        Ok(StableOsciData::unstable_with_fallback(
+            OsciData::new(t0, dt, size, data),
             fallback_value,
         ))
     }
@@ -3864,7 +3883,7 @@ impl ActionDriver {
         signal: Signal,
         trigger: Option<TriggerConfig>,
         data_to_get: DataToGet,
-    ) -> Result<Option<OsciData>, NanonisError> {
+    ) -> Result<Option<StableOsciData>, NanonisError> {
         match self.execute(Action::ReadOsci {
             signal,
             trigger,
@@ -3886,7 +3905,7 @@ impl ActionDriver {
         trigger: Option<TriggerConfig>,
         data_to_get: DataToGet,
         is_stable: fn(&[f64]) -> bool,
-    ) -> Result<Option<OsciData>, NanonisError> {
+    ) -> Result<Option<StableOsciData>, NanonisError> {
         match self.execute(Action::ReadOsci {
             signal,
             trigger,
@@ -4107,8 +4126,8 @@ impl ExpectFromExecution<Position> for ExecutionResult {
     }
 }
 
-impl ExpectFromExecution<OsciData> for ExecutionResult {
-    fn expect_from_execution(self) -> Result<OsciData, NanonisError> {
+impl ExpectFromExecution<StableOsciData> for ExecutionResult {
+    fn expect_from_execution(self) -> Result<StableOsciData, NanonisError> {
         match self {
             ExecutionResult::Single(ActionResult::OsciData(data)) => Ok(data),
             _ => Err(NanonisError::Protocol(
