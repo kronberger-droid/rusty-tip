@@ -10,7 +10,7 @@ use crate::action::util::Wait;
 use crate::action::z_controller::{CalibratedApproach, SetZSetpoint, Withdraw};
 use crate::action::{Action, ActionContext, ActionOutput, DataStore};
 use crate::config::{AppConfig, TipPrepConfig};
-use crate::controller_types::{BiasSweepPolarity, PulseMethod};
+use crate::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
 use crate::event::{Event, EventBus};
 use crate::spm_controller::SpmController;
 use crate::spm_error::SpmError;
@@ -536,14 +536,26 @@ fn check_stability(
         // fires on an engaged tip if the earlier withdraw silently failed.
         execute_logged(&Withdraw::default(), ctx)?;
 
-        // Fire max pulse and reset to blunt
+        // Fire max pulse and reset to blunt. `fire_max_pulse_voltage` bumps
+        // pulse_count and may flip polarity, so capture the effective sign
+        // from the returned voltage rather than re-reading base_polarity.
         let signed_max =
             pulse_state.fire_max_pulse_voltage(&config.pulse_method);
+        let effective_polarity = if signed_max >= 0.0 {
+            PolaritySign::Positive
+        } else {
+            PolaritySign::Negative
+        };
         log::info!(
-            "Executing MAX pulse #{} due to stability failure: {:.3}V ({:?})",
+            "Executing MAX pulse #{} due to stability failure: {:.3}V ({:?}{})",
             pulse_state.pulse_count,
             signed_max,
-            pulse_state.base_polarity,
+            effective_polarity,
+            if effective_polarity != pulse_state.base_polarity {
+                " - SWITCHED"
+            } else {
+                ""
+            },
         );
         execute_logged(
             &BiasPulse {
