@@ -91,6 +91,10 @@ fn default_max_iterations() -> u32 {
     1000
 }
 
+fn default_compare_tolerance() -> f64 {
+    1e-9
+}
+
 impl Step {
     /// Convenience: create a Do step.
     pub fn action(name: &str, params: serde_json::Value) -> Self {
@@ -103,7 +107,11 @@ impl Step {
     }
 
     /// Convenience: create a Do step that stores its result.
-    pub fn action_store(name: &str, params: serde_json::Value, store_as: &str) -> Self {
+    pub fn action_store(
+        name: &str,
+        params: serde_json::Value,
+        store_as: &str,
+    ) -> Self {
         Step::Do {
             action: name.into(),
             params,
@@ -114,10 +122,7 @@ impl Step {
 
     /// Convenience: create a Sequence step.
     pub fn sequence(steps: Vec<Step>) -> Self {
-        Step::Sequence {
-            steps,
-            label: None,
-        }
+        Step::Sequence { steps, label: None }
     }
 
     /// Convenience: create a Loop step.
@@ -131,7 +136,11 @@ impl Step {
     }
 
     /// Convenience: create a Loop step with an exit condition.
-    pub fn repeat_until(body: Step, until: Condition, max_iterations: u32) -> Self {
+    pub fn repeat_until(
+        body: Step,
+        until: Condition,
+        max_iterations: u32,
+    ) -> Self {
         Step::Loop {
             body: Box::new(body),
             until: Some(until),
@@ -151,10 +160,17 @@ impl Step {
 #[serde(tag = "type")]
 pub enum Condition {
     /// Compare a stored value to a threshold.
+    ///
+    /// `tolerance` is the absolute tolerance applied to `Eq`/`Ne` comparisons.
+    /// For physical measurements (bias in V, frequency shift in Hz, etc.)
+    /// `f64::EPSILON` is never useful — supply a tolerance meaningful in the
+    /// variable's units. Defaults to `1e-9`.
     Compare {
         variable: String,
         operator: CompareOp,
         threshold: f64,
+        #[serde(default = "default_compare_tolerance")]
+        tolerance: f64,
     },
     /// Check if a value is within bounds (inclusive).
     InRange {

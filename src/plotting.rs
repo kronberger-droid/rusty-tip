@@ -180,6 +180,8 @@ mod tests {
     fn test_plot_small_values() {
         let data = vec![1e-12, 2e-12, 1.5e-12, 3e-12];
         // Should not panic and should use pico scaling
-        assert!(plot_values(&data, Some("Picoamp Current"), None, None).is_ok());
+        assert!(
+            plot_values(&data, Some("Picoamp Current"), None, None).is_ok()
+        );
     }
 }

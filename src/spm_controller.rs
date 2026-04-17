@@ -3,12 +3,14 @@ use std::time::Duration;
 pub use nanonis_rs::z_ctrl::{ZControllerStatus, ZHomeMode};
 
 use nanonis_rs::{
+    Position,
     motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D},
     oscilloscope::{OsciData, TriggerConfig},
-    scan::{ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder},
+    scan::{
+        ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder,
+    },
     tcplog::TCPLogStatus,
     tip_recovery::TipShaperConfig,
-    Position,
 };
 
 use std::collections::HashSet;
@@ -72,7 +74,9 @@ pub trait SpmController: Send {
     /// One-time hardware setup: load configuration, set safe operating
     /// defaults, apply vendor-specific workarounds.  Called once before
     /// the main experiment loop.  Default is a no-op.
-    fn prepare(&mut self) -> Result<()> { Ok(()) }
+    fn prepare(&mut self) -> Result<()> {
+        Ok(())
+    }
 
     /// Best-effort resource cleanup: stop data streams, disable safety
     /// overrides, release hardware locks.  Implementations should log
@@ -85,18 +89,22 @@ pub trait SpmController: Send {
     /// A return value of `false` indicates the connection was poisoned by a
     /// previous I/O error and [`reconnect()`](Self::reconnect) must be called
     /// before further use.
-    fn is_connected(&self) -> bool { true }
+    fn is_connected(&self) -> bool {
+        true
+    }
 
     /// Re-establish the connection to the hardware controller.
     ///
     /// Call this after an I/O error has poisoned the connection. The default
     /// implementation is a no-op (always succeeds), suitable for mock
     /// controllers in tests.
-    fn reconnect(&mut self) -> Result<()> { Ok(()) }
+    fn reconnect(&mut self) -> Result<()> {
+        Ok(())
+    }
 
     // -- Signals --
     fn read_signal(&mut self, index: u32, wait_for_newest: bool)
-        -> Result<f64>;
+    -> Result<f64>;
     fn read_signals(
         &mut self,
         indices: &[u32],

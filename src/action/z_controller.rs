@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 use crate::action::pll::CenterFreqShift;
 use crate::action::util::Wait;
 use crate::action::{Action, ActionContext, ActionOutput};
-use crate::machine_state::{ScanActivity, StateEffects, TipEngagement};
+use crate::machine_state::{
+    ActionKind, MachineState, ScanActivity, StateEffects, StateField,
+    TipEngagement,
+};
 use crate::spm_controller::{Capability, ZControllerStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,6 +147,89 @@ impl Action for ZHome {
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         ctx.controller.go_z_home()?;
         Ok(ActionOutput::Unit)
+    }
+}
+
+/// Query the current Z-controller status (on/off).
+///
+/// Resolves `StateField::ZController` so the framework can auto-insert this
+/// action when a downstream step requires the field to be Known.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReadZControllerStatus;
+
+impl Action for ReadZControllerStatus {
+    fn name(&self) -> &str {
+        "read_z_controller_status"
+    }
+    fn description(&self) -> &str {
+        "Read the current Z-controller status (on/off)"
+    }
+    fn requires(&self) -> Vec<Capability> {
+        vec![Capability::ZController]
+    }
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+        let status = ctx.controller.z_controller_status()?;
+        let on = matches!(status, ZControllerStatus::On);
+        Ok(ActionOutput::Data(serde_json::json!({
+            "on": on,
+            "status": format!("{:?}", status),
+        })))
+    }
+
+    fn kind(&self) -> ActionKind {
+        ActionKind::Query
+    }
+    fn resolves(&self) -> Vec<StateField> {
+        vec![StateField::ZController]
+    }
+    fn apply_to_state(&self, output: &ActionOutput, state: &mut MachineState) {
+        if let ActionOutput::Data(json) = output
+            && let Some(on) = json.get("on").and_then(|v| v.as_bool())
+        {
+            state.z_controller.set(if on {
+                ZControllerStatus::On
+            } else {
+                ZControllerStatus::Off
+            });
+        }
+    }
+}
+
+/// Query whether safe-tip crash protection is currently enabled.
+///
+/// Resolves `StateField::SafeTipEnabled`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReadSafeTipStatus;
+
+impl Action for ReadSafeTipStatus {
+    fn name(&self) -> &str {
+        "read_safe_tip_status"
+    }
+    fn description(&self) -> &str {
+        "Read whether the safe-tip crash protection is currently enabled"
+    }
+    fn requires(&self) -> Vec<Capability> {
+        vec![Capability::SafeTip]
+    }
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+        let enabled = ctx.controller.safe_tip_enabled()?;
+        Ok(ActionOutput::Data(
+            serde_json::json!({ "enabled": enabled }),
+        ))
+    }
+
+    fn kind(&self) -> ActionKind {
+        ActionKind::Query
+    }
+    fn resolves(&self) -> Vec<StateField> {
+        vec![StateField::SafeTipEnabled]
+    }
+    fn apply_to_state(&self, output: &ActionOutput, state: &mut MachineState) {
+        if let ActionOutput::Data(json) = output
+            && let Some(enabled) = json.get("enabled").and_then(|v| v.as_bool())
+        {
+            state.safe_tip_enabled.set(enabled);
+        }
     }
 }
 

@@ -1,5 +1,5 @@
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 
 use crate::spm_error::SpmError;
@@ -21,9 +21,16 @@ impl DataStore {
 
     /// Store a serializable value under the given key.
     /// Overwrites any existing value at that key.
-    pub fn set<T: Serialize>(&mut self, key: &str, value: &T) -> Result<(), SpmError> {
+    pub fn set<T: Serialize>(
+        &mut self,
+        key: &str,
+        value: &T,
+    ) -> Result<(), SpmError> {
         let json = serde_json::to_value(value).map_err(|e| {
-            SpmError::Protocol(format!("Failed to serialize value for key '{}': {}", key, e))
+            SpmError::Protocol(format!(
+                "Failed to serialize value for key '{}': {}",
+                key, e
+            ))
         })?;
         self.values.insert(key.to_string(), json);
         Ok(())
@@ -87,7 +94,10 @@ mod tests {
     #[test]
     fn store_and_retrieve_struct() {
         #[derive(Debug, Serialize, Deserialize, PartialEq)]
-        struct Point { x: f64, y: f64 }
+        struct Point {
+            x: f64,
+            y: f64,
+        }
 
         let mut store = DataStore::new();
         store.set("pos", &Point { x: 1.0, y: 2.0 }).unwrap();

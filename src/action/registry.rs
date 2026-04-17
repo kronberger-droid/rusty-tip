@@ -3,10 +3,18 @@ use std::collections::HashMap;
 use serde::de::DeserializeOwned;
 
 use super::{Action, Result};
+use crate::machine_state::{ActionKind, StateField};
 use crate::spm_error::SpmError;
 
 /// Factory function that creates an action instance from JSON parameters.
-pub type ActionFactory = Box<dyn Fn(serde_json::Value) -> Result<Box<dyn Action>> + Send + Sync>;
+pub type ActionFactory =
+    Box<dyn Fn(serde_json::Value) -> Result<Box<dyn Action>> + Send + Sync>;
+
+/// Factory function that creates a default-parameter resolver action
+/// without going through JSON deserialization. Used by the executor's
+/// auto-resolve path where the action must be constructed from a
+/// `StateField` lookup, not a name + JSON.
+pub type ResolverFactory = Box<dyn Fn() -> Box<dyn Action> + Send + Sync>;
 
 /// Metadata about a registered action.
 #[derive(Debug, Clone)]
@@ -20,9 +28,14 @@ pub struct ActionInfo {
 /// Actions are registered by type, and can be instantiated from a name
 /// and JSON parameters. This enables runtime discovery (for LLMs) and
 /// deserialization of workflows from config files.
+///
+/// Query actions that declare `resolves()` are also indexed by
+/// `StateField` so the executor can auto-insert them to resolve unknown
+/// state before running a gated action.
 pub struct ActionRegistry {
     factories: HashMap<String, ActionFactory>,
     descriptions: HashMap<String, String>,
+    resolvers: HashMap<StateField, ResolverFactory>,
 }
 
 impl ActionRegistry {
@@ -30,6 +43,7 @@ impl ActionRegistry {
         Self {
             factories: HashMap::new(),
             descriptions: HashMap::new(),
+            resolvers: HashMap::new(),
         }
     }
 
@@ -38,6 +52,9 @@ impl ActionRegistry {
     /// The action must implement `Action + DeserializeOwned` so it can
     /// be constructed from JSON parameters. A temporary instance is created
     /// to extract the name and description for the registry.
+    ///
+    /// If the action is a `Query` that declares any `resolves()` fields,
+    /// it is also indexed as the resolver for those fields.
     pub fn register<A>(&mut self)
     where
         A: Action + DeserializeOwned + 'static,
@@ -46,21 +63,53 @@ impl ActionRegistry {
         let sample = A::default();
         let name = sample.name().to_string();
         let desc = sample.description().to_string();
+        let kind = sample.kind();
+        let resolves = sample.resolves();
 
         if self.factories.contains_key(&name) {
-            log::warn!("ActionRegistry: overwriting existing action '{}'", name);
+            log::warn!(
+                "ActionRegistry: overwriting existing action '{}'",
+                name
+            );
         }
 
         self.factories.insert(
             name.clone(),
             Box::new(|params: serde_json::Value| {
-                let action: A = serde_json::from_value(params).map_err(|e| {
-                    SpmError::Protocol(format!("Failed to deserialize action: {}", e))
-                })?;
+                let action: A =
+                    serde_json::from_value(params).map_err(|e| {
+                        SpmError::Protocol(format!(
+                            "Failed to deserialize action: {}",
+                            e
+                        ))
+                    })?;
                 Ok(Box::new(action) as Box<dyn Action>)
             }),
         );
-        self.descriptions.insert(name, desc);
+        self.descriptions.insert(name.clone(), desc);
+
+        if kind == ActionKind::Query {
+            for field in resolves {
+                if self.resolvers.contains_key(&field) {
+                    log::warn!(
+                        "ActionRegistry: overwriting resolver for {:?} with '{}'",
+                        field,
+                        name
+                    );
+                }
+                self.resolvers.insert(
+                    field,
+                    Box::new(|| Box::new(A::default()) as Box<dyn Action>),
+                );
+            }
+        }
+    }
+
+    /// Instantiate the resolver (default-parameter Query action) for a state
+    /// field, if one is registered. Returns `None` if no Query action was
+    /// registered with this field in its `resolves()`.
+    pub fn resolver_for(&self, field: StateField) -> Option<Box<dyn Action>> {
+        self.resolvers.get(&field).map(|factory| factory())
     }
 
     /// List all registered actions with their descriptions.
@@ -75,7 +124,11 @@ impl ActionRegistry {
     }
 
     /// Create an action instance from a name and JSON parameters.
-    pub fn create(&self, name: &str, params: serde_json::Value) -> Result<Box<dyn Action>> {
+    pub fn create(
+        &self,
+        name: &str,
+        params: serde_json::Value,
+    ) -> Result<Box<dyn Action>> {
         let factory = self.factories.get(name).ok_or_else(|| {
             SpmError::Protocol(format!("Unknown action: {}", name))
         })?;
@@ -107,9 +160,16 @@ mod tests {
     }
 
     impl Action for DummyAction {
-        fn name(&self) -> &str { "dummy" }
-        fn description(&self) -> &str { "A test action" }
-        fn execute(&self, _ctx: &mut ActionContext) -> crate::action::Result<ActionOutput> {
+        fn name(&self) -> &str {
+            "dummy"
+        }
+        fn description(&self) -> &str {
+            "A test action"
+        }
+        fn execute(
+            &self,
+            _ctx: &mut ActionContext,
+        ) -> crate::action::Result<ActionOutput> {
             Ok(ActionOutput::Value(self.value))
         }
     }
@@ -120,7 +180,9 @@ mod tests {
         reg.register::<DummyAction>();
         assert!(reg.has("dummy"));
 
-        let action = reg.create("dummy", serde_json::json!({"value": 42.0})).unwrap();
+        let action = reg
+            .create("dummy", serde_json::json!({"value": 42.0}))
+            .unwrap();
         assert_eq!(action.name(), "dummy");
     }
 
@@ -173,7 +235,11 @@ mod tests {
         assert!(reg.has("center_freq_shift"));
 
         let list = reg.list();
-        assert!(list.len() >= 20, "Should have 20+ built-in actions, got {}", list.len());
+        assert!(
+            list.len() >= 20,
+            "Should have 20+ built-in actions, got {}",
+            list.len()
+        );
     }
 
     #[test]

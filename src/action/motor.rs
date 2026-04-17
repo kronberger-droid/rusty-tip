@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-use nanonis_rs::motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D};
+use nanonis_rs::motor::{
+    MotorDirection, MotorDisplacement, MovementMode, Position3D,
+};
 
-use crate::action::{Action, ActionContext, ActionOutput};
 use crate::action::util::Wait;
 use crate::action::z_controller::{CalibratedApproach, Withdraw};
-use crate::machine_state::{StateEffects, TipEngagement};
+use crate::action::{Action, ActionContext, ActionOutput};
+use crate::machine_state::{StateEffects, StateRequirements, TipEngagement};
 use crate::spm_controller::{Capability, ZControllerStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,8 +65,11 @@ impl Action for MoveMotor {
         vec![Capability::Motor]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
-        ctx.controller
-            .move_motor(self.direction.clone().into(), self.steps, self.wait)?;
+        ctx.controller.move_motor(
+            self.direction.clone().into(),
+            self.steps,
+            self.wait,
+        )?;
         Ok(ActionOutput::Unit)
     }
 }
@@ -99,6 +104,16 @@ impl Action for MoveMotor3D {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Motor]
     }
+
+    /// Coarse motor moves are not atomic across axes — the underlying driver
+    /// issues one blocking move per nonzero axis in sequence, so a mid-move
+    /// error leaves the tip partially displaced. Require the tip to be
+    /// withdrawn so a partial move cannot end with the tip in unexpected XY
+    /// above an engaged z-controller.
+    fn expects(&self) -> StateRequirements {
+        StateRequirements::none().tip(TipEngagement::Withdrawn)
+    }
+
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let displacement = MotorDisplacement {
             x: self.x,
@@ -257,11 +272,17 @@ impl Action for Reposition {
         };
         ctx.controller.move_motor_3d(displacement, true)?;
 
-        Wait { duration_ms: self.post_move_settle_ms }.execute(ctx)?;
+        Wait {
+            duration_ms: self.post_move_settle_ms,
+        }
+        .execute(ctx)?;
 
         CalibratedApproach::default().execute(ctx)?;
 
-        Wait { duration_ms: self.post_approach_settle_ms }.execute(ctx)?;
+        Wait {
+            duration_ms: self.post_approach_settle_ms,
+        }
+        .execute(ctx)?;
 
         Ok(ActionOutput::Unit)
     }

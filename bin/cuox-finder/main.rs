@@ -57,11 +57,7 @@ fn main() {
 
     // Convert to Vec<Vec<f32>>
     let data: Vec<Vec<f32>> = (0..height)
-        .map(|y| {
-            (0..width)
-                .map(|x| gray.get_pixel(x, y).0[0])
-                .collect()
-        })
+        .map(|y| (0..width).map(|x| gray.get_pixel(x, y).0[0]).collect())
         .collect();
 
     // Build detector

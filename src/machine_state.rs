@@ -19,8 +19,7 @@ use crate::spm_controller::ZControllerStatus;
 /// - `Known(T)` — set by a successful action or verified by a query.
 /// - `Unknown` — was known, but a failed action made it uncertain.
 /// - `Uninitialized` — never set; procedure has not addressed this field yet.
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub enum Tracked<T> {
     Known(T),
     Unknown,
@@ -64,14 +63,15 @@ impl<T: fmt::Display> Tracked<T> {
     pub fn describe(&self, field_name: &str) -> String {
         match self {
             Tracked::Known(v) => format!("{}", v),
-            Tracked::Unknown => format!("{}: UNKNOWN (query needed)", field_name),
+            Tracked::Unknown => {
+                format!("{}: UNKNOWN (query needed)", field_name)
+            }
             Tracked::Uninitialized => {
                 format!("{}: uninitialized", field_name)
             }
         }
     }
 }
-
 
 // ============================================================================
 // Domain types for tracked fields
@@ -171,7 +171,9 @@ impl MachineState {
             StateField::ZSetpointA => self.z_setpoint_a.needs_resolution(),
             StateField::ZController => self.z_controller.needs_resolution(),
             StateField::Scan => self.scan.needs_resolution(),
-            StateField::SafeTipEnabled => self.safe_tip_enabled.needs_resolution(),
+            StateField::SafeTipEnabled => {
+                self.safe_tip_enabled.needs_resolution()
+            }
         }
     }
 
@@ -232,14 +234,12 @@ impl StateRequirements {
     }
 
     pub fn tip(mut self, engagement: TipEngagement) -> Self {
-        self.requirements
-            .push(FieldRequirement::TipIs(engagement));
+        self.requirements.push(FieldRequirement::TipIs(engagement));
         self
     }
 
     pub fn scan(mut self, activity: ScanActivity) -> Self {
-        self.requirements
-            .push(FieldRequirement::ScanIs(activity));
+        self.requirements.push(FieldRequirement::ScanIs(activity));
         self
     }
 
@@ -472,8 +472,12 @@ pub enum ActionKind {
 }
 
 /// How strictly the executor enforces action preconditions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ValidationPolicy {
+    /// Do not consult MachineState at all. Preserves pre-state-tracking
+    /// behavior for workflows that predate the feature.
+    #[default]
+    Disabled,
     /// Log warnings but execute anyway. For simulation and testing.
     Advisory,
     /// Hard gate with automatic Query-based recovery for unknown fields.
@@ -529,12 +533,32 @@ pub fn validate_chain(
                 action_name: name.to_string(),
                 violations,
             });
+            // Don't apply effects of a step whose preconditions failed —
+            // otherwise downstream violations reflect a simulated state that
+            // would never actually have been reached, drowning the real root
+            // cause in spurious cascades.
+            continue;
         }
-        // Advance simulated state regardless (to catch downstream errors)
         effects.apply(&mut simulated);
     }
 
     errors
+}
+
+impl MachineState {
+    /// Mark every Known field as Unknown.
+    ///
+    /// Used after a connection reset or other wide-scope uncertainty event:
+    /// the software state model no longer reflects hardware, so the next
+    /// action that needs a field will force a fresh query.
+    pub fn degrade_all(&mut self) {
+        self.tip.degrade();
+        self.bias_v.degrade();
+        self.z_setpoint_a.degrade();
+        self.z_controller.degrade();
+        self.scan.degrade();
+        self.safe_tip_enabled.degrade();
+    }
 }
 
 // ============================================================================

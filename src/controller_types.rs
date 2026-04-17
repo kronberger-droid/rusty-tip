@@ -234,7 +234,7 @@ impl PulseMethod {
                 }
                 if *voltage_steps == 0 {
                     return Err(
-                        "voltage_steps must be greater than zero".to_string(),
+                        "voltage_steps must be greater than zero".to_string()
                     );
                 }
             }
@@ -300,7 +300,10 @@ pub enum ControllerAction {
     MeasuringSignal,
     Pulsing,
     StabilityCheck,
-    StabilitySweep { sweep: u32, total: u32 },
+    StabilitySweep {
+        sweep: u32,
+        total: u32,
+    },
     Repositioning,
     Completed,
     Stopped,

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::action::scan::DEFAULT_SCAN_FRAME_KEY;
 use crate::action::{Action, ActionContext, ActionOutput};
 use crate::spm_error::SpmError;
 
@@ -24,6 +25,11 @@ pub struct RunAnalyzer {
     /// Optional calibration override (metres per pixel).
     /// If `None`, the adapter does not provide calibration to the analyzer.
     pub calibration_m_per_px: Option<f64>,
+    /// DataStore key to read the scan frame from. Allows pairing two
+    /// `GrabScanFrame` + `RunAnalyzer` runs in the same workflow (e.g. one
+    /// for the forward scan, one for the backward scan) without the second
+    /// grab overwriting the first's data before analysis.
+    pub source_key: String,
 }
 
 impl RunAnalyzer {
@@ -31,11 +37,17 @@ impl RunAnalyzer {
         Self {
             analyzer,
             calibration_m_per_px: None,
+            source_key: DEFAULT_SCAN_FRAME_KEY.into(),
         }
     }
 
     pub fn with_calibration(mut self, m_per_px: f64) -> Self {
         self.calibration_m_per_px = Some(m_per_px);
+        self
+    }
+
+    pub fn with_source_key(mut self, key: impl Into<String>) -> Self {
+        self.source_key = key.into();
         self
     }
 }
@@ -49,18 +61,21 @@ impl Action for RunAnalyzer {
         self.analyzer.description()
     }
 
-    fn execute(&self, ctx: &mut ActionContext) -> std::result::Result<ActionOutput, SpmError> {
+    fn execute(
+        &self,
+        ctx: &mut ActionContext,
+    ) -> std::result::Result<ActionOutput, SpmError> {
         // Pull scan frame from the DataStore
         let frame: serde_json::Value = ctx
             .store
-            .get_raw("scan_frame")
+            .get_raw(&self.source_key)
             .cloned()
             .ok_or_else(|| {
-                SpmError::Workflow(
-                    "RunAnalyzer: no \"scan_frame\" in DataStore. \
-                     Run GrabScanFrame first."
-                        .into(),
-                )
+                SpmError::Workflow(format!(
+                    "RunAnalyzer: no \"{}\" in DataStore. Run GrabScanFrame \
+                     (or set source_key) first.",
+                    self.source_key
+                ))
             })?;
 
         let channel_name = frame
@@ -73,9 +88,10 @@ impl Action for RunAnalyzer {
             .get("data")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .ok_or_else(|| {
-                SpmError::Workflow(
-                    "RunAnalyzer: \"scan_frame.data\" missing or not a 2D array".into(),
-                )
+                SpmError::Workflow(format!(
+                    "RunAnalyzer: \"{}.data\" missing or not a 2D array",
+                    self.source_key
+                ))
             })?;
 
         let input = AnalyzerInput {

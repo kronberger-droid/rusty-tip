@@ -1,28 +1,28 @@
 pub mod action;
 pub mod action_driver;
-pub mod analyzer;
-pub mod config;
-pub mod event;
-pub mod machine_state;
-pub mod tip_prep;
-pub mod workflow;
 pub mod actions;
+pub mod analyzer;
 pub mod buffered_tcp_reader;
+pub mod config;
 pub mod controller_types;
 pub mod error;
+pub mod event;
 pub mod logger;
+pub mod machine_state;
 pub mod nanonis_controller;
 pub mod plotting;
 pub mod signal_registry;
 pub mod spm_controller;
 pub mod spm_error;
 pub mod tip_controller;
+pub mod tip_prep;
 pub mod types;
 pub mod utils;
+pub mod workflow;
 
 pub use action_driver::{
-    stability, ActionDriver, ActionDriverBuilder, ExecutionResult,
-    ExecutionStats, TCPReaderConfig,
+    ActionDriver, ActionDriverBuilder, ExecutionResult, ExecutionStats,
+    TCPReaderConfig, stability,
 };
 pub use actions::{Action, ActionChain, ActionLogEntry, ActionResult};
 pub use controller_types::{
@@ -39,7 +39,7 @@ pub use types::{
     ChainExperimentData, ExperimentData, SessionMetadata,
     TimestampedSignalFrame, TipShape,
 };
-pub use utils::{poll_until, poll_with_timeout, PollError};
+pub use utils::{PollError, poll_until, poll_with_timeout};
 
 // Re-export nanonis-rs core types
 pub use nanonis_rs::{

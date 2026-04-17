@@ -1,6 +1,6 @@
+use super::DataStore;
 use crate::event::EventEmitter;
 use crate::spm_controller::SpmController;
-use super::DataStore;
 
 /// Context passed to every action during execution.
 ///

@@ -1,6 +1,6 @@
 mod app;
 
-use app::{init_logging, TipPrepApp};
+use app::{TipPrepApp, init_logging};
 use log::LevelFilter;
 
 fn main() -> eframe::Result<()> {

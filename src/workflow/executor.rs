@@ -1,7 +1,10 @@
 use std::time::Instant;
 
-use crate::action::{ActionContext, ActionOutput, ActionRegistry, DataStore};
+use crate::action::{
+    Action, ActionContext, ActionOutput, ActionRegistry, DataStore,
+};
 use crate::event::{Event, EventBus, EventEmitter, Observer};
+use crate::machine_state::{MachineState, StateField, ValidationPolicy};
 use crate::spm_controller::SpmController;
 use crate::spm_error::SpmError;
 
@@ -21,6 +24,8 @@ pub struct WorkflowExecutor {
     events: EventBus,
     store: DataStore,
     shutdown: ShutdownFlag,
+    state: MachineState,
+    policy: ValidationPolicy,
 }
 
 impl WorkflowExecutor {
@@ -34,6 +39,8 @@ impl WorkflowExecutor {
             events: EventBus::new(),
             store: DataStore::new(),
             shutdown: ShutdownFlag::new(),
+            state: MachineState::uninitialized(),
+            policy: ValidationPolicy::default(),
         }
     }
 
@@ -55,6 +62,28 @@ impl WorkflowExecutor {
 
     pub fn store_mut(&mut self) -> &mut DataStore {
         &mut self.store
+    }
+
+    /// Current software model of the machine state.
+    pub fn state(&self) -> &MachineState {
+        &self.state
+    }
+
+    /// Pre-seed the state model (e.g. from a known startup configuration).
+    pub fn seed_state(&mut self, state: MachineState) {
+        self.state = state;
+    }
+
+    /// Current enforcement policy for action preconditions.
+    pub fn policy(&self) -> ValidationPolicy {
+        self.policy
+    }
+
+    /// Change how the executor consults `MachineState`. Defaults to
+    /// `Disabled` (no state checking) for backwards compatibility with
+    /// workflows that predate the state-tracking feature.
+    pub fn set_policy(&mut self, policy: ValidationPolicy) {
+        self.policy = policy;
     }
 
     /// Execute a complete workflow.
@@ -238,16 +267,13 @@ impl WorkflowExecutor {
             }
         }
 
-        // Emit start event
+        self.enforce_preconditions(&*action)?;
+
         self.events
             .emit(Event::action_started(action.name(), params.clone()));
 
         let start = Instant::now();
-        let mut ctx = ActionContext {
-            controller: &mut *self.controller,
-            store: &mut self.store,
-            events: &self.events,
-        };
+        let mut ctx = self.make_ctx();
 
         match action.execute(&mut ctx) {
             Ok(output) => {
@@ -258,7 +284,10 @@ impl WorkflowExecutor {
                     duration,
                 ));
 
-                // Store result only when explicitly requested
+                if self.policy != ValidationPolicy::Disabled {
+                    action.apply_to_state(&output, &mut self.state);
+                }
+
                 if let Some(key) = store_as {
                     self.store.set(key, &output)?;
                 }
@@ -273,15 +302,28 @@ impl WorkflowExecutor {
                     duration,
                 ));
 
-                // On connection errors, attempt to restore the link so that
-                // subsequent workflow steps (or a loop retry) can proceed.
-                // We do NOT retry the failed action -- it may have been a
-                // write that partially executed.
+                if self.policy != ValidationPolicy::Disabled {
+                    action.effects().degrade(&mut self.state);
+                }
+
+                // A partial write may have left the hardware in an
+                // indeterminate state; after reconnect, degrade every Known
+                // field so downstream actions force a fresh query before
+                // trusting the state model.
                 if e.is_connection_error() && !self.controller.is_connected() {
-                    log::warn!("Connection lost during '{}', attempting reconnect...", action.name());
+                    log::warn!(
+                        "Connection lost during '{}', attempting reconnect...",
+                        action.name()
+                    );
                     match self.controller.reconnect() {
                         Ok(()) => {
-                            log::info!("Reconnected successfully after '{}' failure", action.name());
+                            log::info!(
+                                "Reconnected successfully after '{}' failure",
+                                action.name()
+                            );
+                            if self.policy != ValidationPolicy::Disabled {
+                                self.state.degrade_all();
+                            }
                             self.events.emit(Event::custom(
                                 "connection_restored",
                                 serde_json::json!({
@@ -307,6 +349,97 @@ impl WorkflowExecutor {
         }
     }
 
+    fn make_ctx(&mut self) -> ActionContext<'_> {
+        ActionContext {
+            controller: &mut *self.controller,
+            store: &mut self.store,
+            events: &self.events,
+        }
+    }
+
+    /// In Strict mode, auto-insert Query resolvers for any required field
+    /// that is Unknown/Uninitialized, then recheck. Advisory logs and
+    /// proceeds. Disabled is a no-op.
+    fn enforce_preconditions(
+        &mut self,
+        action: &dyn Action,
+    ) -> Result<(), SpmError> {
+        if self.policy == ValidationPolicy::Disabled {
+            return Ok(());
+        }
+
+        let expects = action.expects();
+        if expects.is_empty() {
+            return Ok(());
+        }
+
+        let mut violations = expects.check(&self.state);
+        if violations.is_empty() {
+            return Ok(());
+        }
+
+        if self.policy == ValidationPolicy::Strict {
+            let unresolved: Vec<StateField> = expects
+                .required_fields()
+                .into_iter()
+                .filter(|f| self.state.needs_resolution(*f))
+                .collect();
+
+            if !unresolved.is_empty() {
+                for field in unresolved {
+                    self.run_resolver(field);
+                }
+                violations = expects.check(&self.state);
+                if violations.is_empty() {
+                    return Ok(());
+                }
+            }
+        }
+
+        let msg = format!(
+            "Action '{}' preconditions not satisfied: {}",
+            action.name(),
+            violations
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        if self.policy == ValidationPolicy::Strict {
+            Err(SpmError::Workflow(msg))
+        } else {
+            log::warn!("{msg} (advisory — proceeding)");
+            Ok(())
+        }
+    }
+
+    /// Run the registered Query resolver for a state field, if any.
+    /// A failed resolver falls through to the normal check, which will
+    /// surface the still-unresolved field as a proper violation.
+    fn run_resolver(&mut self, field: StateField) {
+        let Some(resolver) = self.registry.resolver_for(field) else {
+            log::debug!("No resolver registered for {:?}", field);
+            return;
+        };
+
+        log::info!("Auto-resolving {:?} via '{}'", field, resolver.name());
+
+        let mut ctx = self.make_ctx();
+        match resolver.execute(&mut ctx) {
+            Ok(output) => {
+                resolver.apply_to_state(&output, &mut self.state);
+            }
+            Err(e) => {
+                log::warn!(
+                    "Resolver '{}' for {:?} failed: {e}",
+                    resolver.name(),
+                    field
+                );
+            }
+        }
+    }
+
     /// Evaluate a condition against the current DataStore.
     fn evaluate_condition(
         &self,
@@ -317,15 +450,16 @@ impl WorkflowExecutor {
                 variable,
                 operator,
                 threshold,
+                tolerance,
             } => {
                 let value: f64 = self.resolve_variable(variable)?;
                 Ok(match operator {
                     CompareOp::Lt => value < *threshold,
                     CompareOp::Le => value <= *threshold,
-                    CompareOp::Eq => (value - threshold).abs() < f64::EPSILON,
+                    CompareOp::Eq => (value - threshold).abs() <= *tolerance,
                     CompareOp::Ge => value >= *threshold,
                     CompareOp::Gt => value > *threshold,
-                    CompareOp::Ne => (value - threshold).abs() >= f64::EPSILON,
+                    CompareOp::Ne => (value - threshold).abs() > *tolerance,
                 })
             }
 
@@ -796,6 +930,7 @@ mod tests {
                 variable: "x".into(),
                 operator: CompareOp::Gt,
                 threshold: 3.0,
+                tolerance: 1e-9,
             },
             then: Box::new(Step::SetVar {
                 key: "result".into(),
@@ -820,6 +955,7 @@ mod tests {
                 variable: "x".into(),
                 operator: CompareOp::Gt,
                 threshold: 3.0,
+                tolerance: 1e-9,
             },
             then: Box::new(Step::SetVar {
                 key: "result".into(),
@@ -844,6 +980,7 @@ mod tests {
                 variable: "x".into(),
                 operator: CompareOp::Gt,
                 threshold: 99.0,
+                tolerance: 1e-9,
             },
             then: Box::new(Step::SetVar {
                 key: "result".into(),
@@ -867,6 +1004,7 @@ mod tests {
                 variable: "x".into(),
                 operator: op,
                 threshold: thresh,
+                tolerance: 1e-9,
             };
             exec.evaluate_condition(&cond).unwrap()
         };
@@ -914,11 +1052,13 @@ mod tests {
                     variable: "x".into(),
                     operator: CompareOp::Gt,
                     threshold: 3.0,
+                    tolerance: 1e-9,
                 },
                 Condition::Compare {
                     variable: "x".into(),
                     operator: CompareOp::Lt,
                     threshold: 10.0,
+                    tolerance: 1e-9,
                 },
             ],
         };
@@ -930,11 +1070,13 @@ mod tests {
                     variable: "x".into(),
                     operator: CompareOp::Gt,
                     threshold: 3.0,
+                    tolerance: 1e-9,
                 },
                 Condition::Compare {
                     variable: "x".into(),
                     operator: CompareOp::Lt,
                     threshold: 2.0,
+                    tolerance: 1e-9,
                 },
             ],
         };
@@ -952,11 +1094,13 @@ mod tests {
                     variable: "x".into(),
                     operator: CompareOp::Gt,
                     threshold: 99.0,
+                    tolerance: 1e-9,
                 },
                 Condition::Compare {
                     variable: "x".into(),
                     operator: CompareOp::Lt,
                     threshold: 10.0,
+                    tolerance: 1e-9,
                 },
             ],
         };
@@ -968,11 +1112,13 @@ mod tests {
                     variable: "x".into(),
                     operator: CompareOp::Gt,
                     threshold: 99.0,
+                    tolerance: 1e-9,
                 },
                 Condition::Compare {
                     variable: "x".into(),
                     operator: CompareOp::Lt,
                     threshold: 1.0,
+                    tolerance: 1e-9,
                 },
             ],
         };
@@ -989,6 +1135,7 @@ mod tests {
                 variable: "x".into(),
                 operator: CompareOp::Gt,
                 threshold: 10.0,
+                tolerance: 1e-9,
             }),
         };
         assert!(exec.evaluate_condition(&neg).unwrap());
@@ -1001,6 +1148,7 @@ mod tests {
             variable: "nonexistent".into(),
             operator: CompareOp::Gt,
             threshold: 0.0,
+            tolerance: 1e-9,
         };
         assert!(exec.evaluate_condition(&cond).is_err());
     }
@@ -1028,6 +1176,7 @@ mod tests {
                 variable: "counter".into(),
                 operator: CompareOp::Ge,
                 threshold: 3.0,
+                tolerance: 1e-9,
             },
             100,
         ));
@@ -1190,6 +1339,7 @@ mod tests {
                     variable: "counter".into(),
                     operator: CompareOp::Ge,
                     threshold: 10.0,
+                    tolerance: 1e-9,
                 },
                 100,
             ));
@@ -1260,5 +1410,90 @@ mod tests {
         // The result is stored by the executor via DataStore::set with ActionOutput.
         // Verify the key exists
         assert!(exec.store().contains("final_bias"));
+    }
+
+    // ── MachineState enforcement ───────────────────────────────────
+
+    use crate::machine_state::{MachineState, TipEngagement, ValidationPolicy};
+
+    /// An action that expects the tip to be Approached and declares no capability
+    /// requirements so our minimal MockController can run it.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct ApproachedOnly;
+
+    impl Action for ApproachedOnly {
+        fn name(&self) -> &str {
+            "approached_only"
+        }
+        fn description(&self) -> &str {
+            "test action that requires approached tip"
+        }
+        fn execute(
+            &self,
+            _ctx: &mut ActionContext,
+        ) -> Result<ActionOutput, SpmError> {
+            Ok(ActionOutput::Unit)
+        }
+        fn expects(&self) -> crate::machine_state::StateRequirements {
+            crate::machine_state::StateRequirements::none()
+                .tip(TipEngagement::Approached)
+        }
+    }
+
+    fn exec_with_policy(policy: ValidationPolicy) -> WorkflowExecutor {
+        let mut reg = ActionRegistry::new();
+        reg.register::<ApproachedOnly>();
+        let mut exec =
+            WorkflowExecutor::new(reg, Box::new(MockController::new()));
+        exec.set_policy(policy);
+        exec
+    }
+
+    fn approached_only_wf() -> Workflow {
+        Workflow::new("t", "")
+            .step(Step::action("approached_only", serde_json::Value::Null))
+    }
+
+    #[test]
+    fn disabled_policy_skips_preconditions() {
+        let mut exec = exec_with_policy(ValidationPolicy::Disabled);
+        assert_eq!(exec.policy(), ValidationPolicy::Disabled);
+        exec.run(&approached_only_wf()).unwrap();
+    }
+
+    #[test]
+    fn strict_policy_blocks_when_precondition_unmet() {
+        let mut exec = exec_with_policy(ValidationPolicy::Strict);
+        let err = exec.run(&approached_only_wf()).unwrap_err();
+        assert!(matches!(err, SpmError::Workflow(_)));
+    }
+
+    #[test]
+    fn strict_policy_passes_when_state_seeded() {
+        let mut exec = exec_with_policy(ValidationPolicy::Strict);
+        let mut state = MachineState::uninitialized();
+        state.tip.set(TipEngagement::Approached);
+        exec.seed_state(state);
+        exec.run(&approached_only_wf()).unwrap();
+    }
+
+    #[test]
+    fn advisory_policy_warns_but_proceeds() {
+        let mut exec = exec_with_policy(ValidationPolicy::Advisory);
+        exec.run(&approached_only_wf()).unwrap();
+    }
+
+    #[test]
+    fn set_bias_updates_state_in_strict_mode() {
+        let reg = crate::action::builtin_registry();
+        let mut exec =
+            WorkflowExecutor::new(reg, Box::new(MockController::new()));
+        exec.set_policy(ValidationPolicy::Strict);
+        let wf = Workflow::new("t", "").step(Step::action(
+            "set_bias",
+            serde_json::json!({"voltage": 2.5}),
+        ));
+        exec.run(&wf).unwrap();
+        assert_eq!(exec.state().bias_v.as_known(), Some(&2.5));
     }
 }

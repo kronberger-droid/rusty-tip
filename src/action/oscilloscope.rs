@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::action::{Action, ActionContext, ActionOutput};
-use crate::spm_controller::Capability;
 use crate::spm_controller::AcquisitionMode;
+use crate::spm_controller::Capability;
 
 /// Serializable acquisition mode for the oscilloscope.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -19,7 +19,9 @@ impl From<AcquisitionModeParam> for AcquisitionMode {
         match p {
             AcquisitionModeParam::Current => AcquisitionMode::Current,
             AcquisitionModeParam::NextTrigger => AcquisitionMode::NextTrigger,
-            AcquisitionModeParam::WaitTwoTriggers => AcquisitionMode::WaitTwoTriggers,
+            AcquisitionModeParam::WaitTwoTriggers => {
+                AcquisitionMode::WaitTwoTriggers
+            }
         }
     }
 }

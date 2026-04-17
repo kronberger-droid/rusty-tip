@@ -154,19 +154,26 @@ impl Action for SafeSetBias {
             && !(current_bias == 0.0 && self.voltage == 0.0);
 
         if crosses_zero {
-            let is_approached = ctx
-                .controller
-                .z_controller_status()
-                .map(|s| matches!(s, ZControllerStatus::On))
-                .unwrap_or(true);
+            // On query failure, default to "approached" so the polarity flip
+            // is preceded by a defensive withdraw rather than a bias swing
+            // against an engaged tip.
+            let is_approached = match ctx.controller.z_controller_status() {
+                Ok(s) => matches!(s, ZControllerStatus::On),
+                Err(e) => {
+                    log::warn!(
+                        "SafeSetBias: z_controller_status failed ({e}); defaulting to approached"
+                    );
+                    true
+                }
+            };
 
             if is_approached {
                 log::info!(
                     "Bias change {:.3}V -> {:.3}V crosses zero while approached — withdrawing first",
-                    current_bias, self.voltage
+                    current_bias,
+                    self.voltage
                 );
-                ctx.controller
-                    .withdraw(true, Duration::from_secs(5))?;
+                ctx.controller.withdraw(true, Duration::from_secs(5))?;
             }
         }
 

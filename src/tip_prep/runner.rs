@@ -531,6 +531,11 @@ fn check_stability(
         ));
         Ok(StabilityOutcome::Stable)
     } else {
+        // The post-sweep withdraw in execute_stability_sweep only logs errors;
+        // re-withdraw here with error propagation so a max-voltage pulse never
+        // fires on an engaged tip if the earlier withdraw silently failed.
+        execute_logged(&Withdraw::default(), ctx)?;
+
         // Fire max pulse and reset to blunt
         let signed_max =
             pulse_state.fire_max_pulse_voltage(&config.pulse_method);
