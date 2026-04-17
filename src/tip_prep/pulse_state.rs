@@ -106,13 +106,25 @@ impl PulseState {
     }
 
     /// Compute the signed max-voltage pulse (used after stability failure).
-    pub fn fire_max_pulse_voltage(&self, method: &PulseMethod) -> f64 {
-        let max_voltage = method.max_voltage() as f64;
-        let sign = match self.base_polarity {
+    ///
+    /// Counts as a pulse for random-polarity-switch purposes: increments
+    /// `pulse_count` and, if this cycle hits a switch boundary, fires at
+    /// the opposite polarity. Matches V1 `execute_max_pulse` semantics.
+    pub fn fire_max_pulse_voltage(&mut self, method: &PulseMethod) -> f64 {
+        self.pulse_count += 1;
+
+        let effective_polarity = if self.should_use_opposite_polarity() {
+            self.base_polarity.opposite()
+        } else {
+            self.base_polarity
+        };
+
+        let sign = match effective_polarity {
             PolaritySign::Positive => 1.0,
             PolaritySign::Negative => -1.0,
         };
-        sign * max_voltage
+
+        sign * method.max_voltage() as f64
     }
 
     /// Update pulse voltage magnitude based on the latest freq_shift reading.
