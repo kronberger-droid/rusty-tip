@@ -260,17 +260,18 @@ fn run_tip_prep_inner(
 
         // Reposition immediately: get away from pulse site
         execute_logged(
+            // V1 parity: post_move_settle_ms matches V1's hardcoded 500ms
+            // between motor and approach; post_approach_settle_ms ends the
+            // whole reposition (V1's `Wait(post_reposition_settle)` after
+            // SafeReposition returned).
             &Reposition {
                 x_steps: config.tip_prep.timing.reposition_steps[0],
                 y_steps: config.tip_prep.timing.reposition_steps[1],
-                post_move_settle_ms: config
-                    .tip_prep
-                    .timing
-                    .post_reposition_settle_ms,
+                post_move_settle_ms: 500,
                 post_approach_settle_ms: config
                     .tip_prep
                     .timing
-                    .post_approach_settle_ms,
+                    .post_reposition_settle_ms,
                 ..Default::default()
             },
             &mut ctx,
@@ -371,17 +372,18 @@ fn confirm_sharp(
         }
 
         execute_logged(
+            // V1 parity: post_move_settle_ms matches V1's hardcoded 500ms
+            // between motor and approach; post_approach_settle_ms ends the
+            // whole reposition (V1's `Wait(post_reposition_settle)` after
+            // SafeReposition returned).
             &Reposition {
                 x_steps: config.tip_prep.timing.reposition_steps[0],
                 y_steps: config.tip_prep.timing.reposition_steps[1],
-                post_move_settle_ms: config
-                    .tip_prep
-                    .timing
-                    .post_reposition_settle_ms,
+                post_move_settle_ms: 500,
                 post_approach_settle_ms: config
                     .tip_prep
                     .timing
-                    .post_approach_settle_ms,
+                    .post_reposition_settle_ms,
                 ..Default::default()
             },
             ctx,
@@ -567,17 +569,18 @@ fn check_stability(
         )?;
 
         execute_logged(
+            // V1 parity: post_move_settle_ms matches V1's hardcoded 500ms
+            // between motor and approach; post_approach_settle_ms ends the
+            // whole reposition (V1's `Wait(post_reposition_settle)` after
+            // SafeReposition returned).
             &Reposition {
                 x_steps: config.tip_prep.timing.reposition_steps[0],
                 y_steps: config.tip_prep.timing.reposition_steps[1],
-                post_move_settle_ms: config
-                    .tip_prep
-                    .timing
-                    .post_reposition_settle_ms,
+                post_move_settle_ms: 500,
                 post_approach_settle_ms: config
                     .tip_prep
                     .timing
-                    .post_approach_settle_ms,
+                    .post_reposition_settle_ms,
                 ..Default::default()
             },
             ctx,

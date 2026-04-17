@@ -345,9 +345,18 @@ impl SignalRegistry {
             .collect()
     }
 
-    /// Get signal by name, returning the new Signal type
+    /// Get signal by name, matched case-insensitively against registered
+    /// aliases. Nanonis firmware has returned differing capitalizations
+    /// across versions (e.g. "freq shift" vs "Freq Shift"), so lookup
+    /// tolerates both.
     pub fn get_by_name(&self, name: &str) -> Option<&Signal> {
-        self.get(name)
+        if let Some(signal) = self.get(name) {
+            return Some(signal);
+        }
+        self.0
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v)
     }
 
     /// Get signal by Nanonis index, returning the new Signal type
