@@ -1,7 +1,9 @@
 use crate::{
-    types::{DataToGet, MotorDisplacement, StableOsciData, TipShape, TriggerConfig},
     MotorDirection, MovementMode, Position, Position3D, ScanAction, Signal,
     TipShaperConfig,
+    types::{
+        DataToGet, MotorDisplacement, StableOsciData, TipShape, TriggerConfig,
+    },
 };
 use nanonis_rs::signals::SignalIndex;
 use std::{collections::HashMap, time::Duration};
@@ -861,7 +863,9 @@ impl Action {
                 steps,
                 blocking,
             } => {
-                format!("Move motor {direction:?} {steps} steps with blocking {blocking}")
+                format!(
+                    "Move motor {direction:?} {steps} steps with blocking {blocking}"
+                )
             }
             Action::MoveMotor3D {
                 displacement,
@@ -973,8 +977,12 @@ impl Action {
                         duration,
                         ..
                     } => {
-                        format!("Check tip stability: extended monitoring signal {} for {:.1}s (max: {})",
-                               signal.index, duration.as_secs_f32(), duration_desc)
+                        format!(
+                            "Check tip stability: extended monitoring signal {} for {:.1}s (max: {})",
+                            signal.index,
+                            duration.as_secs_f32(),
+                            duration_desc
+                        )
                     }
                     TipStabilityMethod::BiasSweepResponse {
                         signal,
@@ -983,8 +991,16 @@ impl Action {
                         step_duration,
                         allowed_signal_change,
                     } => {
-                        format!("Check tip stability: bias sweep signal {} from {:.2}V to {:.2}V ({} steps, {:.1}ms period, {:.1}% change allowed, max: {})",
-                               signal.index, bias_range.0, bias_range.1, bias_steps, step_duration.as_millis(), allowed_signal_change * 100.0, duration_desc)
+                        format!(
+                            "Check tip stability: bias sweep signal {} from {:.2}V to {:.2}V ({} steps, {:.1}ms period, {:.1}% change allowed, max: {})",
+                            signal.index,
+                            bias_range.0,
+                            bias_range.1,
+                            bias_steps,
+                            step_duration.as_millis(),
+                            allowed_signal_change * 100.0,
+                            duration_desc
+                        )
                     }
                 }
             }

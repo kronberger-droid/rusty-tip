@@ -25,12 +25,41 @@ impl FileLogger {
 
 impl Observer for FileLogger {
     fn on_event(&self, event: &Event) {
-        if let Ok(mut w) = self.writer.lock()
-            && let Ok(json) = serde_json::to_string(event)
-        {
-            let _ = writeln!(w, "{json}");
-            // BufWriter flushes automatically when its buffer fills
-            // or on drop -- no need to flush on every event.
+        // Recover from a poisoned mutex so one panicking observer elsewhere
+        // doesn't silently stop event logging for the rest of the session.
+        let mut w = match self.writer.lock() {
+            Ok(guard) => guard,
+            Err(poison) => {
+                log::warn!(
+                    "FileLogger: mutex poisoned, recovering inner writer"
+                );
+                poison.into_inner()
+            }
+        };
+        let json = match serde_json::to_string(event) {
+            Ok(j) => j,
+            Err(e) => {
+                log::warn!("FileLogger: failed to serialize event: {e}");
+                return;
+            }
+        };
+        if let Err(e) = writeln!(w, "{json}") {
+            log::warn!("FileLogger: write failed: {e}");
+        }
+    }
+}
+
+// `BufWriter` swallows write errors encountered during its own Drop-time flush.
+// Explicit flush surfaces any late failures (disk full, broken pipe) instead of
+// losing the tail of the log silently.
+impl Drop for FileLogger {
+    fn drop(&mut self) {
+        let w = match self.writer.get_mut() {
+            Ok(w) => w,
+            Err(poison) => poison.into_inner(),
+        };
+        if let Err(e) = w.flush() {
+            log::warn!("FileLogger: final flush failed: {e}");
         }
     }
 }
@@ -48,7 +77,18 @@ impl ChannelForwarder {
 
 impl Observer for ChannelForwarder {
     fn on_event(&self, event: &Event) {
-        let _ = self.sender.try_send(event.clone());
+        match self.sender.try_send(event.clone()) {
+            Ok(()) => {}
+            Err(crossbeam_channel::TrySendError::Full(_)) => {
+                // The receiver (likely a GUI thread) is behind. Dropping is
+                // preferable to blocking the executor, but warn so the
+                // operator knows events are being lost.
+                log::warn!("ChannelForwarder: channel full, dropping event");
+            }
+            Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+                // Receiver gone (e.g. GUI closed); nothing we can do.
+            }
+        }
     }
 }
 

@@ -20,7 +20,7 @@ pub use registry::{ActionFactory, ActionInfo, ActionRegistry};
 pub use store::DataStore;
 
 use crate::machine_state::{
-    ActionKind, MachineState, StateEffects, StateRequirements, StateField,
+    ActionKind, MachineState, StateEffects, StateField, StateRequirements,
 };
 use crate::spm_controller::Capability;
 use crate::spm_error::SpmError;
@@ -101,24 +101,27 @@ pub trait Action: Send + Sync {
     /// Called by the framework after a successful execute(). For Mutate
     /// actions, the default applies `effects()`. For Query actions, override
     /// this to write the queried value into MachineState.
-    fn apply_to_state(
-        &self,
-        _output: &ActionOutput,
-        state: &mut MachineState,
-    ) {
+    fn apply_to_state(&self, _output: &ActionOutput, state: &mut MachineState) {
         self.effects().apply(state);
     }
 
     /// Execute and store the result under the action's name.
     /// Overwrites any previous value stored under that key.
-    fn execute_and_store_as(&self, ctx: &mut ActionContext) -> Result<ActionOutput> {
+    fn execute_and_store_as(
+        &self,
+        ctx: &mut ActionContext,
+    ) -> Result<ActionOutput> {
         let output = self.execute(ctx)?;
         ctx.store.set(self.name(), &output)?;
         Ok(output)
     }
 
     /// Execute and store the result under a custom key.
-    fn execute_and_store(&self, ctx: &mut ActionContext, key: &str) -> Result<ActionOutput> {
+    fn execute_and_store(
+        &self,
+        ctx: &mut ActionContext,
+        key: &str,
+    ) -> Result<ActionOutput> {
         let output = self.execute(ctx)?;
         ctx.store.set(key, &output)?;
         Ok(output)
@@ -147,6 +150,8 @@ pub fn builtin_registry() -> ActionRegistry {
     r.register::<z_controller::SetZSetpoint>();
     r.register::<z_controller::ZHome>();
     r.register::<z_controller::SafeTipSet>();
+    r.register::<z_controller::ReadZControllerStatus>();
+    r.register::<z_controller::ReadSafeTipStatus>();
     r.register::<z_controller::CalibratedApproach>();
 
     // Piezo Position

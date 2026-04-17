@@ -2,12 +2,13 @@ use serde::{Deserialize, Serialize};
 
 // Re-export nanonis-rs types from their respective submodules
 pub use nanonis_rs::motor::{
-    Amplitude, Frequency, MotorAxis, MotorDirection, MotorDisplacement, MotorGroup,
-    MotorMovement, MovementMode, Position3D, StepCount,
+    Amplitude, Frequency, MotorAxis, MotorDirection, MotorDisplacement,
+    MotorGroup, MotorMovement, MovementMode, Position3D, StepCount,
 };
 pub use nanonis_rs::oscilloscope::{
-    OsciData, OsciTriggerMode, OscilloscopeIndex, OversamplingIndex, SampleCount,
-    TimebaseIndex, TriggerConfig, TriggerLevel, TriggerMode, TriggerSlope,
+    OsciData, OsciTriggerMode, OscilloscopeIndex, OversamplingIndex,
+    SampleCount, TimebaseIndex, TriggerConfig, TriggerLevel, TriggerMode,
+    TriggerSlope,
 };
 
 /// Signal stability statistics for oscilloscope data analysis.
@@ -86,10 +87,10 @@ pub enum TipShape {
 #[derive(Debug, Clone)]
 pub struct SessionMetadata {
     pub session_id: String,
-    pub signal_names: Vec<String>,   // All signal names
-    pub active_indices: Vec<usize>,  // Which signals are being monitored
+    pub signal_names: Vec<String>, // All signal names
+    pub active_indices: Vec<usize>, // Which signals are being monitored
     pub primary_signal_index: usize, // Index of the primary signal
-    pub session_start: f64,          // Session start timestamp
+    pub session_start: f64,        // Session start timestamp
 }
 
 /// Extended DataToGet with application-specific Stable variant
@@ -170,26 +171,37 @@ impl ExperimentData {
         self.signal_frames
             .iter()
             .filter(|frame| {
-                frame.timestamp >= self.action_start && frame.timestamp <= self.action_end
+                frame.timestamp >= self.action_start
+                    && frame.timestamp <= self.action_end
             })
             .collect()
     }
 
     /// Get signal data before action execution
-    pub fn data_before_action(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
+    pub fn data_before_action(
+        &self,
+        duration: Duration,
+    ) -> Vec<&TimestampedSignalFrame> {
         let cutoff = self.action_start - duration;
         self.signal_frames
             .iter()
-            .filter(|frame| frame.timestamp >= cutoff && frame.timestamp < self.action_start)
+            .filter(|frame| {
+                frame.timestamp >= cutoff && frame.timestamp < self.action_start
+            })
             .collect()
     }
 
     /// Get signal data after action execution
-    pub fn data_after_action(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
+    pub fn data_after_action(
+        &self,
+        duration: Duration,
+    ) -> Vec<&TimestampedSignalFrame> {
         let cutoff = self.action_end + duration;
         self.signal_frames
             .iter()
-            .filter(|frame| frame.timestamp > self.action_end && frame.timestamp <= cutoff)
+            .filter(|frame| {
+                frame.timestamp > self.action_end && frame.timestamp <= cutoff
+            })
             .collect()
     }
 
@@ -217,11 +229,16 @@ impl ChainExperimentData {
     ///
     /// # Returns
     /// Vector of signal frames collected during the specified action
-    pub fn data_during_action(&self, action_index: usize) -> Vec<&TimestampedSignalFrame> {
+    pub fn data_during_action(
+        &self,
+        action_index: usize,
+    ) -> Vec<&TimestampedSignalFrame> {
         if let Some((start, end)) = self.action_timings.get(action_index) {
             self.signal_frames
                 .iter()
-                .filter(|frame| frame.timestamp >= *start && frame.timestamp <= *end)
+                .filter(|frame| {
+                    frame.timestamp >= *start && frame.timestamp <= *end
+                })
                 .collect()
         } else {
             Vec::new()
@@ -247,7 +264,9 @@ impl ChainExperimentData {
         ) {
             self.signal_frames
                 .iter()
-                .filter(|frame| frame.timestamp > *end1 && frame.timestamp < *start2)
+                .filter(|frame| {
+                    frame.timestamp > *end1 && frame.timestamp < *start2
+                })
                 .collect()
         } else {
             Vec::new()
@@ -261,11 +280,16 @@ impl ChainExperimentData {
     ///
     /// # Returns
     /// Vector of signal frames from before the chain started
-    pub fn data_before_chain(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
+    pub fn data_before_chain(
+        &self,
+        duration: Duration,
+    ) -> Vec<&TimestampedSignalFrame> {
         let cutoff = self.chain_start - duration;
         self.signal_frames
             .iter()
-            .filter(|frame| frame.timestamp >= cutoff && frame.timestamp < self.chain_start)
+            .filter(|frame| {
+                frame.timestamp >= cutoff && frame.timestamp < self.chain_start
+            })
             .collect()
     }
 
@@ -276,11 +300,16 @@ impl ChainExperimentData {
     ///
     /// # Returns
     /// Vector of signal frames from after the chain ended
-    pub fn data_after_chain(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
+    pub fn data_after_chain(
+        &self,
+        duration: Duration,
+    ) -> Vec<&TimestampedSignalFrame> {
         let cutoff = self.chain_end + duration;
         self.signal_frames
             .iter()
-            .filter(|frame| frame.timestamp > self.chain_end && frame.timestamp <= cutoff)
+            .filter(|frame| {
+                frame.timestamp > self.chain_end && frame.timestamp <= cutoff
+            })
             .collect()
     }
 
@@ -292,7 +321,8 @@ impl ChainExperimentData {
         self.signal_frames
             .iter()
             .filter(|frame| {
-                frame.timestamp >= self.chain_start && frame.timestamp <= self.chain_end
+                frame.timestamp >= self.chain_start
+                    && frame.timestamp <= self.chain_end
             })
             .collect()
     }
@@ -304,7 +334,10 @@ impl ChainExperimentData {
     ///
     /// # Returns
     /// Optional tuple of (start_time, end_time, duration)
-    pub fn action_timing(&self, action_index: usize) -> Option<(Instant, Instant, Duration)> {
+    pub fn action_timing(
+        &self,
+        action_index: usize,
+    ) -> Option<(Instant, Instant, Duration)> {
         self.action_timings
             .get(action_index)
             .map(|(start, end)| (*start, *end, end.duration_since(*start)))
@@ -319,7 +352,9 @@ impl ChainExperimentData {
         let successful_actions = self
             .action_results
             .iter()
-            .filter(|result| matches!(result, crate::actions::ActionResult::Success))
+            .filter(|result| {
+                matches!(result, crate::actions::ActionResult::Success)
+            })
             .count();
         let total_frames = self.signal_frames.len();
 
@@ -366,8 +401,12 @@ impl AutoApproachResult {
         match self {
             AutoApproachResult::Failed(msg) => Some(msg),
             AutoApproachResult::Timeout => Some("Auto-approach timed out"),
-            AutoApproachResult::AlreadyRunning => Some("Auto-approach already running"),
-            AutoApproachResult::Cancelled => Some("Auto-approach was cancelled"),
+            AutoApproachResult::AlreadyRunning => {
+                Some("Auto-approach already running")
+            }
+            AutoApproachResult::Cancelled => {
+                Some("Auto-approach was cancelled")
+            }
             AutoApproachResult::Success => None,
         }
     }
@@ -383,4 +422,3 @@ pub enum AutoApproachStatus {
     /// Auto-approach status is unknown (e.g., communication error)
     Unknown,
 }
-

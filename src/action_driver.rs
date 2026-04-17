@@ -31,7 +31,9 @@ use crate::{
 
 /// Convert a 3D displacement to an ordered sequence of motor movements.
 /// Safety ordering: Z-retract first, X/Y moves, Z-approach last.
-fn displacement_to_movements(d: &MotorDisplacement) -> Vec<(MotorDirection, u16)> {
+fn displacement_to_movements(
+    d: &MotorDisplacement,
+) -> Vec<(MotorDirection, u16)> {
     let mut movements = Vec::new();
     if d.z < 0 {
         movements.push((MotorDirection::ZMinus, (-d.z) as u16));
@@ -1590,8 +1592,9 @@ impl ActionDriver {
                         };
                         let (t0, dt, size, data) =
                             self.client.osci1t_data_get(data_mode)?;
-                        let osci_data =
-                            StableOsciData::stable(OsciData::new(t0, dt, size, data));
+                        let osci_data = StableOsciData::stable(OsciData::new(
+                            t0, dt, size, data,
+                        ));
                         Ok(ActionResult::OsciData(osci_data))
                     }
                 }
@@ -3556,9 +3559,7 @@ impl ActionDriver {
                         self.client.osci1t_data_get(2)?; // Wait2Triggers = 2
 
                     if let Some(stable_osci_data) = self
-                        .analyze_stability_window(
-                            t0, dt, size, data, params,
-                        )?
+                        .analyze_stability_window(t0, dt, size, data, params)?
                     {
                         return Ok(Some(stable_osci_data));
                     }
@@ -3607,7 +3608,8 @@ impl ActionDriver {
                 stability_fn(window)
             } else {
                 // Default dual-threshold approach: relative OR absolute
-                let is_relative_stable = relative_std < params.relative_threshold;
+                let is_relative_stable =
+                    relative_std < params.relative_threshold;
                 let is_absolute_stable = std_dev < params.absolute_threshold;
                 is_relative_stable || is_absolute_stable
             };
@@ -3618,8 +3620,10 @@ impl ActionDriver {
                     "custom".to_string()
                 } else {
                     // Default dual-threshold logic
-                    let is_relative_stable = relative_std < params.relative_threshold;
-                    let is_absolute_stable = std_dev < params.absolute_threshold;
+                    let is_relative_stable =
+                        relative_std < params.relative_threshold;
+                    let is_absolute_stable =
+                        std_dev < params.absolute_threshold;
                     match (is_relative_stable, is_absolute_stable) {
                         (true, true) => "both".to_string(),
                         (true, false) => "relative".to_string(),
@@ -3637,7 +3641,12 @@ impl ActionDriver {
                 };
 
                 let osci_data = StableOsciData::with_stats(
-                    OsciData::new(t0, dt, stable_data.len() as i32, stable_data),
+                    OsciData::new(
+                        t0,
+                        dt,
+                        stable_data.len() as i32,
+                        stable_data,
+                    ),
                     stats,
                 );
                 return Ok(Some(osci_data));

@@ -5,13 +5,13 @@
 //! the existing TCPLoggerStream infrastructure while providing efficient time-windowed
 //! queries for synchronized data collection during SPM experiments.
 
-use crate::types::TimestampedSignalFrame;
 use crate::NanonisError;
+use crate::types::TimestampedSignalFrame;
 use nanonis_rs::TCPLoggerStream;
 use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -89,7 +89,8 @@ impl BufferedTCPReader {
         oversampling: f32,
     ) -> Result<Self, NanonisError> {
         let tcp_stream = TCPLoggerStream::new(host, port)?;
-        let (tcp_receiver, stream_handle) = tcp_stream.spawn_background_reader();
+        let (tcp_receiver, stream_handle) =
+            tcp_stream.spawn_background_reader();
 
         let buffer =
             Arc::new(RwLock::new(VecDeque::with_capacity(buffer_size)));
@@ -98,7 +99,8 @@ impl BufferedTCPReader {
         let shutdown_signal = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown_signal.clone();
 
-        let stream_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let stream_error: Arc<Mutex<Option<String>>> =
+            Arc::new(Mutex::new(None));
         let stream_error_clone = stream_error.clone();
 
         let start_time = Instant::now();
@@ -518,9 +520,9 @@ impl BufferedTCPReader {
     pub fn stop(&mut self) -> Result<(), NanonisError> {
         self.shutdown_signal.store(true, Ordering::Relaxed);
         if let Some(handle) = self.buffering_thread.take() {
-            handle
-                .join()
-                .unwrap_or_else(|_| Err(NanonisError::Protocol("Buffering thread panicked".into())))
+            handle.join().unwrap_or_else(|_| {
+                Err(NanonisError::Protocol("Buffering thread panicked".into()))
+            })
         } else {
             Ok(())
         }

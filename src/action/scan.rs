@@ -9,6 +9,9 @@ use crate::machine_state::{
 };
 use crate::spm_controller::Capability;
 
+/// DataStore key that `GrabScanFrame` writes and `RunAnalyzer` reads by default.
+pub const DEFAULT_SCAN_FRAME_KEY: &str = "scan_frame";
+
 /// Serializable scan action that maps to nanonis-rs ScanAction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -75,8 +78,10 @@ impl Action for ScanControl {
         vec![Capability::Scanning]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
-        ctx.controller
-            .scan_action(self.action.clone().into(), self.direction.clone().into())?;
+        ctx.controller.scan_action(
+            self.action.clone().into(),
+            self.direction.clone().into(),
+        )?;
         Ok(ActionOutput::Unit)
     }
 
@@ -146,7 +151,7 @@ impl Action for GrabScanFrame {
             "data": data,
             "direction_up": direction_up,
         });
-        ctx.store.set("scan_frame", &result)?;
+        ctx.store.set(DEFAULT_SCAN_FRAME_KEY, &result)?;
         Ok(ActionOutput::Data(result))
     }
 }
@@ -166,7 +171,9 @@ impl Action for ReadScanStatus {
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let running = ctx.controller.scan_status()?;
-        Ok(ActionOutput::Data(serde_json::json!({ "running": running })))
+        Ok(ActionOutput::Data(
+            serde_json::json!({ "running": running }),
+        ))
     }
 
     fn kind(&self) -> ActionKind {

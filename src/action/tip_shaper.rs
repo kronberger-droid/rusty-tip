@@ -44,7 +44,9 @@ impl Default for TipShaperParams {
 }
 
 impl TipShaperParams {
-    fn to_nanonis_config(&self) -> Result<nanonis_rs::tip_recovery::TipShaperConfig, SpmError> {
+    fn to_nanonis_config(
+        &self,
+    ) -> Result<nanonis_rs::tip_recovery::TipShaperConfig, SpmError> {
         Ok(nanonis_rs::tip_recovery::TipShaperConfig {
             switch_off_delay: Duration::from_millis(self.switch_off_delay_ms),
             change_bias: self.change_bias,
@@ -52,7 +54,9 @@ impl TipShaperParams {
             tip_lift_m: self.tip_lift_m as f32,
             lift_time_1: Duration::from_millis(self.lift_time_1_ms),
             bias_lift_v: self.bias_lift_v as f32,
-            bias_settling_time: Duration::from_millis(self.bias_settling_time_ms),
+            bias_settling_time: Duration::from_millis(
+                self.bias_settling_time_ms,
+            ),
             lift_height_m: self.lift_height_m as f32,
             lift_time_2: Duration::from_millis(self.lift_time_2_ms),
             end_wait_time: Duration::from_millis(self.end_wait_time_ms),
@@ -96,8 +100,11 @@ impl Action for TipShape {
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let config = self.config.to_nanonis_config()?;
-        ctx.controller
-            .tip_shaper(&config, self.wait, Duration::from_millis(self.timeout_ms))?;
+        ctx.controller.tip_shaper(
+            &config,
+            self.wait,
+            Duration::from_millis(self.timeout_ms),
+        )?;
         Ok(ActionOutput::Unit)
     }
 }

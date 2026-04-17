@@ -119,7 +119,13 @@ impl Analyzer for CuoxRowDetector {
         let cx = cols as f64 / 2.0;
         let min_proj = compute_min_proj(rows, cols, cos_a, sin_a, cy, cx);
         let geom = ProjectionGeometry {
-            rows, cols, cos_a, sin_a, cy, cx, min_proj,
+            rows,
+            cols,
+            cos_a,
+            sin_a,
+            cy,
+            cx,
+            min_proj,
         };
 
         let bands_json: Vec<serde_json::Value> = bands
@@ -130,7 +136,8 @@ impl Analyzer for CuoxRowDetector {
                 // edge_high is exclusive (first bin outside band), so use
                 // edge_high - 1 for the last bin inside the band.
                 let high_line = line_endpoints(
-                    (b.edge_high.saturating_sub(1)) as f64, &geom,
+                    (b.edge_high.saturating_sub(1)) as f64,
+                    &geom,
                 );
 
                 let mut obj = json!({
@@ -545,7 +552,10 @@ struct ProjectionGeometry {
 ///   y = cy + d * cos_a + t * (-sin_a)
 ///   x = cx + d * sin_a + t * cos_a
 /// where `d = proj_bin + min_proj` is the actual perpendicular distance.
-fn line_endpoints(proj_bin: f64, geom: &ProjectionGeometry) -> Option<LineSegment> {
+fn line_endpoints(
+    proj_bin: f64,
+    geom: &ProjectionGeometry,
+) -> Option<LineSegment> {
     let d = proj_bin + geom.min_proj;
     let base_y = geom.cy + d * geom.cos_a;
     let base_x = geom.cx + d * geom.sin_a;
@@ -1284,10 +1294,18 @@ mod tests {
         let cos_a = 1.0; // 0 degrees
         let sin_a = 0.0;
         let min_proj = compute_min_proj(rows, cols, cos_a, sin_a, cy, cx);
-        let geom = ProjectionGeometry { rows, cols, cos_a, sin_a, cy, cx, min_proj };
+        let geom = ProjectionGeometry {
+            rows,
+            cols,
+            cos_a,
+            sin_a,
+            cy,
+            cx,
+            min_proj,
+        };
 
-        let seg = line_endpoints(50.0, &geom)
-            .expect("Should produce a line segment");
+        let seg =
+            line_endpoints(50.0, &geom).expect("Should produce a line segment");
 
         // Both endpoints should have same y, and x should span 0..cols
         assert!(
@@ -1315,10 +1333,18 @@ mod tests {
         let cos_a = angle_rad.cos();
         let sin_a = angle_rad.sin();
         let min_proj = compute_min_proj(rows, cols, cos_a, sin_a, cy, cx);
-        let geom = ProjectionGeometry { rows, cols, cos_a, sin_a, cy, cx, min_proj };
+        let geom = ProjectionGeometry {
+            rows,
+            cols,
+            cos_a,
+            sin_a,
+            cy,
+            cx,
+            min_proj,
+        };
 
-        let seg = line_endpoints(30.0, &geom)
-            .expect("Should produce a line segment");
+        let seg =
+            line_endpoints(30.0, &geom).expect("Should produce a line segment");
 
         // Both endpoints should have same x, and y should span 0..rows
         assert!(
@@ -1346,7 +1372,15 @@ mod tests {
         let cos_a = angle_rad.cos();
         let sin_a = angle_rad.sin();
         let min_proj = compute_min_proj(rows, cols, cos_a, sin_a, cy, cx);
-        let geom = ProjectionGeometry { rows, cols, cos_a, sin_a, cy, cx, min_proj };
+        let geom = ProjectionGeometry {
+            rows,
+            cols,
+            cos_a,
+            sin_a,
+            cy,
+            cx,
+            min_proj,
+        };
 
         for bin in [10.0, 30.0, 50.0, 70.0] {
             if let Some(seg) = line_endpoints(bin, &geom) {
@@ -1377,7 +1411,15 @@ mod tests {
         let cos_a = 1.0;
         let sin_a = 0.0;
         let min_proj = compute_min_proj(rows, cols, cos_a, sin_a, cy, cx);
-        let geom = ProjectionGeometry { rows, cols, cos_a, sin_a, cy, cx, min_proj };
+        let geom = ProjectionGeometry {
+            rows,
+            cols,
+            cos_a,
+            sin_a,
+            cy,
+            cx,
+            min_proj,
+        };
 
         let result = line_endpoints(9999.0, &geom);
         assert!(

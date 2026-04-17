@@ -2,7 +2,10 @@ use chrono::Utc;
 use clap::Parser;
 use env_logger::Env;
 use log::{LevelFilter, error, info};
-use std::{collections::HashMap, fs, io, path::PathBuf, time::Duration};
+use std::{
+    collections::HashMap, fs, io, path::PathBuf, process::ExitCode,
+    time::Duration,
+};
 
 use rusty_tip::config::{AppConfig, load_config};
 use rusty_tip::event::{ConsoleLogger, EventAccumulator, EventBus, FileLogger};
@@ -27,7 +30,34 @@ struct Args {
     log_level: Option<String>,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        // 2 = completed-but-aborted-by-user / didn't converge. Reserve
+        // ExitCode::FAILURE (1) for hard errors so CI can distinguish
+        // "the tip didn't get sharp" from "the program crashed."
+        Err(RunError::Incomplete) => ExitCode::from(2),
+        Err(RunError::Fatal(e)) => {
+            error!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+enum RunError {
+    /// Outcome that isn't success but isn't a crash either (cycle limit,
+    /// timeout, user-requested stop).
+    Incomplete,
+    Fatal(Box<dyn std::error::Error>),
+}
+
+impl<E: Into<Box<dyn std::error::Error>>> From<E> for RunError {
+    fn from(e: E) -> Self {
+        RunError::Fatal(e.into())
+    }
+}
+
+fn run() -> Result<(), RunError> {
     #[cfg(windows)]
     ensure_console_allocated();
 
@@ -130,19 +160,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         other => other,
     };
 
-    match &result {
+    match result {
         Ok(Outcome::Completed) => {
-            info!("Tip preparation completed successfully!")
+            info!("Tip preparation completed successfully!");
+            Ok(())
         }
-        Ok(Outcome::StoppedByUser) => info!("Tip preparation stopped by user"),
-        Ok(Outcome::CycleLimit(n)) => error!("Max cycles ({}) exceeded", n),
+        Ok(Outcome::StoppedByUser) => {
+            info!("Tip preparation stopped by user");
+            Err(RunError::Incomplete)
+        }
+        Ok(Outcome::CycleLimit(n)) => {
+            error!("Max cycles ({}) exceeded", n);
+            Err(RunError::Incomplete)
+        }
         Ok(Outcome::TimedOut(d)) => {
-            error!("Max duration ({:.0}s) exceeded", d.as_secs_f64())
+            error!("Max duration ({:.0}s) exceeded", d.as_secs_f64());
+            Err(RunError::Incomplete)
         }
-        Err(e) => error!("Tip preparation failed: {}", e),
+        Err(e) => {
+            error!("Tip preparation failed: {}", e);
+            Err(RunError::Fatal(e))
+        }
     }
-
-    result.map(|_| ())
 }
 
 // ============================================================================
@@ -194,16 +233,19 @@ fn setup_tcp_stream(
     controller.data_stream_configure(&tcp_channels, oversampling)?;
     controller.set_channel_mapping(signal_mapping);
 
+    // Stop any lingering stream from a prior session, then start a fresh one
+    // BEFORE attaching the reader — otherwise the reader's first frames may
+    // be stale bytes left in the TCP buffer from the previous session.
+    let _ = controller.data_stream_stop();
+    std::thread::sleep(Duration::from_millis(200));
+    controller.data_stream_start()?;
+
     let buffer_size = 10_000;
     controller.start_tcp_reader(
         &config.nanonis.host_ip,
         config.data_acquisition.data_port,
         buffer_size,
     )?;
-
-    let _ = controller.data_stream_stop();
-    std::thread::sleep(Duration::from_millis(200));
-    controller.data_stream_start()?;
     info!("TCP data stream started");
 
     Ok(())

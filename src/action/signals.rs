@@ -33,7 +33,9 @@ impl Action for ReadSignal {
         vec![Capability::Signals]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
-        let val = ctx.controller.read_signal(self.index, self.wait_for_newest)?;
+        let val = ctx
+            .controller
+            .read_signal(self.index, self.wait_for_newest)?;
         Ok(ActionOutput::Value(val))
     }
 
@@ -73,7 +75,9 @@ impl Action for ReadSignals {
         ActionKind::Query
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
-        let vals = ctx.controller.read_signals(&self.indices, self.wait_for_newest)?;
+        let vals = ctx
+            .controller
+            .read_signals(&self.indices, self.wait_for_newest)?;
         if vals.len() != self.indices.len() {
             return Err(crate::spm_error::SpmError::Protocol(format!(
                 "read_signals: requested {} indices but got {} values",
@@ -111,7 +115,10 @@ impl Action for ReadSignalNames {
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let names = ctx.controller.signal_names()?;
         let json = serde_json::to_value(names).map_err(|e| {
-            crate::spm_error::SpmError::Protocol(format!("Failed to serialize signal names: {}", e))
+            crate::spm_error::SpmError::Protocol(format!(
+                "Failed to serialize signal names: {}",
+                e
+            ))
         })?;
         Ok(ActionOutput::Data(json))
     }
@@ -190,7 +197,9 @@ impl Action for ReadStableSignal {
             if samples.len() < self.num_samples / 2 {
                 log::warn!(
                     "ReadStableSignal: only got {}/{} samples, treating as unstable (attempt {})",
-                    samples.len(), self.num_samples, attempt
+                    samples.len(),
+                    self.num_samples,
+                    attempt
                 );
                 if attempt < self.max_retries {
                     let backoff_ms = 100u64 * (1 << attempt);
@@ -208,7 +217,12 @@ impl Action for ReadStableSignal {
             if noise_ok && drift_ok {
                 log::debug!(
                     "ReadStableSignal: index={}, samples={}, mean={:.6}, std_dev={:.4}, slope={:.6} (stable, attempt {})",
-                    self.index, samples.len(), mean, std_dev, slope, attempt
+                    self.index,
+                    samples.len(),
+                    mean,
+                    std_dev,
+                    slope,
+                    attempt
                 );
                 return Ok(ActionOutput::Value(mean));
             }
@@ -217,13 +231,21 @@ impl Action for ReadStableSignal {
                 let backoff_ms = 100u64 * (1 << attempt);
                 log::debug!(
                     "ReadStableSignal: not stable (std_dev={:.4}/{:.4}, slope={:.6}/{:.6}), retry {} in {}ms",
-                    std_dev, self.max_std_dev, slope.abs(), self.max_slope, attempt + 1, backoff_ms
+                    std_dev,
+                    self.max_std_dev,
+                    slope.abs(),
+                    self.max_slope,
+                    attempt + 1,
+                    backoff_ms
                 );
                 std::thread::sleep(Duration::from_millis(backoff_ms));
             } else {
                 log::warn!(
                     "ReadStableSignal: signal not stable after {} retries (std_dev={:.4}, slope={:.6}), using mean={:.6}",
-                    self.max_retries, std_dev, slope, mean
+                    self.max_retries,
+                    std_dev,
+                    slope,
+                    mean
                 );
                 return Ok(ActionOutput::Value(mean));
             }
