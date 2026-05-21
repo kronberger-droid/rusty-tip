@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "rusty-tip: automated tip conditioning for scanning probe microscopy"
+abstract: >-
+  A Rust library and tools for automated, reproducible STM/AFM tip
+  conditioning on Nanonis-controlled scanning probe microscopes. It
+  connects to the controller over TCP through a generalized hardware-
+  abstraction interface, runs configurable conditioning routines, and
+  logs every step so that procedures can be reproduced, optimized,
+  shared, and compared between groups.
+authors:
+  - family-names: Kronberger
+    given-names: Martin
+    affiliation: "Institute of Applied Physics, TU Wien, Vienna, Austria"
+    email: kronberger@iap.tuwien.ac.at
+version: 0.2.0
+date-released: "2026-03-09"
+license: MIT
+repository-code: "https://github.com/kronberger-droid/rusty-tip"
+url: "https://github.com/kronberger-droid/rusty-tip"
+keywords:
+  - scanning probe microscopy
+  - SPM
+  - STM
+  - AFM
+  - tip preparation
+  - tip conditioning
+  - Nanonis
+  - automation
+  - Rust
