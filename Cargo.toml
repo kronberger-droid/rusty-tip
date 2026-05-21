@@ -5,7 +5,7 @@ edition = "2021"
 description = "Rust library for Nanonis SPM system control via TCP"
 repository = "https://github.com/kronberger-droid/rusty-tip"
 license = "MIT"
-authors = ["Martin Kronberger <kronberger@proton.me"]
+authors = ["Martin Kronberger <kronberger@proton.me>"]
 
 [lib]
 name = "rusty_tip"
