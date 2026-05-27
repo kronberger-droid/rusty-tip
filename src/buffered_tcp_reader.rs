@@ -86,7 +86,8 @@ impl BufferedTCPReader {
         oversampling: f32,
     ) -> Result<Self, NanonisError> {
         let tcp_stream = TCPLoggerStream::new(host, port)?;
-        let tcp_receiver = tcp_stream.spawn_background_reader();
+        // 0.4.0 returns (receiver, JoinHandle); we only need the receiver here.
+        let (tcp_receiver, _stream_handle) = tcp_stream.spawn_background_reader();
 
         let buffer = Arc::new(RwLock::new(VecDeque::with_capacity(buffer_size)));
         let buffer_clone = buffer.clone();
