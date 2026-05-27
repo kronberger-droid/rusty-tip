@@ -17,8 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Loosened the default noise gate `max_std_dev` from 0.3 → 1.0 Hz, which was too
-  tight for typical tips. Tune per setup via the new config section.
+- Loosened the default noise gate `max_std_dev` from 0.3 → 1.5 Hz, which was too
+  tight for typical tips (they fluctuate but hold a stable mean). Tune per setup
+  via the new config section.
 
 ## [0.2.2] - 2026-05-27
 
