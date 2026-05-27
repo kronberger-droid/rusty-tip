@@ -211,6 +211,26 @@ scan_speed_m_s = 5e-9  # 5 nm/s
 # scan_speed_m_s = null   # Alternative: Use current scan speed
 
 # =============================================================================
+# SIGNAL-READ STABILITY (frequency-shift noise/drift gates)
+# =============================================================================
+# How clean a frequency-shift reading must be before it's trusted as a
+# measurement. Loosen for noisier tips, tighten for cleaner ones. Honored by
+# both tip-prep and the GUI (the GUI reads these from the config file).
+[tip_prep.signal_stability]
+# Max standard deviation (Hz) for a reading to count as stable.
+# 1.0 is permissive (suits most tips); lower it for cleaner tips.
+max_std_dev_hz = 1.0
+# Max drift rate (Hz/s) for a reading to count as stable.
+# ~0.5 Hz/s ≈ 0.25 Hz of drift over the 500 ms collection window.
+max_slope_hz_per_s = 0.5
+# Data-collection window (ms) for one stable read.
+data_collection_duration_ms = 500
+# Timeout (s) for acquiring a stable read before falling back.
+read_timeout_secs = 15
+# Retries when a stable read isn't found.
+read_retry_count = 3
+
+# =============================================================================
 # PULSE METHOD CONFIGURATION
 # =============================================================================
 # Three pulse methods are available:
