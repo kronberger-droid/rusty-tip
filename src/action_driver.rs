@@ -1973,17 +1973,20 @@ impl ActionDriver {
                                 ExecutionResult::Single(
                                     ActionResult::Values(values),
                                 ) => {
-                                    // ReadStableSignal failed but returned raw data, use minimum as fallback
-                                    log::warn!("CheckTipState: ReadStableSignal failed but returned {} raw values, using minimum as fallback", values.len());
+                                    // ReadStableSignal failed but returned raw data; use the
+                                    // mean as an unbiased fallback (min skews the reading negative).
+                                    log::warn!("CheckTipState: ReadStableSignal failed but returned {} raw values, using mean as fallback", values.len());
                                     let raw_data: Vec<f32> = values
                                         .iter()
                                         .map(|&v| v as f32)
                                         .collect();
-                                    let min_value = raw_data
-                                        .iter()
-                                        .cloned()
-                                        .fold(f32::INFINITY, f32::min);
-                                    (min_value, raw_data, "fallback_minimum")
+                                    let mean_value = if raw_data.is_empty() {
+                                        f32::NAN
+                                    } else {
+                                        raw_data.iter().sum::<f32>()
+                                            / raw_data.len() as f32
+                                    };
+                                    (mean_value, raw_data, "fallback_mean")
                                 }
                                 _ => {
                                     // Unexpected result type, fallback to single read
@@ -2183,14 +2186,17 @@ impl ActionDriver {
                                                 .iter()
                                                 .map(|&v| v as f32)
                                                 .collect();
-                                            let min_value = raw_data
-                                                .iter()
-                                                .cloned()
-                                                .fold(f32::INFINITY, f32::min);
+                                            let mean_value =
+                                                if raw_data.is_empty() {
+                                                    f32::NAN
+                                                } else {
+                                                    raw_data.iter().sum::<f32>()
+                                                        / raw_data.len() as f32
+                                                };
                                             (
-                                                min_value,
+                                                mean_value,
                                                 raw_data,
-                                                "fallback_minimum",
+                                                "fallback_mean",
                                             )
                                         }
                                         _ => {
