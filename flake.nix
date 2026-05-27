@@ -112,6 +112,11 @@
           ++ guiDeps;
 
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath guiDeps;
+
+        shellHook = ''
+          # Activate the repo's git hooks (pre-push rustfmt check).
+          git config core.hooksPath .githooks 2>/dev/null || true
+        '';
       };
 
       windows = pkgs.mkShell {
