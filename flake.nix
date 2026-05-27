@@ -9,15 +9,30 @@
     };
   };
 
-  outputs = {self, nixpkgs, fenix, ...}: let
+  outputs = {
+    self,
+    nixpkgs,
+    fenix,
+    ...
+  }: let
     forAllSystems = nixpkgs.lib.genAttrs ["x86_64-linux" "aarch64-linux"];
   in {
     packages = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
       guiDeps = with pkgs; [
-        wayland wayland-protocols libxkbcommon
-        xorg.libX11 xorg.libXcursor xorg.libXrandr xorg.libXi
-        libGL libGLU gtk3 dbus dbus.lib zenity
+        wayland
+        wayland-protocols
+        libxkbcommon
+        libX11
+        libXcursor
+        libXrandr
+        libXi
+        libGL
+        libGLU
+        gtk3
+        dbus
+        dbus.lib
+        zenity
       ];
     in {
       tip-prep-gui = pkgs.rustPlatform.buildRustPackage {
@@ -60,25 +75,41 @@
       pkgs = nixpkgs.legacyPackages.${system};
       toolchain = fenix.packages.${system}.combine [
         (fenix.packages.${system}.stable.withComponents [
-          "cargo" "clippy" "rust-src" "rustc" "rustfmt"
+          "cargo"
+          "clippy"
+          "rust-src"
+          "rustc"
+          "rustfmt"
         ])
         fenix.packages.${system}.targets.x86_64-pc-windows-gnu.stable.rust-std
       ];
       guiDeps = with pkgs; [
-        wayland wayland-protocols libxkbcommon
-        xorg.libX11 xorg.libXcursor xorg.libXrandr xorg.libXi
-        libGL libGLU gtk3 dbus dbus.lib zenity
+        wayland
+        wayland-protocols
+        libxkbcommon
+        libX11
+        libXcursor
+        libXrandr
+        libXi
+        libGL
+        libGLU
+        gtk3
+        dbus
+        dbus.lib
+        zenity
       ];
     in {
       default = pkgs.mkShell {
-        nativeBuildInputs = [
-          toolchain
-          fenix.packages.${system}.rust-analyzer
-          pkgs.pkg-config
-          pkgs.gcc
-          pkgs.cargo-expand
-          pkgs.cargo-dist
-        ] ++ guiDeps;
+        nativeBuildInputs =
+          [
+            toolchain
+            fenix.packages.${system}.rust-analyzer
+            pkgs.pkg-config
+            pkgs.gcc
+            pkgs.cargo-expand
+            pkgs.cargo-dist
+          ]
+          ++ guiDeps;
 
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath guiDeps;
       };
