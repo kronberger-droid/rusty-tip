@@ -9,6 +9,7 @@ pub mod error;
 pub mod event;
 pub mod logger;
 pub mod machine_state;
+pub mod mock_controller;
 pub mod nanonis_controller;
 pub mod plotting;
 pub mod signal_registry;
