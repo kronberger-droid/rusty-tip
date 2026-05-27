@@ -141,6 +141,60 @@ impl Default for TimingConfig {
     }
 }
 
+fn default_max_std_dev_hz() -> f32 {
+    1.0
+}
+
+fn default_max_slope_hz_per_s() -> f32 {
+    0.5
+}
+
+fn default_data_collection_duration_ms() -> u64 {
+    500
+}
+
+fn default_read_timeout_secs() -> u64 {
+    15
+}
+
+fn default_read_retry_count() -> u32 {
+    3
+}
+
+/// Signal-read stability thresholds: how clean a frequency-shift reading must
+/// be to be trusted as a measurement. Loosen these for noisier tips, tighten
+/// for cleaner ones. Tunable at runtime via the config file.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct SignalStabilityConfig {
+    /// Maximum standard deviation (Hz) of the reading to count as stable.
+    #[serde(default = "default_max_std_dev_hz")]
+    pub max_std_dev_hz: f32,
+    /// Maximum drift rate (Hz/s) of the reading to count as stable.
+    #[serde(default = "default_max_slope_hz_per_s")]
+    pub max_slope_hz_per_s: f32,
+    /// Data-collection window (ms) for one stable read.
+    #[serde(default = "default_data_collection_duration_ms")]
+    pub data_collection_duration_ms: u64,
+    /// Timeout (s) for acquiring a stable read.
+    #[serde(default = "default_read_timeout_secs")]
+    pub read_timeout_secs: u64,
+    /// Number of retries when a stable read isn't found.
+    #[serde(default = "default_read_retry_count")]
+    pub read_retry_count: u32,
+}
+
+impl Default for SignalStabilityConfig {
+    fn default() -> Self {
+        Self {
+            max_std_dev_hz: default_max_std_dev_hz(),
+            max_slope_hz_per_s: default_max_slope_hz_per_s(),
+            data_collection_duration_ms: default_data_collection_duration_ms(),
+            read_timeout_secs: default_read_timeout_secs(),
+            read_retry_count: default_read_retry_count(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TipPrepConfig {
     pub sharp_tip_bounds: [f32; 2],
@@ -161,6 +215,9 @@ pub struct TipPrepConfig {
     /// Timing and step configuration for the tip controller
     #[serde(default)]
     pub timing: TimingConfig,
+    /// Signal-read stability thresholds (frequency-shift noise/drift gates)
+    #[serde(default)]
+    pub signal_stability: SignalStabilityConfig,
 }
 
 impl Default for NanonisConfig {
@@ -211,6 +268,7 @@ impl Default for TipPrepConfig {
             initial_z_setpoint_a: default_initial_z_setpoint_a(),
             safe_tip_threshold: default_safe_tip_threshold(),
             timing: TimingConfig::default(),
+            signal_stability: SignalStabilityConfig::default(),
         }
     }
 }

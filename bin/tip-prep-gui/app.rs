@@ -9,11 +9,11 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use rusty_tip::{ActionDriver, Signal, TCPReaderConfig};
+use rusty_tip::{ActionDriver, Signal, TCPReaderConfig, TipStateConfig};
 
 use crate::config::{
     load_config, AppConfig, ConsoleConfig, DataAcquisitionConfig, ExperimentLoggingConfig,
-    NanonisConfig, TcpChannelMapping, TimingConfig, TipPrepConfig,
+    NanonisConfig, SignalStabilityConfig, TcpChannelMapping, TimingConfig, TipPrepConfig,
 };
 use rusty_tip::{
     BiasSweepPolarity, ControllerAction, ControllerState, PolaritySign, PulseMethod,
@@ -176,6 +176,10 @@ pub struct EditableConfig {
 
     // TCP channel mapping
     pub tcp_channel_mappings: Vec<EditableTcpMapping>,
+
+    // Carried through from the loaded config (no GUI widget yet) so the GUI
+    // honors a custom [tip_prep.signal_stability] from the config file.
+    pub signal_stability: SignalStabilityConfig,
 }
 
 impl Default for EditableConfig {
@@ -219,6 +223,7 @@ impl Default for EditableConfig {
             random_polarity_enabled: false,
             random_polarity_switch_every: "10".to_string(),
             tcp_channel_mappings: Vec::new(),
+            signal_stability: SignalStabilityConfig::default(),
         }
     }
 }
@@ -391,6 +396,7 @@ impl EditableConfig {
                         .collect()
                 })
                 .unwrap_or_default(),
+            signal_stability: app_config.tip_prep.signal_stability.clone(),
         }
     }
 
@@ -579,6 +585,7 @@ impl EditableConfig {
                 initial_z_setpoint_a: initial_z_setpoint_pa * 1e-12, // Convert pA to A
                 safe_tip_threshold: safe_tip_threshold_pa * 1e-12, // Convert pA to A
                 timing: TimingConfig::default(),
+                signal_stability: self.signal_stability.clone(),
             },
             pulse_method,
             tcp_channel_mapping: if self.tcp_channel_mappings.is_empty() {
@@ -1569,6 +1576,16 @@ fn run_controller(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Setting up controller...");
 
+    // Signal-read stability gates, configurable via [tip_prep.signal_stability]
+    let ss = &config.tip_prep.signal_stability;
+    let tip_state_config = TipStateConfig {
+        max_std_dev: ss.max_std_dev_hz,
+        max_slope: ss.max_slope_hz_per_s,
+        data_collection_duration: std::time::Duration::from_millis(ss.data_collection_duration_ms),
+        read_timeout: std::time::Duration::from_secs(ss.read_timeout_secs),
+        read_retry_count: ss.read_retry_count,
+    };
+
     // Setup driver
     let mut builder =
         ActionDriver::builder(&config.nanonis.host_ip, config.nanonis.control_ports[0])
@@ -1576,7 +1593,8 @@ fn run_controller(
                 stream_port: config.data_acquisition.data_port,
                 oversampling: (2000 / config.data_acquisition.sample_rate) as i32,
                 ..Default::default()
-            });
+            })
+            .with_tip_state_config(tip_state_config);
 
     // Add custom TCP channel mapping if configured
     if let Some(ref mappings) = config.tcp_channel_mapping {

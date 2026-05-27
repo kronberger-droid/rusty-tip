@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-05-27
+
+### Added
+
+- `[tip_prep.signal_stability]` config section exposing the signal-read stability
+  gates at runtime: `max_std_dev_hz`, `max_slope_hz_per_s`,
+  `data_collection_duration_ms`, `read_timeout_secs`, `read_retry_count`. These
+  were previously compile-time only. Honored by both the CLI and the GUI (the GUI
+  carries them through from the loaded config file).
+
+### Changed
+
+- Loosened the default noise gate `max_std_dev` from 0.3 → 1.0 Hz, which was too
+  tight for typical tips. Tune per setup via the new config section.
+
 ## [0.2.2] - 2026-05-27
 
 ### Fixed

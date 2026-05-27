@@ -6,7 +6,7 @@ use env_logger::Env;
 use log::{error, info, LevelFilter};
 use rusty_tip::error::{Error, RunOutcome};
 use rusty_tip::Signal;
-use rusty_tip::{ActionDriver, TCPReaderConfig};
+use rusty_tip::{ActionDriver, TCPReaderConfig, TipStateConfig};
 use rusty_tip::{PulseMethod, TipController, TipControllerConfig};
 use std::{
     fs, io,
@@ -211,6 +211,16 @@ fn log_tip_config(config: &TipControllerConfig) {
 
 /// Setup ActionDriver from configuration
 fn setup_driver(config: &AppConfig) -> Result<ActionDriver, Box<dyn std::error::Error>> {
+    // Signal-read stability gates, configurable at runtime via [tip_prep.signal_stability]
+    let ss = &config.tip_prep.signal_stability;
+    let tip_state_config = TipStateConfig {
+        max_std_dev: ss.max_std_dev_hz,
+        max_slope: ss.max_slope_hz_per_s,
+        data_collection_duration: std::time::Duration::from_millis(ss.data_collection_duration_ms),
+        read_timeout: std::time::Duration::from_secs(ss.read_timeout_secs),
+        read_retry_count: ss.read_retry_count,
+    };
+
     let mut builder =
         ActionDriver::builder(&config.nanonis.host_ip, config.nanonis.control_ports[0])
             .with_tcp_reader(TCPReaderConfig {
@@ -218,6 +228,7 @@ fn setup_driver(config: &AppConfig) -> Result<ActionDriver, Box<dyn std::error::
                 oversampling: (2000 / config.data_acquisition.sample_rate) as i32,
                 ..Default::default()
             })
+            .with_tip_state_config(tip_state_config)
             .with_action_logging(
                 create_log_file_path(&config.experiment_logging.output_path)?,
                 1000,
