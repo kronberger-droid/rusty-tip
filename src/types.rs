@@ -12,7 +12,7 @@ pub use nanonis_rs::oscilloscope::{
 };
 pub use nanonis_rs::scan::{ScanAction, ScanConfig, ScanDirection, ScanFrame};
 pub use nanonis_rs::signals::SignalFrame;
-pub use nanonis_rs::tcplog::{TCPLogStatus, TCPLoggerData};
+pub use nanonis_rs::tcplog::TCPLogStatus;
 pub use nanonis_rs::z_ctrl::ZControllerHold;
 pub use nanonis_rs::Position;
 // DataToGet is extended locally with Stable variant
@@ -210,21 +210,6 @@ impl ExperimentData {
         self.signal_frames
             .iter()
             .filter(|frame| frame.timestamp > self.action_end && frame.timestamp <= cutoff)
-            .collect()
-    }
-
-    /// Get full TCPLoggerData for compatibility when needed
-    /// This reconstructs the full data structures using stored TCP config
-    pub fn get_tcp_logger_data(&self) -> Vec<TCPLoggerData> {
-        self.signal_frames
-            .iter()
-            .map(|frame| TCPLoggerData {
-                num_channels: self.tcp_config.channels.len() as u32,
-                oversampling: self.tcp_config.oversampling as f32,
-                counter: frame.signal_frame.counter,
-                state: TCPLogStatus::Running,
-                data: frame.signal_frame.data.clone(),
-            })
             .collect()
     }
 }

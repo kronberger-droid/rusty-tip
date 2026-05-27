@@ -58,7 +58,7 @@ pub use nanonis_rs::z_ctrl::ZControllerHold;
 pub use nanonis_rs::signals::SignalFrame;
 
 // Re-export nanonis-rs tcplog types
-pub use nanonis_rs::tcplog::{TCPLogStatus, TCPLoggerData};
+pub use nanonis_rs::tcplog::TCPLogStatus;
 
 // Re-export nanonis-rs tip recovery types
 pub use nanonis_rs::tip_recovery::TipShaperConfig;
