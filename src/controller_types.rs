@@ -348,7 +348,7 @@ pub struct TipStateConfig {
 impl Default for TipStateConfig {
     fn default() -> Self {
         Self {
-            max_std_dev: 1.0, // Hz; permissive default for typical tips (tune at runtime)
+            max_std_dev: 1.5, // Hz; ~typical tip noise (fluctuates, stable mean); tune at runtime
             max_slope: 0.5,   // Hz/s; ~0.25 Hz drift over a 500 ms window
             data_collection_duration: Duration::from_millis(500),
             read_timeout: Duration::from_secs(15),

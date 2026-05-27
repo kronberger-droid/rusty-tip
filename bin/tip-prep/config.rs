@@ -142,7 +142,7 @@ impl Default for TimingConfig {
 }
 
 fn default_max_std_dev_hz() -> f32 {
-    1.0
+    1.5
 }
 
 fn default_max_slope_hz_per_s() -> f32 {

@@ -68,7 +68,7 @@ scan_speed_m_s = 60e-9  # 5 nm/s
 # tips, tighten for cleaner ones. Tunable at runtime.
 [tip_prep.signal_stability]
 # Max standard deviation (Hz) for a reading to count as stable
-max_std_dev_hz = 1.0
+max_std_dev_hz = 1.5
 # Max drift rate (Hz/s) for a reading to count as stable
 max_slope_hz_per_s = 0.5
 # Data-collection window (ms) for one stable read
