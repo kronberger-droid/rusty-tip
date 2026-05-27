@@ -1729,6 +1729,8 @@ dependencies = [
 [[package]]
 name = "nanonis-rs"
 version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfd17a5b36957c565668f05cbe24ff665b6029fe3b2a84683e6a5ce63ad86325"
 dependencies = [
  "byteorder",
  "log",
@@ -2585,7 +2587,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rusty-tip"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "byteorder",
  "chrono",
