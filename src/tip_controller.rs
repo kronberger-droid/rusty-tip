@@ -10,8 +10,8 @@ use std::time::Duration;
 use crate::action_driver::ActionDriver;
 use crate::actions::{Action, TipCheckMethod, TipState};
 use crate::controller_types::{
-    BiasSweepPolarity, ControllerAction, ControllerState, PolaritySign,
-    PulseMethod, TipControllerConfig,
+    BiasSweepPolarity, ControllerAction, ControllerState, PolaritySign, PulseMethod,
+    TipControllerConfig,
 };
 use crate::error::{Error, RunOutcome};
 use crate::types::{MotorDisplacement, TipShape};
@@ -185,9 +185,7 @@ impl TipController {
             } => {
                 switch.enabled
                     && self.pulse_count_for_random > 0
-                    && self.pulse_count_for_random
-                        % switch.switch_every_n_pulses
-                        == 0
+                    && self.pulse_count_for_random % switch.switch_every_n_pulses == 0
             }
             _ => false,
         }
@@ -232,10 +230,7 @@ impl TipController {
 
     /// Get signal history for a specific signal (most recent first)
     #[allow(dead_code)]
-    pub fn get_signal_history(
-        &self,
-        signal: &Signal,
-    ) -> Option<&VecDeque<f32>> {
+    pub fn get_signal_history(&self, signal: &Signal) -> Option<&VecDeque<f32>> {
         self.signal_histories.get(&signal.index)
     }
 
@@ -319,8 +314,8 @@ impl TipController {
             if history.len() < 2 {
                 (true, 0.0)
             } else {
-                let stable_period_size = (self.cycles_without_change as usize)
-                    .min(history.len() - 1);
+                let stable_period_size =
+                    (self.cycles_without_change as usize).min(history.len() - 1);
 
                 if stable_period_size == 0 {
                     let current_signal = history[0];
@@ -343,8 +338,8 @@ impl TipController {
                         .take(stable_period_size)
                         .cloned()
                         .collect();
-                    let stable_mean = stable_signals.iter().sum::<f32>()
-                        / stable_signals.len() as f32;
+                    let stable_mean =
+                        stable_signals.iter().sum::<f32>() / stable_signals.len() as f32;
 
                     log::debug!(
                         "Current: {:.3e} | Stable mean: {:.3e} | Threshold: {:.3e}",
@@ -375,10 +370,8 @@ impl TipController {
             PulseMethod::Linear { .. } => return false,
         };
 
-        let step_size =
-            (voltage_bounds.1 - voltage_bounds.0) / voltage_steps as f32;
-        let new_pulse =
-            (self.current_pulse_voltage + step_size).min(voltage_bounds.1);
+        let step_size = (voltage_bounds.1 - voltage_bounds.0) / voltage_steps as f32;
+        let new_pulse = (self.current_pulse_voltage + step_size).min(voltage_bounds.1);
 
         if new_pulse > self.current_pulse_voltage {
             info!(
@@ -389,10 +382,7 @@ impl TipController {
             self.cycles_without_change = 0;
             true
         } else {
-            log::debug!(
-                "Pulse voltage already at maximum: {:.3}V",
-                voltage_bounds.1
-            );
+            log::debug!("Pulse voltage already at maximum: {:.3}V", voltage_bounds.1);
             self.cycles_without_change = 0;
             false
         }
@@ -418,14 +408,12 @@ impl TipController {
                 } else if is_significant {
                     log::warn!("Negative significant change detected!");
                     self.cycles_without_change += 1;
-                    if self.cycles_without_change >= *cycles_before_step as u32
-                    {
+                    if self.cycles_without_change >= *cycles_before_step as u32 {
                         self.step_pulse_voltage();
                     }
                 } else {
                     self.cycles_without_change += 1;
-                    if self.cycles_without_change >= *cycles_before_step as u32
-                    {
+                    if self.cycles_without_change >= *cycles_before_step as u32 {
                         self.step_pulse_voltage();
                     }
                 }
@@ -445,9 +433,7 @@ impl TipController {
                 {
                     current_freq_shift = freq_shift_history[0];
 
-                    if !(linear_clamp.0..linear_clamp.1)
-                        .contains(&current_freq_shift)
-                    {
+                    if !(linear_clamp.0..linear_clamp.1).contains(&current_freq_shift) {
                         log::info!(
                             "Linear pulse: freq_shift {:.2} Hz outside range [{:.2}, {:.2}] Hz -> using max voltage {:.2}V",
                             current_freq_shift, linear_clamp.0, linear_clamp.1, voltage_bounds.1
@@ -503,9 +489,7 @@ impl TipController {
             // Check cycle limit
             if let Some(max) = self.max_cycles {
                 if self.cycle_count >= max as u32 {
-                    self.set_action(ControllerAction::Error(
-                        "Max cycles exceeded".to_string(),
-                    ));
+                    self.set_action(ControllerAction::Error("Max cycles exceeded".to_string()));
                     return Err(Error::CycleLimit(max as u32));
                 }
             }
@@ -674,8 +658,7 @@ impl TipController {
     fn good_loop(&mut self) -> Result<(), Error> {
         self.set_action(ControllerAction::StabilityCheck);
 
-        let (confident_tip_shape, baseline_freq_shift) =
-            self.pre_good_loop_check()?;
+        let (confident_tip_shape, baseline_freq_shift) = self.pre_good_loop_check()?;
 
         if matches!(confident_tip_shape, TipShape::Blunt) {
             info!("Tip Shape was wrongly measured as good");
@@ -695,9 +678,7 @@ impl TipController {
         let baseline_freq_shift = match baseline_freq_shift {
             Some(v) => v,
             None => {
-                log::error!(
-                    "No baseline freq_shift available for stability check"
-                );
+                log::error!("No baseline freq_shift available for stability check");
                 self.current_tip_shape = TipShape::Blunt;
                 self.send_state();
                 return Ok(());
@@ -722,10 +703,7 @@ impl TipController {
         let mut shutdown_requested = false;
         for plan in &sweep_plans {
             if self.is_shutdown_requested() {
-                log::info!(
-                    "Shutdown requested before stability sweep {}",
-                    plan.index
-                );
+                log::info!("Shutdown requested before stability sweep {}", plan.index);
                 shutdown_requested = true;
                 break;
             }
@@ -821,8 +799,7 @@ impl TipController {
             .copied()
             .ok_or_else(|| {
                 Error::Nanonis(crate::NanonisError::Protocol(
-                    "Failed to read final freq_shift after stability sweeps"
-                        .to_string(),
+                    "Failed to read final freq_shift after stability sweeps".to_string(),
                 ))
             })?;
 
@@ -877,11 +854,11 @@ impl TipController {
     }
 
     /// Prepare the tip for a stability sweep
-    fn prepare_for_sweep(
-        &mut self,
-        starting_bias: f32,
-    ) -> Result<(), Error> {
-        info!("Preparing for sweep: withdrawing and repositioning, starting bias = {:.3}V", starting_bias);
+    fn prepare_for_sweep(&mut self, starting_bias: f32) -> Result<(), Error> {
+        info!(
+            "Preparing for sweep: withdrawing and repositioning, starting bias = {:.3}V",
+            starting_bias
+        );
 
         self.set_action(ControllerAction::Withdrawing);
         self.driver
@@ -939,15 +916,10 @@ impl TipController {
     }
 
     /// Execute a single stability sweep and return whether the tip was stable.
-    fn execute_stability_sweep(
-        &mut self,
-        plan: &SweepPlan,
-    ) -> Result<bool, Error> {
+    fn execute_stability_sweep(&mut self, plan: &SweepPlan) -> Result<bool, Error> {
         let stability_config = self.config.stability_config.clone();
-        let step_duration =
-            Duration::from_millis(stability_config.step_period_ms);
-        let max_duration =
-            Duration::from_secs(stability_config.max_duration_secs);
+        let step_duration = Duration::from_millis(stability_config.step_period_ms);
+        let max_duration = Duration::from_secs(stability_config.max_duration_secs);
         let bias_steps = stability_config.bias_steps;
 
         self.set_action(ControllerAction::StabilitySweep {
@@ -962,16 +934,13 @@ impl TipController {
         let stability_result: crate::actions::StabilityResult = self
             .driver
             .run(Action::CheckTipStability {
-                method:
-                    crate::actions::TipStabilityMethod::BiasSweepResponse {
-                        signal: self.config.freq_shift_signal.clone(),
-                        bias_range: plan.bias_range,
-                        bias_steps,
-                        step_duration,
-                        allowed_signal_change: self
-                            .config
-                            .allowed_change_for_stable,
-                    },
+                method: crate::actions::TipStabilityMethod::BiasSweepResponse {
+                    signal: self.config.freq_shift_signal.clone(),
+                    bias_range: plan.bias_range,
+                    bias_steps,
+                    step_duration,
+                    allowed_signal_change: self.config.allowed_change_for_stable,
+                },
                 max_duration,
             })
             .expecting()?;
@@ -997,9 +966,7 @@ impl TipController {
     }
 
     /// Save the current scan speed and set the stability-check speed if configured.
-    fn save_and_set_scan_speed(
-        &mut self,
-    ) -> Result<Option<ScanConfig>, Error> {
+    fn save_and_set_scan_speed(&mut self) -> Result<Option<ScanConfig>, Error> {
         let target_speed = self.config.stability_config.scan_speed_m_s;
 
         if let Some(target_speed) = target_speed {
@@ -1013,13 +980,8 @@ impl TipController {
                     new_config.forward_linear_speed_m_s = target_speed;
                     new_config.backward_linear_speed_m_s = target_speed;
                     new_config.keep_parameter_constant = 1;
-                    if let Err(e) =
-                        self.driver.client_mut().scan_config_set(new_config)
-                    {
-                        log::warn!(
-                            "Failed to set scan speed for stability check: {}",
-                            e
-                        );
+                    if let Err(e) = self.driver.client_mut().scan_config_set(new_config) {
+                        log::warn!("Failed to set scan speed for stability check: {}", e);
                     } else {
                         info!(
                             "Set scan speed to {:.2e} m/s for stability check",
@@ -1082,9 +1044,7 @@ impl TipController {
     }
 
     /// Check reliability of tip state and return baseline freq_shift for stability comparison.
-    fn pre_good_loop_check(
-        &mut self,
-    ) -> Result<(TipShape, Option<f32>), Error> {
+    fn pre_good_loop_check(&mut self) -> Result<(TipShape, Option<f32>), Error> {
         log::info!("Checking reliability of tip state result");
 
         let mut last_freq_shift: Option<f32> = None;
@@ -1151,13 +1111,12 @@ impl TipController {
         // Load layout file if specified
         if let Some(layout_path) = self.config.layout_file.clone() {
             self.set_action(ControllerAction::LoadingLayout);
-            let abs_path =
-                Path::new(&layout_path).canonicalize().map_err(|e| {
-                    Error::Nanonis(crate::NanonisError::Protocol(format!(
-                        "Layout file not found: {} ({})",
-                        layout_path, e
-                    )))
-                })?;
+            let abs_path = Path::new(&layout_path).canonicalize().map_err(|e| {
+                Error::Nanonis(crate::NanonisError::Protocol(format!(
+                    "Layout file not found: {} ({})",
+                    layout_path, e
+                )))
+            })?;
             let abs_path_str = abs_path.to_string_lossy();
             info!("Loading layout from: {}", abs_path_str);
             self.driver
@@ -1169,13 +1128,12 @@ impl TipController {
         // Load settings file if specified
         if let Some(settings_path) = self.config.settings_file.clone() {
             self.set_action(ControllerAction::LoadingSettings);
-            let abs_path =
-                Path::new(&settings_path).canonicalize().map_err(|e| {
-                    Error::Nanonis(crate::NanonisError::Protocol(format!(
-                        "Settings file not found: {} ({})",
-                        settings_path, e
-                    )))
-                })?;
+            let abs_path = Path::new(&settings_path).canonicalize().map_err(|e| {
+                Error::Nanonis(crate::NanonisError::Protocol(format!(
+                    "Settings file not found: {} ({})",
+                    settings_path, e
+                )))
+            })?;
             let abs_path_str = abs_path.to_string_lossy();
             info!("Loading settings from: {}", abs_path_str);
             self.driver
@@ -1206,11 +1164,9 @@ impl TipController {
 
         // Set correct safe tip config
         let safe_tip_threshold = self.config.safe_tip_threshold;
-        self.driver.client_mut().safe_tip_props_set(
-            false,
-            true,
-            safe_tip_threshold,
-        )?;
+        self.driver
+            .client_mut()
+            .safe_tip_props_set(false, true, safe_tip_threshold)?;
 
         // Update some random User Output to update TCP Channel List
         // Should be fixed in next Nanonis Software Update

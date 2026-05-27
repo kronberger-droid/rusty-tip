@@ -194,7 +194,10 @@ mod tests {
             Duration::from_millis(10),
         );
 
-        assert!(matches!(result, Err(PollError::ConditionError("test error"))));
+        assert!(matches!(
+            result,
+            Err(PollError::ConditionError("test error"))
+        ));
     }
 
     #[test]
@@ -241,6 +244,9 @@ mod tests {
             Duration::from_millis(10),
         );
 
-        assert!(matches!(result, Err(PollError::ConditionError("test error"))));
+        assert!(matches!(
+            result,
+            Err(PollError::ConditionError("test error"))
+        ));
     }
 }
