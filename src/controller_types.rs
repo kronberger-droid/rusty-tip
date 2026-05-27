@@ -238,9 +238,7 @@ impl PulseMethod {
                     ));
                 }
                 if *voltage_steps == 0 {
-                    return Err(
-                        "voltage_steps must be greater than zero".to_string(),
-                    );
+                    return Err("voltage_steps must be greater than zero".to_string());
                 }
             }
             PulseMethod::Linear {
@@ -351,7 +349,7 @@ impl Default for TipStateConfig {
     fn default() -> Self {
         Self {
             max_std_dev: 1.0, // Hz; ~half the sharp-tip bound width
-            max_slope: 2.0, // Hz/s; ~1 Hz drift tolerated over a 500 ms window
+            max_slope: 2.0,   // Hz/s; ~1 Hz drift tolerated over a 500 ms window
             data_collection_duration: Duration::from_millis(500),
             read_timeout: Duration::from_secs(15),
             read_retry_count: 3,
@@ -400,8 +398,7 @@ pub struct TipControllerConfig {
 
 impl Default for TipControllerConfig {
     fn default() -> Self {
-        let freq_shift_signal =
-            Signal::new_unchecked("freq_shift", 76, Some(18));
+        let freq_shift_signal = Signal::new_unchecked("freq_shift", 76, Some(18));
 
         Self {
             freq_shift_signal,

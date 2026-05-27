@@ -26,11 +26,14 @@ impl AppConfig {
     /// Validate all configuration values
     pub fn validate(&self) -> Result<(), ConfigError> {
         // Validate stability config
-        self.tip_prep.stability.validate()
+        self.tip_prep
+            .stability
+            .validate()
             .map_err(ConfigError::Message)?;
 
         // Validate pulse method
-        self.pulse_method.validate()
+        self.pulse_method
+            .validate()
             .map_err(|e| ConfigError::Message(format!("Invalid pulse_method: {}", e)))?;
 
         Ok(())
@@ -48,7 +51,6 @@ pub struct NanonisConfig {
     /// If set, these settings will be loaded before tip preparation starts
     pub settings_file: Option<String>,
 }
-
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DataAcquisitionConfig {

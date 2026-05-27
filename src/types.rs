@@ -1,20 +1,20 @@
 use serde::{Deserialize, Serialize};
 
 // Re-export nanonis-rs types from their respective submodules
+pub use nanonis_rs::bias::PulseMode;
 pub use nanonis_rs::motor::{
-    Amplitude, Frequency, MotorAxis, MotorDirection, MotorDisplacement, MotorGroup,
-    MotorMovement, MovementMode, Position3D, StepCount,
+    Amplitude, Frequency, MotorAxis, MotorDirection, MotorDisplacement, MotorGroup, MotorMovement,
+    MovementMode, Position3D, StepCount,
 };
 pub use nanonis_rs::oscilloscope::{
     OsciData, OsciTriggerMode, OscilloscopeIndex, OversamplingIndex, SampleCount, SignalStats,
     TimebaseIndex, TriggerConfig, TriggerLevel, TriggerMode, TriggerSlope,
 };
-pub use nanonis_rs::Position;
-pub use nanonis_rs::bias::PulseMode;
 pub use nanonis_rs::scan::{ScanAction, ScanConfig, ScanDirection, ScanFrame};
 pub use nanonis_rs::signals::SignalFrame;
 pub use nanonis_rs::tcplog::{TCPLogStatus, TCPLoggerData};
 pub use nanonis_rs::z_ctrl::ZControllerHold;
+pub use nanonis_rs::Position;
 // DataToGet is extended locally with Stable variant
 
 use std::time::{Duration, Instant};
@@ -329,4 +329,3 @@ pub enum AutoApproachStatus {
     /// Auto-approach status is unknown (e.g., communication error)
     Unknown,
 }
-

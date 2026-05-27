@@ -12,14 +12,12 @@ use std::time::{Duration, Instant};
 use rusty_tip::{ActionDriver, Signal, TCPReaderConfig};
 
 use crate::config::{
-    load_config, AppConfig, ConsoleConfig, DataAcquisitionConfig,
-    ExperimentLoggingConfig, NanonisConfig, TcpChannelMapping, TimingConfig,
-    TipPrepConfig,
+    load_config, AppConfig, ConsoleConfig, DataAcquisitionConfig, ExperimentLoggingConfig,
+    NanonisConfig, TcpChannelMapping, TimingConfig, TipPrepConfig,
 };
 use rusty_tip::{
-    BiasSweepPolarity, ControllerAction, ControllerState, PolaritySign,
-    PulseMethod, RandomPolaritySwitch, StabilityConfig, TipController,
-    TipControllerConfig, TipShape,
+    BiasSweepPolarity, ControllerAction, ControllerState, PolaritySign, PulseMethod,
+    RandomPolaritySwitch, StabilityConfig, TipController, TipControllerConfig, TipShape,
 };
 
 // ============================================================================
@@ -228,79 +226,106 @@ impl Default for EditableConfig {
 impl EditableConfig {
     pub fn from_app_config(app_config: &AppConfig) -> Self {
         // Extract pulse method parameters
-        let (pulse_method_type, pulse_voltage, pulse_voltage_min, pulse_voltage_max,
-             voltage_steps, cycles_before_step, threshold_value,
-             linear_clamp_min, linear_clamp_max, pulse_polarity,
-             random_polarity_enabled, random_polarity_switch_every) =
-            match &app_config.pulse_method {
-                PulseMethod::Fixed { voltage, polarity, random_polarity_switch } => {
-                    let (rp_enabled, rp_every) = match random_polarity_switch {
-                        Some(rps) => (rps.enabled, rps.switch_every_n_pulses.to_string()),
-                        None => (false, "10".to_string()),
-                    };
-                    (
-                        PulseMethodType::Fixed,
-                        voltage.to_string(),
-                        "2.0".to_string(),
-                        "6.0".to_string(),
-                        "4".to_string(),
-                        "2".to_string(),
-                        "0.1".to_string(),
-                        "-20.0".to_string(),
-                        "0.0".to_string(),
-                        *polarity,
-                        rp_enabled,
-                        rp_every,
-                    )
-                }
-                PulseMethod::Stepping {
-                    voltage_bounds, voltage_steps, cycles_before_step, threshold_value,
-                    polarity, random_polarity_switch
-                } => {
-                    let (rp_enabled, rp_every) = match random_polarity_switch {
-                        Some(rps) => (rps.enabled, rps.switch_every_n_pulses.to_string()),
-                        None => (false, "10".to_string()),
-                    };
-                    (
-                        PulseMethodType::Stepping,
-                        "6.0".to_string(),
-                        voltage_bounds.0.to_string(),
-                        voltage_bounds.1.to_string(),
-                        voltage_steps.to_string(),
-                        cycles_before_step.to_string(),
-                        threshold_value.to_string(),
-                        "-20.0".to_string(),
-                        "0.0".to_string(),
-                        *polarity,
-                        rp_enabled,
-                        rp_every,
-                    )
-                }
-                PulseMethod::Linear { voltage_bounds, linear_clamp, polarity, random_polarity_switch } => {
-                    let (rp_enabled, rp_every) = match random_polarity_switch {
-                        Some(rps) => (rps.enabled, rps.switch_every_n_pulses.to_string()),
-                        None => (false, "10".to_string()),
-                    };
-                    (
-                        PulseMethodType::Linear,
-                        "6.0".to_string(),
-                        voltage_bounds.0.to_string(),
-                        voltage_bounds.1.to_string(),
-                        "4".to_string(),
-                        "2".to_string(),
-                        "0.1".to_string(),
-                        linear_clamp.0.to_string(),
-                        linear_clamp.1.to_string(),
-                        *polarity,
-                        rp_enabled,
-                        rp_every,
-                    )
-                }
-            };
+        let (
+            pulse_method_type,
+            pulse_voltage,
+            pulse_voltage_min,
+            pulse_voltage_max,
+            voltage_steps,
+            cycles_before_step,
+            threshold_value,
+            linear_clamp_min,
+            linear_clamp_max,
+            pulse_polarity,
+            random_polarity_enabled,
+            random_polarity_switch_every,
+        ) = match &app_config.pulse_method {
+            PulseMethod::Fixed {
+                voltage,
+                polarity,
+                random_polarity_switch,
+            } => {
+                let (rp_enabled, rp_every) = match random_polarity_switch {
+                    Some(rps) => (rps.enabled, rps.switch_every_n_pulses.to_string()),
+                    None => (false, "10".to_string()),
+                };
+                (
+                    PulseMethodType::Fixed,
+                    voltage.to_string(),
+                    "2.0".to_string(),
+                    "6.0".to_string(),
+                    "4".to_string(),
+                    "2".to_string(),
+                    "0.1".to_string(),
+                    "-20.0".to_string(),
+                    "0.0".to_string(),
+                    *polarity,
+                    rp_enabled,
+                    rp_every,
+                )
+            }
+            PulseMethod::Stepping {
+                voltage_bounds,
+                voltage_steps,
+                cycles_before_step,
+                threshold_value,
+                polarity,
+                random_polarity_switch,
+            } => {
+                let (rp_enabled, rp_every) = match random_polarity_switch {
+                    Some(rps) => (rps.enabled, rps.switch_every_n_pulses.to_string()),
+                    None => (false, "10".to_string()),
+                };
+                (
+                    PulseMethodType::Stepping,
+                    "6.0".to_string(),
+                    voltage_bounds.0.to_string(),
+                    voltage_bounds.1.to_string(),
+                    voltage_steps.to_string(),
+                    cycles_before_step.to_string(),
+                    threshold_value.to_string(),
+                    "-20.0".to_string(),
+                    "0.0".to_string(),
+                    *polarity,
+                    rp_enabled,
+                    rp_every,
+                )
+            }
+            PulseMethod::Linear {
+                voltage_bounds,
+                linear_clamp,
+                polarity,
+                random_polarity_switch,
+            } => {
+                let (rp_enabled, rp_every) = match random_polarity_switch {
+                    Some(rps) => (rps.enabled, rps.switch_every_n_pulses.to_string()),
+                    None => (false, "10".to_string()),
+                };
+                (
+                    PulseMethodType::Linear,
+                    "6.0".to_string(),
+                    voltage_bounds.0.to_string(),
+                    voltage_bounds.1.to_string(),
+                    "4".to_string(),
+                    "2".to_string(),
+                    "0.1".to_string(),
+                    linear_clamp.0.to_string(),
+                    linear_clamp.1.to_string(),
+                    *polarity,
+                    rp_enabled,
+                    rp_every,
+                )
+            }
+        };
 
         Self {
             host_ip: app_config.nanonis.host_ip.clone(),
-            control_port: app_config.nanonis.control_ports.first().unwrap_or(&6501).to_string(),
+            control_port: app_config
+                .nanonis
+                .control_ports
+                .first()
+                .unwrap_or(&6501)
+                .to_string(),
             data_port: app_config.data_acquisition.data_port.to_string(),
             layout_file: app_config.nanonis.layout_file.clone().unwrap_or_default(),
             settings_file: app_config.nanonis.settings_file.clone().unwrap_or_default(),
@@ -310,20 +335,35 @@ impl EditableConfig {
             verbosity: app_config.console.verbosity.clone(),
             sharp_tip_lower: app_config.tip_prep.sharp_tip_bounds[0].to_string(),
             sharp_tip_upper: app_config.tip_prep.sharp_tip_bounds[1].to_string(),
-            max_cycles: app_config.tip_prep.max_cycles.map(|c| c.to_string()).unwrap_or_default(),
-            max_duration_secs: app_config.tip_prep.max_duration_secs.map(|d| d.to_string()).unwrap_or_default(),
+            max_cycles: app_config
+                .tip_prep
+                .max_cycles
+                .map(|c| c.to_string())
+                .unwrap_or_default(),
+            max_duration_secs: app_config
+                .tip_prep
+                .max_duration_secs
+                .map(|d| d.to_string())
+                .unwrap_or_default(),
             initial_bias_v: (app_config.tip_prep.initial_bias_v * 1000.0).to_string(), // Convert to mV for display
             initial_z_setpoint_pa: (app_config.tip_prep.initial_z_setpoint_a * 1e12).to_string(), // Convert to pA
             safe_tip_threshold_pa: (app_config.tip_prep.safe_tip_threshold * 1e12).to_string(), // Convert A to pA
             check_stability: app_config.tip_prep.stability.check_stability,
-            stable_tip_allowed_change: app_config.tip_prep.stability.stable_tip_allowed_change.to_string(),
+            stable_tip_allowed_change: app_config
+                .tip_prep
+                .stability
+                .stable_tip_allowed_change
+                .to_string(),
             bias_range_lower: app_config.tip_prep.stability.bias_range.0.to_string(),
             bias_range_upper: app_config.tip_prep.stability.bias_range.1.to_string(),
             bias_steps: app_config.tip_prep.stability.bias_steps.to_string(),
             step_period_ms: app_config.tip_prep.stability.step_period_ms.to_string(),
             stability_max_duration: app_config.tip_prep.stability.max_duration_secs.to_string(),
             polarity_mode: app_config.tip_prep.stability.polarity_mode,
-            scan_speed_nm_s: app_config.tip_prep.stability.scan_speed_m_s
+            scan_speed_nm_s: app_config
+                .tip_prep
+                .stability
+                .scan_speed_m_s
                 .map(|s| (s * 1e9).to_string())
                 .unwrap_or_default(),
             pulse_method_type,
@@ -338,42 +378,87 @@ impl EditableConfig {
             linear_clamp_max,
             random_polarity_enabled,
             random_polarity_switch_every,
-            tcp_channel_mappings: app_config.tcp_channel_mapping
+            tcp_channel_mappings: app_config
+                .tcp_channel_mapping
                 .as_ref()
                 .map(|mappings| {
-                    mappings.iter().map(|m| EditableTcpMapping {
-                        nanonis_index: m.nanonis_index.to_string(),
-                        tcp_channel: m.tcp_channel.to_string(),
-                    }).collect()
+                    mappings
+                        .iter()
+                        .map(|m| EditableTcpMapping {
+                            nanonis_index: m.nanonis_index.to_string(),
+                            tcp_channel: m.tcp_channel.to_string(),
+                        })
+                        .collect()
                 })
                 .unwrap_or_default(),
         }
     }
 
     pub fn to_app_config(&self) -> Result<AppConfig, String> {
-        let control_port: u16 = self.control_port.parse().map_err(|_| "Invalid control port")?;
+        let control_port: u16 = self
+            .control_port
+            .parse()
+            .map_err(|_| "Invalid control port")?;
         let data_port: u16 = self.data_port.parse().map_err(|_| "Invalid data port")?;
-        let sample_rate: u32 = self.sample_rate.parse().map_err(|_| "Invalid sample rate")?;
-        let sharp_tip_lower: f32 = self.sharp_tip_lower.parse().map_err(|_| "Invalid sharp tip lower bound")?;
-        let sharp_tip_upper: f32 = self.sharp_tip_upper.parse().map_err(|_| "Invalid sharp tip upper bound")?;
-        let max_cycles: Option<usize> = if self.max_cycles.is_empty() { None } else { Some(self.max_cycles.parse().map_err(|_| "Invalid max cycles")?) };
-        let max_duration_secs: Option<u64> = if self.max_duration_secs.is_empty() { None } else { Some(self.max_duration_secs.parse().map_err(|_| "Invalid max duration")?) };
-        let initial_bias_mv: f32 = self.initial_bias_v.parse().map_err(|_| "Invalid initial bias")?;
-        let initial_z_setpoint_pa: f32 = self.initial_z_setpoint_pa.parse().map_err(|_| "Invalid Z setpoint")?;
-        let safe_tip_threshold_pa: f32 = self.safe_tip_threshold_pa.parse().map_err(|_| "Invalid safe tip threshold")?;
+        let sample_rate: u32 = self
+            .sample_rate
+            .parse()
+            .map_err(|_| "Invalid sample rate")?;
+        let sharp_tip_lower: f32 = self
+            .sharp_tip_lower
+            .parse()
+            .map_err(|_| "Invalid sharp tip lower bound")?;
+        let sharp_tip_upper: f32 = self
+            .sharp_tip_upper
+            .parse()
+            .map_err(|_| "Invalid sharp tip upper bound")?;
+        let max_cycles: Option<usize> = if self.max_cycles.is_empty() {
+            None
+        } else {
+            Some(self.max_cycles.parse().map_err(|_| "Invalid max cycles")?)
+        };
+        let max_duration_secs: Option<u64> = if self.max_duration_secs.is_empty() {
+            None
+        } else {
+            Some(
+                self.max_duration_secs
+                    .parse()
+                    .map_err(|_| "Invalid max duration")?,
+            )
+        };
+        let initial_bias_mv: f32 = self
+            .initial_bias_v
+            .parse()
+            .map_err(|_| "Invalid initial bias")?;
+        let initial_z_setpoint_pa: f32 = self
+            .initial_z_setpoint_pa
+            .parse()
+            .map_err(|_| "Invalid Z setpoint")?;
+        let safe_tip_threshold_pa: f32 = self
+            .safe_tip_threshold_pa
+            .parse()
+            .map_err(|_| "Invalid safe tip threshold")?;
 
         // Parse scan speed (nm/s to m/s)
         let scan_speed_m_s: Option<f32> = if self.scan_speed_nm_s.is_empty() {
             None
         } else {
-            Some(self.scan_speed_nm_s.parse::<f32>().map_err(|_| "Invalid scan speed")? * 1e-9)
+            Some(
+                self.scan_speed_nm_s
+                    .parse::<f32>()
+                    .map_err(|_| "Invalid scan speed")?
+                    * 1e-9,
+            )
         };
 
         // Random polarity switch
         let random_polarity_switch = if self.random_polarity_enabled {
             Some(RandomPolaritySwitch {
                 enabled: true,
-                switch_every_n_pulses: self.random_polarity_switch_every.parse().map_err(|_| "Invalid switch every N pulses")?,
+                switch_every_n_pulses: self
+                    .random_polarity_switch_every
+                    .parse()
+                    .map_err(|_| "Invalid switch every N pulses")?,
             })
         } else {
             None
@@ -381,29 +466,53 @@ impl EditableConfig {
 
         let pulse_method = match self.pulse_method_type {
             PulseMethodType::Fixed => PulseMethod::Fixed {
-                voltage: self.pulse_voltage.parse().map_err(|_| "Invalid pulse voltage")?,
+                voltage: self
+                    .pulse_voltage
+                    .parse()
+                    .map_err(|_| "Invalid pulse voltage")?,
                 polarity: self.pulse_polarity,
                 random_polarity_switch,
             },
             PulseMethodType::Stepping => PulseMethod::Stepping {
                 voltage_bounds: (
-                    self.pulse_voltage_min.parse().map_err(|_| "Invalid voltage min")?,
-                    self.pulse_voltage_max.parse().map_err(|_| "Invalid voltage max")?,
+                    self.pulse_voltage_min
+                        .parse()
+                        .map_err(|_| "Invalid voltage min")?,
+                    self.pulse_voltage_max
+                        .parse()
+                        .map_err(|_| "Invalid voltage max")?,
                 ),
-                voltage_steps: self.voltage_steps.parse().map_err(|_| "Invalid voltage steps")?,
-                cycles_before_step: self.cycles_before_step.parse().map_err(|_| "Invalid cycles before step")?,
-                threshold_value: self.threshold_value.parse().map_err(|_| "Invalid threshold value")?,
+                voltage_steps: self
+                    .voltage_steps
+                    .parse()
+                    .map_err(|_| "Invalid voltage steps")?,
+                cycles_before_step: self
+                    .cycles_before_step
+                    .parse()
+                    .map_err(|_| "Invalid cycles before step")?,
+                threshold_value: self
+                    .threshold_value
+                    .parse()
+                    .map_err(|_| "Invalid threshold value")?,
                 polarity: self.pulse_polarity,
                 random_polarity_switch,
             },
             PulseMethodType::Linear => PulseMethod::Linear {
                 voltage_bounds: (
-                    self.pulse_voltage_min.parse().map_err(|_| "Invalid voltage min")?,
-                    self.pulse_voltage_max.parse().map_err(|_| "Invalid voltage max")?,
+                    self.pulse_voltage_min
+                        .parse()
+                        .map_err(|_| "Invalid voltage min")?,
+                    self.pulse_voltage_max
+                        .parse()
+                        .map_err(|_| "Invalid voltage max")?,
                 ),
                 linear_clamp: (
-                    self.linear_clamp_min.parse().map_err(|_| "Invalid linear clamp min")?,
-                    self.linear_clamp_max.parse().map_err(|_| "Invalid linear clamp max")?,
+                    self.linear_clamp_min
+                        .parse()
+                        .map_err(|_| "Invalid linear clamp min")?,
+                    self.linear_clamp_max
+                        .parse()
+                        .map_err(|_| "Invalid linear clamp max")?,
                 ),
                 polarity: self.pulse_polarity,
                 random_polarity_switch,
@@ -414,8 +523,16 @@ impl EditableConfig {
             nanonis: NanonisConfig {
                 host_ip: self.host_ip.clone(),
                 control_ports: vec![control_port],
-                layout_file: if self.layout_file.is_empty() { None } else { Some(self.layout_file.clone()) },
-                settings_file: if self.settings_file.is_empty() { None } else { Some(self.settings_file.clone()) },
+                layout_file: if self.layout_file.is_empty() {
+                    None
+                } else {
+                    Some(self.layout_file.clone())
+                },
+                settings_file: if self.settings_file.is_empty() {
+                    None
+                } else {
+                    Some(self.settings_file.clone())
+                },
             },
             data_acquisition: DataAcquisitionConfig {
                 data_port,
@@ -434,14 +551,27 @@ impl EditableConfig {
                 max_duration_secs,
                 stability: StabilityConfig {
                     check_stability: self.check_stability,
-                    stable_tip_allowed_change: self.stable_tip_allowed_change.parse().map_err(|_| "Invalid allowed change")?,
+                    stable_tip_allowed_change: self
+                        .stable_tip_allowed_change
+                        .parse()
+                        .map_err(|_| "Invalid allowed change")?,
                     bias_range: (
-                        self.bias_range_lower.parse().map_err(|_| "Invalid bias range lower")?,
-                        self.bias_range_upper.parse().map_err(|_| "Invalid bias range upper")?,
+                        self.bias_range_lower
+                            .parse()
+                            .map_err(|_| "Invalid bias range lower")?,
+                        self.bias_range_upper
+                            .parse()
+                            .map_err(|_| "Invalid bias range upper")?,
                     ),
                     bias_steps: self.bias_steps.parse().map_err(|_| "Invalid bias steps")?,
-                    step_period_ms: self.step_period_ms.parse().map_err(|_| "Invalid step period")?,
-                    max_duration_secs: self.stability_max_duration.parse().map_err(|_| "Invalid stability max duration")?,
+                    step_period_ms: self
+                        .step_period_ms
+                        .parse()
+                        .map_err(|_| "Invalid step period")?,
+                    max_duration_secs: self
+                        .stability_max_duration
+                        .parse()
+                        .map_err(|_| "Invalid stability max duration")?,
                     polarity_mode: self.polarity_mode,
                     scan_speed_m_s,
                 },
@@ -454,12 +584,19 @@ impl EditableConfig {
             tcp_channel_mapping: if self.tcp_channel_mappings.is_empty() {
                 None
             } else {
-                let mappings: Result<Vec<TcpChannelMapping>, String> = self.tcp_channel_mappings
+                let mappings: Result<Vec<TcpChannelMapping>, String> = self
+                    .tcp_channel_mappings
                     .iter()
                     .map(|m| {
                         Ok(TcpChannelMapping {
-                            nanonis_index: m.nanonis_index.parse().map_err(|_| "Invalid nanonis index")?,
-                            tcp_channel: m.tcp_channel.parse().map_err(|_| "Invalid TCP channel")?,
+                            nanonis_index: m
+                                .nanonis_index
+                                .parse()
+                                .map_err(|_| "Invalid nanonis index")?,
+                            tcp_channel: m
+                                .tcp_channel
+                                .parse()
+                                .map_err(|_| "Invalid TCP channel")?,
                         })
                     })
                     .collect();
@@ -663,7 +800,8 @@ impl TipPrepApp {
                     match self.current_state.as_ref().map(|s| &s.current_action) {
                         Some(ControllerAction::Completed) => {
                             self.run_status = RunStatus::Completed;
-                            self.message = Some(("Tip preparation completed successfully".to_string(), false));
+                            self.message =
+                                Some(("Tip preparation completed successfully".to_string(), false));
                         }
                         Some(ControllerAction::Stopped) => {
                             self.run_status = RunStatus::Idle;
@@ -676,8 +814,10 @@ impl TipPrepApp {
                         _ => {
                             // Thread finished but action wasn't Completed/Stopped/Error
                             // This likely means an unexpected error occurred
-                            self.run_status = RunStatus::Error("Unexpected termination".to_string());
-                            self.message = Some(("Controller terminated unexpectedly".to_string(), true));
+                            self.run_status =
+                                RunStatus::Error("Unexpected termination".to_string());
+                            self.message =
+                                Some(("Controller terminated unexpectedly".to_string(), true));
                         }
                     }
                 }
@@ -765,7 +905,8 @@ impl TipPrepApp {
                             ui.end_row();
 
                             ui.label("Tip Shape:");
-                            let shape_color = match self.current_state.as_ref().map(|s| s.tip_shape) {
+                            let shape_color = match self.current_state.as_ref().map(|s| s.tip_shape)
+                            {
                                 Some(TipShape::Blunt) => egui::Color32::RED,
                                 Some(TipShape::Sharp) => egui::Color32::YELLOW,
                                 Some(TipShape::Stable) => egui::Color32::GREEN,
@@ -823,12 +964,18 @@ impl TipPrepApp {
 
                 // Control buttons
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(!self.is_running(), egui::Button::new("Start")).clicked() {
+                    if ui
+                        .add_enabled(!self.is_running(), egui::Button::new("Start"))
+                        .clicked()
+                    {
                         self.message = None;
                         self.start_controller();
                     }
 
-                    if ui.add_enabled(self.is_running(), egui::Button::new("Stop")).clicked() {
+                    if ui
+                        .add_enabled(self.is_running(), egui::Button::new("Stop"))
+                        .clicked()
+                    {
                         self.stop_controller();
                     }
                 });
@@ -900,7 +1047,10 @@ impl TipPrepApp {
                             self.load_path = path.display().to_string();
                         }
                     }
-                    if ui.add_enabled(!self.load_path.is_empty(), egui::Button::new("Load")).clicked() {
+                    if ui
+                        .add_enabled(!self.load_path.is_empty(), egui::Button::new("Load"))
+                        .clicked()
+                    {
                         self.load_config_from_file();
                     }
                 });
@@ -919,7 +1069,10 @@ impl TipPrepApp {
                             self.save_path = path.display().to_string();
                         }
                     }
-                    if ui.add_enabled(!self.save_path.is_empty(), egui::Button::new("Save")).clicked() {
+                    if ui
+                        .add_enabled(!self.save_path.is_empty(), egui::Button::new("Save"))
+                        .clicked()
+                    {
                         self.save_config_to_file();
                     }
                 });
@@ -935,24 +1088,39 @@ impl TipPrepApp {
                     .spacing([20.0, 4.0])
                     .show(ui, |ui| {
                         ui.label("Host IP:");
-                        ui.add(egui::TextEdit::singleline(&mut self.config.host_ip).desired_width(150.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.config.host_ip)
+                                .desired_width(150.0),
+                        );
                         ui.end_row();
 
                         ui.label("Control Port:");
-                        ui.add(egui::TextEdit::singleline(&mut self.config.control_port).desired_width(80.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.config.control_port)
+                                .desired_width(80.0),
+                        );
                         ui.end_row();
 
                         ui.label("Data Port:");
-                        ui.add(egui::TextEdit::singleline(&mut self.config.data_port).desired_width(80.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.config.data_port)
+                                .desired_width(80.0),
+                        );
                         ui.end_row();
 
                         ui.label("Sample Rate (Hz):");
-                        ui.add(egui::TextEdit::singleline(&mut self.config.sample_rate).desired_width(80.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.config.sample_rate)
+                                .desired_width(80.0),
+                        );
                         ui.end_row();
 
                         ui.label("Layout File:");
                         ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(&mut self.config.layout_file).desired_width(200.0));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.config.layout_file)
+                                    .desired_width(200.0),
+                            );
                             if ui.button("...").clicked() {
                                 if let Some(path) = rfd::FileDialog::new()
                                     .add_filter("Layout", &["lyt"])
@@ -966,7 +1134,10 @@ impl TipPrepApp {
 
                         ui.label("Settings File:");
                         ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(&mut self.config.settings_file).desired_width(200.0));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.config.settings_file)
+                                    .desired_width(200.0),
+                            );
                             if ui.button("...").clicked() {
                                 if let Some(path) = rfd::FileDialog::new()
                                     .add_filter("Settings", &["ini"])
@@ -991,30 +1162,51 @@ impl TipPrepApp {
                     .show(ui, |ui| {
                         ui.label("Sharp Tip Bounds (Hz):");
                         ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(&mut self.config.sharp_tip_lower).desired_width(60.0));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.config.sharp_tip_lower)
+                                    .desired_width(60.0),
+                            );
                             ui.label("to");
-                            ui.add(egui::TextEdit::singleline(&mut self.config.sharp_tip_upper).desired_width(60.0));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.config.sharp_tip_upper)
+                                    .desired_width(60.0),
+                            );
                         });
                         ui.end_row();
 
                         ui.label("Max Cycles:");
-                        ui.add(egui::TextEdit::singleline(&mut self.config.max_cycles).desired_width(80.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.config.max_cycles)
+                                .desired_width(80.0),
+                        );
                         ui.end_row();
 
                         ui.label("Max Duration (s):");
-                        ui.add(egui::TextEdit::singleline(&mut self.config.max_duration_secs).desired_width(80.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.config.max_duration_secs)
+                                .desired_width(80.0),
+                        );
                         ui.end_row();
 
                         ui.label("Initial Bias (mV):");
-                        ui.add(egui::TextEdit::singleline(&mut self.config.initial_bias_v).desired_width(80.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.config.initial_bias_v)
+                                .desired_width(80.0),
+                        );
                         ui.end_row();
 
                         ui.label("Initial Z Setpoint (pA):");
-                        ui.add(egui::TextEdit::singleline(&mut self.config.initial_z_setpoint_pa).desired_width(80.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.config.initial_z_setpoint_pa)
+                                .desired_width(80.0),
+                        );
                         ui.end_row();
 
                         ui.label("Safe Tip Threshold (pA):");
-                        ui.add(egui::TextEdit::singleline(&mut self.config.safe_tip_threshold_pa).desired_width(80.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.config.safe_tip_threshold_pa)
+                                .desired_width(80.0),
+                        );
                         ui.end_row();
                     });
             });
@@ -1026,9 +1218,21 @@ impl TipPrepApp {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Method:");
-                    ui.selectable_value(&mut self.config.pulse_method_type, PulseMethodType::Fixed, "Fixed");
-                    ui.selectable_value(&mut self.config.pulse_method_type, PulseMethodType::Stepping, "Stepping");
-                    ui.selectable_value(&mut self.config.pulse_method_type, PulseMethodType::Linear, "Linear");
+                    ui.selectable_value(
+                        &mut self.config.pulse_method_type,
+                        PulseMethodType::Fixed,
+                        "Fixed",
+                    );
+                    ui.selectable_value(
+                        &mut self.config.pulse_method_type,
+                        PulseMethodType::Stepping,
+                        "Stepping",
+                    );
+                    ui.selectable_value(
+                        &mut self.config.pulse_method_type,
+                        PulseMethodType::Linear,
+                        "Linear",
+                    );
                 });
 
                 ui.add_space(5.0);
@@ -1040,44 +1244,86 @@ impl TipPrepApp {
                         match self.config.pulse_method_type {
                             PulseMethodType::Fixed => {
                                 ui.label("Voltage (V):");
-                                ui.add(egui::TextEdit::singleline(&mut self.config.pulse_voltage).desired_width(60.0));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.config.pulse_voltage)
+                                        .desired_width(60.0),
+                                );
                                 ui.end_row();
                             }
                             PulseMethodType::Stepping => {
                                 ui.label("Voltage Range (V):");
                                 ui.horizontal(|ui| {
-                                    ui.add(egui::TextEdit::singleline(&mut self.config.pulse_voltage_min).desired_width(60.0));
+                                    ui.add(
+                                        egui::TextEdit::singleline(
+                                            &mut self.config.pulse_voltage_min,
+                                        )
+                                        .desired_width(60.0),
+                                    );
                                     ui.label("to");
-                                    ui.add(egui::TextEdit::singleline(&mut self.config.pulse_voltage_max).desired_width(60.0));
+                                    ui.add(
+                                        egui::TextEdit::singleline(
+                                            &mut self.config.pulse_voltage_max,
+                                        )
+                                        .desired_width(60.0),
+                                    );
                                 });
                                 ui.end_row();
 
                                 ui.label("Voltage Steps:");
-                                ui.add(egui::TextEdit::singleline(&mut self.config.voltage_steps).desired_width(60.0));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.config.voltage_steps)
+                                        .desired_width(60.0),
+                                );
                                 ui.end_row();
 
                                 ui.label("Cycles Before Step:");
-                                ui.add(egui::TextEdit::singleline(&mut self.config.cycles_before_step).desired_width(60.0));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.config.cycles_before_step)
+                                        .desired_width(60.0),
+                                );
                                 ui.end_row();
 
                                 ui.label("Threshold Value (Hz):");
-                                ui.add(egui::TextEdit::singleline(&mut self.config.threshold_value).desired_width(60.0));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.config.threshold_value)
+                                        .desired_width(60.0),
+                                );
                                 ui.end_row();
                             }
                             PulseMethodType::Linear => {
                                 ui.label("Voltage Range (V):");
                                 ui.horizontal(|ui| {
-                                    ui.add(egui::TextEdit::singleline(&mut self.config.pulse_voltage_min).desired_width(60.0));
+                                    ui.add(
+                                        egui::TextEdit::singleline(
+                                            &mut self.config.pulse_voltage_min,
+                                        )
+                                        .desired_width(60.0),
+                                    );
                                     ui.label("to");
-                                    ui.add(egui::TextEdit::singleline(&mut self.config.pulse_voltage_max).desired_width(60.0));
+                                    ui.add(
+                                        egui::TextEdit::singleline(
+                                            &mut self.config.pulse_voltage_max,
+                                        )
+                                        .desired_width(60.0),
+                                    );
                                 });
                                 ui.end_row();
 
                                 ui.label("Linear Clamp (Hz):");
                                 ui.horizontal(|ui| {
-                                    ui.add(egui::TextEdit::singleline(&mut self.config.linear_clamp_min).desired_width(60.0));
+                                    ui.add(
+                                        egui::TextEdit::singleline(
+                                            &mut self.config.linear_clamp_min,
+                                        )
+                                        .desired_width(60.0),
+                                    );
                                     ui.label("to");
-                                    ui.add(egui::TextEdit::singleline(&mut self.config.linear_clamp_max).desired_width(60.0));
+                                    ui.add(
+                                        egui::TextEdit::singleline(
+                                            &mut self.config.linear_clamp_max,
+                                        )
+                                        .desired_width(60.0),
+                                    );
                                 });
                                 ui.end_row();
                             }
@@ -1085,8 +1331,16 @@ impl TipPrepApp {
 
                         ui.label("Polarity:");
                         ui.horizontal(|ui| {
-                            ui.selectable_value(&mut self.config.pulse_polarity, PolaritySign::Positive, "Positive");
-                            ui.selectable_value(&mut self.config.pulse_polarity, PolaritySign::Negative, "Negative");
+                            ui.selectable_value(
+                                &mut self.config.pulse_polarity,
+                                PolaritySign::Positive,
+                                "Positive",
+                            );
+                            ui.selectable_value(
+                                &mut self.config.pulse_polarity,
+                                PolaritySign::Negative,
+                                "Negative",
+                            );
                         });
                         ui.end_row();
 
@@ -1097,7 +1351,12 @@ impl TipPrepApp {
 
                         if self.config.random_polarity_enabled {
                             ui.label("Switch Every N Pulses:");
-                            ui.add(egui::TextEdit::singleline(&mut self.config.random_polarity_switch_every).desired_width(60.0));
+                            ui.add(
+                                egui::TextEdit::singleline(
+                                    &mut self.config.random_polarity_switch_every,
+                                )
+                                .desired_width(60.0),
+                            );
                             ui.end_row();
                         }
                     });
@@ -1118,39 +1377,74 @@ impl TipPrepApp {
                         .spacing([20.0, 4.0])
                         .show(ui, |ui| {
                             ui.label("Allowed Change (Hz):");
-                            ui.add(egui::TextEdit::singleline(&mut self.config.stable_tip_allowed_change).desired_width(60.0));
+                            ui.add(
+                                egui::TextEdit::singleline(
+                                    &mut self.config.stable_tip_allowed_change,
+                                )
+                                .desired_width(60.0),
+                            );
                             ui.end_row();
 
                             ui.label("Bias Range (V):");
                             ui.horizontal(|ui| {
-                                ui.add(egui::TextEdit::singleline(&mut self.config.bias_range_lower).desired_width(60.0));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.config.bias_range_lower)
+                                        .desired_width(60.0),
+                                );
                                 ui.label("to");
-                                ui.add(egui::TextEdit::singleline(&mut self.config.bias_range_upper).desired_width(60.0));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.config.bias_range_upper)
+                                        .desired_width(60.0),
+                                );
                             });
                             ui.end_row();
 
                             ui.label("Bias Steps:");
-                            ui.add(egui::TextEdit::singleline(&mut self.config.bias_steps).desired_width(80.0));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.config.bias_steps)
+                                    .desired_width(80.0),
+                            );
                             ui.end_row();
 
                             ui.label("Step Period (ms):");
-                            ui.add(egui::TextEdit::singleline(&mut self.config.step_period_ms).desired_width(80.0));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.config.step_period_ms)
+                                    .desired_width(80.0),
+                            );
                             ui.end_row();
 
                             ui.label("Max Duration (s):");
-                            ui.add(egui::TextEdit::singleline(&mut self.config.stability_max_duration).desired_width(80.0));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.config.stability_max_duration)
+                                    .desired_width(80.0),
+                            );
                             ui.end_row();
 
                             ui.label("Polarity Mode:");
                             ui.horizontal(|ui| {
-                                ui.selectable_value(&mut self.config.polarity_mode, BiasSweepPolarity::Both, "Both");
-                                ui.selectable_value(&mut self.config.polarity_mode, BiasSweepPolarity::Positive, "Positive");
-                                ui.selectable_value(&mut self.config.polarity_mode, BiasSweepPolarity::Negative, "Negative");
+                                ui.selectable_value(
+                                    &mut self.config.polarity_mode,
+                                    BiasSweepPolarity::Both,
+                                    "Both",
+                                );
+                                ui.selectable_value(
+                                    &mut self.config.polarity_mode,
+                                    BiasSweepPolarity::Positive,
+                                    "Positive",
+                                );
+                                ui.selectable_value(
+                                    &mut self.config.polarity_mode,
+                                    BiasSweepPolarity::Negative,
+                                    "Negative",
+                                );
                             });
                             ui.end_row();
 
                             ui.label("Scan Speed (nm/s):");
-                            ui.add(egui::TextEdit::singleline(&mut self.config.scan_speed_nm_s).desired_width(80.0));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.config.scan_speed_nm_s)
+                                    .desired_width(80.0),
+                            );
                             ui.end_row();
                         });
                 }
@@ -1171,7 +1465,10 @@ impl TipPrepApp {
 
                         ui.label("Output Path:");
                         ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(&mut self.config.logging_output_path).desired_width(200.0));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.config.logging_output_path)
+                                    .desired_width(200.0),
+                            );
                             if ui.button("...").clicked() {
                                 if let Some(path) = rfd::FileDialog::new().pick_folder() {
                                     self.config.logging_output_path = path.display().to_string();
@@ -1213,9 +1510,15 @@ impl TipPrepApp {
                 let mut to_remove: Option<usize> = None;
                 for (idx, mapping) in self.config.tcp_channel_mappings.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut mapping.nanonis_index).desired_width(80.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut mapping.nanonis_index)
+                                .desired_width(80.0),
+                        );
                         ui.add_space(20.0);
-                        ui.add(egui::TextEdit::singleline(&mut mapping.tcp_channel).desired_width(80.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut mapping.tcp_channel)
+                                .desired_width(80.0),
+                        );
                         ui.add_space(20.0);
                         if ui.button("Remove").clicked() {
                             to_remove = Some(idx);
@@ -1232,7 +1535,9 @@ impl TipPrepApp {
 
                 // Add new mapping button
                 if ui.button("Add Mapping").clicked() {
-                    self.config.tcp_channel_mappings.push(EditableTcpMapping::default());
+                    self.config
+                        .tcp_channel_mappings
+                        .push(EditableTcpMapping::default());
                 }
             });
 
@@ -1265,15 +1570,13 @@ fn run_controller(
     info!("Setting up controller...");
 
     // Setup driver
-    let mut builder = ActionDriver::builder(
-        &config.nanonis.host_ip,
-        config.nanonis.control_ports[0],
-    )
-    .with_tcp_reader(TCPReaderConfig {
-        stream_port: config.data_acquisition.data_port,
-        oversampling: (2000 / config.data_acquisition.sample_rate) as i32,
-        ..Default::default()
-    });
+    let mut builder =
+        ActionDriver::builder(&config.nanonis.host_ip, config.nanonis.control_ports[0])
+            .with_tcp_reader(TCPReaderConfig {
+                stream_port: config.data_acquisition.data_port,
+                oversampling: (2000 / config.data_acquisition.sample_rate) as i32,
+                ..Default::default()
+            });
 
     // Add custom TCP channel mapping if configured
     if let Some(ref mappings) = config.tcp_channel_mapping {
@@ -1313,7 +1616,9 @@ fn run_controller(
         safe_tip_threshold: config.tip_prep.safe_tip_threshold,
         pulse_width: Duration::from_millis(config.tip_prep.timing.pulse_width_ms),
         post_approach_settle: Duration::from_millis(config.tip_prep.timing.post_approach_settle_ms),
-        post_reposition_settle: Duration::from_millis(config.tip_prep.timing.post_reposition_settle_ms),
+        post_reposition_settle: Duration::from_millis(
+            config.tip_prep.timing.post_reposition_settle_ms,
+        ),
         buffer_clear_wait: Duration::from_millis(config.tip_prep.timing.buffer_clear_wait_ms),
         post_pulse_settle: Duration::from_millis(config.tip_prep.timing.post_pulse_settle_ms),
         reposition_steps: (
@@ -1348,10 +1653,16 @@ impl eframe::App for TipPrepApp {
 
             // Tab bar
             ui.horizontal(|ui| {
-                if ui.selectable_label(self.current_tab == Tab::Control, "Control").clicked() {
+                if ui
+                    .selectable_label(self.current_tab == Tab::Control, "Control")
+                    .clicked()
+                {
                     self.current_tab = Tab::Control;
                 }
-                if ui.selectable_label(self.current_tab == Tab::Configuration, "Configuration").clicked() {
+                if ui
+                    .selectable_label(self.current_tab == Tab::Configuration, "Configuration")
+                    .clicked()
+                {
                     self.current_tab = Tab::Configuration;
                 }
             });

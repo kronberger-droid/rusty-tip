@@ -11,14 +11,12 @@ pub mod types;
 pub mod utils;
 
 pub use action_driver::{
-    stability, ActionDriver, ActionDriverBuilder, ExecutionResult,
-    ExecutionStats, TCPReaderConfig,
+    stability, ActionDriver, ActionDriverBuilder, ExecutionResult, ExecutionStats, TCPReaderConfig,
 };
 pub use actions::{Action, ActionChain, ActionLogEntry, ActionResult};
 pub use controller_types::{
-    BiasSweepPolarity, ControllerAction, ControllerState, PolaritySign,
-    PulseMethod, RandomPolaritySwitch, StabilityConfig, TipControllerConfig,
-    TipStateConfig,
+    BiasSweepPolarity, ControllerAction, ControllerState, PolaritySign, PulseMethod,
+    RandomPolaritySwitch, StabilityConfig, TipControllerConfig, TipStateConfig,
 };
 pub use error::{Error, RunOutcome};
 pub use logger::Logger;
@@ -26,21 +24,20 @@ pub use plotting::{plot_values, plot_values_with_range};
 pub use signal_registry::{Signal, SignalRegistry};
 pub use tip_controller::TipController;
 pub use types::{
-    ChainExperimentData, ExperimentData, SessionMetadata,
-    TimestampedSignalFrame, TipShape,
+    ChainExperimentData, ExperimentData, SessionMetadata, TimestampedSignalFrame, TipShape,
 };
 pub use utils::{poll_until, poll_with_timeout, PollError};
 
 // Re-export nanonis-rs core types
 pub use nanonis_rs::{
-    ConnectionConfig, NanonisClient, NanonisClientBuilder, NanonisError,
-    NanonisValue, Position, TCPLoggerStream,
+    ConnectionConfig, NanonisClient, NanonisClientBuilder, NanonisError, NanonisValue, Position,
+    TCPLoggerStream,
 };
 
 // Re-export nanonis-rs motor types
 pub use nanonis_rs::motor::{
-    Amplitude, Frequency, MotorAxis, MotorDirection, MotorGroup,
-    MotorMovement, MovementMode, Position3D, StepCount,
+    Amplitude, Frequency, MotorAxis, MotorDirection, MotorGroup, MotorMovement, MovementMode,
+    Position3D, StepCount,
 };
 
 // Re-export nanonis-rs scan types
