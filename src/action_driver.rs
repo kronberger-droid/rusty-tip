@@ -3066,9 +3066,15 @@ impl ActionDriver {
                                 ));
                             } else if attempt >= max_retries {
                                 // No more retries, return raw data as fallback
+                                let nan = f32::NAN;
                                 log::warn!(
-                                    "Signal not stable after {} attempts, returning raw data",
-                                    attempt + 1
+                                    "Signal not stable after {} attempts: std_dev={:.3} Hz (thresh {:.3}), drift={:.3} Hz/s (thresh {:.3}), n={} — returning raw data",
+                                    attempt + 1,
+                                    metrics.get("std_dev").copied().unwrap_or(nan),
+                                    metrics.get("max_std_dev_threshold").copied().unwrap_or(nan),
+                                    metrics.get("abs_slope").copied().unwrap_or(nan),
+                                    metrics.get("max_slope_threshold").copied().unwrap_or(nan),
+                                    metrics.get("data_points").copied().unwrap_or(nan) as usize,
                                 );
                                 let values: Vec<f64> = signal_data
                                     .iter()
@@ -3077,9 +3083,12 @@ impl ActionDriver {
                                 return Ok(ActionResult::Values(values));
                             } else {
                                 // Signal not stable, but we can retry
+                                let nan = f32::NAN;
                                 log::debug!(
-                                    "Signal not stable on attempt {}, retrying...",
-                                    attempt + 1
+                                    "Signal not stable on attempt {} (std_dev={:.3} Hz, drift={:.3} Hz/s), retrying...",
+                                    attempt + 1,
+                                    metrics.get("std_dev").copied().unwrap_or(nan),
+                                    metrics.get("abs_slope").copied().unwrap_or(nan),
                                 );
                             }
                         }
@@ -3158,6 +3167,21 @@ impl ActionDriver {
         Ok(())
     }
 
+    /// Effective sample rate (Hz) of the TCP data stream.
+    ///
+    /// Used to convert per-sample regression slopes into a physically
+    /// meaningful drift rate (Hz/s) that is independent of how many frames
+    /// were buffered. Mirrors the rate used in `calculate_samples_for_duration`.
+    fn effective_sample_rate_hz(&self) -> f32 {
+        const BASE_RATE_HZ: f32 = 2000.0; // Typical Nanonis base rate
+        match &self.tcp_reader_config {
+            Some(config) => {
+                BASE_RATE_HZ / (config.oversampling as f32).max(1.0)
+            }
+            None => BASE_RATE_HZ,
+        }
+    }
+
     /// Attempt a single stable signal read (used by retry logic)
     fn attempt_stable_signal_read(
         &self,
@@ -3189,9 +3213,13 @@ impl ActionDriver {
             ));
         }
 
-        // Analyze stability using the specified method
-        let (is_stable, metrics) =
-            Self::analyze_signal_stability(&signal_data, stability_method);
+        // Analyze stability using the specified method. The sample rate lets
+        // slope-based methods report drift in Hz/s rather than Hz/sample.
+        let (is_stable, metrics) = Self::analyze_signal_stability(
+            &signal_data,
+            stability_method,
+            self.effective_sample_rate_hz(),
+        );
 
         Ok((signal_data, is_stable, metrics))
     }
@@ -3285,6 +3313,7 @@ impl ActionDriver {
     fn analyze_signal_stability(
         data: &[f32],
         method: &crate::actions::SignalStabilityMethod,
+        sample_rate_hz: f32,
     ) -> (bool, std::collections::HashMap<String, f32>) {
         use crate::actions::SignalStabilityMethod;
 
@@ -3369,15 +3398,19 @@ impl ActionDriver {
                     denominator += (x - x_mean).powi(2);
                 }
 
-                let slope = if denominator > 1e-12 {
+                let slope_per_sample = if denominator > 1e-12 {
                     numerator / denominator
                 } else {
                     0.0
                 };
+                // Convert to Hz/s so the threshold is independent of sample count.
+                let slope = slope_per_sample * sample_rate_hz;
                 let abs_slope = slope.abs();
 
-                metrics.insert("slope".to_string(), slope);
-                metrics.insert("abs_slope".to_string(), abs_slope);
+                metrics
+                    .insert("slope_per_sample".to_string(), slope_per_sample);
+                metrics.insert("slope".to_string(), slope); // Hz/s
+                metrics.insert("abs_slope".to_string(), abs_slope); // Hz/s
                 metrics.insert("max_slope_threshold".to_string(), *max_slope);
                 abs_slope <= *max_slope
             }
@@ -3399,19 +3432,23 @@ impl ActionDriver {
                     denominator += (x - x_mean).powi(2);
                 }
 
-                let slope = if denominator > 1e-12 {
+                let slope_per_sample = if denominator > 1e-12 {
                     numerator / denominator
                 } else {
                     0.0
                 };
+                // Convert to Hz/s so the threshold is independent of sample count.
+                let slope = slope_per_sample * sample_rate_hz;
                 let abs_slope = slope.abs();
 
                 // Check both conditions: noise AND drift
                 let noise_ok = std_dev <= *max_std_dev;
                 let drift_ok = abs_slope <= *max_slope;
 
-                metrics.insert("slope".to_string(), slope);
-                metrics.insert("abs_slope".to_string(), abs_slope);
+                metrics
+                    .insert("slope_per_sample".to_string(), slope_per_sample);
+                metrics.insert("slope".to_string(), slope); // Hz/s
+                metrics.insert("abs_slope".to_string(), abs_slope); // Hz/s
                 metrics.insert("max_slope_threshold".to_string(), *max_slope);
                 metrics
                     .insert("max_std_dev_threshold".to_string(), *max_std_dev);

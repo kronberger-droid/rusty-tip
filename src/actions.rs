@@ -27,10 +27,11 @@ pub enum SignalStabilityMethod {
         window_size: usize,
         max_variation: f32,
     },
-    /// Trend analysis - ensure no consistent drift
+    /// Trend analysis - ensure no consistent drift.
+    /// `max_slope` is the maximum allowed drift rate in Hz/s.
     TrendAnalysis { max_slope: f32 },
-    /// Combined: checks both noise (std dev) AND drift (slope)
-    /// Both conditions must be satisfied for signal to be stable
+    /// Combined: checks both noise (`max_std_dev`, Hz) AND drift
+    /// (`max_slope`, Hz/s). Both conditions must hold for signal to be stable.
     Combined { max_std_dev: f32, max_slope: f32 },
 }
 
@@ -1022,14 +1023,17 @@ impl Action {
                         )
                     }
                     SignalStabilityMethod::TrendAnalysis { max_slope } => {
-                        format!("trend analysis, max slope {:.3e}", max_slope)
+                        format!(
+                            "trend analysis, max slope {:.3e} Hz/s",
+                            max_slope
+                        )
                     }
                     SignalStabilityMethod::Combined {
                         max_std_dev,
                         max_slope,
                     } => {
                         format!(
-                            "combined: std dev {:.3e}, slope {:.3e}",
+                            "combined: std dev {:.3e} Hz, slope {:.3e} Hz/s",
                             max_std_dev, max_slope
                         )
                     }
