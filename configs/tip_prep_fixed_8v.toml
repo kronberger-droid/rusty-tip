@@ -64,6 +64,20 @@ polarity_mode = "both"
 # Scan speed for stability check in m/s
 scan_speed_m_s = 60e-9  # 5 nm/s
 
+# Signal-read stability gates (frequency-shift noise/drift). Loosen for noisier
+# tips, tighten for cleaner ones. Tunable at runtime.
+[tip_prep.signal_stability]
+# Max standard deviation (Hz) for a reading to count as stable
+max_std_dev_hz = 1.0
+# Max drift rate (Hz/s) for a reading to count as stable
+max_slope_hz_per_s = 0.5
+# Data-collection window (ms) for one stable read
+data_collection_duration_ms = 500
+# Timeout (s) for acquiring a stable read
+read_timeout_secs = 15
+# Retries when a stable read isn't found
+read_retry_count = 3
+
 [pulse_method]
 # Use fixed pulse method
 type = "fixed"
