@@ -1481,7 +1481,7 @@ impl ActionDriver {
                 blocking,
             } => {
                 // Convert 3D displacement to sequence of motor movements
-                let movements = displacement.to_motor_movements();
+                let movements = displacement_to_motor_movements(&displacement);
 
                 // Execute each movement in sequence
                 for (direction, steps) in movements {
@@ -1598,7 +1598,7 @@ impl ActionDriver {
                 self.client.z_ctrl_withdraw(true, withdraw_timeout)?;
 
                 // 2. Move motor 3D (using the same logic as MoveMotor3D)
-                let movements = displacement.to_motor_movements();
+                let movements = displacement_to_motor_movements(&displacement);
                 for (direction, steps) in movements {
                     self.client
                         .motor_start_move(direction, steps, MotorGroup::Group1, true)?;
@@ -3881,4 +3881,34 @@ mod tests {
             }
         }
     }
+}
+
+/// Decompose a 3D motor displacement into an ordered sequence of single-axis
+/// moves: retract (Z-) first for safety, then X, then Y, then approach (Z+).
+///
+/// nanonis-rs 0.4.0 dropped `MotorDisplacement::to_motor_movements`, so the
+/// safe ordering lives here now.
+fn displacement_to_motor_movements(
+    d: &crate::types::MotorDisplacement,
+) -> Vec<(crate::types::MotorDirection, u16)> {
+    use crate::types::MotorDirection;
+
+    let mut movements = Vec::new();
+    if d.z < 0 {
+        movements.push((MotorDirection::ZMinus, (-d.z) as u16));
+    }
+    if d.x > 0 {
+        movements.push((MotorDirection::XPlus, d.x as u16));
+    } else if d.x < 0 {
+        movements.push((MotorDirection::XMinus, (-d.x) as u16));
+    }
+    if d.y > 0 {
+        movements.push((MotorDirection::YPlus, d.y as u16));
+    } else if d.y < 0 {
+        movements.push((MotorDirection::YMinus, (-d.y) as u16));
+    }
+    if d.z > 0 {
+        movements.push((MotorDirection::ZPlus, d.z as u16));
+    }
+    movements
 }

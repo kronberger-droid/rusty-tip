@@ -7,8 +7,8 @@ pub use nanonis_rs::motor::{
     MovementMode, Position3D, StepCount,
 };
 pub use nanonis_rs::oscilloscope::{
-    OsciData, OsciTriggerMode, OscilloscopeIndex, OversamplingIndex, SampleCount, SignalStats,
-    TimebaseIndex, TriggerConfig, TriggerLevel, TriggerMode, TriggerSlope,
+    OsciTriggerMode, OscilloscopeIndex, OversamplingIndex, SampleCount, TimebaseIndex,
+    TriggerConfig, TriggerLevel, TriggerMode, TriggerSlope,
 };
 pub use nanonis_rs::scan::{ScanAction, ScanConfig, ScanDirection, ScanFrame};
 pub use nanonis_rs::signals::SignalFrame;
@@ -18,6 +18,80 @@ pub use nanonis_rs::Position;
 // DataToGet is extended locally with Stable variant
 
 use std::time::{Duration, Instant};
+
+/// Signal stability statistics computed by rusty-tip.
+///
+/// Previously provided by nanonis-rs; as of 0.4.0 its `OsciData` is a pure
+/// protocol type, so this application-level analysis lives here.
+#[derive(Debug, Clone)]
+pub struct SignalStats {
+    pub mean: f64,
+    pub std_dev: f64,
+    pub relative_std: f64,
+    pub window_size: usize,
+    pub stability_method: String,
+}
+
+/// Oscilloscope reading (t0/dt/size/data from nanonis-rs) plus rusty-tip's
+/// stability analysis. nanonis-rs 0.4.0 made its `OsciData` a pure protocol
+/// type, so the stability fields are tracked here.
+#[derive(Debug, Clone)]
+pub struct OsciData {
+    pub t0: f64,
+    pub dt: f64,
+    pub size: i32,
+    pub data: Vec<f64>,
+    pub signal_stats: Option<SignalStats>,
+    pub is_stable: bool,
+    pub fallback_value: Option<f64>,
+}
+
+impl OsciData {
+    /// Stable reading with no extra statistics attached.
+    pub fn new_stable(t0: f64, dt: f64, size: i32, data: Vec<f64>) -> Self {
+        Self {
+            t0,
+            dt,
+            size,
+            data,
+            signal_stats: None,
+            is_stable: true,
+            fallback_value: None,
+        }
+    }
+
+    /// Stable reading with computed statistics.
+    pub fn new_with_stats(t0: f64, dt: f64, size: i32, data: Vec<f64>, stats: SignalStats) -> Self {
+        Self {
+            t0,
+            dt,
+            size,
+            data,
+            signal_stats: Some(stats),
+            is_stable: true,
+            fallback_value: None,
+        }
+    }
+
+    /// Unstable reading; carries a single fallback value (e.g. the mean).
+    pub fn new_unstable_with_fallback(
+        t0: f64,
+        dt: f64,
+        size: i32,
+        data: Vec<f64>,
+        fallback_value: f64,
+    ) -> Self {
+        Self {
+            t0,
+            dt,
+            size,
+            data,
+            signal_stats: None,
+            is_stable: false,
+            fallback_value: Some(fallback_value),
+        }
+    }
+}
 
 /// Simple tip shape - matches original controller
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
