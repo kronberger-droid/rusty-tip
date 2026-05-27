@@ -348,8 +348,8 @@ pub struct TipStateConfig {
 impl Default for TipStateConfig {
     fn default() -> Self {
         Self {
-            max_std_dev: 1.0, // Hz; ~half the sharp-tip bound width
-            max_slope: 2.0,   // Hz/s; ~1 Hz drift tolerated over a 500 ms window
+            max_std_dev: 0.3, // Hz; matches a clean tip's ±0.25 Hz spread
+            max_slope: 0.5,   // Hz/s; ~0.25 Hz drift over a 500 ms window
             data_collection_duration: Duration::from_millis(500),
             read_timeout: Duration::from_secs(15),
             read_retry_count: 3,
