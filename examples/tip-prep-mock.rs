@@ -24,9 +24,13 @@ use env_logger::Env;
 use log::info;
 
 use rusty_tip::config::AppConfig;
-use rusty_tip::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
+use rusty_tip::controller_types::{
+    BiasSweepPolarity, PolaritySign, PulseMethod,
+};
 use rusty_tip::event::{ConsoleLogger, EventBus};
-use rusty_tip::mock_controller::{FaultKind, FreqShiftModel, MockController, models};
+use rusty_tip::mock_controller::{
+    FaultKind, FreqShiftModel, MockController, models,
+};
 use rusty_tip::tip_prep::{Outcome, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 
@@ -91,7 +95,9 @@ fn main() {
     println!();
     println!("───────────────────────── result ─────────────────────────");
     match &result {
-        Ok(Outcome::Completed) => println!("outcome:  Completed (tip is sharp + stable)"),
+        Ok(Outcome::Completed) => {
+            println!("outcome:  Completed (tip is sharp + stable)")
+        }
         Ok(Outcome::StoppedByUser) => println!("outcome:  StoppedByUser"),
         Ok(Outcome::CycleLimit(n)) => println!("outcome:  CycleLimit({n})"),
         Ok(Outcome::TimedOut(d)) => {
@@ -123,8 +129,7 @@ struct Scenario {
 fn build_scenario(name: &str) -> Option<Scenario> {
     let s = match name {
         "sharpen" => Scenario {
-            description:
-                "Tip is blunt (+40 Hz) until 5 pulses land, then sharp (-1 Hz). \
+            description: "Tip is blunt (+40 Hz) until 5 pulses land, then sharp (-1 Hz). \
                  Expect a few pulse/reposition cycles, a stability sweep, then Completed.",
             model: models::sharpens_after(5, 40.0, -1.0),
             config: with_stability(base_config()),
@@ -136,8 +141,7 @@ fn build_scenario(name: &str) -> Option<Scenario> {
             let mut cfg = base_config();
             cfg.tip_prep.max_cycles = Some(6);
             Scenario {
-                description:
-                    "Tip never sharpens (+40 Hz forever). Expect 6 pulse cycles, then CycleLimit.",
+                description: "Tip never sharpens (+40 Hz forever). Expect 6 pulse cycles, then CycleLimit.",
                 model: models::always(40.0),
                 config: cfg,
                 faults: vec![],
@@ -160,11 +164,12 @@ fn build_scenario(name: &str) -> Option<Scenario> {
                 random_polarity_switch: None,
             };
             Scenario {
-                description:
-                    "Tip reads sharp, but the post-sweep measurement has drifted past the \
+                description: "Tip reads sharp, but the post-sweep measurement has drifted past the \
                      stability threshold. Expect a stability sweep, a 6 V recovery pulse, then CycleLimit.",
                 // [0] blunt, [1..4] sharp (baseline), [5] drifted, [6+] blunt.
-                model: models::scripted(vec![40.0, -1.0, -1.0, -1.0, -1.0, -1.8, 40.0]),
+                model: models::scripted(vec![
+                    40.0, -1.0, -1.0, -1.0, -1.0, -1.8, 40.0,
+                ]),
                 config: cfg,
                 faults: vec![],
                 request_shutdown_after: None,
@@ -172,8 +177,7 @@ fn build_scenario(name: &str) -> Option<Scenario> {
         }
 
         "fault" => Scenario {
-            description:
-                "Every auto-approach fails with an I/O error, so the initial approach aborts \
+            description: "Every auto-approach fails with an I/O error, so the initial approach aborts \
                  the run. Watch the routine still withdraw and tear down on the way out.",
             model: models::always(-1.0),
             config: base_config(),
@@ -182,8 +186,7 @@ fn build_scenario(name: &str) -> Option<Scenario> {
         },
 
         "shutdown" => Scenario {
-            description:
-                "A blunt tip pulses away while a background thread requests shutdown after 3s \
+            description: "A blunt tip pulses away while a background thread requests shutdown after 3s \
                  (a stand-in for Ctrl+C). Expect StoppedByUser with cleanup.",
             model: models::always(40.0),
             config: base_config(),
