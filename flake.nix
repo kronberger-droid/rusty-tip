@@ -3,16 +3,11 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    fenix = {
-      url = "github:nix-community/fenix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs = {
     self,
     nixpkgs,
-    fenix,
     ...
   }: let
     forAllSystems = nixpkgs.lib.genAttrs ["x86_64-linux" "aarch64-linux"];
@@ -73,16 +68,6 @@
 
     devShells = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
-      toolchain = fenix.packages.${system}.combine [
-        (fenix.packages.${system}.stable.withComponents [
-          "cargo"
-          "clippy"
-          "rust-src"
-          "rustc"
-          "rustfmt"
-        ])
-        fenix.packages.${system}.targets.x86_64-pc-windows-gnu.stable.rust-std
-      ];
       guiDeps = with pkgs; [
         wayland
         wayland-protocols
@@ -101,27 +86,21 @@
     in {
       default = pkgs.mkShell {
         nativeBuildInputs =
-          [
-            toolchain
-            fenix.packages.${system}.rust-analyzer
-            pkgs.pkg-config
-            pkgs.gcc
-            pkgs.cargo-expand
-            pkgs.cargo-dist
-          ]
+          (with pkgs; [
+            cargo
+            clippy
+            rustc
+            rustfmt
+            rust-analyzer
+            pkg-config
+            gcc
+            cargo-expand
+            cargo-dist
+          ])
           ++ guiDeps;
 
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath guiDeps;
-      };
-
-      windows = pkgs.mkShell {
-        nativeBuildInputs = [
-          toolchain
-          fenix.packages.${system}.rust-analyzer
-          pkgs.pkg-config
-          pkgs.pkgsCross.mingwW64.stdenv.cc
-          pkgs.pkgsCross.mingwW64.windows.pthreads
-        ];
+        RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
       };
     });
   };
