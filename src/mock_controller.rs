@@ -251,10 +251,7 @@ impl MockController {
             return Err(self.fire(kind));
         }
         let once = self.faults_once.get(method).and_then(|faults| {
-            faults
-                .iter()
-                .find(|f| f.on_call == n)
-                .map(|f| f.kind)
+            faults.iter().find(|f| f.on_call == n).map(|f| f.kind)
         });
         if let Some(kind) = once {
             return Err(self.fire(kind));

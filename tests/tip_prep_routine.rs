@@ -8,7 +8,9 @@
 use std::sync::{Arc, Mutex as StdMutex};
 
 use rusty_tip::config::AppConfig;
-use rusty_tip::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
+use rusty_tip::controller_types::{
+    BiasSweepPolarity, PolaritySign, PulseMethod,
+};
 use rusty_tip::event::{Event, EventBus, Observer};
 use rusty_tip::mock_controller::{FaultKind, MockController, models};
 use rusty_tip::spm_error::SpmError;
@@ -146,8 +148,14 @@ fn already_sharp_and_stable_completes_through_full_sweep() {
     assert!(obs.called("scan_action"), "stability sweep should scan");
 
     let events = events_handle.lock().unwrap();
-    assert!(saw_phase(&events, "stability_check"), "should emit stability_check");
-    assert!(saw_phase(&events, "stable"), "should emit a stable snapshot");
+    assert!(
+        saw_phase(&events, "stability_check"),
+        "should emit stability_check"
+    );
+    assert!(
+        saw_phase(&events, "stable"),
+        "should emit a stable snapshot"
+    );
 }
 
 #[test]
@@ -206,7 +214,9 @@ fn blunt_tip_hits_cycle_limit() {
 
     match outcome {
         Outcome::CycleLimit(n) => assert_eq!(n, 3),
-        other => panic!("expected CycleLimit(3), got {:?}", outcome_name(&other)),
+        other => {
+            panic!("expected CycleLimit(3), got {:?}", outcome_name(&other))
+        }
     }
 
     let obs = obs.lock();
@@ -270,7 +280,10 @@ fn io_fault_mid_run_propagates_but_still_cleans_up() {
     let spm = err
         .downcast_ref::<SpmError>()
         .expect("error should be an SpmError");
-    assert!(spm.is_connection_error(), "expected a connection-class error");
+    assert!(
+        spm.is_connection_error(),
+        "expected a connection-class error"
+    );
 
     // The crucial safety property: even though the run aborted, cleanup ran.
     let obs = obs.lock();
@@ -348,7 +361,8 @@ fn sharp_but_unstable_fires_max_pulse_then_cycle_limit() {
     //   [2..4] confirm reads  -> sharp; baseline = read[4]
     //   [5] post-sweep final  -> still in-bounds but drifted 0.8 Hz => UNSTABLE
     //   [6+] cycle-2 measure  -> blunt again => no second stability check
-    let scripted = models::scripted(vec![40.0, -1.0, -1.0, -1.0, -1.0, -1.8, 40.0]);
+    let scripted =
+        models::scripted(vec![40.0, -1.0, -1.0, -1.0, -1.0, -1.8, 40.0]);
 
     let mock = MockController::builder()
         .freq_shift_index(FREQ_SHIFT_INDEX)
@@ -368,7 +382,10 @@ fn sharp_but_unstable_fires_max_pulse_then_cycle_limit() {
     assert!(matches!(outcome, Outcome::CycleLimit(2)));
 
     let obs = obs.lock();
-    assert!(obs.called("scan_action"), "the stability sweep must have run");
+    assert!(
+        obs.called("scan_action"),
+        "the stability sweep must have run"
+    );
     assert!(
         obs.pulses.iter().any(|&v| (v - 6.0).abs() < 1e-9),
         "instability should trigger a max-voltage (6 V) pulse, got {:?}",
