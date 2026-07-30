@@ -39,9 +39,11 @@ verbosity = "info"
 # Frequency shift window (Hz) that counts as a sharp tip.
 sharp_tip_bounds = [-2.0, 0.0]
 
-# Generous enough that the stochastic tip model reaches the window, low enough
-# that a pathological run still terminates.
-max_cycles = 30
+# Conditioning is a random search, not a convergent process: each pulse re-rolls
+# the apex, and the run ends when a draw happens to land in the window above.
+# That takes O(100) pulses and varies a lot run to run (the reference data set
+# needed 287 pulses once and 9 another time), so the limit has to be generous.
+max_cycles = 600
 
 [tip_prep.timing]
 pulse_width_ms = 50

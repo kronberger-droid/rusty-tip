@@ -225,6 +225,8 @@ fn build_scenario(name: &str) -> Option<Scenario> {
         // Pass a second arg to try another seed: `-- realistic 42`.
         "realistic" => {
             let mut cfg = with_stability(base_config());
+            // A random search needs room to run; see `configs/mock_demo.toml`.
+            cfg.tip_prep.max_cycles = Some(600);
             // Match `configs/mock_demo.toml`, which the GUI's Simulate mode
             // loads: linear mapping so the pulse voltage varies with the
             // measured shift instead of sitting flat at the minimum.
@@ -235,9 +237,10 @@ fn build_scenario(name: &str) -> Option<Scenario> {
                 random_polarity_switch: None,
             };
             Scenario {
-                description: "Stochastic tip: a blunt tip at -40 Hz climbs toward the sharp window as \
-                     pulses land, with occasional over-pulsing that costs progress, plus \
-                     measurement noise and slow drift. Expect a non-monotonic rise, then Completed.",
+                description: "Stochastic tip matched to real conditioning data: each pulse re-rolls \
+                     the apex, so the shift wanders around -11.5 Hz with occasional deep excursions \
+                     and never converges. The run ends when a draw happens to land in the sharp \
+                     window — O(100) pulses, and highly variable.",
                 model: models::realistic(RealisticParams {
                     seed: std::env::args()
                         .nth(2)
