@@ -9,6 +9,15 @@
 //! cargo run --example tip-prep-mock -- unstable     # sharp but drifts -> max pulse
 //! cargo run --example tip-prep-mock -- fault        # I/O error mid-run + cleanup
 //! cargo run --example tip-prep-mock -- shutdown     # Ctrl+C-style graceful stop
+//! cargo run --example tip-prep-mock -- realistic    # stochastic tip, noise + drift
+//! ```
+//!
+//! Every run prints the freq-shift trajectory the model produced, so a scenario
+//! can be judged without a GUI. `realistic` takes an optional seed to draw a
+//! different trajectory:
+//!
+//! ```text
+//! cargo run --example tip-prep-mock -- realistic 99
 //! ```
 //!
 //! Crank up the detail with `RUST_LOG`:
@@ -28,6 +37,7 @@ use rusty_tip::controller_types::{
     BiasSweepPolarity, PolaritySign, PulseMethod,
 };
 use rusty_tip::event::{ConsoleLogger, EventBus};
+use rusty_tip::mock_controller::models::RealisticParams;
 use rusty_tip::mock_controller::{
     FaultKind, FreqShiftModel, MockController, models,
 };
@@ -52,7 +62,7 @@ fn main() {
         None => {
             eprintln!(
                 "unknown scenario '{scenario}'.\n\
-                 try: sharpen | cyclelimit | unstable | fault | shutdown"
+                 try: sharpen | cyclelimit | unstable | fault | shutdown | realistic"
             );
             std::process::exit(2);
         }
@@ -62,7 +72,8 @@ fn main() {
 
     let mut builder = MockController::builder()
         .freq_shift_index(FREQ_SHIFT_INDEX)
-        .freq_shift(plan.model);
+        .freq_shift(plan.model)
+        .sample_noise_hz(plan.sample_noise_hz);
     for (method, kind) in plan.faults {
         builder = builder.fail_every(method, kind);
     }
@@ -113,7 +124,35 @@ fn main() {
     println!("motor moves:     {}", obs.motor_moves);
     println!("freq-shift reads:{}", obs.freq_reads);
     println!("teardown ran:    {}", obs.torn_down);
+    println!(
+        "pulse voltages:  {}",
+        obs.pulses
+            .iter()
+            .map(|v| format!("{v:.1}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
+        "freq trajectory: {}",
+        obs.freq_values
+            .iter()
+            .map(|v| format!("{v:.2}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     println!("───────────────────────────────────────────────────────────");
+
+    // The trajectory the model actually produced — the shape a plot of this run
+    // would show.
+    if !obs.freq_values.is_empty() {
+        println!();
+        let _ = rusty_tip::plotting::plot_values(
+            &obs.freq_values,
+            Some("freq shift per read (Hz)"),
+            Some(100),
+            Some(30),
+        );
+    }
 }
 
 /// A self-contained scenario: the tip model, config tweaks, any injected
@@ -124,28 +163,32 @@ struct Scenario {
     config: AppConfig,
     faults: Vec<(&'static str, FaultKind)>,
     request_shutdown_after: Option<Duration>,
+    /// Within-batch sample scatter (Hz). `0.0` keeps constant batches.
+    sample_noise_hz: f64,
 }
 
 fn build_scenario(name: &str) -> Option<Scenario> {
     let s = match name {
         "sharpen" => Scenario {
-            description: "Tip is blunt (+40 Hz) until 5 pulses land, then sharp (-1 Hz). \
+            description: "Tip is blunt (-40 Hz) until 5 pulses land, then sharp (-1 Hz). \
                  Expect a few pulse/reposition cycles, a stability sweep, then Completed.",
-            model: models::sharpens_after(5, 40.0, -1.0),
+            model: models::sharpens_after(5, -40.0, -1.0),
             config: with_stability(base_config()),
             faults: vec![],
             request_shutdown_after: None,
+            sample_noise_hz: 0.0,
         },
 
         "cyclelimit" => {
             let mut cfg = base_config();
             cfg.tip_prep.max_cycles = Some(6);
             Scenario {
-                description: "Tip never sharpens (+40 Hz forever). Expect 6 pulse cycles, then CycleLimit.",
-                model: models::always(40.0),
+                description: "Tip never sharpens (-40 Hz forever). Expect 6 pulse cycles, then CycleLimit.",
+                model: models::always(-40.0),
                 config: cfg,
                 faults: vec![],
                 request_shutdown_after: None,
+                sample_noise_hz: 0.0,
             }
         }
 
@@ -168,11 +211,44 @@ fn build_scenario(name: &str) -> Option<Scenario> {
                      stability threshold. Expect a stability sweep, a 6 V recovery pulse, then CycleLimit.",
                 // [0] blunt, [1..4] sharp (baseline), [5] drifted, [6+] blunt.
                 model: models::scripted(vec![
-                    40.0, -1.0, -1.0, -1.0, -1.0, -1.8, 40.0,
+                    -40.0, -1.0, -1.0, -1.0, -1.0, -1.8, -40.0,
                 ]),
                 config: cfg,
                 faults: vec![],
                 request_shutdown_after: None,
+                sample_noise_hz: 0.0,
+            }
+        }
+
+        // Mirrors what the GUI's "Simulate" checkbox runs, so the trajectory can
+        // be iterated on here (fast, in the terminal) before screenshotting.
+        // Pass a second arg to try another seed: `-- realistic 42`.
+        "realistic" => {
+            let mut cfg = with_stability(base_config());
+            // Match `configs/mock_demo.toml`, which the GUI's Simulate mode
+            // loads: linear mapping so the pulse voltage varies with the
+            // measured shift instead of sitting flat at the minimum.
+            cfg.pulse_method = PulseMethod::Linear {
+                voltage_bounds: (2.0, 7.0),
+                linear_clamp: (-20.0, 0.0),
+                polarity: PolaritySign::Positive,
+                random_polarity_switch: None,
+            };
+            Scenario {
+                description: "Stochastic tip: a blunt tip at -40 Hz climbs toward the sharp window as \
+                     pulses land, with occasional over-pulsing that costs progress, plus \
+                     measurement noise and slow drift. Expect a non-monotonic rise, then Completed.",
+                model: models::realistic(RealisticParams {
+                    seed: std::env::args()
+                        .nth(2)
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(RealisticParams::default().seed),
+                    ..Default::default()
+                }),
+                config: cfg,
+                faults: vec![],
+                request_shutdown_after: None,
+                sample_noise_hz: 0.25,
             }
         }
 
@@ -183,15 +259,17 @@ fn build_scenario(name: &str) -> Option<Scenario> {
             config: base_config(),
             faults: vec![("auto_approach", FaultKind::Io)],
             request_shutdown_after: None,
+            sample_noise_hz: 0.0,
         },
 
         "shutdown" => Scenario {
             description: "A blunt tip pulses away while a background thread requests shutdown after 3s \
                  (a stand-in for Ctrl+C). Expect StoppedByUser with cleanup.",
-            model: models::always(40.0),
+            model: models::always(-40.0),
             config: base_config(),
             faults: vec![],
             request_shutdown_after: Some(Duration::from_secs(3)),
+            sample_noise_hz: 0.0,
         },
 
         _ => return None,

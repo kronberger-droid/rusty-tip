@@ -3,6 +3,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::action::{Action, ActionContext, ActionOutput};
+use crate::event::Event;
 use crate::machine_state::ActionKind;
 use crate::spm_controller::Capability;
 
@@ -224,6 +225,15 @@ impl Action for ReadStableSignal {
                     slope,
                     attempt
                 );
+                emit_measurement(
+                    ctx,
+                    self.index,
+                    samples.len(),
+                    mean,
+                    std_dev,
+                    slope,
+                    true,
+                );
                 return Ok(ActionOutput::Value(mean));
             }
 
@@ -247,12 +257,54 @@ impl Action for ReadStableSignal {
                     slope,
                     mean
                 );
+                emit_measurement(
+                    ctx,
+                    self.index,
+                    samples.len(),
+                    mean,
+                    std_dev,
+                    slope,
+                    false,
+                );
                 return Ok(ActionOutput::Value(mean));
             }
         }
 
         unreachable!()
     }
+}
+
+/// Publish the outcome of a [`ReadStableSignal`] as one measurement: the value
+/// plus the batch statistics it was derived from.
+///
+/// One event per read, deliberately — a stable read *is* a single measurement of
+/// the signal, and the raw sample batch is an implementation detail of how it was
+/// averaged. Carrying `std_dev` and `n` keeps the uncertainty available (for an
+/// error bar, say) without putting every sample in the log.
+///
+/// `ActionCompleted` also carries the mean, but only as a bare value; this event
+/// is self-describing and stable to parse.
+#[allow(clippy::too_many_arguments)]
+fn emit_measurement(
+    ctx: &ActionContext,
+    index: u32,
+    n: usize,
+    mean: f64,
+    std_dev: f64,
+    slope: f64,
+    stable: bool,
+) {
+    ctx.events.emit(Event::data_collected(
+        "stable_read",
+        serde_json::json!({
+            "index": index,
+            "value": mean,
+            "std_dev": std_dev,
+            "slope": slope,
+            "n": n,
+            "stable": stable,
+        }),
+    ));
 }
 
 /// Compute mean, standard deviation, and linear regression slope from sample data.

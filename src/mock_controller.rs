@@ -148,6 +148,10 @@ pub struct MockObservations {
     pub motor_moves: usize,
     /// Number of freq-shift reads served by the tip model.
     pub freq_reads: usize,
+    /// Every value the tip model returned, in order. `len()` equals
+    /// [`freq_reads`](Self::freq_reads); useful for asserting on (or plotting)
+    /// the trajectory a model produced.
+    pub freq_values: Vec<f64>,
     /// Connection health; flipped to `false` by a [`FaultKind::Disconnect`].
     pub connected: bool,
 }
@@ -168,6 +172,7 @@ impl Default for MockObservations {
             withdraw_count: 0,
             motor_moves: 0,
             freq_reads: 0,
+            freq_values: Vec::new(),
             connected: true,
         }
     }
@@ -195,6 +200,47 @@ impl MockObservations {
     }
 }
 
+/// Small deterministic PRNG (xorshift64\*) so mock runs are reproducible —
+/// a figure generated from a mock run can be regenerated exactly.
+///
+/// Deliberately not `rand`: the crate isn't a dependency, and a fixed-seed
+/// generator is the property we actually want here.
+#[derive(Debug, Clone, Copy)]
+struct Rng(u64);
+
+impl Rng {
+    fn new(seed: u64) -> Self {
+        // Guard the all-zero state, which xorshift can never escape.
+        Rng(if seed == 0 {
+            0x9E37_79B9_7F4A_7C15
+        } else {
+            seed
+        })
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    /// Uniform in `[0, 1)`.
+    fn uniform(&mut self) -> f64 {
+        // Top 53 bits land exactly in an f64 mantissa, so no rounding bias.
+        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// Standard normal, via Box-Muller.
+    fn normal(&mut self) -> f64 {
+        let u1 = self.uniform().max(f64::MIN_POSITIVE);
+        let u2 = self.uniform();
+        (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
+    }
+}
+
 /// A fault scheduled to fire on a specific call number of a method.
 #[derive(Debug, Clone, Copy)]
 struct ScheduledFault {
@@ -211,6 +257,11 @@ pub struct MockController {
     model: FreqShiftModel,
     /// Value returned for any non-freq-shift signal index.
     default_signal: f64,
+    /// Within-batch scatter (Hz std dev) added by `read_signal_samples`. `0.0`
+    /// keeps the legacy constant-batch behavior.
+    sample_noise_hz: f64,
+    /// PRNG state for [`Self::sample_noise_hz`].
+    noise_rng: Rng,
     /// Faults that fire on a specific call ordinal, keyed by method name.
     faults_once: HashMap<&'static str, Vec<ScheduledFault>>,
     /// Faults that fire on *every* call, keyed by method name.
@@ -278,7 +329,10 @@ impl MockController {
             let obs = self.obs.lock();
             (self.model)(&obs)
         };
-        self.obs.lock().freq_reads += 1;
+        let mut obs = self.obs.lock();
+        obs.freq_reads += 1;
+        obs.freq_values.push(value);
+        drop(obs);
         value
     }
 }
@@ -349,9 +403,26 @@ impl SpmController for MockController {
                 "read_signal_samples: num_samples must be > 0".into(),
             ));
         }
-        // Constant samples => std_dev = 0, slope = 0 => always "stable", so
-        // ReadStableSignal returns on the first attempt with no backoff sleeps.
+        // One model call per *batch*, not per sample: the tip model owns the
+        // slow behavior (pulse response, drift), and scatter is layered on top.
+        // Keeping drift out of the within-batch samples matters — it would show
+        // up as a regression slope and trip `ReadStableSignal`'s `max_slope`
+        // (default 0.01 Hz/sample), stalling the routine in retry backoff.
         let value = self.signal_value(index);
+
+        if self.sample_noise_hz > 0.0 && index == self.freq_shift_index {
+            let sigma = self.sample_noise_hz;
+            let mut rng = self.noise_rng;
+            let samples = (0..num_samples)
+                .map(|_| value + rng.normal() * sigma)
+                .collect();
+            self.noise_rng = rng;
+            return Ok(samples);
+        }
+
+        // Default: constant samples => std_dev = 0, slope = 0 => always
+        // "stable", so ReadStableSignal returns on the first attempt with no
+        // backoff sleeps. Keeps the test suite fast and deterministic.
         Ok(vec![value; num_samples])
     }
 
@@ -617,6 +688,8 @@ pub struct MockControllerBuilder {
     freq_shift_index: u32,
     model: FreqShiftModel,
     default_signal: f64,
+    sample_noise_hz: f64,
+    noise_seed: u64,
     faults_once: HashMap<&'static str, Vec<ScheduledFault>>,
     faults_always: HashMap<&'static str, FaultKind>,
     capabilities: HashSet<Capability>,
@@ -632,6 +705,8 @@ impl MockControllerBuilder {
             // spurious success.
             model: models::always(100.0),
             default_signal: 0.0,
+            sample_noise_hz: 0.0,
+            noise_seed: 0x5EED_5EED,
             faults_once: HashMap::new(),
             faults_always: HashMap::new(),
             capabilities: all_capabilities(),
@@ -656,6 +731,26 @@ impl MockControllerBuilder {
     /// Value returned for every non-freq-shift signal index (default `0.0`).
     pub fn default_signal(mut self, value: f64) -> Self {
         self.default_signal = value;
+        self
+    }
+
+    /// Add per-sample scatter (Hz std dev) to `read_signal_samples` batches on
+    /// the freq-shift channel. Default `0.0` = constant batches.
+    ///
+    /// This is *within-batch* noise, distinct from
+    /// [`RealisticParams::noise_hz`], which jitters the batch mean read-to-read.
+    /// Non-zero scatter is what makes `ReadStableSignal`'s std-dev check do real
+    /// work — keep it comfortably under the configured `max_std_dev` or the
+    /// routine will spend its time in retry backoff.
+    pub fn sample_noise_hz(mut self, sigma: f64) -> Self {
+        self.sample_noise_hz = sigma;
+        self
+    }
+
+    /// Seed for the [`sample_noise_hz`](Self::sample_noise_hz) generator. Fixed
+    /// by default, so a mock run is reproducible.
+    pub fn noise_seed(mut self, seed: u64) -> Self {
+        self.noise_seed = seed;
         self
     }
 
@@ -704,6 +799,8 @@ impl MockControllerBuilder {
             freq_shift_index: self.freq_shift_index,
             model: self.model,
             default_signal: self.default_signal,
+            sample_noise_hz: self.sample_noise_hz,
+            noise_rng: Rng::new(self.noise_seed),
             faults_once: self.faults_once,
             faults_always: self.faults_always,
             capabilities: self.capabilities,
@@ -758,6 +855,137 @@ pub mod models {
             }
             let i = obs.freq_reads.min(values.len() - 1);
             values[i]
+        })
+    }
+
+    /// Tunables for [`realistic`]. Start from `Default` and override what you
+    /// care about:
+    ///
+    /// ```
+    /// use rusty_tip::mock_controller::models::{RealisticParams, realistic};
+    ///
+    /// let model = realistic(RealisticParams {
+    ///     overshoot_chance: 0.3, // a badly behaved tip
+    ///     ..Default::default()
+    /// });
+    /// ```
+    #[derive(Debug, Clone, Copy)]
+    pub struct RealisticParams {
+        /// Frequency shift (Hz) of the unconditioned tip — strongly negative.
+        /// Conditioning drives the shift *up* from here toward `sharp`.
+        pub blunt: f64,
+        /// Asymptote (Hz) a well-conditioned tip approaches, just inside the
+        /// sharp window (typically `[-2, 0]`).
+        pub sharp: f64,
+        /// Read-to-read jitter (Hz std dev) on the batch mean. Distinct from
+        /// [`MockControllerBuilder::sample_noise_hz`], which scatters the
+        /// samples *within* one batch.
+        pub noise_hz: f64,
+        /// Std dev of each random-walk drift step, applied once per read.
+        pub drift_hz_per_read: f64,
+        /// Fraction of the remaining gap to `sharp` that a pulse at
+        /// `reference_voltage` closes.
+        pub pulse_efficiency: f64,
+        /// Pulse voltage at which `pulse_efficiency` applies; higher pulses
+        /// move the tip further, lower ones less.
+        pub reference_voltage: f64,
+        /// Probability that a pulse makes the tip *worse* instead of better —
+        /// usually blunting it back down, occasionally overshooting the window
+        /// into positive shift (see [`insulating_chance`](Self::insulating_chance)).
+        pub overshoot_chance: f64,
+        /// Given a bad pulse, the probability it lands the tip on an insulating
+        /// patch — the one case where the shift goes *positive*. Real but
+        /// uncommon, so this is a small fraction of an already-uncommon event.
+        pub insulating_chance: f64,
+        /// PRNG seed — fixed, so the trajectory is reproducible.
+        pub seed: u64,
+    }
+
+    impl Default for RealisticParams {
+        /// Tuned so the default run exercises the whole algorithm rather than
+        /// just the happy path: the tip climbs from `blunt` into the sharp
+        /// window, holds, then loses it to a bad recovery pulse and climbs back
+        /// before passing the stability check.
+        ///
+        /// Change `seed` to draw a different trajectory — `cargo run --example
+        /// tip-prep-mock -- realistic <seed>` prints the one a given seed
+        /// produces, so a scenario can be judged without a GUI.
+        fn default() -> Self {
+            Self {
+                blunt: -40.0,
+                sharp: -1.0,
+                noise_hz: 0.08,
+                drift_hz_per_read: 0.012,
+                pulse_efficiency: 0.45,
+                reference_voltage: 4.0,
+                overshoot_chance: 0.15,
+                insulating_chance: 0.15,
+                seed: 2026,
+            }
+        }
+    }
+
+    /// A tip that responds to pulses the way a real one roughly does:
+    /// stochastic sharpening that closes a *fraction* of the remaining gap per
+    /// pulse (so it converges asymptotically rather than snapping to a value),
+    /// occasional over-pulsing that undoes progress, plus measurement noise and
+    /// slow thermal drift on every read.
+    ///
+    /// Follows the physical sign convention: a blunt tip sits at a strongly
+    /// negative frequency shift and conditioning drives it *up* toward the sharp
+    /// window near `[-2, 0]` Hz. Positive shift means the tip has found an
+    /// insulating patch — real, but uncommon, so the model reaches it rarely.
+    ///
+    /// Unlike [`sharpens_after`] and [`scripted`], the trajectory here is
+    /// *emergent* — it depends on how many pulses the routine fires and at what
+    /// voltage, which is what makes the resulting trace look like data instead
+    /// of a step function. Pair it with
+    /// [`MockControllerBuilder::sample_noise_hz`] for within-batch scatter.
+    ///
+    /// Seeded, so the same params always produce the same run.
+    pub fn realistic(params: RealisticParams) -> FreqShiftModel {
+        let mut rng = super::Rng::new(params.seed);
+        let mut state = params.blunt;
+        let mut seen_pulses = 0usize;
+        let mut drift = 0.0f64;
+
+        Box::new(move |obs: &MockObservations| {
+            // Apply every pulse that landed since the previous read. Reading
+            // `obs.pulses` rather than a counter means the model sees the
+            // actual voltages the routine chose.
+            for &voltage in obs.pulses.iter().skip(seen_pulses) {
+                seen_pulses += 1;
+                let strength =
+                    (voltage.abs() / params.reference_voltage).clamp(0.0, 2.0);
+
+                if rng.uniform() < params.overshoot_chance {
+                    // A bad pulse: the apex reorganized the wrong way.
+                    state = if rng.uniform() < params.insulating_chance {
+                        // Overshot the window entirely and landed on an
+                        // insulating patch — the rare positive-shift case.
+                        (1.0 + 4.0 * rng.uniform()) * strength.max(0.5)
+                    } else {
+                        // The common failure: blunted back down, losing a
+                        // fraction of the progress made so far.
+                        state
+                            - (0.25 + 0.45 * rng.uniform())
+                                * (state - params.blunt).abs().max(2.0)
+                    };
+                } else {
+                    // Normal conditioning: close a fraction of the gap, scaled
+                    // by pulse strength, with spread on the efficiency.
+                    let eff = (params.pulse_efficiency
+                        * strength
+                        * (0.6 + 0.8 * rng.uniform()))
+                    .clamp(0.0, 0.95);
+                    state += (params.sharp - state) * eff;
+                }
+            }
+
+            // Random walk, not white noise: consecutive reads stay correlated
+            // the way real thermal drift does.
+            drift += rng.normal() * params.drift_hz_per_read;
+            state + drift + rng.normal() * params.noise_hz
         })
     }
 }
@@ -865,6 +1093,99 @@ mod tests {
         let samples = mock.read_signal_samples(0, 64).unwrap();
         assert_eq!(samples.len(), 64);
         assert!(samples.iter().all(|&v| v == -1.0));
+    }
+
+    #[test]
+    fn sample_noise_scatters_within_a_batch() {
+        let mut mock = MockController::builder()
+            .freq_shift(models::always(-1.0))
+            .sample_noise_hz(0.3)
+            .build();
+
+        let samples = mock.read_signal_samples(0, 512).unwrap();
+        let (mean, std_dev, _) =
+            crate::action::signals::compute_stability_metrics(&samples);
+
+        // Scattered, but centered on the model value.
+        assert!(std_dev > 0.2 && std_dev < 0.4, "std_dev was {std_dev}");
+        assert!((mean - -1.0).abs() < 0.05, "mean was {mean}");
+    }
+
+    #[test]
+    fn sample_noise_leaves_other_channels_constant() {
+        let mut mock = MockController::builder()
+            .freq_shift_index(2)
+            .default_signal(7.0)
+            .sample_noise_hz(0.5)
+            .build();
+
+        let samples = mock.read_signal_samples(0, 32).unwrap();
+        assert!(samples.iter().all(|&v| v == 7.0));
+    }
+
+    #[test]
+    fn realistic_is_reproducible_for_a_seed() {
+        let params = models::RealisticParams::default();
+        let run = || {
+            let mut mock = MockController::builder()
+                .freq_shift(models::realistic(params))
+                .build();
+            (0..5)
+                .map(|_| {
+                    mock.bias_pulse(4.0, Duration::ZERO, true, true).unwrap();
+                    mock.read_signal(0, true).unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn realistic_trends_toward_sharp_as_pulses_land() {
+        // Overshoot disabled so the trend is monotone and the assert is not
+        // hostage to the seed.
+        let mut mock = MockController::builder()
+            .freq_shift(models::realistic(models::RealisticParams {
+                overshoot_chance: 0.0,
+                ..Default::default()
+            }))
+            .build();
+
+        let first = mock.read_signal(0, true).unwrap();
+        for _ in 0..12 {
+            mock.bias_pulse(4.0, Duration::ZERO, true, true).unwrap();
+        }
+        let last = mock.read_signal(0, true).unwrap();
+
+        // Physical convention: blunt is strongly negative, conditioning drives
+        // the shift *up* into the sharp window.
+        assert!(
+            first < -30.0,
+            "blunt tip should start strongly negative, got {first}"
+        );
+        assert!(
+            last < 0.0 && last > -3.0,
+            "conditioned tip should rise toward sharp, got {last}"
+        );
+        assert!(last > first, "conditioning should raise the shift");
+    }
+
+    #[test]
+    fn realistic_stays_negative_without_insulating_events() {
+        // With the insulating branch disabled, the shift must never go positive.
+        let mut mock = MockController::builder()
+            .freq_shift(models::realistic(models::RealisticParams {
+                insulating_chance: 0.0,
+                overshoot_chance: 0.5, // plenty of bad pulses
+                ..Default::default()
+            }))
+            .build();
+
+        for _ in 0..40 {
+            mock.bias_pulse(5.0, Duration::ZERO, true, true).unwrap();
+            let v = mock.read_signal(0, true).unwrap();
+            assert!(v < 0.5, "shift should stay negative, got {v}");
+        }
     }
 
     #[test]

@@ -160,10 +160,10 @@ fn already_sharp_and_stable_completes_through_full_sweep() {
 
 #[test]
 fn tip_sharpens_after_pulses_then_completes() {
-    // Blunt (+40 Hz) until 3 pulses land, then sharp (-1 Hz).
+    // Blunt (-40 Hz) until 3 pulses land, then sharp (-1 Hz).
     let mock = MockController::builder()
         .freq_shift_index(FREQ_SHIFT_INDEX)
-        .freq_shift(models::sharpens_after(3, 40.0, -1.0))
+        .freq_shift(models::sharpens_after(3, -40.0, -1.0))
         .build();
     let obs = mock.observations();
 
@@ -196,10 +196,10 @@ fn blunt_tip_hits_cycle_limit() {
     let mut cfg = fast_config();
     cfg.tip_prep.max_cycles = Some(3);
 
-    // Never sharp: +40 Hz forever.
+    // Never sharp: -40 Hz forever.
     let mock = MockController::builder()
         .freq_shift_index(FREQ_SHIFT_INDEX)
-        .freq_shift(models::always(40.0))
+        .freq_shift(models::always(-40.0))
         .build();
     let obs = mock.observations();
 
@@ -231,7 +231,7 @@ fn shutdown_before_loop_stops_by_user() {
 
     let mock = MockController::builder()
         .freq_shift_index(FREQ_SHIFT_INDEX)
-        .freq_shift(models::always(40.0)) // blunt => routine reaches the loop
+        .freq_shift(models::always(-40.0)) // blunt => routine reaches the loop
         .build();
     let obs = mock.observations();
 
@@ -311,7 +311,7 @@ fn withdraw_fault_during_cleanup_is_swallowed() {
 
     let mock = MockController::builder()
         .freq_shift_index(FREQ_SHIFT_INDEX)
-        .freq_shift(models::always(40.0))
+        .freq_shift(models::always(-40.0))
         .fail_on_call("withdraw", 2, FaultKind::Io)
         .build();
     let obs = mock.observations();
@@ -362,7 +362,7 @@ fn sharp_but_unstable_fires_max_pulse_then_cycle_limit() {
     //   [5] post-sweep final  -> still in-bounds but drifted 0.8 Hz => UNSTABLE
     //   [6+] cycle-2 measure  -> blunt again => no second stability check
     let scripted =
-        models::scripted(vec![40.0, -1.0, -1.0, -1.0, -1.0, -1.8, 40.0]);
+        models::scripted(vec![-40.0, -1.0, -1.0, -1.0, -1.0, -1.8, -40.0]);
 
     let mock = MockController::builder()
         .freq_shift_index(FREQ_SHIFT_INDEX)
@@ -391,6 +391,107 @@ fn sharp_but_unstable_fires_max_pulse_then_cycle_limit() {
         "instability should trigger a max-voltage (6 V) pulse, got {:?}",
         obs.pulses
     );
+}
+
+/// The `realistic` tip model must drive the routine to `Completed`, and each
+/// stable read must reach observers as one measurement — this is what the GUI's
+/// "Simulate" mode and the poster figure plot.
+#[test]
+fn realistic_model_completes_and_publishes_measurements() {
+    let mut cfg = fast_config();
+    cfg.tip_prep.max_cycles = Some(40);
+    cfg.tip_prep.stability.check_stability = true;
+    cfg.tip_prep.stability.bias_steps = 2;
+    cfg.tip_prep.stability.step_period_ms = 1;
+    cfg.data_acquisition.stable_signal_samples = 64;
+    // Mirror `configs/mock_demo.toml` — the config the GUI's Simulate mode runs.
+    cfg.pulse_method = PulseMethod::Linear {
+        voltage_bounds: (2.0, 7.0),
+        linear_clamp: (-20.0, 0.0),
+        polarity: PolaritySign::Positive,
+        random_polarity_switch: None,
+    };
+
+    let mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT_INDEX)
+        .freq_shift(models::realistic(models::RealisticParams::default()))
+        .sample_noise_hz(0.25)
+        .build();
+    let obs = mock.observations();
+
+    /// One captured `stable_read`: the measured value and its batch statistics.
+    #[derive(Default)]
+    struct Reads(StdMutex<Vec<(f64, f64, usize)>>);
+    impl Observer for Reads {
+        fn on_event(&self, event: &Event) {
+            if let Event::DataCollected { label, value, .. } = event
+                && label == "stable_read"
+                && let (Some(v), Some(sd), Some(n)) = (
+                    value.get("value").and_then(|v| v.as_f64()),
+                    value.get("std_dev").and_then(|v| v.as_f64()),
+                    value.get("n").and_then(|v| v.as_u64()),
+                )
+            {
+                self.0.lock().unwrap().push((v, sd, n as usize));
+            }
+        }
+    }
+
+    let reads = Arc::new(Reads::default());
+    let mut events = EventBus::new();
+    events.add_observer(Box::new(ArcObserver(Arc::clone(&reads))));
+
+    let outcome = run_tip_prep(
+        Box::new(mock),
+        &events,
+        &ShutdownFlag::new(),
+        &cfg,
+        FREQ_SHIFT_INDEX,
+    )
+    .expect("routine should not error");
+
+    assert!(
+        matches!(outcome, Outcome::Completed),
+        "realistic model should reach a sharp, stable tip, got {}",
+        outcome_name(&outcome)
+    );
+
+    let captured = reads.0.lock().unwrap();
+
+    // One event per stable read — not one per sample.
+    assert_eq!(
+        captured.len(),
+        obs.lock().freq_reads,
+        "every stable read should publish exactly one measurement"
+    );
+    assert!(captured.len() >= 5, "expected several measurements");
+    assert!(
+        captured.iter().all(|&(_, _, n)| n == 64),
+        "each measurement should report the configured sample count"
+    );
+
+    // The uncertainty must be real — a constant batch would mean the noise never
+    // reached the statistics, and the trace would be a step function again.
+    let widest_sd = captured.iter().map(|&(_, sd, _)| sd).fold(0.0, f64::max);
+    assert!(
+        widest_sd > 0.1,
+        "batches look constant, widest std_dev was {widest_sd}"
+    );
+
+    // Physical convention: start blunt (strongly negative), rise into [-2, 0].
+    let obs = obs.lock();
+    let first = obs.freq_values.first().copied().unwrap_or_default();
+    let last = obs.freq_values.last().copied().unwrap_or_default();
+    assert!(first < -30.0, "should start blunt, got {first}");
+    assert!(last < 0.0 && last > -2.0, "should end sharp, got {last}");
+}
+
+/// Lets an `Arc`-shared observer be registered without giving up the handle.
+struct ArcObserver<T>(Arc<T>);
+impl<T: Observer> Observer for ArcObserver<T> {
+    fn on_event(&self, event: &Event) {
+        self.0.on_event(event);
+    }
 }
 
 // Tiny helper so panic messages name the outcome (Outcome has no Debug).
