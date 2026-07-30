@@ -1,6 +1,6 @@
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use eframe::egui;
-use egui_plot::{HLine, Line, Plot, PlotPoints};
+use egui_plot::{HLine, Line, Plot, PlotPoints, Points};
 use log::{LevelFilter, error, info};
 use std::collections::HashMap;
 use std::path::Path;
@@ -17,6 +17,7 @@ use rusty_tip::event::{
     ChannelForwarder, ConsoleLogger, Event, EventAccumulator, EventBus,
     FileLogger,
 };
+use rusty_tip::mock_controller::{MockController, models};
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
 use rusty_tip::signal_registry::SignalRegistry;
 use rusty_tip::spm_controller::SpmController;
@@ -124,6 +125,14 @@ struct DataPoint {
     time_s: f64,
     value: f64,
 }
+
+/// Upper bound on plotted freq-shift points; oldest are dropped past this.
+const MAX_PLOT_POINTS: usize = 20_000;
+
+/// Radius of the per-measurement markers. Both series are discrete measurements,
+/// so they are drawn as points with a connecting line — a bare `Line` renders
+/// nothing at all until the second point arrives.
+const MARKER_RADIUS: f32 = 2.5;
 
 // ============================================================================
 // Editable Configuration
@@ -712,6 +721,11 @@ pub struct TipPrepApp {
     run_status: RunStatus,
     start_time: Option<Instant>,
 
+    /// Run against the mock controller instead of real hardware. Runtime-only,
+    /// deliberately not part of `EditableConfig` — it must never end up in a
+    /// saved TOML and be mistaken for a hardware setting.
+    simulate: bool,
+
     // Real-time state from V2 event stream
     event_receiver: Option<Receiver<Event>>,
     tip_state: TipPrepState,
@@ -745,6 +759,7 @@ impl TipPrepApp {
             shutdown_flag: None,
             run_status: RunStatus::Idle,
             start_time: None,
+            simulate: false,
             event_receiver: None,
             tip_state: TipPrepState::default(),
             freq_shift_history: Vec::new(),
@@ -835,8 +850,10 @@ impl TipPrepApp {
         let (event_tx, event_rx) = unbounded();
         self.event_receiver = Some(event_rx);
 
+        let simulate = self.simulate;
         let handle = thread::spawn(move || {
-            if let Err(e) = run_controller(config, shutdown, event_tx) {
+            if let Err(e) = run_controller(config, shutdown, event_tx, simulate)
+            {
                 error!("Controller error: {}", e);
             }
         });
@@ -864,7 +881,16 @@ impl TipPrepApp {
             }
         }
 
-        // Poll events from the V2 event bus
+        // Poll events from the V2 event bus.
+        //
+        // One clock for every plotted series: the runner's own `elapsed_secs`
+        // and the GUI's `start_time` differ by thread-start latency, and mixing
+        // them puts a visible kink in the trace.
+        let elapsed_now = self
+            .start_time
+            .map(|t| t.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
+
         if let Some(rx) = &self.event_receiver {
             while let Ok(event) = rx.try_recv() {
                 match &event {
@@ -882,21 +908,20 @@ impl TipPrepApp {
                         {
                             self.tip_state.elapsed_secs = elapsed;
                         }
+                        // Only the status readout — the freq-shift *plot* is fed
+                        // by the per-sample `signal_samples` stream below, which
+                        // covers these same reads at full resolution.
                         if let Some(fs) =
                             data.get("freq_shift").and_then(|v| v.as_f64())
                         {
                             self.tip_state.freq_shift = Some(fs);
-                            self.freq_shift_history.push(DataPoint {
-                                time_s: self.tip_state.elapsed_secs,
-                                value: fs,
-                            });
                         }
                         if let Some(pv) =
                             data.get("pulse_voltage").and_then(|v| v.as_f64())
                         {
                             self.tip_state.pulse_voltage = pv;
                             self.voltage_history.push(DataPoint {
-                                time_s: self.tip_state.elapsed_secs,
+                                time_s: elapsed_now,
                                 value: pv,
                             });
                         }
@@ -909,6 +934,31 @@ impl TipPrepApp {
                             data.get("phase").and_then(|v| v.as_str())
                         {
                             self.tip_state.phase = phase.to_string();
+                        }
+                    }
+                    Event::DataCollected { label, value, .. }
+                        if label == "stable_read" =>
+                    {
+                        // One point per measurement: a stable read *is* a single
+                        // measurement of the frequency shift, averaged from a
+                        // sample batch. Every stable read in the tip-prep routine
+                        // goes through `read_stable(.., freq_shift_index)`, so
+                        // this stream is the freq-shift channel. The event carries
+                        // `index` if that ever stops being true.
+                        if let Some(v) =
+                            value.get("value").and_then(|v| v.as_f64())
+                        {
+                            self.freq_shift_history.push(DataPoint {
+                                time_s: elapsed_now,
+                                value: v,
+                            });
+
+                            // Bound memory on long runs.
+                            if self.freq_shift_history.len() > MAX_PLOT_POINTS {
+                                let excess = self.freq_shift_history.len()
+                                    - MAX_PLOT_POINTS;
+                                self.freq_shift_history.drain(0..excess);
+                            }
                         }
                     }
                     Event::ActionStarted { action, .. } => {
@@ -1137,7 +1187,23 @@ impl TipPrepApp {
                     {
                         self.stop_controller();
                     }
+
+                    ui.add_enabled_ui(!self.is_running(), |ui| {
+                        ui.checkbox(&mut self.simulate, "Simulate")
+                            .on_hover_text(
+                                "Run against the in-memory mock controller \
+                                 instead of the Nanonis system. No hardware \
+                                 is contacted.",
+                            );
+                    });
                 });
+
+                if self.simulate {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(255, 165, 0),
+                        "Simulation - no hardware connected",
+                    );
+                }
             });
 
             ui.add_space(10.0);
@@ -1179,13 +1245,17 @@ impl TipPrepApp {
         ui.add_space(10.0);
         ui.label("Freq Shift History");
 
-        let fs_points: PlotPoints = self
+        let fs_xy: Vec<[f64; 2]> = self
             .freq_shift_history
             .iter()
             .map(|dp| [dp.time_s, dp.value])
             .collect();
-        let fs_line = Line::new("Freq Shift (Hz)", fs_points)
-            .color(egui::Color32::LIGHT_BLUE);
+        let fs_line =
+            Line::new("Freq Shift (Hz)", PlotPoints::from(fs_xy.clone()))
+                .color(egui::Color32::LIGHT_BLUE);
+        let fs_marks = Points::new("Measurements", PlotPoints::from(fs_xy))
+            .color(egui::Color32::LIGHT_BLUE)
+            .radius(MARKER_RADIUS);
 
         Plot::new("freq_shift_plot")
             .height(120.0)
@@ -1196,6 +1266,7 @@ impl TipPrepApp {
             .y_axis_label("Hz")
             .show(ui, |plot_ui| {
                 plot_ui.line(fs_line);
+                plot_ui.points(fs_marks);
 
                 // Draw sharp bounds as horizontal lines
                 if let Some((lower, upper)) = self.sharp_bounds {
@@ -1224,13 +1295,18 @@ impl TipPrepApp {
         ui.add_space(5.0);
         ui.label("Pulse Voltage History");
 
-        let v_points: PlotPoints = self
+        let v_xy: Vec<[f64; 2]> = self
             .voltage_history
             .iter()
             .map(|dp| [dp.time_s, dp.value])
             .collect();
-        let v_line = Line::new("Pulse Voltage (V)", v_points)
-            .color(egui::Color32::from_rgb(255, 165, 0));
+        let orange = egui::Color32::from_rgb(255, 165, 0);
+        let v_line =
+            Line::new("Pulse Voltage (V)", PlotPoints::from(v_xy.clone()))
+                .color(orange);
+        let v_marks = Points::new("Pulses", PlotPoints::from(v_xy))
+            .color(orange)
+            .radius(MARKER_RADIUS);
 
         Plot::new("voltage_plot")
             .height(100.0)
@@ -1241,6 +1317,7 @@ impl TipPrepApp {
             .y_axis_label("V")
             .show(ui, |plot_ui| {
                 plot_ui.line(v_line);
+                plot_ui.points(v_marks);
             });
     }
 
@@ -1881,33 +1958,13 @@ fn run_controller(
     config: AppConfig,
     shutdown: ShutdownFlag,
     event_tx: Sender<Event>,
+    simulate: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    info!("Setting up V2 controller...");
-
-    // Connect to Nanonis
-    let client = rusty_tip::NanonisClient::builder()
-        .address(&config.nanonis.host_ip)
-        .port(config.nanonis.control_ports[0])
-        .build()?;
-    let setup = NanonisSetupConfig {
-        layout_file: config.nanonis.layout_file.clone(),
-        settings_file: config.nanonis.settings_file.clone(),
-        safe_tip_threshold_a: config.tip_prep.safe_tip_threshold as f64,
-        ..Default::default()
+    let (controller, freq_shift_index) = if simulate {
+        build_mock_backend(&config)?
+    } else {
+        build_nanonis_backend(&config)?
     };
-    let mut controller = NanonisController::new(client, setup);
-    info!("Connected to Nanonis system");
-
-    // Build signal registry
-    let signal_names = controller.signal_names()?;
-    let registry = build_signal_registry(&signal_names, &config);
-    let freq_shift_signal = registry
-        .get_by_name("freq shift")
-        .ok_or("Frequency shift signal not found in registry")?;
-    let freq_shift_index = freq_shift_signal.index as u32;
-
-    // Setup TCP data stream
-    setup_tcp_stream(&mut controller, &registry, &config)?;
 
     // Setup event bus with ChannelForwarder for GUI
     let mut events = EventBus::new();
@@ -1929,13 +1986,8 @@ fn run_controller(
     events.add_observer(Box::new(EventAccumulator::new(500)));
 
     // Run tip preparation
-    let result = run_tip_prep(
-        Box::new(controller),
-        &events,
-        &shutdown,
-        &config,
-        freq_shift_index,
-    );
+    let result =
+        run_tip_prep(controller, &events, &shutdown, &config, freq_shift_index);
 
     // Convert ShutdownRequested to StoppedByUser
     let result = match result {
@@ -1961,6 +2013,83 @@ fn run_controller(
     }
 
     Ok(())
+}
+
+/// Boxed controller plus the resolved freq-shift signal index.
+type Backend = (Box<dyn SpmController>, u32);
+
+/// Index of `"freq shift"` in [`MockController`]'s fixed channel layout. Checked
+/// against the registry in [`build_mock_backend`] so a change to the mock's
+/// `signal_names` surfaces as an error instead of a silently wrong channel.
+const MOCK_FREQ_SHIFT_INDEX: u32 = 2;
+
+/// Connect to the real Nanonis system and set up its TCP data stream.
+fn build_nanonis_backend(
+    config: &AppConfig,
+) -> Result<Backend, Box<dyn std::error::Error + Send + Sync>> {
+    info!("Setting up V2 controller...");
+
+    let client = rusty_tip::NanonisClient::builder()
+        .address(&config.nanonis.host_ip)
+        .port(config.nanonis.control_ports[0])
+        .build()?;
+    let setup = NanonisSetupConfig {
+        layout_file: config.nanonis.layout_file.clone(),
+        settings_file: config.nanonis.settings_file.clone(),
+        safe_tip_threshold_a: config.tip_prep.safe_tip_threshold as f64,
+        ..Default::default()
+    };
+    let mut controller = NanonisController::new(client, setup);
+    info!("Connected to Nanonis system");
+
+    let signal_names = controller.signal_names()?;
+    let registry = build_signal_registry(&signal_names, config);
+    let freq_shift_index = registry
+        .get_by_name("freq shift")
+        .ok_or("Frequency shift signal not found in registry")?
+        .index as u32;
+
+    setup_tcp_stream(&mut controller, &registry, config)?;
+
+    Ok((Box::new(controller), freq_shift_index))
+}
+
+/// Drive the routine against the in-memory mock — no hardware, no TCP stream.
+///
+/// The tip model is `models::realistic`, so the frequency shift responds to the
+/// voltages the routine actually chooses and carries noise and drift, rather
+/// than stepping between two constants. Seeded, so a run is reproducible.
+fn build_mock_backend(
+    config: &AppConfig,
+) -> Result<Backend, Box<dyn std::error::Error + Send + Sync>> {
+    info!("Simulation mode: running against the mock controller (no hardware)");
+
+    let mut mock = MockController::builder()
+        .freq_shift_index(MOCK_FREQ_SHIFT_INDEX)
+        .freq_shift(models::realistic(models::RealisticParams::default()))
+        // Within-batch scatter, well under the default 1.0 Hz `max_std_dev` so
+        // ReadStableSignal's statistics do real work without stalling in retries.
+        .sample_noise_hz(0.25)
+        .build();
+
+    // Resolve the index through the same registry path the real backend uses,
+    // so simulation exercises the lookup instead of bypassing it.
+    let signal_names = mock.signal_names()?;
+    let registry = build_signal_registry(&signal_names, config);
+    let resolved = registry
+        .get_by_name("freq shift")
+        .ok_or("Frequency shift signal not found in mock registry")?
+        .index as u32;
+
+    if resolved != MOCK_FREQ_SHIFT_INDEX {
+        return Err(format!(
+            "mock freq-shift index drifted: registry resolved {resolved}, \
+             mock model answers for {MOCK_FREQ_SHIFT_INDEX}"
+        )
+        .into());
+    }
+
+    Ok((Box::new(mock), resolved))
 }
 
 fn build_signal_registry(
