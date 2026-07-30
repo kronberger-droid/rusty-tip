@@ -134,6 +134,35 @@ const MAX_PLOT_POINTS: usize = 20_000;
 /// nothing at all until the second point arrives.
 const MARKER_RADIUS: f32 = 2.5;
 
+/// Plot colours for one theme.
+struct PlotColors {
+    freq_shift: egui::Color32,
+    pulse_voltage: egui::Color32,
+    bounds: egui::Color32,
+}
+
+impl PlotColors {
+    /// The dark-theme palette is tuned for a dark background: pale series and
+    /// very transparent bound lines. Both wash out badly on white, so light mode
+    /// gets saturated, darker equivalents and far more opaque bounds — this is
+    /// what makes a screenshot survive being printed.
+    fn for_theme(dark_mode: bool) -> Self {
+        if dark_mode {
+            Self {
+                freq_shift: egui::Color32::LIGHT_BLUE,
+                pulse_voltage: egui::Color32::from_rgb(255, 165, 0),
+                bounds: egui::Color32::from_rgba_unmultiplied(0, 255, 0, 80),
+            }
+        } else {
+            Self {
+                freq_shift: egui::Color32::from_rgb(0, 84, 159),
+                pulse_voltage: egui::Color32::from_rgb(191, 87, 0),
+                bounds: egui::Color32::from_rgba_unmultiplied(0, 120, 40, 180),
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Editable Configuration
 // ============================================================================
@@ -726,6 +755,11 @@ pub struct TipPrepApp {
     /// saved TOML and be mistaken for a hardware setting.
     simulate: bool,
 
+    /// Light / dark / follow-system. egui defaults to following the system
+    /// theme, which gives a dark UI on a dark desktop — fine on screen, but
+    /// screenshots of it print badly, so this is selectable.
+    theme: egui::ThemePreference,
+
     // Real-time state from V2 event stream
     event_receiver: Option<Receiver<Event>>,
     tip_state: TipPrepState,
@@ -760,6 +794,7 @@ impl TipPrepApp {
             run_status: RunStatus::Idle,
             start_time: None,
             simulate: false,
+            theme: egui::ThemePreference::System,
             event_receiver: None,
             tip_state: TipPrepState::default(),
             freq_shift_history: Vec::new(),
@@ -1250,11 +1285,12 @@ impl TipPrepApp {
             .iter()
             .map(|dp| [dp.time_s, dp.value])
             .collect();
+        let colors = PlotColors::for_theme(ui.visuals().dark_mode);
         let fs_line =
             Line::new("Freq Shift (Hz)", PlotPoints::from(fs_xy.clone()))
-                .color(egui::Color32::LIGHT_BLUE);
+                .color(colors.freq_shift);
         let fs_marks = Points::new("Measurements", PlotPoints::from(fs_xy))
-            .color(egui::Color32::LIGHT_BLUE)
+            .color(colors.freq_shift)
             .radius(MARKER_RADIUS);
 
         Plot::new("freq_shift_plot")
@@ -1272,18 +1308,14 @@ impl TipPrepApp {
                 if let Some((lower, upper)) = self.sharp_bounds {
                     plot_ui.hline(
                         HLine::new("Lower bound", lower)
-                            .color(egui::Color32::from_rgba_unmultiplied(
-                                0, 255, 0, 80,
-                            ))
+                            .color(colors.bounds)
                             .style(egui_plot::LineStyle::Dashed {
                                 length: 5.0,
                             }),
                     );
                     plot_ui.hline(
                         HLine::new("Upper bound", upper)
-                            .color(egui::Color32::from_rgba_unmultiplied(
-                                0, 255, 0, 80,
-                            ))
+                            .color(colors.bounds)
                             .style(egui_plot::LineStyle::Dashed {
                                 length: 5.0,
                             }),
@@ -1300,12 +1332,11 @@ impl TipPrepApp {
             .iter()
             .map(|dp| [dp.time_s, dp.value])
             .collect();
-        let orange = egui::Color32::from_rgb(255, 165, 0);
         let v_line =
             Line::new("Pulse Voltage (V)", PlotPoints::from(v_xy.clone()))
-                .color(orange);
+                .color(colors.pulse_voltage);
         let v_marks = Points::new("Pulses", PlotPoints::from(v_xy))
-            .color(orange)
+            .color(colors.pulse_voltage)
             .radius(MARKER_RADIUS);
 
         Plot::new("voltage_plot")
@@ -2168,6 +2199,7 @@ impl eframe::App for TipPrepApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.check_controller_status();
 
+        ctx.set_theme(self.theme);
         ctx.request_repaint_after(Duration::from_millis(100));
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -2195,6 +2227,42 @@ impl eframe::App for TipPrepApp {
                 {
                     self.current_tab = Tab::Configuration;
                 }
+
+                // Right-aligned so it stays out of the way of the tabs.
+                ui.with_layout(
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        egui::ComboBox::from_id_salt("theme_selector")
+                            .selected_text(match self.theme {
+                                egui::ThemePreference::Light => "Light",
+                                egui::ThemePreference::Dark => "Dark",
+                                egui::ThemePreference::System => "System",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.theme,
+                                    egui::ThemePreference::System,
+                                    "System",
+                                );
+                                ui.selectable_value(
+                                    &mut self.theme,
+                                    egui::ThemePreference::Light,
+                                    "Light",
+                                );
+                                ui.selectable_value(
+                                    &mut self.theme,
+                                    egui::ThemePreference::Dark,
+                                    "Dark",
+                                );
+                            })
+                            .response
+                            .on_hover_text(
+                                "Light prints far better than dark — the plots \
+                                 pick higher-contrast colours to match.",
+                            );
+                        ui.label("Theme:");
+                    },
+                );
             });
 
             ui.separator();
