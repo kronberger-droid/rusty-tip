@@ -26,10 +26,12 @@
 //! use rusty_tip::tip_prep::run_tip_prep;
 //!
 //! let freq_shift_index = 0;
-//! // Tip is blunt (+40 Hz) until 3 pulses land, then sharp (-1 Hz).
+//! // Tip is blunt (-40 Hz) until 3 pulses land, then sharp (-1 Hz). Conditioning
+//! // drives the shift *up* toward the sharp window; see [`models::realistic`]
+//! // for a model that follows real conditioning statistics.
 //! let mock = MockController::builder()
 //!     .freq_shift_index(freq_shift_index)
-//!     .freq_shift(models::sharpens_after(3, 40.0, -1.0))
+//!     .freq_shift(models::sharpens_after(3, -40.0, -1.0))
 //!     .build();
 //! let obs = mock.observations(); // clone the handle BEFORE moving the mock
 //!
@@ -865,127 +867,158 @@ pub mod models {
     /// use rusty_tip::mock_controller::models::{RealisticParams, realistic};
     ///
     /// let model = realistic(RealisticParams {
-    ///     overshoot_chance: 0.3, // a badly behaved tip
+    ///     spread: 6.0, // a wilder tip
     ///     ..Default::default()
     /// });
     /// ```
+    ///
+    /// Defaults are read off a real 287-pulse conditioning run: shift wandering
+    /// in roughly `[-20, -4]` Hz about a mean near `-11.5`, a handful of
+    /// excursions past `-25`, and the sharp band reached twice in the whole run.
     #[derive(Debug, Clone, Copy)]
     pub struct RealisticParams {
-        /// Frequency shift (Hz) of the unconditioned tip — strongly negative.
-        /// Conditioning drives the shift *up* from here toward `sharp`.
-        pub blunt: f64,
-        /// Asymptote (Hz) a well-conditioned tip approaches, just inside the
-        /// sharp window (typically `[-2, 0]`).
-        pub sharp: f64,
+        /// Mean frequency shift (Hz) the apex reverts to over many pulses.
+        /// This is *not* a target the tip converges on — it is the centre of the
+        /// distribution each pulse redraws from.
+        pub baseline: f64,
+        /// Standard deviation (Hz) of that stationary distribution. Together with
+        /// `baseline` this sets how often a pulse happens to land in the sharp
+        /// band, and so how many pulses a run takes.
+        pub spread: f64,
+        /// Correlation between consecutive pulses, in `[0, 1)`. `0` makes every
+        /// pulse an independent draw; higher values make the shift wander in
+        /// slow excursions, which is what the real traces look like.
+        pub persistence: f64,
+        /// Pulse voltage at which `persistence` applies. Stronger pulses
+        /// randomise the apex more (lower effective persistence), weaker ones
+        /// less.
+        pub reference_voltage: f64,
+        /// Probability that a pulse throws a large negative excursion — the
+        /// occasional deep outlier in a real trace.
+        pub excursion_chance: f64,
+        /// Magnitude range (Hz) of an excursion below `baseline`.
+        pub excursion_depth: (f64, f64),
+        /// Probability a pulse lands the tip on an insulating patch, the one case
+        /// where the shift goes *positive*. Real but uncommon.
+        pub insulating_chance: f64,
         /// Read-to-read jitter (Hz std dev) on the batch mean. Distinct from
         /// [`MockControllerBuilder::sample_noise_hz`], which scatters the
         /// samples *within* one batch.
         pub noise_hz: f64,
         /// Std dev of each random-walk drift step, applied once per read.
         pub drift_hz_per_read: f64,
-        /// Fraction of the remaining gap to `sharp` that a pulse at
-        /// `reference_voltage` closes.
-        pub pulse_efficiency: f64,
-        /// Pulse voltage at which `pulse_efficiency` applies; higher pulses
-        /// move the tip further, lower ones less.
-        pub reference_voltage: f64,
-        /// Probability that a pulse makes the tip *worse* instead of better —
-        /// usually blunting it back down, occasionally overshooting the window
-        /// into positive shift (see [`insulating_chance`](Self::insulating_chance)).
-        pub overshoot_chance: f64,
-        /// Given a bad pulse, the probability it lands the tip on an insulating
-        /// patch — the one case where the shift goes *positive*. Real but
-        /// uncommon, so this is a small fraction of an already-uncommon event.
-        pub insulating_chance: f64,
         /// PRNG seed — fixed, so the trajectory is reproducible.
         pub seed: u64,
     }
 
     impl Default for RealisticParams {
-        /// Tuned so the default run exercises the whole algorithm rather than
-        /// just the happy path: the tip climbs from `blunt` into the sharp
-        /// window, holds, then loses it to a bad recovery pulse and climbs back
-        /// before passing the stability check.
+        /// Matched to a real conditioning run (see the struct docs). With these
+        /// values a pulse lands in a `[-2, 0]` Hz sharp band under 1 % of the
+        /// time, so runs are long and their length varies a lot — which is the
+        /// behaviour being reproduced, not a shortcoming.
         ///
-        /// Change `seed` to draw a different trajectory — `cargo run --example
-        /// tip-prep-mock -- realistic <seed>` prints the one a given seed
-        /// produces, so a scenario can be judged without a GUI.
+        /// `cargo run --example tip-prep-mock -- realistic <seed>` prints the
+        /// trajectory a given seed produces, so a scenario can be judged without
+        /// a GUI.
         fn default() -> Self {
             Self {
-                blunt: -40.0,
-                sharp: -1.0,
+                baseline: -11.5,
+                spread: 4.0,
+                persistence: 0.82,
+                reference_voltage: 4.0,
+                excursion_chance: 0.015,
+                excursion_depth: (12.0, 30.0),
+                insulating_chance: 0.004,
                 noise_hz: 0.08,
                 drift_hz_per_read: 0.012,
-                pulse_efficiency: 0.45,
-                reference_voltage: 4.0,
-                overshoot_chance: 0.15,
-                insulating_chance: 0.15,
                 seed: 2026,
             }
         }
     }
 
-    /// A tip that responds to pulses the way a real one roughly does:
-    /// stochastic sharpening that closes a *fraction* of the remaining gap per
-    /// pulse (so it converges asymptotically rather than snapping to a value),
-    /// occasional over-pulsing that undoes progress, plus measurement noise and
-    /// slow thermal drift on every read.
+    /// A tip whose apex each pulse *re-rolls at random*, rather than gradually
+    /// improving.
     ///
-    /// Follows the physical sign convention: a blunt tip sits at a strongly
-    /// negative frequency shift and conditioning drives it *up* toward the sharp
-    /// window near `[-2, 0]` Hz. Positive shift means the tip has found an
-    /// insulating patch — real, but uncommon, so the model reaches it rarely.
+    /// This is the shape real conditioning data takes: the frequency shift
+    /// wanders in a band well below the sharp window, mean-reverting with
+    /// short-term persistence so consecutive pulses are correlated, and the run
+    /// ends when a draw happens to land inside the window. There is no
+    /// convergence — a long run and a lucky 9-pulse run are the same process
+    /// with different luck.
     ///
-    /// Unlike [`sharpens_after`] and [`scripted`], the trajectory here is
-    /// *emergent* — it depends on how many pulses the routine fires and at what
-    /// voltage, which is what makes the resulting trace look like data instead
-    /// of a step function. Pair it with
+    /// Concretely, each pulse advances an AR(1) process
+    ///
+    /// ```text
+    /// Δf ← baseline + φ·(Δf − baseline) + ε,   ε ~ N(0, spread·√(1 − φ²))
+    /// ```
+    ///
+    /// whose stationary distribution is `N(baseline, spread)`. `φ` comes from
+    /// [`persistence`](RealisticParams::persistence), damped by pulse strength so
+    /// a harder pulse scrambles the apex more. On top of that sit rare deep
+    /// excursions and rarer insulating (positive-shift) events, plus measurement
+    /// noise and slow drift on every read.
+    ///
+    /// Contrast [`sharpens_after`] and [`scripted`], which are deterministic and
+    /// meant for tests that need a specific outcome. Pair this with
     /// [`MockControllerBuilder::sample_noise_hz`] for within-batch scatter.
     ///
     /// Seeded, so the same params always produce the same run.
     pub fn realistic(params: RealisticParams) -> FreqShiftModel {
         let mut rng = super::Rng::new(params.seed);
-        let mut state = params.blunt;
         let mut seen_pulses = 0usize;
         let mut drift = 0.0f64;
+        // A one-read outlier (deep excursion or insulating patch) awaiting report.
+        let mut outlier: Option<f64> = None;
+        // Start from a draw of the stationary distribution rather than exactly
+        // at the mean, so run-to-run starting points differ the way they do in
+        // practice.
+        let mut state = params.baseline + rng.normal() * params.spread;
 
         Box::new(move |obs: &MockObservations| {
             // Apply every pulse that landed since the previous read. Reading
-            // `obs.pulses` rather than a counter means the model sees the
-            // actual voltages the routine chose.
+            // `obs.pulses` rather than a counter means the model sees the actual
+            // voltages the routine chose.
             for &voltage in obs.pulses.iter().skip(seen_pulses) {
                 seen_pulses += 1;
-                let strength =
-                    (voltage.abs() / params.reference_voltage).clamp(0.0, 2.0);
 
-                if rng.uniform() < params.overshoot_chance {
-                    // A bad pulse: the apex reorganized the wrong way.
-                    state = if rng.uniform() < params.insulating_chance {
-                        // Overshot the window entirely and landed on an
-                        // insulating patch — the rare positive-shift case.
-                        (1.0 + 4.0 * rng.uniform()) * strength.max(0.5)
-                    } else {
-                        // The common failure: blunted back down, losing a
-                        // fraction of the progress made so far.
-                        state
-                            - (0.25 + 0.45 * rng.uniform())
-                                * (state - params.blunt).abs().max(2.0)
-                    };
-                } else {
-                    // Normal conditioning: close a fraction of the gap, scaled
-                    // by pulse strength, with spread on the efficiency.
-                    let eff = (params.pulse_efficiency
-                        * strength
-                        * (0.6 + 0.8 * rng.uniform()))
-                    .clamp(0.0, 0.95);
-                    state += (params.sharp - state) * eff;
+                // Excursions and insulating events are *transient outliers*, not
+                // state changes: in a real trace a deep point sits alone, with
+                // its neighbours back in the normal band. So they are reported
+                // for one read and deliberately do not feed into `state` —
+                // folding them in would drag the whole distribution down as the
+                // AR process reverted from them over the following pulses.
+                if rng.uniform() < params.insulating_chance {
+                    outlier = Some((0.5 + 3.0 * rng.uniform()).max(0.1));
+                    continue;
                 }
+
+                if rng.uniform() < params.excursion_chance {
+                    let (lo, hi) = params.excursion_depth;
+                    outlier = Some(
+                        params.baseline - (lo + (hi - lo) * rng.uniform()),
+                    );
+                    continue;
+                }
+
+                // A harder pulse scrambles the apex more, so it retains less of
+                // the previous state. `phi^strength` decays smoothly with
+                // voltage and stays inside [0, 1).
+                let strength =
+                    (voltage.abs() / params.reference_voltage).clamp(0.25, 4.0);
+                let phi = params.persistence.clamp(0.0, 0.999).powf(strength);
+                let innovation = params.spread * (1.0 - phi * phi).sqrt();
+
+                state = params.baseline
+                    + phi * (state - params.baseline)
+                    + rng.normal() * innovation;
             }
 
             // Random walk, not white noise: consecutive reads stay correlated
             // the way real thermal drift does.
             drift += rng.normal() * params.drift_hz_per_read;
-            state + drift + rng.normal() * params.noise_hz
+
+            let level = outlier.take().unwrap_or(state);
+            level + drift + rng.normal() * params.noise_hz
         })
     }
 }
@@ -1141,33 +1174,113 @@ mod tests {
     }
 
     #[test]
-    fn realistic_trends_toward_sharp_as_pulses_land() {
-        // Overshoot disabled so the trend is monotone and the assert is not
-        // hostage to the seed.
+    fn realistic_wanders_without_converging() {
+        // The defining property: many pulses in, the shift is still wandering
+        // about `baseline` rather than settling near the sharp window.
+        let params = models::RealisticParams::default();
+        let mut mock = MockController::builder()
+            .freq_shift(models::realistic(params))
+            .build();
+
+        let mut values = Vec::new();
+        for _ in 0..600 {
+            mock.bias_pulse(4.0, Duration::ZERO, true, true).unwrap();
+            values.push(mock.read_signal(0, true).unwrap());
+        }
+
+        // Robust statistics, not mean/sd: the deep excursions are a heavy
+        // negative tail that drags the mean well below `baseline` (each one
+        // persists for several pulses as the AR process reverts). The median and
+        // the IQR describe the band the shift actually wanders in, which is what
+        // `baseline` and `spread` are meant to set.
+        let mut sorted = values.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let quantile =
+            |q: f64| sorted[((sorted.len() - 1) as f64 * q) as usize];
+        let median = quantile(0.5);
+        // IQR / 1.349 estimates the sd of a normal.
+        let robust_spread = (quantile(0.75) - quantile(0.25)) / 1.349;
+
+        assert!(
+            (median - params.baseline).abs() < 1.5,
+            "median {median:.2} should be near baseline {:.2}",
+            params.baseline
+        );
+        assert!(
+            (robust_spread - params.spread).abs() < 1.5,
+            "spread {robust_spread:.2} should be near {:.2}",
+            params.spread
+        );
+
+        // No convergence: the last quarter must be just as spread out as the
+        // first. A model that homed in on a target would fail this.
+        let quarter = values.len() / 4;
+        let spread_of = |xs: &[f64]| {
+            let m = xs.iter().sum::<f64>() / xs.len() as f64;
+            (xs.iter().map(|v| (v - m).powi(2)).sum::<f64>() / xs.len() as f64)
+                .sqrt()
+        };
+        let early = spread_of(&values[..quarter]);
+        let late = spread_of(&values[values.len() - quarter..]);
+        assert!(
+            late > early * 0.5,
+            "late spread {late:.2} collapsed vs early {early:.2} — model is converging"
+        );
+    }
+
+    #[test]
+    fn realistic_shows_persistence_between_consecutive_pulses() {
+        // Consecutive pulses must be correlated, otherwise the trace is white
+        // noise rather than the slow excursions real data shows.
         let mut mock = MockController::builder()
             .freq_shift(models::realistic(models::RealisticParams {
-                overshoot_chance: 0.0,
+                excursion_chance: 0.0,
+                insulating_chance: 0.0,
                 ..Default::default()
             }))
             .build();
 
-        let first = mock.read_signal(0, true).unwrap();
-        for _ in 0..12 {
+        let mut values = Vec::new();
+        for _ in 0..800 {
             mock.bias_pulse(4.0, Duration::ZERO, true, true).unwrap();
+            values.push(mock.read_signal(0, true).unwrap());
         }
-        let last = mock.read_signal(0, true).unwrap();
 
-        // Physical convention: blunt is strongly negative, conditioning drives
-        // the shift *up* into the sharp window.
+        let n = values.len();
+        let mean = values.iter().sum::<f64>() / n as f64;
+        let var =
+            values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n as f64;
+        let cov = values
+            .windows(2)
+            .map(|w| (w[0] - mean) * (w[1] - mean))
+            .sum::<f64>()
+            / (n - 1) as f64;
+        let lag1 = cov / var;
+
         assert!(
-            first < -30.0,
-            "blunt tip should start strongly negative, got {first}"
+            lag1 > 0.3,
+            "lag-1 correlation {lag1:.2} too low — pulses look independent"
         );
+    }
+
+    #[test]
+    fn realistic_produces_occasional_deep_excursions() {
+        let params = models::RealisticParams::default();
+        let mut mock = MockController::builder()
+            .freq_shift(models::realistic(params))
+            .build();
+
+        let mut deepest = 0.0f64;
+        for _ in 0..2000 {
+            mock.bias_pulse(4.0, Duration::ZERO, true, true).unwrap();
+            deepest = deepest.min(mock.read_signal(0, true).unwrap());
+        }
+
+        let threshold = params.baseline - params.excursion_depth.0;
         assert!(
-            last < 0.0 && last > -3.0,
-            "conditioned tip should rise toward sharp, got {last}"
+            deepest <= threshold,
+            "deepest {deepest:.1} never reached excursion range (<= {threshold:.1})"
         );
-        assert!(last > first, "conditioning should raise the shift");
     }
 
     #[test]
@@ -1176,12 +1289,11 @@ mod tests {
         let mut mock = MockController::builder()
             .freq_shift(models::realistic(models::RealisticParams {
                 insulating_chance: 0.0,
-                overshoot_chance: 0.5, // plenty of bad pulses
                 ..Default::default()
             }))
             .build();
 
-        for _ in 0..40 {
+        for _ in 0..500 {
             mock.bias_pulse(5.0, Duration::ZERO, true, true).unwrap();
             let v = mock.read_signal(0, true).unwrap();
             assert!(v < 0.5, "shift should stay negative, got {v}");
