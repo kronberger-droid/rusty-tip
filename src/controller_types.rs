@@ -24,6 +24,12 @@ pub enum BiasSweepPolarity {
 // ============================================================================
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+// `default` at the container level so a config may set only the stability
+// fields it cares about — `configs/tip_prep_no_stability.toml` sets just
+// `check_stability = false` — and the rest fall back to `Default`. Without this,
+// naming the `[tip_prep.stability]` table at all forced every field to be spelled
+// out, which made that config fail to load with a bare "missing field" error.
+#[serde(default)]
 pub struct StabilityConfig {
     /// Whether to perform stability checking
     /// When true, performs a scan with bias sweep to verify tip stability
