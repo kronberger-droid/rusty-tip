@@ -19,7 +19,7 @@ The library is built around a hardware abstraction trait (`SpmController`) and a
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Binaries                                               │
-│  tip-prep-v2 (CLI)  ·  tip-prep-gui (eframe/egui)      │
+│  tip-prep (CLI)  ·  tip-prep-gui (eframe/egui)         │
 └────────────┬────────────────────────────┬───────────────┘
              │                            │
 ┌────────────▼────────────────────────────▼───────────────┐
@@ -95,11 +95,11 @@ cargo add rusty-tip
 
 ## Usage
 
-### CLI (tip-prep-v2)
+### CLI (tip-prep)
 
 ```bash
-tip-prep-v2 --config path/to/config.toml
-tip-prep-v2 --config config.toml --log-level debug
+tip-prep --config path/to/config.toml
+tip-prep --config config.toml --log-level debug
 ```
 
 ### GUI (tip-prep-gui)

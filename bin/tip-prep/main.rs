@@ -13,10 +13,10 @@ use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::{Outcome, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 
-/// Rusty Tip Preparation Tool (v2)
+/// Rusty Tip Preparation Tool
 #[derive(Parser, Debug)]
-#[command(name = "tip-prep-v2")]
-#[command(about = "Automated tip preparation for STM/AFM (v2)", long_about = None)]
+#[command(name = "tip-prep")]
+#[command(about = "Automated tip preparation for STM/AFM", long_about = None)]
 struct Args {
     /// Path to configuration file (required)
     #[arg(short, long, value_name = "FILE", required = true)]

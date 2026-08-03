@@ -12,8 +12,8 @@ name = "rusty_tip"
 path = "src/lib.rs"
 
 [[bin]]
-name = "tip-prep-v2"
-path = "bin/tip-prep-v2/main.rs"
+name = "tip-prep"
+path = "bin/tip-prep/main.rs"
 
 [[bin]]
 name = "cuox-finder"
