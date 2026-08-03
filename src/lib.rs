@@ -19,9 +19,8 @@ pub mod utils;
 pub mod workflow;
 
 pub use controller_types::{
-    BiasSweepPolarity, ControllerAction, ControllerState, PolaritySign,
-    PulseMethod, RandomPolaritySwitch, StabilityConfig, TipControllerConfig,
-    TipStateConfig,
+    BiasSweepPolarity, ControllerAction, ControllerState, PolaritySign, PulseMethod,
+    RandomPolaritySwitch, StabilityConfig, TipControllerConfig, TipStateConfig,
 };
 pub use error::{Error, RunOutcome};
 pub use logger::Logger;
@@ -32,14 +31,14 @@ pub use utils::{PollError, poll_until, poll_with_timeout};
 
 // Re-export nanonis-rs core types
 pub use nanonis_rs::{
-    ConnectionConfig, NanonisClient, NanonisClientBuilder, NanonisError,
-    NanonisValue, Position, TCPLoggerStream,
+    ConnectionConfig, NanonisClient, NanonisClientBuilder, NanonisError, NanonisValue, Position,
+    TCPLoggerStream,
 };
 
 // Re-export nanonis-rs motor types
 pub use nanonis_rs::motor::{
-    Amplitude, Frequency, MotorAxis, MotorDirection, MotorGroup, MotorMovement,
-    MovementMode, Position3D, StepCount,
+    Amplitude, Frequency, MotorAxis, MotorDirection, MotorGroup, MotorMovement, MovementMode,
+    Position3D, StepCount,
 };
 
 // Re-export nanonis-rs scan types
@@ -62,7 +61,7 @@ pub use nanonis_rs::z_ctrl::ZControllerHold;
 pub use nanonis_rs::signals::SignalFrame;
 
 // Re-export nanonis-rs tcplog types
-pub use nanonis_rs::tcplog::{TCPLogStatus, TCPLoggerData};
+pub use nanonis_rs::tcplog::TCPLogStatus;
 
 // Re-export nanonis-rs tip recovery types
 pub use nanonis_rs::tip_recovery::TipShaperConfig;

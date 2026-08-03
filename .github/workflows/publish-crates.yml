@@ -1,0 +1,31 @@
+# Publishes the library to crates.io on a version tag.
+#
+# Complements release.yml (cargo-dist), which builds binaries and creates the
+# GitHub Release from the same tag. cargo-dist has no built-in crates.io job,
+# so registry publishing lives here as a standalone workflow.
+#
+# Requires a CARGO_REGISTRY_TOKEN secret in the repository settings.
+name: Publish to crates.io
+
+# Same tag pattern as release.yml so the two fire together. Tags only — never
+# on PRs or branch pushes, because `cargo publish` is irreversible.
+on:
+  push:
+    tags:
+      - '**[0-9]+.[0-9]+.[0-9]+*'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # --locked builds against the committed Cargo.lock; the version published
+      # is whatever is in Cargo.toml (cargo-dist's plan job already enforces
+      # that the tag matches that version).
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

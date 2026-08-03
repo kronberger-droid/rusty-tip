@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use rusty_tip::config::{
     AppConfig, ConsoleConfig, DataAcquisitionConfig, ExperimentLoggingConfig,
-    NanonisConfig, TcpChannelMapping, TimingConfig, TipPrepConfig,
-    load_config_with_fallback,
+    NanonisConfig, SignalStabilityConfig, TcpChannelMapping, TimingConfig,
+    TipPrepConfig, load_config_with_fallback,
 };
 use rusty_tip::event::{
     ChannelForwarder, ConsoleLogger, Event, EventAccumulator, EventBus,
@@ -247,6 +247,10 @@ pub struct EditableConfig {
 
     // TCP channel mapping
     pub tcp_channel_mappings: Vec<EditableTcpMapping>,
+
+    // Carried through from the loaded config (no GUI widget yet) so the GUI
+    // honors a custom [tip_prep.signal_stability] from the config file.
+    pub signal_stability: SignalStabilityConfig,
 }
 
 impl Default for EditableConfig {
@@ -291,6 +295,7 @@ impl Default for EditableConfig {
             random_polarity_enabled: false,
             random_polarity_switch_every: "10".to_string(),
             tcp_channel_mappings: Vec::new(),
+            signal_stability: SignalStabilityConfig::default(),
         }
     }
 }
@@ -508,6 +513,7 @@ impl EditableConfig {
                         .collect()
                 })
                 .unwrap_or_default(),
+            signal_stability: app_config.tip_prep.signal_stability.clone(),
         }
     }
 
@@ -705,6 +711,7 @@ impl EditableConfig {
                 initial_z_setpoint_a: initial_z_setpoint_pa * 1e-12,
                 safe_tip_threshold: safe_tip_threshold_pa * 1e-12,
                 timing: TimingConfig::default(),
+                signal_stability: self.signal_stability.clone(),
             },
             pulse_method,
             tcp_channel_mapping: if self.tcp_channel_mappings.is_empty() {
