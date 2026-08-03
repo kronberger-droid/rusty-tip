@@ -395,7 +395,7 @@ impl SpmController for MockController {
         // slow behavior (pulse response, drift), and scatter is layered on top.
         // Keeping drift out of the within-batch samples matters — it would show
         // up as a regression slope and trip `ReadStableSignal`'s `max_slope`
-        // (default 0.01 Hz/sample), stalling the routine in retry backoff.
+        // (0.5 Hz/s by default), stalling the routine in retry backoff.
         let value = self.signal_value(index);
 
         if self.sample_noise_hz > 0.0 && index == self.freq_shift_index {

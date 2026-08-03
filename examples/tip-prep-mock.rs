@@ -291,9 +291,8 @@ fn base_config() -> AppConfig {
     t.reposition_steps = [2, 2];
     t.status_interval = 5;
 
-    let da = &mut cfg.data_acquisition;
-    da.stable_signal_samples = 32;
-    da.stable_read_retries = 1;
+    cfg.data_acquisition.stable_signal_samples = 32;
+    cfg.tip_prep.signal_stability.read_retry_count = 1;
 
     cfg.tip_prep.stability.check_stability = false;
     cfg.tip_prep.stability.scan_speed_m_s = None;

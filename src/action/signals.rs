@@ -124,8 +124,8 @@ impl Action for ReadSignalNames {
 
 /// Read a stable signal by collecting samples and checking statistical stability.
 ///
-/// Collects `num_samples` from the data stream, then checks that both
-/// the standard deviation and linear regression slope are within bounds.
+/// Collects `num_samples` from the data stream, then checks that both the
+/// standard deviation (Hz) and the drift rate (Hz/s) are within bounds.
 /// Retries with exponential backoff (100ms, 200ms, 400ms, ...) if the
 /// signal is not stable. Returns the mean of the stable batch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,12 +133,19 @@ pub struct ReadStableSignal {
     pub index: u32,
     #[serde(default = "default_num_samples")]
     pub num_samples: usize,
+    /// Noise gate: maximum standard deviation of the batch, in Hz.
     #[serde(default = "default_max_std_dev")]
     pub max_std_dev: f64,
+    /// Drift gate: maximum regression slope, in Hz/s.
     #[serde(default = "default_max_slope")]
     pub max_slope: f64,
     #[serde(default = "default_max_retries")]
     pub max_retries: usize,
+    /// Rate the samples arrive at, used to turn the per-sample regression
+    /// slope into Hz/s. Without it the effective drift tolerance would scale
+    /// with `num_samples`, so a tip could pass or fail on batch size alone.
+    #[serde(default = "default_sample_rate_hz")]
+    pub sample_rate_hz: f64,
 }
 
 fn default_num_samples() -> usize {
@@ -146,15 +153,19 @@ fn default_num_samples() -> usize {
 }
 
 fn default_max_std_dev() -> f64 {
-    1.0
+    1.5
 }
 
 fn default_max_slope() -> f64 {
-    0.01
+    0.5
 }
 
 fn default_max_retries() -> usize {
     3
+}
+
+fn default_sample_rate_hz() -> f64 {
+    2000.0
 }
 
 impl Default for ReadStableSignal {
@@ -165,6 +176,7 @@ impl Default for ReadStableSignal {
             max_std_dev: default_max_std_dev(),
             max_slope: default_max_slope(),
             max_retries: default_max_retries(),
+            sample_rate_hz: default_sample_rate_hz(),
         }
     }
 }
@@ -207,46 +219,71 @@ impl Action for ReadStableSignal {
                 // Fall through to compute on partial data as last resort
             }
 
-            let (mean, std_dev, slope) = compute_stability_metrics(&samples);
+            let (mean, std_dev, slope_per_sample) = compute_stability_metrics(&samples);
+            // Compare drift in Hz/s, not Hz/sample, so the gate does not move
+            // when `num_samples` or the stream's oversampling changes.
+            let drift = slope_per_sample * self.sample_rate_hz;
 
             let noise_ok = std_dev <= self.max_std_dev;
-            let drift_ok = slope.abs() <= self.max_slope;
+            let drift_ok = drift.abs() <= self.max_slope;
 
             if noise_ok && drift_ok {
                 log::debug!(
-                    "ReadStableSignal: index={}, samples={}, mean={:.6}, std_dev={:.4}, slope={:.6} (stable, attempt {})",
+                    "ReadStableSignal: index={}, samples={}, mean={:.6}, std_dev={:.4} Hz, drift={:.4} Hz/s (stable, attempt {})",
                     self.index,
                     samples.len(),
                     mean,
                     std_dev,
-                    slope,
+                    drift,
                     attempt
                 );
-                emit_measurement(ctx, self.index, samples.len(), mean, std_dev, slope, true);
+                emit_measurement(
+                    ctx,
+                    self.index,
+                    samples.len(),
+                    mean,
+                    std_dev,
+                    drift,
+                    slope_per_sample,
+                    true,
+                );
                 return Ok(ActionOutput::Value(mean));
             }
 
             if attempt < self.max_retries {
                 let backoff_ms = 100u64 * (1 << attempt);
                 log::debug!(
-                    "ReadStableSignal: not stable (std_dev={:.4}/{:.4}, slope={:.6}/{:.6}), retry {} in {}ms",
+                    "ReadStableSignal: not stable (std_dev={:.4}/{:.4} Hz, drift={:.4}/{:.4} Hz/s, n={}), retry {} in {}ms",
                     std_dev,
                     self.max_std_dev,
-                    slope.abs(),
+                    drift.abs(),
                     self.max_slope,
+                    samples.len(),
                     attempt + 1,
                     backoff_ms
                 );
                 std::thread::sleep(Duration::from_millis(backoff_ms));
             } else {
                 log::warn!(
-                    "ReadStableSignal: signal not stable after {} retries (std_dev={:.4}, slope={:.6}), using mean={:.6}",
+                    "ReadStableSignal: signal not stable after {} retries (std_dev={:.4}/{:.4} Hz, drift={:.4}/{:.4} Hz/s, n={}), using mean={:.6}",
                     self.max_retries,
                     std_dev,
-                    slope,
+                    self.max_std_dev,
+                    drift.abs(),
+                    self.max_slope,
+                    samples.len(),
                     mean
                 );
-                emit_measurement(ctx, self.index, samples.len(), mean, std_dev, slope, false);
+                emit_measurement(
+                    ctx,
+                    self.index,
+                    samples.len(),
+                    mean,
+                    std_dev,
+                    drift,
+                    slope_per_sample,
+                    false,
+                );
                 return Ok(ActionOutput::Value(mean));
             }
         }
@@ -272,7 +309,8 @@ fn emit_measurement(
     n: usize,
     mean: f64,
     std_dev: f64,
-    slope: f64,
+    drift: f64,
+    slope_per_sample: f64,
     stable: bool,
 ) {
     ctx.events.emit(Event::data_collected(
@@ -281,7 +319,8 @@ fn emit_measurement(
             "index": index,
             "value": mean,
             "std_dev": std_dev,
-            "slope": slope,
+            "slope": drift,
+            "slope_per_sample": slope_per_sample,
             "n": n,
             "stable": stable,
         }),
@@ -289,6 +328,10 @@ fn emit_measurement(
 }
 
 /// Compute mean, standard deviation, and linear regression slope from sample data.
+///
+/// The slope is per sample, since this works on a bare slice with no notion of
+/// how fast the samples arrived. Callers holding a sample rate should scale it
+/// to Hz/s before comparing against a threshold.
 pub(crate) fn compute_stability_metrics(data: &[f64]) -> (f64, f64, f64) {
     if data.is_empty() {
         return (f64::NAN, 0.0, 0.0);
@@ -329,4 +372,37 @@ pub(crate) fn compute_stability_metrics(data: &[f64]) -> (f64, f64, f64) {
     };
 
     (mean, std_dev, slope)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The slope is per sample, and a caller's sample rate is what turns it
+    /// into the Hz/s that thresholds are expressed in. Pinned because getting
+    /// this backwards makes the drift gate scale with the batch size: the same
+    /// tip then passes or fails on `num_samples` alone.
+    #[test]
+    fn slope_is_per_sample_and_scales_to_hz_per_second() {
+        // 0.01 Hz per sample, dead straight.
+        let ramp: Vec<f64> = (0..100).map(|i| i as f64 * 0.01).collect();
+
+        let (_, std_dev, slope_per_sample) = compute_stability_metrics(&ramp);
+        assert!((slope_per_sample - 0.01).abs() < 1e-9);
+
+        // At 2 kHz that ramp is 20 Hz/s, far past a 0.5 Hz/s gate...
+        assert!((slope_per_sample * 2000.0 - 20.0).abs() < 1e-6);
+        // ...though the batch is not *noisy*, which is the other, separate gate.
+        assert!(std_dev > 0.0);
+    }
+
+    #[test]
+    fn a_flat_batch_has_no_drift_at_any_sample_rate() {
+        let flat = vec![-1.5_f64; 64];
+        let (mean, std_dev, slope_per_sample) = compute_stability_metrics(&flat);
+
+        assert!((mean - -1.5).abs() < 1e-12);
+        assert_eq!(std_dev, 0.0);
+        assert_eq!(slope_per_sample, 0.0);
+    }
 }

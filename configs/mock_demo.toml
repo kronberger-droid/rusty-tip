@@ -22,12 +22,6 @@ sample_rate = 2000
 # (its std dev rides along on the event for an error bar).
 stable_signal_samples = 64
 
-# Stability gates on the batch. The mock's per-sample scatter (0.25 Hz) sits well
-# inside max_std_dev, so reads pass without spending the run in retry backoff.
-max_std_dev = 1.0
-max_slope = 0.01
-stable_read_retries = 1
-
 [experiment_logging]
 enabled = true
 output_path = "./experiments"
@@ -44,6 +38,13 @@ sharp_tip_bounds = [-2.0, 0.0]
 # That takes O(100) pulses and varies a lot run to run (the reference data set
 # needed 287 pulses once and 9 another time), so the limit has to be generous.
 max_cycles = 600
+
+[tip_prep.signal_stability]
+# Gates on each batch. The mock's per-sample scatter (0.25 Hz) sits well inside
+# max_std_dev_hz, so reads pass without spending the run in retry backoff.
+max_std_dev_hz = 1.0
+max_slope_hz_per_s = 20.0
+read_retry_count = 1
 
 [tip_prep.timing]
 pulse_width_ms = 50

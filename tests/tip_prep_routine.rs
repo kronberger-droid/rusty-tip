@@ -35,11 +35,14 @@ fn fast_config() -> AppConfig {
     t.reposition_steps = [1, 1];
     t.status_interval = 100;
 
-    let da = &mut cfg.data_acquisition;
-    da.stable_signal_samples = 16;
-    da.max_std_dev = 1.0;
-    da.max_slope = 0.01;
-    da.stable_read_retries = 0;
+    cfg.data_acquisition.stable_signal_samples = 16;
+
+    // 20 Hz/s is the old 0.01 Hz/sample gate restated at the 2 kHz default
+    // sample rate, so these tests keep judging drift exactly as before.
+    let ss = &mut cfg.tip_prep.signal_stability;
+    ss.max_std_dev_hz = 1.0;
+    ss.max_slope_hz_per_s = 20.0;
+    ss.read_retry_count = 0;
 
     // Default: stability checking OFF so most tests stop at "sharp confirmed".
     // Tests that exercise the sweep turn it back on explicitly.
