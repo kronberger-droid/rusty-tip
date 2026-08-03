@@ -4,8 +4,8 @@ use nanonis_rs::scan::{ScanAction, ScanDirection};
 
 use crate::action::{Action, ActionContext, ActionOutput};
 use crate::machine_state::{
-    ActionKind, MachineState, ScanActivity, StateEffects, StateField,
-    StateRequirements, TipEngagement,
+    ActionKind, MachineState, ScanActivity, StateEffects, StateField, StateRequirements,
+    TipEngagement,
 };
 use crate::spm_controller::Capability;
 
@@ -78,10 +78,8 @@ impl Action for ScanControl {
         vec![Capability::Scanning]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
-        ctx.controller.scan_action(
-            self.action.clone().into(),
-            self.direction.clone().into(),
-        )?;
+        ctx.controller
+            .scan_action(self.action.clone().into(), self.direction.clone().into())?;
         Ok(ActionOutput::Unit)
     }
 
@@ -90,9 +88,7 @@ impl Action for ScanControl {
             ScanActionParam::Start | ScanActionParam::Resume => {
                 StateRequirements::none().tip(TipEngagement::Approached)
             }
-            ScanActionParam::Stop | ScanActionParam::Pause => {
-                StateRequirements::none()
-            }
+            ScanActionParam::Stop | ScanActionParam::Pause => StateRequirements::none(),
         }
     }
 

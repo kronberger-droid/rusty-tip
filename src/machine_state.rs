@@ -171,9 +171,7 @@ impl MachineState {
             StateField::ZSetpointA => self.z_setpoint_a.needs_resolution(),
             StateField::ZController => self.z_controller.needs_resolution(),
             StateField::Scan => self.scan.needs_resolution(),
-            StateField::SafeTipEnabled => {
-                self.safe_tip_enabled.needs_resolution()
-            }
+            StateField::SafeTipEnabled => self.safe_tip_enabled.needs_resolution(),
         }
     }
 
@@ -281,10 +279,7 @@ impl StateRequirements {
     }
 }
 
-fn check_requirement(
-    req: &FieldRequirement,
-    state: &MachineState,
-) -> Option<Violation> {
+fn check_requirement(req: &FieldRequirement, state: &MachineState) -> Option<Violation> {
     match req {
         FieldRequirement::Known(field) => {
             if state.needs_resolution(*field) {
@@ -675,8 +670,7 @@ mod tests {
         let state = MachineState::uninitialized();
 
         // Chain: BiasPulse (needs approached) without prior approach
-        let pulse_expects =
-            StateRequirements::none().tip(TipEngagement::Approached);
+        let pulse_expects = StateRequirements::none().tip(TipEngagement::Approached);
         let pulse_effects = StateEffects::none();
 
         let chain: Vec<(&str, &StateRequirements, &StateEffects)> =
@@ -693,11 +687,9 @@ mod tests {
         let state = MachineState::uninitialized();
 
         let approach_expects = StateRequirements::none();
-        let approach_effects =
-            StateEffects::none().set_tip(TipEngagement::Approached);
+        let approach_effects = StateEffects::none().set_tip(TipEngagement::Approached);
 
-        let pulse_expects =
-            StateRequirements::none().tip(TipEngagement::Approached);
+        let pulse_expects = StateRequirements::none().tip(TipEngagement::Approached);
         let pulse_effects = StateEffects::none();
 
         let chain: Vec<(&str, &StateRequirements, &StateEffects)> = vec![
@@ -713,8 +705,7 @@ mod tests {
     fn chain_validation_catches_scan_start_without_approach() {
         let state = MachineState::uninitialized();
 
-        let scan_expects =
-            StateRequirements::none().tip(TipEngagement::Approached);
+        let scan_expects = StateRequirements::none().tip(TipEngagement::Approached);
         let scan_effects = StateEffects::none().set_scan(ScanActivity::Running);
 
         let chain: Vec<(&str, &StateRequirements, &StateEffects)> =

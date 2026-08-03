@@ -2,13 +2,12 @@ use serde::{Deserialize, Serialize};
 
 // Re-export nanonis-rs types from their respective submodules
 pub use nanonis_rs::motor::{
-    Amplitude, Frequency, MotorAxis, MotorDirection, MotorDisplacement,
-    MotorGroup, MotorMovement, MovementMode, Position3D, StepCount,
+    Amplitude, Frequency, MotorAxis, MotorDirection, MotorDisplacement, MotorGroup, MotorMovement,
+    MovementMode, Position3D, StepCount,
 };
 pub use nanonis_rs::oscilloscope::{
-    OsciData, OsciTriggerMode, OscilloscopeIndex, OversamplingIndex,
-    SampleCount, TimebaseIndex, TriggerConfig, TriggerLevel, TriggerMode,
-    TriggerSlope,
+    OsciData, OsciTriggerMode, OscilloscopeIndex, OversamplingIndex, SampleCount, TimebaseIndex,
+    TriggerConfig, TriggerLevel, TriggerMode, TriggerSlope,
 };
 
 /// Signal stability statistics for oscilloscope data analysis.
@@ -87,10 +86,10 @@ pub enum TipShape {
 #[derive(Debug, Clone)]
 pub struct SessionMetadata {
     pub session_id: String,
-    pub signal_names: Vec<String>, // All signal names
-    pub active_indices: Vec<usize>, // Which signals are being monitored
+    pub signal_names: Vec<String>,   // All signal names
+    pub active_indices: Vec<usize>,  // Which signals are being monitored
     pub primary_signal_index: usize, // Index of the primary signal
-    pub session_start: f64,        // Session start timestamp
+    pub session_start: f64,          // Session start timestamp
 }
 
 /// Extended DataToGet with application-specific Stable variant
@@ -160,12 +159,8 @@ impl AutoApproachResult {
         match self {
             AutoApproachResult::Failed(msg) => Some(msg),
             AutoApproachResult::Timeout => Some("Auto-approach timed out"),
-            AutoApproachResult::AlreadyRunning => {
-                Some("Auto-approach already running")
-            }
-            AutoApproachResult::Cancelled => {
-                Some("Auto-approach was cancelled")
-            }
+            AutoApproachResult::AlreadyRunning => Some("Auto-approach already running"),
+            AutoApproachResult::Cancelled => Some("Auto-approach was cancelled"),
             AutoApproachResult::Success => None,
         }
     }

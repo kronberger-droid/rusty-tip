@@ -318,9 +318,7 @@ pub fn load_config(config_path: &Path) -> Result<AppConfig, ConfigError> {
 /// - If a path is provided and the file exists, loads from that file.
 /// - If a path is provided but the file doesn't exist, returns an error.
 /// - If no path is provided, tries common locations, then falls back to defaults.
-pub fn load_config_with_fallback(
-    config_path: Option<&Path>,
-) -> Result<AppConfig, ConfigError> {
+pub fn load_config_with_fallback(config_path: Option<&Path>) -> Result<AppConfig, ConfigError> {
     let mut builder = Config::builder();
     let mut config_file_found = false;
 

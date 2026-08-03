@@ -1,8 +1,6 @@
 mod observer;
 
-pub use observer::{
-    ChannelForwarder, ConsoleLogger, EventAccumulator, FileLogger, Observer,
-};
+pub use observer::{ChannelForwarder, ConsoleLogger, EventAccumulator, FileLogger, Observer};
 
 use std::time::{Duration, SystemTime};
 
@@ -65,11 +63,7 @@ impl Event {
         }
     }
 
-    pub fn action_completed(
-        action: &str,
-        output: &ActionOutput,
-        duration: Duration,
-    ) -> Self {
+    pub fn action_completed(action: &str, output: &ActionOutput, duration: Duration) -> Self {
         let output_json = match output {
             ActionOutput::Value(v) => serde_json::json!(v),
             ActionOutput::Values(vs) => serde_json::json!(vs),
@@ -84,11 +78,7 @@ impl Event {
         }
     }
 
-    pub fn action_failed(
-        action: &str,
-        error: &str,
-        duration: Duration,
-    ) -> Self {
+    pub fn action_failed(action: &str, error: &str, duration: Duration) -> Self {
         Event::ActionFailed {
             action: action.into(),
             error: error.into(),
@@ -162,10 +152,7 @@ mod system_time_serde {
     use serde::Serializer;
     use std::time::SystemTime;
 
-    pub fn serialize<S: Serializer>(
-        time: &SystemTime,
-        ser: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(time: &SystemTime, ser: S) -> Result<S::Ok, S::Error> {
         let duration = time
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default();
@@ -177,10 +164,7 @@ mod duration_ms_serde {
     use serde::Serializer;
     use std::time::Duration;
 
-    pub fn serialize<S: Serializer>(
-        dur: &Duration,
-        ser: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(dur: &Duration, ser: S) -> Result<S::Ok, S::Error> {
         ser.serialize_f64(dur.as_secs_f64() * 1000.0)
     }
 }
@@ -212,18 +196,12 @@ mod tests {
     #[test]
     fn event_action_completed_converts_output() {
         let output = ActionOutput::Value(f64::consts::PI);
-        let event = Event::action_completed(
-            "read_bias",
-            &output,
-            Duration::from_millis(50),
-        );
+        let event = Event::action_completed("read_bias", &output, Duration::from_millis(50));
         match event {
             Event::ActionCompleted {
                 output, duration, ..
             } => {
-                assert!(
-                    (output.as_f64().unwrap() - f64::consts::PI).abs() < 1e-10
-                );
+                assert!((output.as_f64().unwrap() - f64::consts::PI).abs() < 1e-10);
                 assert!(duration.as_millis() == 50);
             }
             _ => panic!("Wrong variant"),
@@ -232,11 +210,7 @@ mod tests {
 
     #[test]
     fn event_action_completed_unit_is_null() {
-        let event = Event::action_completed(
-            "wait",
-            &ActionOutput::Unit,
-            Duration::ZERO,
-        );
+        let event = Event::action_completed("wait", &ActionOutput::Unit, Duration::ZERO);
         match event {
             Event::ActionCompleted { output, .. } => {
                 assert!(output.is_null());
@@ -247,11 +221,7 @@ mod tests {
 
     #[test]
     fn event_action_failed() {
-        let event = Event::action_failed(
-            "set_bias",
-            "timeout",
-            Duration::from_millis(100),
-        );
+        let event = Event::action_failed("set_bias", "timeout", Duration::from_millis(100));
         match event {
             Event::ActionFailed { action, error, .. } => {
                 assert_eq!(action, "set_bias");
@@ -275,10 +245,7 @@ mod tests {
 
     #[test]
     fn event_custom() {
-        let event = Event::custom(
-            "workflow_started",
-            serde_json::json!({"name": "prep"}),
-        );
+        let event = Event::custom("workflow_started", serde_json::json!({"name": "prep"}));
         match event {
             Event::Custom { kind, data } => {
                 assert_eq!(kind, "workflow_started");
@@ -301,11 +268,8 @@ mod tests {
 
     #[test]
     fn duration_serializes_as_milliseconds() {
-        let event = Event::action_completed(
-            "test",
-            &ActionOutput::Unit,
-            Duration::from_millis(1234),
-        );
+        let event =
+            Event::action_completed("test", &ActionOutput::Unit, Duration::from_millis(1234));
         let json = serde_json::to_value(&event).unwrap();
         let dur_ms = json["duration"].as_f64().unwrap();
         assert!((dur_ms - 1234.0).abs() < 1.0);

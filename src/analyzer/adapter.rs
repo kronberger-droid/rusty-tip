@@ -61,22 +61,19 @@ impl Action for RunAnalyzer {
         self.analyzer.description()
     }
 
-    fn execute(
-        &self,
-        ctx: &mut ActionContext,
-    ) -> std::result::Result<ActionOutput, SpmError> {
+    fn execute(&self, ctx: &mut ActionContext) -> std::result::Result<ActionOutput, SpmError> {
         // Pull scan frame from the DataStore
-        let frame: serde_json::Value = ctx
-            .store
-            .get_raw(&self.source_key)
-            .cloned()
-            .ok_or_else(|| {
-                SpmError::Workflow(format!(
-                    "RunAnalyzer: no \"{}\" in DataStore. Run GrabScanFrame \
+        let frame: serde_json::Value =
+            ctx.store
+                .get_raw(&self.source_key)
+                .cloned()
+                .ok_or_else(|| {
+                    SpmError::Workflow(format!(
+                        "RunAnalyzer: no \"{}\" in DataStore. Run GrabScanFrame \
                      (or set source_key) first.",
-                    self.source_key
-                ))
-            })?;
+                        self.source_key
+                    ))
+                })?;
 
         let channel_name = frame
             .get("channel_name")

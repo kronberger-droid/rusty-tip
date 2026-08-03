@@ -19,9 +19,7 @@ impl From<AcquisitionModeParam> for AcquisitionMode {
         match p {
             AcquisitionModeParam::Current => AcquisitionMode::Current,
             AcquisitionModeParam::NextTrigger => AcquisitionMode::NextTrigger,
-            AcquisitionModeParam::WaitTwoTriggers => {
-                AcquisitionMode::WaitTwoTriggers
-            }
+            AcquisitionModeParam::WaitTwoTriggers => AcquisitionMode::WaitTwoTriggers,
         }
     }
 }

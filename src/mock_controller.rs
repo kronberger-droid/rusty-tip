@@ -53,20 +53,17 @@ use std::time::Duration;
 use parking_lot::Mutex;
 
 use nanonis_rs::Position;
-use nanonis_rs::motor::{
-    MotorDirection, MotorDisplacement, MovementMode, Position3D,
-};
+use nanonis_rs::motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D};
 use nanonis_rs::oscilloscope::OsciData;
 use nanonis_rs::scan::{
-    AutopasteMode, AutosaveMode, ScanAction, ScanConfig, ScanDirection,
-    ScanProps, ScanPropsBuilder,
+    AutopasteMode, AutosaveMode, ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder,
 };
 use nanonis_rs::tcplog::TCPLogStatus;
 use nanonis_rs::tip_recovery::TipShaperConfig;
 
 use crate::spm_controller::{
-    AcquisitionMode, Capability, DataStreamStatus, Result, SpmController,
-    TriggerSetup, ZControllerStatus, ZHomeMode,
+    AcquisitionMode, Capability, DataStreamStatus, Result, SpmController, TriggerSetup,
+    ZControllerStatus, ZHomeMode,
 };
 use crate::spm_error::SpmError;
 
@@ -104,12 +101,8 @@ impl FaultKind {
                 ),
                 context: "mock controller".into(),
             },
-            FaultKind::Timeout => {
-                SpmError::Timeout("mock: injected timeout".into())
-            }
-            FaultKind::Protocol => {
-                SpmError::Protocol("mock: injected protocol error".into())
-            }
+            FaultKind::Timeout => SpmError::Timeout("mock: injected timeout".into()),
+            FaultKind::Protocol => SpmError::Protocol("mock: injected protocol error".into()),
             FaultKind::Hardware(code) => SpmError::Hardware {
                 code,
                 message: "mock: injected hardware error".into(),
@@ -303,9 +296,10 @@ impl MockController {
         if let Some(kind) = self.faults_always.get(method).copied() {
             return Err(self.fire(kind));
         }
-        let once = self.faults_once.get(method).and_then(|faults| {
-            faults.iter().find(|f| f.on_call == n).map(|f| f.kind)
-        });
+        let once = self
+            .faults_once
+            .get(method)
+            .and_then(|faults| faults.iter().find(|f| f.on_call == n).map(|f| f.kind));
         if let Some(kind) = once {
             return Err(self.fire(kind));
         }
@@ -375,11 +369,7 @@ impl SpmController for MockController {
         Ok(self.signal_value(index))
     }
 
-    fn read_signals(
-        &mut self,
-        indices: &[u32],
-        _wait: bool,
-    ) -> Result<Vec<f64>> {
+    fn read_signals(&mut self, indices: &[u32], _wait: bool) -> Result<Vec<f64>> {
         self.enter("read_signals")?;
         Ok(indices.iter().map(|&i| self.signal_value(i)).collect())
     }
@@ -394,11 +384,7 @@ impl SpmController for MockController {
         ])
     }
 
-    fn read_signal_samples(
-        &mut self,
-        index: u32,
-        num_samples: usize,
-    ) -> Result<Vec<f64>> {
+    fn read_signal_samples(&mut self, index: u32, num_samples: usize) -> Result<Vec<f64>> {
         self.enter("read_signal_samples")?;
         if num_samples == 0 {
             return Err(SpmError::Protocol(
@@ -505,32 +491,19 @@ impl SpmController for MockController {
 
     // -- Motor --
 
-    fn move_motor(
-        &mut self,
-        _direction: MotorDirection,
-        _steps: u16,
-        _wait: bool,
-    ) -> Result<()> {
+    fn move_motor(&mut self, _direction: MotorDirection, _steps: u16, _wait: bool) -> Result<()> {
         self.enter("move_motor")?;
         self.obs.lock().motor_moves += 1;
         Ok(())
     }
 
-    fn move_motor_3d(
-        &mut self,
-        _displacement: MotorDisplacement,
-        _wait: bool,
-    ) -> Result<()> {
+    fn move_motor_3d(&mut self, _displacement: MotorDisplacement, _wait: bool) -> Result<()> {
         self.enter("move_motor_3d")?;
         self.obs.lock().motor_moves += 1;
         Ok(())
     }
 
-    fn move_motor_closed_loop(
-        &mut self,
-        _target: Position3D,
-        _mode: MovementMode,
-    ) -> Result<()> {
+    fn move_motor_closed_loop(&mut self, _target: Position3D, _mode: MovementMode) -> Result<()> {
         self.enter("move_motor_closed_loop")?;
         self.obs.lock().motor_moves += 1;
         Ok(())
@@ -543,11 +516,7 @@ impl SpmController for MockController {
 
     // -- Scanning --
 
-    fn scan_action(
-        &mut self,
-        action: ScanAction,
-        _direction: ScanDirection,
-    ) -> Result<()> {
+    fn scan_action(&mut self, action: ScanAction, _direction: ScanDirection) -> Result<()> {
         self.enter("scan_action")?;
         let mut obs = self.obs.lock();
         match action {
@@ -656,11 +625,7 @@ impl SpmController for MockController {
 
     // -- Data Stream --
 
-    fn data_stream_configure(
-        &mut self,
-        _channels: &[i32],
-        _oversampling: i32,
-    ) -> Result<()> {
+    fn data_stream_configure(&mut self, _channels: &[i32], _oversampling: i32) -> Result<()> {
         self.enter("data_stream_configure")?;
         Ok(())
     }
@@ -760,12 +725,7 @@ impl MockControllerBuilder {
     ///
     /// `method` is the [`SpmController`] method name, e.g. `"auto_approach"`,
     /// `"withdraw"`, `"read_signal_samples"`, `"scan_action"`.
-    pub fn fail_on_call(
-        mut self,
-        method: &'static str,
-        nth: usize,
-        kind: FaultKind,
-    ) -> Self {
+    pub fn fail_on_call(mut self, method: &'static str, nth: usize, kind: FaultKind) -> Self {
         self.faults_once
             .entry(method)
             .or_default()
@@ -830,11 +790,7 @@ pub mod models {
 
     /// Blunt (`blunt` Hz) until `pulses` bias pulses have landed, then sharp
     /// (`sharp` Hz) forever after. The classic "conditioning works" trajectory.
-    pub fn sharpens_after(
-        pulses: usize,
-        blunt: f64,
-        sharp: f64,
-    ) -> FreqShiftModel {
+    pub fn sharpens_after(pulses: usize, blunt: f64, sharp: f64) -> FreqShiftModel {
         Box::new(move |obs: &MockObservations| {
             if obs.pulses.len() >= pulses {
                 sharp
@@ -994,23 +950,19 @@ pub mod models {
 
                 if rng.uniform() < params.excursion_chance {
                     let (lo, hi) = params.excursion_depth;
-                    outlier = Some(
-                        params.baseline - (lo + (hi - lo) * rng.uniform()),
-                    );
+                    outlier = Some(params.baseline - (lo + (hi - lo) * rng.uniform()));
                     continue;
                 }
 
                 // A harder pulse scrambles the apex more, so it retains less of
                 // the previous state. `phi^strength` decays smoothly with
                 // voltage and stays inside [0, 1).
-                let strength =
-                    (voltage.abs() / params.reference_voltage).clamp(0.25, 4.0);
+                let strength = (voltage.abs() / params.reference_voltage).clamp(0.25, 4.0);
                 let phi = params.persistence.clamp(0.0, 0.999).powf(strength);
                 let innovation = params.spread * (1.0 - phi * phi).sqrt();
 
-                state = params.baseline
-                    + phi * (state - params.baseline)
-                    + rng.normal() * innovation;
+                state =
+                    params.baseline + phi * (state - params.baseline) + rng.normal() * innovation;
             }
 
             // Random walk, not white noise: consecutive reads stay correlated
@@ -1136,8 +1088,7 @@ mod tests {
             .build();
 
         let samples = mock.read_signal_samples(0, 512).unwrap();
-        let (mean, std_dev, _) =
-            crate::action::signals::compute_stability_metrics(&samples);
+        let (mean, std_dev, _) = crate::action::signals::compute_stability_metrics(&samples);
 
         // Scattered, but centered on the model value.
         assert!(std_dev > 0.2 && std_dev < 0.4, "std_dev was {std_dev}");
@@ -1195,8 +1146,7 @@ mod tests {
         // `baseline` and `spread` are meant to set.
         let mut sorted = values.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let quantile =
-            |q: f64| sorted[((sorted.len() - 1) as f64 * q) as usize];
+        let quantile = |q: f64| sorted[((sorted.len() - 1) as f64 * q) as usize];
         let median = quantile(0.5);
         // IQR / 1.349 estimates the sd of a normal.
         let robust_spread = (quantile(0.75) - quantile(0.25)) / 1.349;
@@ -1217,8 +1167,7 @@ mod tests {
         let quarter = values.len() / 4;
         let spread_of = |xs: &[f64]| {
             let m = xs.iter().sum::<f64>() / xs.len() as f64;
-            (xs.iter().map(|v| (v - m).powi(2)).sum::<f64>() / xs.len() as f64)
-                .sqrt()
+            (xs.iter().map(|v| (v - m).powi(2)).sum::<f64>() / xs.len() as f64).sqrt()
         };
         let early = spread_of(&values[..quarter]);
         let late = spread_of(&values[values.len() - quarter..]);
@@ -1248,8 +1197,7 @@ mod tests {
 
         let n = values.len();
         let mean = values.iter().sum::<f64>() / n as f64;
-        let var =
-            values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n as f64;
+        let var = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n as f64;
         let cov = values
             .windows(2)
             .map(|w| (w[0] - mean) * (w[1] - mean))

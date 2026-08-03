@@ -116,10 +116,7 @@ impl Action for ReadSignalNames {
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let names = ctx.controller.signal_names()?;
         let json = serde_json::to_value(names).map_err(|e| {
-            crate::spm_error::SpmError::Protocol(format!(
-                "Failed to serialize signal names: {}",
-                e
-            ))
+            crate::spm_error::SpmError::Protocol(format!("Failed to serialize signal names: {}", e))
         })?;
         Ok(ActionOutput::Data(json))
     }
@@ -225,15 +222,7 @@ impl Action for ReadStableSignal {
                     slope,
                     attempt
                 );
-                emit_measurement(
-                    ctx,
-                    self.index,
-                    samples.len(),
-                    mean,
-                    std_dev,
-                    slope,
-                    true,
-                );
+                emit_measurement(ctx, self.index, samples.len(), mean, std_dev, slope, true);
                 return Ok(ActionOutput::Value(mean));
             }
 
@@ -257,15 +246,7 @@ impl Action for ReadStableSignal {
                     slope,
                     mean
                 );
-                emit_measurement(
-                    ctx,
-                    self.index,
-                    samples.len(),
-                    mean,
-                    std_dev,
-                    slope,
-                    false,
-                );
+                emit_measurement(ctx, self.index, samples.len(), mean, std_dev, slope, false);
                 return Ok(ActionOutput::Value(mean));
             }
         }

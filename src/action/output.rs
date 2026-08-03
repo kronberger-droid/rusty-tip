@@ -33,8 +33,7 @@ mod tests {
 
     #[test]
     fn values_serializes_tagged() {
-        let output =
-            ActionOutput::Values(vec![("x".into(), 1.0), ("y".into(), 2.0)]);
+        let output = ActionOutput::Values(vec![("x".into(), 1.0), ("y".into(), 2.0)]);
         let v = serde_json::to_value(&output).unwrap();
         assert_eq!(v["type"], "values");
         assert!(v["data"].is_array());

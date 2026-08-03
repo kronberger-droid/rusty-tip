@@ -107,11 +107,7 @@ impl Step {
     }
 
     /// Convenience: create a Do step that stores its result.
-    pub fn action_store(
-        name: &str,
-        params: serde_json::Value,
-        store_as: &str,
-    ) -> Self {
+    pub fn action_store(name: &str, params: serde_json::Value, store_as: &str) -> Self {
         Step::Do {
             action: name.into(),
             params,
@@ -136,11 +132,7 @@ impl Step {
     }
 
     /// Convenience: create a Loop step with an exit condition.
-    pub fn repeat_until(
-        body: Step,
-        until: Condition,
-        max_iterations: u32,
-    ) -> Self {
+    pub fn repeat_until(body: Step, until: Condition, max_iterations: u32) -> Self {
         Step::Loop {
             body: Box::new(body),
             until: Some(until),

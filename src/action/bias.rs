@@ -4,8 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::action::{Action, ActionContext, ActionOutput};
 use crate::machine_state::{
-    ActionKind, MachineState, StateEffects, StateField, StateRequirements,
-    TipEngagement,
+    ActionKind, MachineState, StateEffects, StateField, StateRequirements, TipEngagement,
 };
 use crate::spm_controller::{Capability, ZControllerStatus};
 

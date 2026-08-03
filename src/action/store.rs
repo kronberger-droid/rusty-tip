@@ -21,11 +21,7 @@ impl DataStore {
 
     /// Store a serializable value under the given key.
     /// Overwrites any existing value at that key.
-    pub fn set<T: Serialize>(
-        &mut self,
-        key: &str,
-        value: &T,
-    ) -> Result<(), SpmError> {
+    pub fn set<T: Serialize>(&mut self, key: &str, value: &T) -> Result<(), SpmError> {
         let json = serde_json::to_value(value).map_err(|e| {
             SpmError::Protocol(format!(
                 "Failed to serialize value for key '{}': {}",

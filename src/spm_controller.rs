@@ -6,9 +6,7 @@ use nanonis_rs::{
     Position,
     motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D},
     oscilloscope::{OsciData, TriggerConfig},
-    scan::{
-        ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder,
-    },
+    scan::{ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder},
     tcplog::TCPLogStatus,
     tip_recovery::TipShaperConfig,
 };
@@ -103,13 +101,8 @@ pub trait SpmController: Send {
     }
 
     // -- Signals --
-    fn read_signal(&mut self, index: u32, wait_for_newest: bool)
-    -> Result<f64>;
-    fn read_signals(
-        &mut self,
-        indices: &[u32],
-        wait_for_newest: bool,
-    ) -> Result<Vec<f64>>;
+    fn read_signal(&mut self, index: u32, wait_for_newest: bool) -> Result<f64>;
+    fn read_signals(&mut self, indices: &[u32], wait_for_newest: bool) -> Result<Vec<f64>>;
     fn signal_names(&mut self) -> Result<Vec<String>>;
 
     // -- Bias --
@@ -138,30 +131,13 @@ pub trait SpmController: Send {
     fn set_position(&mut self, pos: Position, wait: bool) -> Result<()>;
 
     // -- Motor (Coarse Positioning) --
-    fn move_motor(
-        &mut self,
-        direction: MotorDirection,
-        steps: u16,
-        wait: bool,
-    ) -> Result<()>;
-    fn move_motor_3d(
-        &mut self,
-        displacement: MotorDisplacement,
-        wait: bool,
-    ) -> Result<()>;
-    fn move_motor_closed_loop(
-        &mut self,
-        target: Position3D,
-        mode: MovementMode,
-    ) -> Result<()>;
+    fn move_motor(&mut self, direction: MotorDirection, steps: u16, wait: bool) -> Result<()>;
+    fn move_motor_3d(&mut self, displacement: MotorDisplacement, wait: bool) -> Result<()>;
+    fn move_motor_closed_loop(&mut self, target: Position3D, mode: MovementMode) -> Result<()>;
     fn stop_motor(&mut self) -> Result<()>;
 
     // -- Scanning --
-    fn scan_action(
-        &mut self,
-        action: ScanAction,
-        direction: ScanDirection,
-    ) -> Result<()>;
+    fn scan_action(&mut self, action: ScanAction, direction: ScanDirection) -> Result<()>;
     fn scan_status(&mut self) -> Result<bool>;
     fn scan_props_get(&mut self) -> Result<ScanProps>;
     fn scan_props_set(&mut self, props: ScanPropsBuilder) -> Result<()>;
@@ -192,12 +168,8 @@ pub trait SpmController: Send {
 
     // -- Tip Shaper --
     // Combines props_set + start
-    fn tip_shaper(
-        &mut self,
-        config: &TipShaperConfig,
-        wait: bool,
-        timeout: Duration,
-    ) -> Result<()>;
+    fn tip_shaper(&mut self, config: &TipShaperConfig, wait: bool, timeout: Duration)
+    -> Result<()>;
 
     // -- PLL --
     fn pll_center_freq_shift(&mut self) -> Result<()>;
@@ -216,11 +188,7 @@ pub trait SpmController: Send {
     fn safe_tip_enabled(&mut self) -> Result<bool>;
 
     // -- TCP Logger --
-    fn data_stream_configure(
-        &mut self,
-        channels: &[i32],
-        oversampling: i32,
-    ) -> Result<()>;
+    fn data_stream_configure(&mut self, channels: &[i32], oversampling: i32) -> Result<()>;
     fn data_stream_start(&mut self) -> Result<()>;
     fn data_stream_stop(&mut self) -> Result<()>;
     fn data_stream_status(&mut self) -> Result<DataStreamStatus>;
@@ -241,11 +209,7 @@ pub trait SpmController: Send {
     /// this to collect frames from the stream instead.
     ///
     /// `index` is the same signal index used by `read_signal`.
-    fn read_signal_samples(
-        &mut self,
-        index: u32,
-        num_samples: usize,
-    ) -> Result<Vec<f64>> {
+    fn read_signal_samples(&mut self, index: u32, num_samples: usize) -> Result<Vec<f64>> {
         if num_samples == 0 {
             return Err(SpmError::Protocol(
                 "read_signal_samples: num_samples must be > 0".into(),
@@ -261,11 +225,7 @@ pub trait SpmController: Send {
     /// Read a noise-reduced signal value by averaging multiple samples.
     ///
     /// Convenience wrapper around `read_signal_samples` that returns the mean.
-    fn read_stable_signal(
-        &mut self,
-        index: u32,
-        num_samples: usize,
-    ) -> Result<f64> {
+    fn read_stable_signal(&mut self, index: u32, num_samples: usize) -> Result<f64> {
         let samples = self.read_signal_samples(index, num_samples)?;
         let mean = samples.iter().sum::<f64>() / samples.len() as f64;
         Ok(mean)
