@@ -4,6 +4,7 @@
 [![docs.rs](https://img.shields.io/docsrs/rusty-tip)](https://docs.rs/rusty-tip)
 [![License: MIT](https://img.shields.io/crates/l/rusty-tip)](https://github.com/kronberger-droid/rusty-tip/blob/main/LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/kronberger-droid/rusty-tip)](https://github.com/kronberger-droid/rusty-tip/releases)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20325230.svg)](https://doi.org/10.5281/zenodo.20325230)
 
 Rust library and tools for automated STM/AFM tip preparation on Nanonis SPM systems.
 

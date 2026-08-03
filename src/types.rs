@@ -68,7 +68,7 @@ pub use nanonis_rs::Position;
 pub use nanonis_rs::bias::PulseMode;
 pub use nanonis_rs::scan::{ScanAction, ScanConfig, ScanDirection, ScanFrame};
 pub use nanonis_rs::signals::SignalFrame;
-pub use nanonis_rs::tcplog::{TCPLogStatus, TCPLoggerData};
+pub use nanonis_rs::tcplog::TCPLogStatus;
 pub use nanonis_rs::z_ctrl::ZControllerHold;
 // DataToGet is extended locally with Stable variant
 
