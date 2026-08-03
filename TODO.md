@@ -22,7 +22,7 @@
 
 ## Machine testing (v2 rewrite)
 
-- Validate `tip-prep-v2` end-to-end on the real machine.
+- Validate `tip-prep` end-to-end on the real machine.
 - Dry-run the routine first against the mock — no hardware needed:
   `cargo run --example tip-prep-mock` (scenarios: `sharpen` | `cyclelimit` |
   `unstable` | `fault` | `shutdown`).

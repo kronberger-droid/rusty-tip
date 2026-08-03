@@ -11,6 +11,8 @@
     ...
   }: let
     forAllSystems = nixpkgs.lib.genAttrs ["x86_64-linux" "aarch64-linux"];
+    # Single source of truth, so the packages cannot drift from the crate.
+    version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
   in {
     packages = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
@@ -32,7 +34,7 @@
     in {
       tip-prep-gui = pkgs.rustPlatform.buildRustPackage {
         pname = "tip-prep-gui";
-        version = "0.1.0";
+        inherit version;
         src = ./.;
         cargoLock.lockFile = ./Cargo.lock;
         buildFeatures = ["gui"];
@@ -44,7 +46,7 @@
 
       tip-prep = pkgs.rustPlatform.buildRustPackage {
         pname = "tip-prep";
-        version = "0.1.0";
+        inherit version;
         src = ./.;
         cargoLock.lockFile = ./Cargo.lock;
         cargoBuildFlags = ["--bin" "tip-prep"];
@@ -54,7 +56,7 @@
 
       tip-prep-gui-windows = pkgs.pkgsCross.mingwW64.rustPlatform.buildRustPackage {
         pname = "tip-prep-gui";
-        version = "0.1.0";
+        inherit version;
         src = ./.;
         cargoLock.lockFile = ./Cargo.lock;
         buildFeatures = ["gui"];
