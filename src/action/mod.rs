@@ -19,9 +19,7 @@ pub use output::ActionOutput;
 pub use registry::{ActionFactory, ActionInfo, ActionRegistry};
 pub use store::DataStore;
 
-use crate::machine_state::{
-    ActionKind, MachineState, StateEffects, StateField, StateRequirements,
-};
+use crate::machine_state::{ActionKind, MachineState, StateEffects, StateField, StateRequirements};
 use crate::spm_controller::Capability;
 use crate::spm_error::SpmError;
 
@@ -107,21 +105,14 @@ pub trait Action: Send + Sync {
 
     /// Execute and store the result under the action's name.
     /// Overwrites any previous value stored under that key.
-    fn execute_and_store_as(
-        &self,
-        ctx: &mut ActionContext,
-    ) -> Result<ActionOutput> {
+    fn execute_and_store_as(&self, ctx: &mut ActionContext) -> Result<ActionOutput> {
         let output = self.execute(ctx)?;
         ctx.store.set(self.name(), &output)?;
         Ok(output)
     }
 
     /// Execute and store the result under a custom key.
-    fn execute_and_store(
-        &self,
-        ctx: &mut ActionContext,
-        key: &str,
-    ) -> Result<ActionOutput> {
+    fn execute_and_store(&self, ctx: &mut ActionContext, key: &str) -> Result<ActionOutput> {
         let output = self.execute(ctx)?;
         ctx.store.set(key, &output)?;
         Ok(output)

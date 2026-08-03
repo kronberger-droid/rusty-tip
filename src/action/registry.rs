@@ -7,8 +7,7 @@ use crate::machine_state::{ActionKind, StateField};
 use crate::spm_error::SpmError;
 
 /// Factory function that creates an action instance from JSON parameters.
-pub type ActionFactory =
-    Box<dyn Fn(serde_json::Value) -> Result<Box<dyn Action>> + Send + Sync>;
+pub type ActionFactory = Box<dyn Fn(serde_json::Value) -> Result<Box<dyn Action>> + Send + Sync>;
 
 /// Factory function that creates a default-parameter resolver action
 /// without going through JSON deserialization. Used by the executor's
@@ -67,22 +66,15 @@ impl ActionRegistry {
         let resolves = sample.resolves();
 
         if self.factories.contains_key(&name) {
-            log::warn!(
-                "ActionRegistry: overwriting existing action '{}'",
-                name
-            );
+            log::warn!("ActionRegistry: overwriting existing action '{}'", name);
         }
 
         self.factories.insert(
             name.clone(),
             Box::new(|params: serde_json::Value| {
-                let action: A =
-                    serde_json::from_value(params).map_err(|e| {
-                        SpmError::Protocol(format!(
-                            "Failed to deserialize action: {}",
-                            e
-                        ))
-                    })?;
+                let action: A = serde_json::from_value(params).map_err(|e| {
+                    SpmError::Protocol(format!("Failed to deserialize action: {}", e))
+                })?;
                 Ok(Box::new(action) as Box<dyn Action>)
             }),
         );
@@ -124,14 +116,11 @@ impl ActionRegistry {
     }
 
     /// Create an action instance from a name and JSON parameters.
-    pub fn create(
-        &self,
-        name: &str,
-        params: serde_json::Value,
-    ) -> Result<Box<dyn Action>> {
-        let factory = self.factories.get(name).ok_or_else(|| {
-            SpmError::Protocol(format!("Unknown action: {}", name))
-        })?;
+    pub fn create(&self, name: &str, params: serde_json::Value) -> Result<Box<dyn Action>> {
+        let factory = self
+            .factories
+            .get(name)
+            .ok_or_else(|| SpmError::Protocol(format!("Unknown action: {}", name)))?;
         factory(params)
     }
 
@@ -166,10 +155,7 @@ mod tests {
         fn description(&self) -> &str {
             "A test action"
         }
-        fn execute(
-            &self,
-            _ctx: &mut ActionContext,
-        ) -> crate::action::Result<ActionOutput> {
+        fn execute(&self, _ctx: &mut ActionContext) -> crate::action::Result<ActionOutput> {
             Ok(ActionOutput::Value(self.value))
         }
     }

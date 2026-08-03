@@ -2,10 +2,7 @@ use chrono::Utc;
 use clap::Parser;
 use env_logger::Env;
 use log::{LevelFilter, error, info};
-use std::{
-    collections::HashMap, fs, io, path::PathBuf, process::ExitCode,
-    time::Duration,
-};
+use std::{collections::HashMap, fs, io, path::PathBuf, process::ExitCode, time::Duration};
 
 use rusty_tip::config::{AppConfig, load_config};
 use rusty_tip::event::{ConsoleLogger, EventAccumulator, EventBus, FileLogger};
@@ -77,8 +74,7 @@ fn run() -> Result<(), RunError> {
     // Log configuration parameters
     info!(
         "Sharp tip bounds: {:.2} to {:.2}",
-        config.tip_prep.sharp_tip_bounds[0],
-        config.tip_prep.sharp_tip_bounds[1]
+        config.tip_prep.sharp_tip_bounds[0], config.tip_prep.sharp_tip_bounds[1]
     );
     info!(
         "Stable tip allowed change: {:.3}",
@@ -284,11 +280,7 @@ fn log_pulse_method_config(method: &rusty_tip::PulseMethod) {
         } => {
             info!(
                 "Pulse method: Linear (voltage: {:.2}V to {:.2}V, freq_shift range: {:.2} to {:.2} Hz, {:?})",
-                voltage_bounds.0,
-                voltage_bounds.1,
-                linear_clamp.0,
-                linear_clamp.1,
-                polarity
+                voltage_bounds.0, voltage_bounds.1, linear_clamp.0, linear_clamp.1, polarity
             );
             log_random_switch(random_polarity_switch);
         }
@@ -309,10 +301,7 @@ fn log_random_switch(switch: &Option<rusty_tip::RandomPolaritySwitch>) {
     }
 }
 
-fn build_signal_registry(
-    signal_names: &[String],
-    config: &AppConfig,
-) -> SignalRegistry {
+fn build_signal_registry(signal_names: &[String], config: &AppConfig) -> SignalRegistry {
     let mut builder = SignalRegistry::builder().with_standard_map();
 
     if let Some(ref mappings) = config.tcp_channel_mapping {
@@ -329,15 +318,12 @@ fn build_signal_registry(
         .build()
 }
 
-fn setup_event_bus(
-    config: &AppConfig,
-) -> Result<EventBus, Box<dyn std::error::Error>> {
+fn setup_event_bus(config: &AppConfig) -> Result<EventBus, Box<dyn std::error::Error>> {
     let mut events = EventBus::new();
     events.add_observer(Box::new(ConsoleLogger));
 
     if config.experiment_logging.enabled {
-        let log_path =
-            create_log_file_path(&config.experiment_logging.output_path)?;
+        let log_path = create_log_file_path(&config.experiment_logging.output_path)?;
         info!("Event log: {}", log_path.display());
         let file = fs::File::create(&log_path)?;
         events.add_observer(Box::new(FileLogger::new(file)));
@@ -369,9 +355,7 @@ fn wait_for_user_confirmation() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn initialize_logging(
-    log_level: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn initialize_logging(log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
     let level = match log_level.to_lowercase().as_str() {
         "trace" => LevelFilter::Trace,
         "debug" => LevelFilter::Debug,
@@ -379,10 +363,7 @@ fn initialize_logging(
         "warn" => LevelFilter::Warn,
         "error" => LevelFilter::Error,
         _ => {
-            eprintln!(
-                "Warning: Invalid log level '{}', using 'info'",
-                log_level
-            );
+            eprintln!("Warning: Invalid log level '{}', using 'info'", log_level);
             LevelFilter::Info
         }
     };
@@ -395,13 +376,10 @@ fn initialize_logging(
     Ok(())
 }
 
-fn create_log_file_path(
-    log_path: &str,
-) -> Result<PathBuf, Box<dyn std::error::Error>> {
+fn create_log_file_path(log_path: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let dir = PathBuf::from(log_path);
     fs::create_dir_all(&dir)?;
-    let filename =
-        format!("tip_prep_{}.jsonl", Utc::now().format("%Y%m%d_%H%M%S"));
+    let filename = format!("tip_prep_{}.jsonl", Utc::now().format("%Y%m%d_%H%M%S"));
     Ok(dir.join(filename))
 }
 
@@ -423,14 +401,11 @@ fn ensure_console_allocated() {
             .collect();
         winapi::um::wincon::SetConsoleTitleW(wide_title.as_ptr());
 
-        let stdout_handle = winapi::um::processenv::GetStdHandle(
-            winapi::um::winbase::STD_OUTPUT_HANDLE,
-        );
+        let stdout_handle =
+            winapi::um::processenv::GetStdHandle(winapi::um::winbase::STD_OUTPUT_HANDLE);
         if stdout_handle != winapi::um::handleapi::INVALID_HANDLE_VALUE {
             let mut mode: u32 = 0;
-            if winapi::um::consoleapi::GetConsoleMode(stdout_handle, &mut mode)
-                != 0
-            {
+            if winapi::um::consoleapi::GetConsoleMode(stdout_handle, &mut mode) != 0 {
                 mode |= winapi::um::wincon::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
                 winapi::um::consoleapi::SetConsoleMode(stdout_handle, mode);
             }

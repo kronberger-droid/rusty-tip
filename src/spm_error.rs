@@ -40,14 +40,10 @@ impl SpmError {
 impl From<nanonis_rs::NanonisError> for SpmError {
     fn from(value: nanonis_rs::NanonisError) -> Self {
         match value {
-            nanonis_rs::NanonisError::Io { source, context } => {
-                Self::Io { source, context }
-            }
+            nanonis_rs::NanonisError::Io { source, context } => Self::Io { source, context },
             nanonis_rs::NanonisError::Timeout(s) => Self::Timeout(s),
             nanonis_rs::NanonisError::Protocol(s) => Self::Protocol(s),
-            nanonis_rs::NanonisError::Server { code, message } => {
-                Self::Hardware { code, message }
-            }
+            nanonis_rs::NanonisError::Server { code, message } => Self::Hardware { code, message },
         }
     }
 }

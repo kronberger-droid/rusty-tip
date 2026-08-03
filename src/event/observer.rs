@@ -30,9 +30,7 @@ impl Observer for FileLogger {
         let mut w = match self.writer.lock() {
             Ok(guard) => guard,
             Err(poison) => {
-                log::warn!(
-                    "FileLogger: mutex poisoned, recovering inner writer"
-                );
+                log::warn!("FileLogger: mutex poisoned, recovering inner writer");
                 poison.into_inner()
             }
         };

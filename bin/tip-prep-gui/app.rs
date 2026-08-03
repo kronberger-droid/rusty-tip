@@ -9,13 +9,12 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use rusty_tip::config::{
-    AppConfig, ConsoleConfig, DataAcquisitionConfig, ExperimentLoggingConfig,
-    NanonisConfig, SignalStabilityConfig, TcpChannelMapping, TimingConfig,
-    TipPrepConfig, load_config_with_fallback,
+    AppConfig, ConsoleConfig, DataAcquisitionConfig, ExperimentLoggingConfig, NanonisConfig,
+    SignalStabilityConfig, TcpChannelMapping, TimingConfig, TipPrepConfig,
+    load_config_with_fallback,
 };
 use rusty_tip::event::{
-    ChannelForwarder, ConsoleLogger, Event, EventAccumulator, EventBus,
-    FileLogger,
+    ChannelForwarder, ConsoleLogger, Event, EventAccumulator, EventBus, FileLogger,
 };
 use rusty_tip::mock_controller::{MockController, models};
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
@@ -25,8 +24,7 @@ use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::{Outcome, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 use rusty_tip::{
-    BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch,
-    StabilityConfig,
+    BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, StabilityConfig,
 };
 
 // ============================================================================
@@ -322,9 +320,7 @@ impl EditableConfig {
                 random_polarity_switch,
             } => {
                 let (rp_enabled, rp_every) = match random_polarity_switch {
-                    Some(rps) => {
-                        (rps.enabled, rps.switch_every_n_pulses.to_string())
-                    }
+                    Some(rps) => (rps.enabled, rps.switch_every_n_pulses.to_string()),
                     None => (false, "10".to_string()),
                 };
                 (
@@ -351,9 +347,7 @@ impl EditableConfig {
                 random_polarity_switch,
             } => {
                 let (rp_enabled, rp_every) = match random_polarity_switch {
-                    Some(rps) => {
-                        (rps.enabled, rps.switch_every_n_pulses.to_string())
-                    }
+                    Some(rps) => (rps.enabled, rps.switch_every_n_pulses.to_string()),
                     None => (false, "10".to_string()),
                 };
                 (
@@ -378,9 +372,7 @@ impl EditableConfig {
                 random_polarity_switch,
             } => {
                 let (rp_enabled, rp_every) = match random_polarity_switch {
-                    Some(rps) => {
-                        (rps.enabled, rps.switch_every_n_pulses.to_string())
-                    }
+                    Some(rps) => (rps.enabled, rps.switch_every_n_pulses.to_string()),
                     None => (false, "10".to_string()),
                 };
                 (
@@ -409,31 +401,18 @@ impl EditableConfig {
                 .unwrap_or(&6501)
                 .to_string(),
             data_port: app_config.data_acquisition.data_port.to_string(),
-            layout_file: app_config
-                .nanonis
-                .layout_file
-                .clone()
-                .unwrap_or_default(),
-            settings_file: app_config
-                .nanonis
-                .settings_file
-                .clone()
-                .unwrap_or_default(),
+            layout_file: app_config.nanonis.layout_file.clone().unwrap_or_default(),
+            settings_file: app_config.nanonis.settings_file.clone().unwrap_or_default(),
             sample_rate: app_config.data_acquisition.sample_rate.to_string(),
             stable_signal_samples: app_config
                 .data_acquisition
                 .stable_signal_samples
                 .to_string(),
             logging_enabled: app_config.experiment_logging.enabled,
-            logging_output_path: app_config
-                .experiment_logging
-                .output_path
-                .clone(),
+            logging_output_path: app_config.experiment_logging.output_path.clone(),
             verbosity: app_config.console.verbosity.clone(),
-            sharp_tip_lower: app_config.tip_prep.sharp_tip_bounds[0]
-                .to_string(),
-            sharp_tip_upper: app_config.tip_prep.sharp_tip_bounds[1]
-                .to_string(),
+            sharp_tip_lower: app_config.tip_prep.sharp_tip_bounds[0].to_string(),
+            sharp_tip_upper: app_config.tip_prep.sharp_tip_bounds[1].to_string(),
             max_cycles: app_config
                 .tip_prep
                 .max_cycles
@@ -444,43 +423,20 @@ impl EditableConfig {
                 .max_duration_secs
                 .map(|d| d.to_string())
                 .unwrap_or_default(),
-            initial_bias_v: (app_config.tip_prep.initial_bias_v * 1000.0)
-                .to_string(),
-            initial_z_setpoint_pa: (app_config.tip_prep.initial_z_setpoint_a
-                * 1e12)
-                .to_string(),
-            safe_tip_threshold_pa: (app_config.tip_prep.safe_tip_threshold
-                * 1e12)
-                .to_string(),
+            initial_bias_v: (app_config.tip_prep.initial_bias_v * 1000.0).to_string(),
+            initial_z_setpoint_pa: (app_config.tip_prep.initial_z_setpoint_a * 1e12).to_string(),
+            safe_tip_threshold_pa: (app_config.tip_prep.safe_tip_threshold * 1e12).to_string(),
             check_stability: app_config.tip_prep.stability.check_stability,
             stable_tip_allowed_change: app_config
                 .tip_prep
                 .stability
                 .stable_tip_allowed_change
                 .to_string(),
-            bias_range_lower: app_config
-                .tip_prep
-                .stability
-                .bias_range
-                .0
-                .to_string(),
-            bias_range_upper: app_config
-                .tip_prep
-                .stability
-                .bias_range
-                .1
-                .to_string(),
+            bias_range_lower: app_config.tip_prep.stability.bias_range.0.to_string(),
+            bias_range_upper: app_config.tip_prep.stability.bias_range.1.to_string(),
             bias_steps: app_config.tip_prep.stability.bias_steps.to_string(),
-            step_period_ms: app_config
-                .tip_prep
-                .stability
-                .step_period_ms
-                .to_string(),
-            stability_max_duration: app_config
-                .tip_prep
-                .stability
-                .max_duration_secs
-                .to_string(),
+            step_period_ms: app_config.tip_prep.stability.step_period_ms.to_string(),
+            stability_max_duration: app_config.tip_prep.stability.max_duration_secs.to_string(),
             polarity_mode: app_config.tip_prep.stability.polarity_mode,
             scan_speed_nm_s: app_config
                 .tip_prep
@@ -522,16 +478,15 @@ impl EditableConfig {
             .control_port
             .parse()
             .map_err(|_| "Invalid control port")?;
-        let data_port: u16 =
-            self.data_port.parse().map_err(|_| "Invalid data port")?;
+        let data_port: u16 = self.data_port.parse().map_err(|_| "Invalid data port")?;
         let sample_rate: u32 = self
             .sample_rate
             .parse()
             .map_err(|_| "Invalid sample rate")?;
-        let stable_signal_samples: usize =
-            self.stable_signal_samples
-                .parse()
-                .map_err(|_| "Invalid stable signal samples")?;
+        let stable_signal_samples: usize = self
+            .stable_signal_samples
+            .parse()
+            .map_err(|_| "Invalid stable signal samples")?;
         let sharp_tip_lower: f32 = self
             .sharp_tip_lower
             .parse()
@@ -545,16 +500,15 @@ impl EditableConfig {
         } else {
             Some(self.max_cycles.parse().map_err(|_| "Invalid max cycles")?)
         };
-        let max_duration_secs: Option<u64> =
-            if self.max_duration_secs.is_empty() {
-                None
-            } else {
-                Some(
-                    self.max_duration_secs
-                        .parse()
-                        .map_err(|_| "Invalid max duration")?,
-                )
-            };
+        let max_duration_secs: Option<u64> = if self.max_duration_secs.is_empty() {
+            None
+        } else {
+            Some(
+                self.max_duration_secs
+                    .parse()
+                    .map_err(|_| "Invalid max duration")?,
+            )
+        };
         let initial_bias_mv: f32 = self
             .initial_bias_v
             .parse()
@@ -692,10 +646,7 @@ impl EditableConfig {
                             .parse()
                             .map_err(|_| "Invalid bias range upper")?,
                     ),
-                    bias_steps: self
-                        .bias_steps
-                        .parse()
-                        .map_err(|_| "Invalid bias steps")?,
+                    bias_steps: self.bias_steps.parse().map_err(|_| "Invalid bias steps")?,
                     step_period_ms: self
                         .step_period_ms
                         .parse()
@@ -831,8 +782,7 @@ impl TipPrepApp {
                     self.message = Some(("Config loaded".to_string(), false));
                 }
                 Err(e) => {
-                    self.message =
-                        Some((format!("Failed to load: {}", e), true));
+                    self.message = Some((format!("Failed to load: {}", e), true));
                 }
             }
         } else {
@@ -851,17 +801,14 @@ impl TipPrepApp {
             Ok(app_config) => match toml::to_string_pretty(&app_config) {
                 Ok(toml_str) => {
                     if let Err(e) = std::fs::write(&save_path, toml_str) {
-                        self.message =
-                            Some((format!("Write failed: {}", e), true));
+                        self.message = Some((format!("Write failed: {}", e), true));
                     } else {
                         self.save_path = save_path;
-                        self.message =
-                            Some(("Config saved".to_string(), false));
+                        self.message = Some(("Config saved".to_string(), false));
                     }
                 }
                 Err(e) => {
-                    self.message =
-                        Some((format!("Serialize failed: {}", e), true));
+                    self.message = Some((format!("Serialize failed: {}", e), true));
                 }
             },
             Err(e) => {
@@ -894,8 +841,7 @@ impl TipPrepApp {
 
         let simulate = self.simulate;
         let handle = thread::spawn(move || {
-            if let Err(e) = run_controller(config, shutdown, event_tx, simulate)
-            {
+            if let Err(e) = run_controller(config, shutdown, event_tx, simulate) {
                 error!("Controller error: {}", e);
             }
         });
@@ -936,60 +882,42 @@ impl TipPrepApp {
         if let Some(rx) = &self.event_receiver {
             while let Ok(event) = rx.try_recv() {
                 match &event {
-                    Event::Custom { kind, data }
-                        if kind == "tip_prep_state" =>
-                    {
+                    Event::Custom { kind, data } if kind == "tip_prep_state" => {
                         // Parse TipPrepSnapshot from JSON
-                        if let Some(cycle) =
-                            data.get("cycle").and_then(|v| v.as_u64())
-                        {
+                        if let Some(cycle) = data.get("cycle").and_then(|v| v.as_u64()) {
                             self.tip_state.cycle = cycle as usize;
                         }
-                        if let Some(elapsed) =
-                            data.get("elapsed_secs").and_then(|v| v.as_f64())
-                        {
+                        if let Some(elapsed) = data.get("elapsed_secs").and_then(|v| v.as_f64()) {
                             self.tip_state.elapsed_secs = elapsed;
                         }
                         // Only the status readout — the freq-shift *plot* is fed
                         // by the per-sample `signal_samples` stream below, which
                         // covers these same reads at full resolution.
-                        if let Some(fs) =
-                            data.get("freq_shift").and_then(|v| v.as_f64())
-                        {
+                        if let Some(fs) = data.get("freq_shift").and_then(|v| v.as_f64()) {
                             self.tip_state.freq_shift = Some(fs);
                         }
-                        if let Some(pv) =
-                            data.get("pulse_voltage").and_then(|v| v.as_f64())
-                        {
+                        if let Some(pv) = data.get("pulse_voltage").and_then(|v| v.as_f64()) {
                             self.tip_state.pulse_voltage = pv;
                             self.voltage_history.push(DataPoint {
                                 time_s: elapsed_now,
                                 value: pv,
                             });
                         }
-                        if let Some(sharp) =
-                            data.get("is_sharp").and_then(|v| v.as_bool())
-                        {
+                        if let Some(sharp) = data.get("is_sharp").and_then(|v| v.as_bool()) {
                             self.tip_state.is_sharp = sharp;
                         }
-                        if let Some(phase) =
-                            data.get("phase").and_then(|v| v.as_str())
-                        {
+                        if let Some(phase) = data.get("phase").and_then(|v| v.as_str()) {
                             self.tip_state.phase = phase.to_string();
                         }
                     }
-                    Event::DataCollected { label, value, .. }
-                        if label == "stable_read" =>
-                    {
+                    Event::DataCollected { label, value, .. } if label == "stable_read" => {
                         // One point per measurement: a stable read *is* a single
                         // measurement of the frequency shift, averaged from a
                         // sample batch. Every stable read in the tip-prep routine
                         // goes through `read_stable(.., freq_shift_index)`, so
                         // this stream is the freq-shift channel. The event carries
                         // `index` if that ever stops being true.
-                        if let Some(v) =
-                            value.get("value").and_then(|v| v.as_f64())
-                        {
+                        if let Some(v) = value.get("value").and_then(|v| v.as_f64()) {
                             self.freq_shift_history.push(DataPoint {
                                 time_s: elapsed_now,
                                 value: v,
@@ -997,8 +925,7 @@ impl TipPrepApp {
 
                             // Bound memory on long runs.
                             if self.freq_shift_history.len() > MAX_PLOT_POINTS {
-                                let excess = self.freq_shift_history.len()
-                                    - MAX_PLOT_POINTS;
+                                let excess = self.freq_shift_history.len() - MAX_PLOT_POINTS;
                                 self.freq_shift_history.drain(0..excess);
                             }
                         }
@@ -1040,11 +967,8 @@ impl TipPrepApp {
                     match self.tip_state.phase.as_str() {
                         "stable" => {
                             self.run_status = RunStatus::Completed;
-                            self.message = Some((
-                                "Tip preparation completed successfully"
-                                    .to_string(),
-                                false,
-                            ));
+                            self.message =
+                                Some(("Tip preparation completed successfully".to_string(), false));
                         }
                         _ => {
                             // Thread finished -- could be stopped, cycle limit, timeout, or error
@@ -1057,10 +981,7 @@ impl TipPrepApp {
                                     .map(|(m, _)| m == "Stop requested...")
                                     .unwrap_or(false)
                             {
-                                self.message = Some((
-                                    "Controller finished".to_string(),
-                                    false,
-                                ));
+                                self.message = Some(("Controller finished".to_string(), false));
                             }
                         }
                     }
@@ -1147,10 +1068,7 @@ impl TipPrepApp {
                                 "Stable" => egui::Color32::GREEN,
                                 _ => egui::Color32::GRAY,
                             };
-                            ui.colored_label(
-                                shape_color,
-                                self.tip_shape_text(),
-                            );
+                            ui.colored_label(shape_color, self.tip_shape_text());
                             ui.end_row();
 
                             ui.label("Phase:");
@@ -1180,10 +1098,7 @@ impl TipPrepApp {
 
                             ui.label("Pulse Voltage:");
                             if self.tip_state.cycle > 0 {
-                                ui.label(format!(
-                                    "{:.2} V",
-                                    self.tip_state.pulse_voltage
-                                ));
+                                ui.label(format!("{:.2} V", self.tip_state.pulse_voltage));
                             } else {
                                 ui.label("-");
                             }
@@ -1210,10 +1125,7 @@ impl TipPrepApp {
                 // Control buttons
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(
-                            !self.is_running(),
-                            egui::Button::new("Start"),
-                        )
+                        .add_enabled(!self.is_running(), egui::Button::new("Start"))
                         .clicked()
                     {
                         self.message = None;
@@ -1221,22 +1133,18 @@ impl TipPrepApp {
                     }
 
                     if ui
-                        .add_enabled(
-                            self.is_running(),
-                            egui::Button::new("Stop"),
-                        )
+                        .add_enabled(self.is_running(), egui::Button::new("Stop"))
                         .clicked()
                     {
                         self.stop_controller();
                     }
 
                     ui.add_enabled_ui(!self.is_running(), |ui| {
-                        ui.checkbox(&mut self.simulate, "Simulate")
-                            .on_hover_text(
-                                "Run against the in-memory mock controller \
+                        ui.checkbox(&mut self.simulate, "Simulate").on_hover_text(
+                            "Run against the in-memory mock controller \
                                  instead of the Nanonis system. No hardware \
                                  is contacted.",
-                            );
+                        );
                     });
                 });
 
@@ -1261,17 +1169,10 @@ impl TipPrepApp {
                         .show(ui, |ui| {
                             ui.set_min_width(280.0);
                             for msg in &self.log_messages {
-                                ui.label(
-                                    egui::RichText::new(msg)
-                                        .monospace()
-                                        .size(11.0),
-                                );
+                                ui.label(egui::RichText::new(msg).monospace().size(11.0));
                             }
                             if self.log_messages.is_empty() {
-                                ui.colored_label(
-                                    egui::Color32::GRAY,
-                                    "No activity yet",
-                                );
+                                ui.colored_label(egui::Color32::GRAY, "No activity yet");
                             }
                         });
                 });
@@ -1294,8 +1195,7 @@ impl TipPrepApp {
             .collect();
         let colors = PlotColors::for_theme(ui.visuals().dark_mode);
         let fs_line =
-            Line::new("Freq Shift (Hz)", PlotPoints::from(fs_xy.clone()))
-                .color(colors.freq_shift);
+            Line::new("Freq Shift (Hz)", PlotPoints::from(fs_xy.clone())).color(colors.freq_shift);
         let fs_marks = Points::new("Measurements", PlotPoints::from(fs_xy))
             .color(colors.freq_shift)
             .radius(MARKER_RADIUS);
@@ -1316,16 +1216,12 @@ impl TipPrepApp {
                     plot_ui.hline(
                         HLine::new("Lower bound", lower)
                             .color(colors.bounds)
-                            .style(egui_plot::LineStyle::Dashed {
-                                length: 5.0,
-                            }),
+                            .style(egui_plot::LineStyle::Dashed { length: 5.0 }),
                     );
                     plot_ui.hline(
                         HLine::new("Upper bound", upper)
                             .color(colors.bounds)
-                            .style(egui_plot::LineStyle::Dashed {
-                                length: 5.0,
-                            }),
+                            .style(egui_plot::LineStyle::Dashed { length: 5.0 }),
                     );
                 }
             });
@@ -1339,9 +1235,8 @@ impl TipPrepApp {
             .iter()
             .map(|dp| [dp.time_s, dp.value])
             .collect();
-        let v_line =
-            Line::new("Pulse Voltage (V)", PlotPoints::from(v_xy.clone()))
-                .color(colors.pulse_voltage);
+        let v_line = Line::new("Pulse Voltage (V)", PlotPoints::from(v_xy.clone()))
+            .color(colors.pulse_voltage);
         let v_marks = Points::new("Pulses", PlotPoints::from(v_xy))
             .color(colors.pulse_voltage)
             .radius(MARKER_RADIUS);
@@ -1366,10 +1261,7 @@ impl TipPrepApp {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Load from:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.load_path)
-                            .desired_width(300.0),
-                    );
+                    ui.add(egui::TextEdit::singleline(&mut self.load_path).desired_width(300.0));
                     if ui.button("Browse...").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter("TOML", &["toml"])
@@ -1379,10 +1271,7 @@ impl TipPrepApp {
                         }
                     }
                     if ui
-                        .add_enabled(
-                            !self.load_path.is_empty(),
-                            egui::Button::new("Load"),
-                        )
+                        .add_enabled(!self.load_path.is_empty(), egui::Button::new("Load"))
                         .clicked()
                     {
                         self.load_config_from_file();
@@ -1393,10 +1282,7 @@ impl TipPrepApp {
 
                 ui.horizontal(|ui| {
                     ui.label("Save to:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.save_path)
-                            .desired_width(300.0),
-                    );
+                    ui.add(egui::TextEdit::singleline(&mut self.save_path).desired_width(300.0));
                     if ui.button("Browse...").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter("TOML", &["toml"])
@@ -1406,10 +1292,7 @@ impl TipPrepApp {
                         }
                     }
                     if ui
-                        .add_enabled(
-                            !self.save_path.is_empty(),
-                            egui::Button::new("Save"),
-                        )
+                        .add_enabled(!self.save_path.is_empty(), egui::Button::new("Save"))
                         .clicked()
                     {
                         self.save_config_to_file();
@@ -1428,64 +1311,51 @@ impl TipPrepApp {
                     .show(ui, |ui| {
                         ui.label("Host IP:");
                         ui.add(
-                            egui::TextEdit::singleline(
-                                &mut self.config.host_ip,
-                            )
-                            .desired_width(150.0),
+                            egui::TextEdit::singleline(&mut self.config.host_ip)
+                                .desired_width(150.0),
                         );
                         ui.end_row();
 
                         ui.label("Control Port:");
                         ui.add(
-                            egui::TextEdit::singleline(
-                                &mut self.config.control_port,
-                            )
-                            .desired_width(80.0),
+                            egui::TextEdit::singleline(&mut self.config.control_port)
+                                .desired_width(80.0),
                         );
                         ui.end_row();
 
                         ui.label("Data Port:");
                         ui.add(
-                            egui::TextEdit::singleline(
-                                &mut self.config.data_port,
-                            )
-                            .desired_width(80.0),
+                            egui::TextEdit::singleline(&mut self.config.data_port)
+                                .desired_width(80.0),
                         );
                         ui.end_row();
 
                         ui.label("Sample Rate (Hz):");
                         ui.add(
-                            egui::TextEdit::singleline(
-                                &mut self.config.sample_rate,
-                            )
-                            .desired_width(80.0),
+                            egui::TextEdit::singleline(&mut self.config.sample_rate)
+                                .desired_width(80.0),
                         );
                         ui.end_row();
 
                         ui.label("Stable Signal Samples:");
                         ui.add(
-                            egui::TextEdit::singleline(
-                                &mut self.config.stable_signal_samples,
-                            )
-                            .desired_width(80.0),
+                            egui::TextEdit::singleline(&mut self.config.stable_signal_samples)
+                                .desired_width(80.0),
                         );
                         ui.end_row();
 
                         ui.label("Layout File:");
                         ui.horizontal(|ui| {
                             ui.add(
-                                egui::TextEdit::singleline(
-                                    &mut self.config.layout_file,
-                                )
-                                .desired_width(200.0),
+                                egui::TextEdit::singleline(&mut self.config.layout_file)
+                                    .desired_width(200.0),
                             );
                             if ui.button("...").clicked() {
                                 if let Some(path) = rfd::FileDialog::new()
                                     .add_filter("Layout", &["lyt"])
                                     .pick_file()
                                 {
-                                    self.config.layout_file =
-                                        path.display().to_string();
+                                    self.config.layout_file = path.display().to_string();
                                 }
                             }
                         });
@@ -1494,18 +1364,15 @@ impl TipPrepApp {
                         ui.label("Settings File:");
                         ui.horizontal(|ui| {
                             ui.add(
-                                egui::TextEdit::singleline(
-                                    &mut self.config.settings_file,
-                                )
-                                .desired_width(200.0),
+                                egui::TextEdit::singleline(&mut self.config.settings_file)
+                                    .desired_width(200.0),
                             );
                             if ui.button("...").clicked() {
                                 if let Some(path) = rfd::FileDialog::new()
                                     .add_filter("Settings", &["ini"])
                                     .pick_file()
                                 {
-                                    self.config.settings_file =
-                                        path.display().to_string();
+                                    self.config.settings_file = path.display().to_string();
                                 }
                             }
                         });
@@ -1525,63 +1392,49 @@ impl TipPrepApp {
                         ui.label("Sharp Tip Bounds (Hz):");
                         ui.horizontal(|ui| {
                             ui.add(
-                                egui::TextEdit::singleline(
-                                    &mut self.config.sharp_tip_lower,
-                                )
-                                .desired_width(60.0),
+                                egui::TextEdit::singleline(&mut self.config.sharp_tip_lower)
+                                    .desired_width(60.0),
                             );
                             ui.label("to");
                             ui.add(
-                                egui::TextEdit::singleline(
-                                    &mut self.config.sharp_tip_upper,
-                                )
-                                .desired_width(60.0),
+                                egui::TextEdit::singleline(&mut self.config.sharp_tip_upper)
+                                    .desired_width(60.0),
                             );
                         });
                         ui.end_row();
 
                         ui.label("Max Cycles:");
                         ui.add(
-                            egui::TextEdit::singleline(
-                                &mut self.config.max_cycles,
-                            )
-                            .desired_width(80.0),
+                            egui::TextEdit::singleline(&mut self.config.max_cycles)
+                                .desired_width(80.0),
                         );
                         ui.end_row();
 
                         ui.label("Max Duration (s):");
                         ui.add(
-                            egui::TextEdit::singleline(
-                                &mut self.config.max_duration_secs,
-                            )
-                            .desired_width(80.0),
+                            egui::TextEdit::singleline(&mut self.config.max_duration_secs)
+                                .desired_width(80.0),
                         );
                         ui.end_row();
 
                         ui.label("Initial Bias (mV):");
                         ui.add(
-                            egui::TextEdit::singleline(
-                                &mut self.config.initial_bias_v,
-                            )
-                            .desired_width(80.0),
+                            egui::TextEdit::singleline(&mut self.config.initial_bias_v)
+                                .desired_width(80.0),
                         );
                         ui.end_row();
 
                         ui.label("Initial Z Setpoint (pA):");
                         ui.add(
-                            egui::TextEdit::singleline(
-                                &mut self.config.initial_z_setpoint_pa,
-                            )
-                            .desired_width(80.0),
+                            egui::TextEdit::singleline(&mut self.config.initial_z_setpoint_pa)
+                                .desired_width(80.0),
                         );
                         ui.end_row();
 
                         ui.label("Safe Tip Threshold (pA):");
                         ui.add(
-                            egui::TextEdit::singleline(
-                                &mut self.config.safe_tip_threshold_pa,
-                            )
-                            .desired_width(80.0),
+                            egui::TextEdit::singleline(&mut self.config.safe_tip_threshold_pa)
+                                .desired_width(80.0),
                         );
                         ui.end_row();
                     });
@@ -1621,10 +1474,8 @@ impl TipPrepApp {
                             PulseMethodType::Fixed => {
                                 ui.label("Voltage (V):");
                                 ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut self.config.pulse_voltage,
-                                    )
-                                    .desired_width(60.0),
+                                    egui::TextEdit::singleline(&mut self.config.pulse_voltage)
+                                        .desired_width(60.0),
                                 );
                                 ui.end_row();
                             }
@@ -1649,28 +1500,22 @@ impl TipPrepApp {
 
                                 ui.label("Voltage Steps:");
                                 ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut self.config.voltage_steps,
-                                    )
-                                    .desired_width(60.0),
+                                    egui::TextEdit::singleline(&mut self.config.voltage_steps)
+                                        .desired_width(60.0),
                                 );
                                 ui.end_row();
 
                                 ui.label("Cycles Before Step:");
                                 ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut self.config.cycles_before_step,
-                                    )
-                                    .desired_width(60.0),
+                                    egui::TextEdit::singleline(&mut self.config.cycles_before_step)
+                                        .desired_width(60.0),
                                 );
                                 ui.end_row();
 
                                 ui.label("Threshold Value (Hz):");
                                 ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut self.config.threshold_value,
-                                    )
-                                    .desired_width(60.0),
+                                    egui::TextEdit::singleline(&mut self.config.threshold_value)
+                                        .desired_width(60.0),
                                 );
                                 ui.end_row();
                             }
@@ -1729,19 +1574,14 @@ impl TipPrepApp {
                         ui.end_row();
 
                         ui.label("Random Polarity Switch:");
-                        ui.checkbox(
-                            &mut self.config.random_polarity_enabled,
-                            "Enabled",
-                        );
+                        ui.checkbox(&mut self.config.random_polarity_enabled, "Enabled");
                         ui.end_row();
 
                         if self.config.random_polarity_enabled {
                             ui.label("Switch Every N Pulses:");
                             ui.add(
                                 egui::TextEdit::singleline(
-                                    &mut self
-                                        .config
-                                        .random_polarity_switch_every,
+                                    &mut self.config.random_polarity_switch_every,
                                 )
                                 .desired_width(60.0),
                             );
@@ -1755,10 +1595,7 @@ impl TipPrepApp {
             // Stability Settings
             ui.heading("Stability Check");
             egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.checkbox(
-                    &mut self.config.check_stability,
-                    "Enable Stability Check",
-                );
+                ui.checkbox(&mut self.config.check_stability, "Enable Stability Check");
 
                 if self.config.check_stability {
                     ui.add_space(5.0);
@@ -1779,45 +1616,35 @@ impl TipPrepApp {
                             ui.label("Bias Range (V):");
                             ui.horizontal(|ui| {
                                 ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut self.config.bias_range_lower,
-                                    )
-                                    .desired_width(60.0),
+                                    egui::TextEdit::singleline(&mut self.config.bias_range_lower)
+                                        .desired_width(60.0),
                                 );
                                 ui.label("to");
                                 ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut self.config.bias_range_upper,
-                                    )
-                                    .desired_width(60.0),
+                                    egui::TextEdit::singleline(&mut self.config.bias_range_upper)
+                                        .desired_width(60.0),
                                 );
                             });
                             ui.end_row();
 
                             ui.label("Bias Steps:");
                             ui.add(
-                                egui::TextEdit::singleline(
-                                    &mut self.config.bias_steps,
-                                )
-                                .desired_width(80.0),
+                                egui::TextEdit::singleline(&mut self.config.bias_steps)
+                                    .desired_width(80.0),
                             );
                             ui.end_row();
 
                             ui.label("Step Period (ms):");
                             ui.add(
-                                egui::TextEdit::singleline(
-                                    &mut self.config.step_period_ms,
-                                )
-                                .desired_width(80.0),
+                                egui::TextEdit::singleline(&mut self.config.step_period_ms)
+                                    .desired_width(80.0),
                             );
                             ui.end_row();
 
                             ui.label("Max Duration (s):");
                             ui.add(
-                                egui::TextEdit::singleline(
-                                    &mut self.config.stability_max_duration,
-                                )
-                                .desired_width(80.0),
+                                egui::TextEdit::singleline(&mut self.config.stability_max_duration)
+                                    .desired_width(80.0),
                             );
                             ui.end_row();
 
@@ -1843,10 +1670,8 @@ impl TipPrepApp {
 
                             ui.label("Scan Speed (nm/s):");
                             ui.add(
-                                egui::TextEdit::singleline(
-                                    &mut self.config.scan_speed_nm_s,
-                                )
-                                .desired_width(80.0),
+                                egui::TextEdit::singleline(&mut self.config.scan_speed_nm_s)
+                                    .desired_width(80.0),
                             );
                             ui.end_row();
                         });
@@ -1869,17 +1694,12 @@ impl TipPrepApp {
                         ui.label("Output Path:");
                         ui.horizontal(|ui| {
                             ui.add(
-                                egui::TextEdit::singleline(
-                                    &mut self.config.logging_output_path,
-                                )
-                                .desired_width(200.0),
+                                egui::TextEdit::singleline(&mut self.config.logging_output_path)
+                                    .desired_width(200.0),
                             );
                             if ui.button("...").clicked() {
-                                if let Some(path) =
-                                    rfd::FileDialog::new().pick_folder()
-                                {
-                                    self.config.logging_output_path =
-                                        path.display().to_string();
+                                if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                                    self.config.logging_output_path = path.display().to_string();
                                 }
                             }
                         });
@@ -1888,26 +1708,10 @@ impl TipPrepApp {
                         ui.label("Verbosity:");
                         ui.horizontal(|ui| {
                             let verbosity = &mut self.config.verbosity;
-                            ui.selectable_value(
-                                verbosity,
-                                "error".to_string(),
-                                "Error",
-                            );
-                            ui.selectable_value(
-                                verbosity,
-                                "warn".to_string(),
-                                "Warn",
-                            );
-                            ui.selectable_value(
-                                verbosity,
-                                "info".to_string(),
-                                "Info",
-                            );
-                            ui.selectable_value(
-                                verbosity,
-                                "debug".to_string(),
-                                "Debug",
-                            );
+                            ui.selectable_value(verbosity, "error".to_string(), "Error");
+                            ui.selectable_value(verbosity, "warn".to_string(), "Warn");
+                            ui.selectable_value(verbosity, "info".to_string(), "Info");
+                            ui.selectable_value(verbosity, "debug".to_string(), "Debug");
                         });
                         ui.end_row();
                     });
@@ -1930,22 +1734,16 @@ impl TipPrepApp {
                 });
 
                 let mut to_remove: Option<usize> = None;
-                for (idx, mapping) in
-                    self.config.tcp_channel_mappings.iter_mut().enumerate()
-                {
+                for (idx, mapping) in self.config.tcp_channel_mappings.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
                         ui.add(
-                            egui::TextEdit::singleline(
-                                &mut mapping.nanonis_index,
-                            )
-                            .desired_width(80.0),
+                            egui::TextEdit::singleline(&mut mapping.nanonis_index)
+                                .desired_width(80.0),
                         );
                         ui.add_space(20.0);
                         ui.add(
-                            egui::TextEdit::singleline(
-                                &mut mapping.tcp_channel,
-                            )
-                            .desired_width(80.0),
+                            egui::TextEdit::singleline(&mut mapping.tcp_channel)
+                                .desired_width(80.0),
                         );
                         ui.add_space(20.0);
                         if ui.button("Remove").clicked() {
@@ -2010,8 +1808,7 @@ fn run_controller(
     events.add_observer(Box::new(ChannelForwarder::new(event_tx)));
 
     if config.experiment_logging.enabled {
-        let log_dir =
-            std::path::PathBuf::from(&config.experiment_logging.output_path);
+        let log_dir = std::path::PathBuf::from(&config.experiment_logging.output_path);
         std::fs::create_dir_all(&log_dir)?;
         let filename = format!(
             "tip_prep_{}.jsonl",
@@ -2024,8 +1821,7 @@ fn run_controller(
     events.add_observer(Box::new(EventAccumulator::new(500)));
 
     // Run tip preparation
-    let result =
-        run_tip_prep(controller, &events, &shutdown, &config, freq_shift_index);
+    let result = run_tip_prep(controller, &events, &shutdown, &config, freq_shift_index);
 
     // Convert ShutdownRequested to StoppedByUser
     let result = match result {
@@ -2130,10 +1926,7 @@ fn build_mock_backend(
     Ok((Box::new(mock), resolved))
 }
 
-fn build_signal_registry(
-    signal_names: &[String],
-    config: &AppConfig,
-) -> SignalRegistry {
+fn build_signal_registry(signal_names: &[String], config: &AppConfig) -> SignalRegistry {
     let mut builder = SignalRegistry::builder().with_standard_map();
 
     if let Some(ref mappings) = config.tcp_channel_mapping {
@@ -2217,59 +2010,50 @@ impl eframe::App for TipPrepApp {
             // Tab bar
             ui.horizontal(|ui| {
                 if ui
-                    .selectable_label(
-                        self.current_tab == Tab::Control,
-                        "Control",
-                    )
+                    .selectable_label(self.current_tab == Tab::Control, "Control")
                     .clicked()
                 {
                     self.current_tab = Tab::Control;
                 }
                 if ui
-                    .selectable_label(
-                        self.current_tab == Tab::Configuration,
-                        "Configuration",
-                    )
+                    .selectable_label(self.current_tab == Tab::Configuration, "Configuration")
                     .clicked()
                 {
                     self.current_tab = Tab::Configuration;
                 }
 
                 // Right-aligned so it stays out of the way of the tabs.
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        egui::ComboBox::from_id_salt("theme_selector")
-                            .selected_text(match self.theme {
-                                egui::ThemePreference::Light => "Light",
-                                egui::ThemePreference::Dark => "Dark",
-                                egui::ThemePreference::System => "System",
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut self.theme,
-                                    egui::ThemePreference::System,
-                                    "System",
-                                );
-                                ui.selectable_value(
-                                    &mut self.theme,
-                                    egui::ThemePreference::Light,
-                                    "Light",
-                                );
-                                ui.selectable_value(
-                                    &mut self.theme,
-                                    egui::ThemePreference::Dark,
-                                    "Dark",
-                                );
-                            })
-                            .response
-                            .on_hover_text(
-                                "Light prints far better than dark — the plots \
-                                 pick higher-contrast colours to match.",
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    egui::ComboBox::from_id_salt("theme_selector")
+                        .selected_text(match self.theme {
+                            egui::ThemePreference::Light => "Light",
+                            egui::ThemePreference::Dark => "Dark",
+                            egui::ThemePreference::System => "System",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.theme,
+                                egui::ThemePreference::System,
+                                "System",
                             );
-                        ui.label("Theme:");
-                    },
-                );
+                            ui.selectable_value(
+                                &mut self.theme,
+                                egui::ThemePreference::Light,
+                                "Light",
+                            );
+                            ui.selectable_value(
+                                &mut self.theme,
+                                egui::ThemePreference::Dark,
+                                "Dark",
+                            );
+                        })
+                        .response
+                        .on_hover_text(
+                            "Light prints far better than dark — the plots \
+                                 pick higher-contrast colours to match.",
+                        );
+                    ui.label("Theme:");
+                });
             });
 
             ui.separator();

@@ -106,8 +106,7 @@ impl Analyzer for CuoxRowDetector {
 
         // Step 3: Band detection
         let projection = project_at_angle(&score, angle_deg as f64);
-        let bands =
-            detect_bands(&projection, self.threshold, self.min_band_width);
+        let bands = detect_bands(&projection, self.threshold, self.min_band_width);
 
         // Step 4: Build output with image-space coordinates
         let calibration_nm_per_px = input.calibration_m_per_px.map(|m| m * 1e9);
@@ -135,10 +134,7 @@ impl Analyzer for CuoxRowDetector {
                 let low_line = line_endpoints(b.edge_low as f64, &geom);
                 // edge_high is exclusive (first bin outside band), so use
                 // edge_high - 1 for the last bin inside the band.
-                let high_line = line_endpoints(
-                    (b.edge_high.saturating_sub(1)) as f64,
-                    &geom,
-                );
+                let high_line = line_endpoints((b.edge_high.saturating_sub(1)) as f64, &geom);
 
                 let mut obj = json!({
                     "center_px": b.center,
@@ -151,10 +147,7 @@ impl Analyzer for CuoxRowDetector {
                 });
                 if let Some(nm_per_px) = calibration_nm_per_px {
                     let obj_map = obj.as_object_mut().unwrap();
-                    obj_map.insert(
-                        "center_nm".into(),
-                        json!(b.center * nm_per_px),
-                    );
+                    obj_map.insert("center_nm".into(), json!(b.center * nm_per_px));
                     obj_map.insert(
                         "width_nm".into(),
                         json!((b.edge_high - b.edge_low) as f64 * nm_per_px),
@@ -194,8 +187,7 @@ fn build_sat(img: &Array2<f32>) -> Array2<f64> {
     for r in 0..rows {
         for c in 0..cols {
             sat[[r + 1, c + 1]] =
-                img[[r, c]] as f64 + sat[[r, c + 1]] + sat[[r + 1, c]]
-                    - sat[[r, c]];
+                img[[r, c]] as f64 + sat[[r, c + 1]] + sat[[r + 1, c]] - sat[[r, c]];
         }
     }
     sat
@@ -208,8 +200,7 @@ fn build_sat_sq(img: &Array2<f32>) -> Array2<f64> {
     for r in 0..rows {
         for c in 0..cols {
             let v = img[[r, c]] as f64;
-            sat[[r + 1, c + 1]] =
-                v * v + sat[[r, c + 1]] + sat[[r + 1, c]] - sat[[r, c]];
+            sat[[r + 1, c + 1]] = v * v + sat[[r, c + 1]] + sat[[r + 1, c]] - sat[[r, c]];
         }
     }
     sat
@@ -218,15 +209,8 @@ fn build_sat_sq(img: &Array2<f32>) -> Array2<f64> {
 /// Query a SAT for the sum within a rectangle [r0..r1, c0..c1] (inclusive pixel coords).
 /// SAT is 1-indexed (row/col 0 is the padding row).
 #[inline]
-fn sat_query(
-    sat: &Array2<f64>,
-    r0: usize,
-    c0: usize,
-    r1: usize,
-    c1: usize,
-) -> f64 {
-    sat[[r1 + 1, c1 + 1]] - sat[[r0, c1 + 1]] - sat[[r1 + 1, c0]]
-        + sat[[r0, c0]]
+fn sat_query(sat: &Array2<f64>, r0: usize, c0: usize, r1: usize, c1: usize) -> f64 {
+    sat[[r1 + 1, c1 + 1]] - sat[[r0, c1 + 1]] - sat[[r1 + 1, c0]] + sat[[r0, c0]]
 }
 
 fn build_score_map(img: &Array2<f32>, var_radius: usize) -> Array2<f32> {
@@ -447,11 +431,7 @@ fn detect_angle(score: &Array2<f32>) -> f32 {
 
 // ── Step 3: Band detection ─────────────────────────────────────────
 
-fn detect_bands(
-    projection: &[f64],
-    threshold: f32,
-    min_width: usize,
-) -> Vec<Band> {
+fn detect_bands(projection: &[f64], threshold: f32, min_width: usize) -> Vec<Band> {
     if projection.is_empty() {
         return vec![];
     }
@@ -514,14 +494,7 @@ struct LineSegment {
 
 /// Compute the minimum projection coordinate for the image corners.
 /// This is the offset between projection bin index and actual projection distance.
-fn compute_min_proj(
-    rows: usize,
-    cols: usize,
-    cos_a: f64,
-    sin_a: f64,
-    cy: f64,
-    cx: f64,
-) -> f64 {
+fn compute_min_proj(rows: usize, cols: usize, cos_a: f64, sin_a: f64, cy: f64, cx: f64) -> f64 {
     let corners = [
         (0.0, 0.0),
         (0.0, cols as f64),
@@ -552,10 +525,7 @@ struct ProjectionGeometry {
 ///   y = cy + d * cos_a + t * (-sin_a)
 ///   x = cx + d * sin_a + t * cos_a
 /// where `d = proj_bin + min_proj` is the actual perpendicular distance.
-fn line_endpoints(
-    proj_bin: f64,
-    geom: &ProjectionGeometry,
-) -> Option<LineSegment> {
+fn line_endpoints(proj_bin: f64, geom: &ProjectionGeometry) -> Option<LineSegment> {
     let d = proj_bin + geom.min_proj;
     let base_y = geom.cy + d * geom.cos_a;
     let base_x = geom.cx + d * geom.sin_a;
@@ -707,11 +677,9 @@ mod tests {
 
     #[test]
     fn sat_full_and_subregion_sums() {
-        let img = Array2::from_shape_vec(
-            (3, 3),
-            vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
-        )
-        .unwrap();
+        let img =
+            Array2::from_shape_vec((3, 3), vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
+                .unwrap();
         let sat = build_sat(&img);
 
         // Full image: 1+2+...+9 = 45
@@ -728,11 +696,9 @@ mod tests {
 
     #[test]
     fn sat_single_pixel_queries() {
-        let img = Array2::from_shape_vec(
-            (3, 3),
-            vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
-        )
-        .unwrap();
+        let img =
+            Array2::from_shape_vec((3, 3), vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
+                .unwrap();
         let sat = build_sat(&img);
 
         // Every single-pixel query should return exactly that pixel's value
@@ -754,11 +720,7 @@ mod tests {
 
     #[test]
     fn sat_squared_correctness() {
-        let img = Array2::from_shape_vec(
-            (2, 3),
-            vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0],
-        )
-        .unwrap();
+        let img = Array2::from_shape_vec((2, 3), vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
         let sat_sq = build_sat_sq(&img);
 
         // Full sum of squares: 1+4+9+16+25+36 = 91
@@ -785,9 +747,7 @@ mod tests {
 
     #[test]
     fn normalize_scales_to_unit() {
-        let mut map =
-            Array2::from_shape_vec((2, 2), vec![2.0f32, 4.0, 6.0, 8.0])
-                .unwrap();
+        let mut map = Array2::from_shape_vec((2, 2), vec![2.0f32, 4.0, 6.0, 8.0]).unwrap();
         normalize_map(&mut map);
         assert!((map[[1, 1]] - 1.0).abs() < 1e-6, "Max should be 1.0");
         assert!((map[[0, 0]] - 0.25).abs() < 1e-6, "2/8 = 0.25");
@@ -811,8 +771,8 @@ mod tests {
         let img = Array2::from_shape_vec(
             (4, 4),
             vec![
-                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
-                13.0, 14.0, 15.0, 16.0f32,
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
+                16.0f32,
             ],
         )
         .unwrap();
@@ -996,11 +956,7 @@ mod tests {
             profile[i] = 1.0;
         }
         let bands = detect_bands(&profile, 0.3, 5);
-        assert_eq!(
-            bands.len(),
-            1,
-            "Should detect band touching end of profile"
-        );
+        assert_eq!(bands.len(), 1, "Should detect band touching end of profile");
     }
 
     #[test]
@@ -1304,8 +1260,7 @@ mod tests {
             min_proj,
         };
 
-        let seg =
-            line_endpoints(50.0, &geom).expect("Should produce a line segment");
+        let seg = line_endpoints(50.0, &geom).expect("Should produce a line segment");
 
         // Both endpoints should have same y, and x should span 0..cols
         assert!(
@@ -1343,8 +1298,7 @@ mod tests {
             min_proj,
         };
 
-        let seg =
-            line_endpoints(30.0, &geom).expect("Should produce a line segment");
+        let seg = line_endpoints(30.0, &geom).expect("Should produce a line segment");
 
         // Both endpoints should have same x, and y should span 0..rows
         assert!(

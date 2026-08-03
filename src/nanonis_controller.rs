@@ -3,13 +3,9 @@ use std::time::Duration;
 
 use nanonis_rs::{
     NanonisClient, Position,
-    motor::{
-        MotorDirection, MotorDisplacement, MotorGroup, MovementMode, Position3D,
-    },
+    motor::{MotorDirection, MotorDisplacement, MotorGroup, MovementMode, Position3D},
     oscilloscope::OsciData,
-    scan::{
-        ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder,
-    },
+    scan::{ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder},
     tip_recovery::TipShaperConfig,
 };
 
@@ -17,8 +13,8 @@ use std::collections::HashSet;
 
 use crate::buffered_tcp_reader::BufferedTCPReader;
 use crate::spm_controller::{
-    AcquisitionMode, Capability, DataStreamStatus, Result, SpmController,
-    TriggerSetup, ZControllerStatus, ZHomeMode,
+    AcquisitionMode, Capability, DataStreamStatus, Result, SpmController, TriggerSetup,
+    ZControllerStatus, ZHomeMode,
 };
 use crate::spm_error::SpmError;
 use crate::utils::{PollError, poll_until};
@@ -130,8 +126,7 @@ impl NanonisController {
             let new_frames = reader.get_data_since(cursor);
             for frame in &new_frames {
                 cursor = frame.timestamp + Duration::from_nanos(1);
-                if let Some(&value) = frame.signal_frame.data.get(data_position)
-                {
+                if let Some(&value) = frame.signal_frame.data.get(data_position) {
                     collected.push(value);
                     if collected.len() >= num_samples {
                         break;
@@ -185,9 +180,7 @@ impl NanonisController {
         buffer_size: usize,
     ) -> Result<()> {
         if self.tcp_reader.is_some() {
-            log::warn!(
-                "TCP reader already running, stopping previous instance"
-            );
+            log::warn!("TCP reader already running, stopping previous instance");
             self.stop_tcp_reader()?;
         }
 
@@ -203,16 +196,8 @@ impl NanonisController {
             ));
         }
 
-        let reader = BufferedTCPReader::new(
-            host,
-            data_port,
-            buffer_size,
-            num_channels,
-            1.0,
-        )
-        .map_err(|e| {
-            SpmError::Protocol(format!("Failed to start TCP reader: {}", e))
-        })?;
+        let reader = BufferedTCPReader::new(host, data_port, buffer_size, num_channels, 1.0)
+            .map_err(|e| SpmError::Protocol(format!("Failed to start TCP reader: {}", e)))?;
 
         self.tcp_reader = Some(reader);
         log::info!(
@@ -227,9 +212,9 @@ impl NanonisController {
     /// Stop the background TCP reader if running.
     pub fn stop_tcp_reader(&mut self) -> Result<()> {
         if let Some(mut reader) = self.tcp_reader.take() {
-            reader.stop().map_err(|e| {
-                SpmError::Protocol(format!("Failed to stop TCP reader: {}", e))
-            })?;
+            reader
+                .stop()
+                .map_err(|e| SpmError::Protocol(format!("Failed to stop TCP reader: {}", e)))?;
         }
         Ok(())
     }
@@ -250,10 +235,10 @@ impl NanonisController {
     fn refresh_tcp_channel_list(&mut self, output_index: i32) -> Result<()> {
         use nanonis_rs::user_out::OutputMode;
 
-        let current_mode =
-            self.client.user_out_mode_get(output_index).map_err(|e| {
-                SpmError::Protocol(format!("user_out_mode_get failed: {}", e))
-            })?;
+        let current_mode = self
+            .client
+            .user_out_mode_get(output_index)
+            .map_err(|e| SpmError::Protocol(format!("user_out_mode_get failed: {}", e)))?;
         let toggle_to = match current_mode {
             OutputMode::UserOutput => OutputMode::Monitor,
             OutputMode::Monitor => OutputMode::CalcSignal,
@@ -261,14 +246,10 @@ impl NanonisController {
         };
         self.client
             .user_out_mode_set(output_index, toggle_to)
-            .map_err(|e| {
-                SpmError::Protocol(format!("user_out_mode_set failed: {}", e))
-            })?;
+            .map_err(|e| SpmError::Protocol(format!("user_out_mode_set failed: {}", e)))?;
         self.client
             .user_out_mode_set(output_index, current_mode)
-            .map_err(|e| {
-                SpmError::Protocol(format!("user_out_mode_set failed: {}", e))
-            })?;
+            .map_err(|e| SpmError::Protocol(format!("user_out_mode_set failed: {}", e)))?;
         log::debug!(
             "TCP channel list refresh workaround applied (output {})",
             output_index
@@ -329,13 +310,9 @@ impl SpmController for NanonisController {
     fn prepare(&mut self) -> Result<()> {
         // Load layout file if specified
         if let Some(ref path) = self.setup.layout_file {
-            let abs =
-                std::path::Path::new(path).canonicalize().map_err(|e| {
-                    SpmError::Protocol(format!(
-                        "Layout file not found: {} ({})",
-                        path, e
-                    ))
-                })?;
+            let abs = std::path::Path::new(path).canonicalize().map_err(|e| {
+                SpmError::Protocol(format!("Layout file not found: {} ({})", path, e))
+            })?;
             self.client
                 .util_layout_load(&abs.to_string_lossy(), false)?;
             log::info!("Layout loaded: {}", abs.display());
@@ -343,13 +320,9 @@ impl SpmController for NanonisController {
 
         // Load settings file if specified
         if let Some(ref path) = self.setup.settings_file {
-            let abs =
-                std::path::Path::new(path).canonicalize().map_err(|e| {
-                    SpmError::Protocol(format!(
-                        "Settings file not found: {} ({})",
-                        path, e
-                    ))
-                })?;
+            let abs = std::path::Path::new(path).canonicalize().map_err(|e| {
+                SpmError::Protocol(format!("Settings file not found: {} ({})", path, e))
+            })?;
             self.client
                 .util_settings_load(&abs.to_string_lossy(), false)?;
             log::info!("Settings loaded: {}", abs.display());
@@ -393,11 +366,7 @@ impl SpmController for NanonisController {
         // Disable safe-tip overrides entirely: auto_recovery=false,
         // auto_pause_scan=false.  Keep the threshold from config so if
         // the user re-enables safe-tip manually, it starts at a known level.
-        if let Err(e) = self.safe_tip_configure(
-            false,
-            false,
-            self.setup.safe_tip_threshold_a,
-        ) {
+        if let Err(e) = self.safe_tip_configure(false, false, self.setup.safe_tip_threshold_a) {
             log::warn!("Failed to reset safe-tip config: {}", e);
         }
     }
@@ -415,39 +384,24 @@ impl SpmController for NanonisController {
 
     // -- Signals --
 
-    fn read_signal(
-        &mut self,
-        index: u32,
-        wait_for_newest: bool,
-    ) -> Result<f64> {
+    fn read_signal(&mut self, index: u32, wait_for_newest: bool) -> Result<f64> {
         let index_u8 = u8::try_from(index).map_err(|_| {
-            SpmError::Protocol(format!(
-                "Signal index {} exceeds u8 range (max 255)",
-                index
-            ))
+            SpmError::Protocol(format!("Signal index {} exceeds u8 range (max 255)", index))
         })?;
         let val = self.client.signal_val_get(index_u8, wait_for_newest)?;
         Ok(val as f64)
     }
 
-    fn read_signals(
-        &mut self,
-        indices: &[u32],
-        wait_for_newest: bool,
-    ) -> Result<Vec<f64>> {
+    fn read_signals(&mut self, indices: &[u32], wait_for_newest: bool) -> Result<Vec<f64>> {
         let indices_i32: Vec<i32> = indices
             .iter()
             .map(|&i| {
                 i32::try_from(i).map_err(|_| {
-                    SpmError::Protocol(format!(
-                        "Signal index {} exceeds i32 range",
-                        i
-                    ))
+                    SpmError::Protocol(format!("Signal index {} exceeds i32 range", i))
                 })
             })
             .collect::<Result<Vec<i32>>>()?;
-        let vals =
-            self.client.signals_vals_get(indices_i32, wait_for_newest)?;
+        let vals = self.client.signals_vals_get(indices_i32, wait_for_newest)?;
         Ok(vals.into_iter().map(|v| v as f64).collect())
     }
 
@@ -525,9 +479,7 @@ impl SpmController for NanonisController {
                 if spm.is_connection_error() {
                     return Err(spm);
                 }
-                log::debug!(
-                    "auto_approach_open rejected (likely already open): {spm}"
-                );
+                log::debug!("auto_approach_open rejected (likely already open): {spm}");
             }
         }
 
@@ -535,9 +487,9 @@ impl SpmController for NanonisController {
         std::thread::sleep(Duration::from_millis(500));
 
         // Start auto-approach
-        self.client.auto_approach_on_off_set(true).map_err(|e| {
-            SpmError::Protocol(format!("Failed to start auto-approach: {}", e))
-        })?;
+        self.client
+            .auto_approach_on_off_set(true)
+            .map_err(|e| SpmError::Protocol(format!("Failed to start auto-approach: {}", e)))?;
 
         if !wait {
             return Ok(());
@@ -600,25 +552,13 @@ impl SpmController for NanonisController {
 
     // -- Motor (Coarse Positioning) --
 
-    fn move_motor(
-        &mut self,
-        direction: MotorDirection,
-        steps: u16,
-        wait: bool,
-    ) -> Result<()> {
-        Ok(self.client.motor_start_move(
-            direction,
-            steps,
-            MotorGroup::Group1,
-            wait,
-        )?)
+    fn move_motor(&mut self, direction: MotorDirection, steps: u16, wait: bool) -> Result<()> {
+        Ok(self
+            .client
+            .motor_start_move(direction, steps, MotorGroup::Group1, wait)?)
     }
 
-    fn move_motor_3d(
-        &mut self,
-        displacement: MotorDisplacement,
-        wait: bool,
-    ) -> Result<()> {
+    fn move_motor_3d(&mut self, displacement: MotorDisplacement, wait: bool) -> Result<()> {
         let axes: [(i16, MotorDirection, MotorDirection); 3] = [
             (
                 displacement.x,
@@ -650,17 +590,10 @@ impl SpmController for NanonisController {
         Ok(())
     }
 
-    fn move_motor_closed_loop(
-        &mut self,
-        target: Position3D,
-        mode: MovementMode,
-    ) -> Result<()> {
-        Ok(self.client.motor_start_closed_loop(
-            mode,
-            target,
-            true,
-            MotorGroup::Group1,
-        )?)
+    fn move_motor_closed_loop(&mut self, target: Position3D, mode: MovementMode) -> Result<()> {
+        Ok(self
+            .client
+            .motor_start_closed_loop(mode, target, true, MotorGroup::Group1)?)
     }
 
     fn stop_motor(&mut self) -> Result<()> {
@@ -669,11 +602,7 @@ impl SpmController for NanonisController {
 
     // -- Scanning --
 
-    fn scan_action(
-        &mut self,
-        action: ScanAction,
-        direction: ScanDirection,
-    ) -> Result<()> {
+    fn scan_action(&mut self, action: ScanAction, direction: ScanDirection) -> Result<()> {
         Ok(self.client.scan_action(action, direction)?)
     }
 
@@ -784,15 +713,10 @@ impl SpmController for NanonisController {
 
     // -- Data Stream (TCP Logger) --
 
-    fn data_stream_configure(
-        &mut self,
-        channels: &[i32],
-        oversampling: i32,
-    ) -> Result<()> {
+    fn data_stream_configure(&mut self, channels: &[i32], oversampling: i32) -> Result<()> {
         if channels.is_empty() {
             return Err(SpmError::Protocol(
-                "data_stream_configure: at least one channel is required"
-                    .into(),
+                "data_stream_configure: at least one channel is required".into(),
             ));
         }
         self.client.tcplog_chs_set(channels.to_vec())?;
@@ -819,11 +743,7 @@ impl SpmController for NanonisController {
 
     // -- Signal Reading (TCP stream override) --
 
-    fn read_signal_samples(
-        &mut self,
-        index: u32,
-        num_samples: usize,
-    ) -> Result<Vec<f64>> {
+    fn read_signal_samples(&mut self, index: u32, num_samples: usize) -> Result<Vec<f64>> {
         if num_samples == 0 {
             return Err(SpmError::Protocol(
                 "read_signal_samples: num_samples must be > 0".into(),
@@ -833,9 +753,7 @@ impl SpmController for NanonisController {
             Some(r) => r,
             None => {
                 // Fall back to polling read_signal if no TCP reader
-                log::debug!(
-                    "No TCP reader available, falling back to polling read_signal"
-                );
+                log::debug!("No TCP reader available, falling back to polling read_signal");
                 let mut samples = Vec::with_capacity(num_samples);
                 for _ in 0..num_samples {
                     samples.push(self.read_signal(index, true)?);
@@ -852,8 +770,7 @@ impl SpmController for NanonisController {
             ))
         })?;
 
-        let collected =
-            Self::collect_tcp_samples(reader, data_position, num_samples)?;
+        let collected = Self::collect_tcp_samples(reader, data_position, num_samples)?;
         Ok(collected.into_iter().map(|v| v as f64).collect())
     }
 }

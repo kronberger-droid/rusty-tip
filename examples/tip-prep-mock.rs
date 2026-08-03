@@ -33,14 +33,10 @@ use env_logger::Env;
 use log::info;
 
 use rusty_tip::config::AppConfig;
-use rusty_tip::controller_types::{
-    BiasSweepPolarity, PolaritySign, PulseMethod,
-};
+use rusty_tip::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
 use rusty_tip::event::{ConsoleLogger, EventBus};
 use rusty_tip::mock_controller::models::RealisticParams;
-use rusty_tip::mock_controller::{
-    FaultKind, FreqShiftModel, MockController, models,
-};
+use rusty_tip::mock_controller::{FaultKind, FreqShiftModel, MockController, models};
 use rusty_tip::tip_prep::{Outcome, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 
@@ -210,9 +206,7 @@ fn build_scenario(name: &str) -> Option<Scenario> {
                 description: "Tip reads sharp, but the post-sweep measurement has drifted past the \
                      stability threshold. Expect a stability sweep, a 6 V recovery pulse, then CycleLimit.",
                 // [0] blunt, [1..4] sharp (baseline), [5] drifted, [6+] blunt.
-                model: models::scripted(vec![
-                    -40.0, -1.0, -1.0, -1.0, -1.0, -1.8, -40.0,
-                ]),
+                model: models::scripted(vec![-40.0, -1.0, -1.0, -1.0, -1.0, -1.8, -40.0]),
                 config: cfg,
                 faults: vec![],
                 request_shutdown_after: None,

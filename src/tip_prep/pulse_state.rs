@@ -1,8 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::controller_types::{
-    PolaritySign, PulseMethod, RandomPolaritySwitch,
-};
+use crate::controller_types::{PolaritySign, PulseMethod, RandomPolaritySwitch};
 
 /// Mutable state for pulse voltage strategies that evolve across cycles.
 pub struct PulseState {
@@ -63,12 +61,8 @@ impl PulseState {
     pub fn reset(&mut self, method: &PulseMethod) {
         self.current_voltage = match method {
             PulseMethod::Fixed { voltage, .. } => *voltage as f64,
-            PulseMethod::Stepping { voltage_bounds, .. } => {
-                voltage_bounds.0 as f64
-            }
-            PulseMethod::Linear { voltage_bounds, .. } => {
-                voltage_bounds.0 as f64
-            }
+            PulseMethod::Stepping { voltage_bounds, .. } => voltage_bounds.0 as f64,
+            PulseMethod::Linear { voltage_bounds, .. } => voltage_bounds.0 as f64,
         };
         self.cycles_without_change = 0;
         self.last_freq_shift = None;
@@ -128,11 +122,7 @@ impl PulseState {
     }
 
     /// Update pulse voltage magnitude based on the latest freq_shift reading.
-    pub fn update_voltage(
-        &mut self,
-        method: &PulseMethod,
-        freq_shift: Option<f64>,
-    ) {
+    pub fn update_voltage(&mut self, method: &PulseMethod, freq_shift: Option<f64>) {
         match method {
             PulseMethod::Fixed { .. } => {
                 // Fixed: voltage never changes
@@ -157,16 +147,10 @@ impl PulseState {
                 let (significant, positive_change) = match freq_shift {
                     Some(current) => {
                         let reference = if self.cycles_without_change > 0
-                            && self.freq_shift_history.len()
-                                > self.cycles_without_change
+                            && self.freq_shift_history.len() > self.cycles_without_change
                         {
                             let n = self.cycles_without_change;
-                            let sum: f64 = self
-                                .freq_shift_history
-                                .iter()
-                                .skip(1)
-                                .take(n)
-                                .sum();
+                            let sum: f64 = self.freq_shift_history.iter().skip(1).take(n).sum();
                             let mean = sum / n as f64;
                             log::debug!(
                                 "Current: {:.3e} | Stable mean: {:.3e} | Threshold: {:.3e}",
@@ -189,10 +173,7 @@ impl PulseState {
                         match reference {
                             Some(ref_val) => {
                                 let change = current - ref_val;
-                                (
-                                    change.abs() > *threshold_value as f64,
-                                    change >= 0.0,
-                                )
+                                (change.abs() > *threshold_value as f64, change >= 0.0)
                             }
                             None => (true, true),
                         }
@@ -215,11 +196,10 @@ impl PulseState {
                 }
 
                 if self.cycles_without_change >= *cycles_before_step as usize {
-                    let step_size = (voltage_bounds.1 - voltage_bounds.0)
-                        as f64
-                        / *voltage_steps as f64;
-                    let new_voltage = (self.current_voltage + step_size)
-                        .min(voltage_bounds.1 as f64);
+                    let step_size =
+                        (voltage_bounds.1 - voltage_bounds.0) as f64 / *voltage_steps as f64;
+                    let new_voltage =
+                        (self.current_voltage + step_size).min(voltage_bounds.1 as f64);
                     if new_voltage > self.current_voltage {
                         log::info!(
                             "Stepping pulse voltage: {:.3}V -> {:.3}V",
@@ -228,10 +208,7 @@ impl PulseState {
                         );
                         self.current_voltage = new_voltage;
                     } else {
-                        log::debug!(
-                            "Pulse voltage already at maximum: {:.3}V",
-                            voltage_bounds.1
-                        );
+                        log::debug!("Pulse voltage already at maximum: {:.3}V", voltage_bounds.1);
                     }
                     self.cycles_without_change = 0;
                 }
@@ -245,8 +222,7 @@ impl PulseState {
                 ..
             } => {
                 if let Some(fs) = freq_shift {
-                    if fs < linear_clamp.0 as f64 || fs > linear_clamp.1 as f64
-                    {
+                    if fs < linear_clamp.0 as f64 || fs > linear_clamp.1 as f64 {
                         self.current_voltage = voltage_bounds.1 as f64;
                         log::info!(
                             "Linear pulse: freq_shift {:.2} Hz outside range [{:.2}, {:.2}] Hz -> using max voltage {:.2}V",
@@ -256,11 +232,9 @@ impl PulseState {
                             voltage_bounds.1
                         );
                     } else {
-                        let slope = (voltage_bounds.1 - voltage_bounds.0)
-                            as f64
+                        let slope = (voltage_bounds.1 - voltage_bounds.0) as f64
                             / (linear_clamp.1 - linear_clamp.0) as f64;
-                        let intercept = voltage_bounds.0 as f64
-                            - slope * linear_clamp.0 as f64;
+                        let intercept = voltage_bounds.0 as f64 - slope * linear_clamp.0 as f64;
                         self.current_voltage = slope * fs + intercept;
                         log::info!(
                             "Linear pulse: freq_shift {:.2} Hz in range [{:.2}, {:.2}] Hz -> calculated voltage {:.2}V",

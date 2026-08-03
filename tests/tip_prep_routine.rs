@@ -8,9 +8,7 @@
 use std::sync::{Arc, Mutex as StdMutex};
 
 use rusty_tip::config::AppConfig;
-use rusty_tip::controller_types::{
-    BiasSweepPolarity, PolaritySign, PulseMethod,
-};
+use rusty_tip::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
 use rusty_tip::event::{Event, EventBus, Observer};
 use rusty_tip::mock_controller::{FaultKind, MockController, models};
 use rusty_tip::spm_error::SpmError;
@@ -361,8 +359,7 @@ fn sharp_but_unstable_fires_max_pulse_then_cycle_limit() {
     //   [2..4] confirm reads  -> sharp; baseline = read[4]
     //   [5] post-sweep final  -> still in-bounds but drifted 0.8 Hz => UNSTABLE
     //   [6+] cycle-2 measure  -> blunt again => no second stability check
-    let scripted =
-        models::scripted(vec![-40.0, -1.0, -1.0, -1.0, -1.0, -1.8, -40.0]);
+    let scripted = models::scripted(vec![-40.0, -1.0, -1.0, -1.0, -1.0, -1.8, -40.0]);
 
     let mock = MockController::builder()
         .freq_shift_index(FREQ_SHIFT_INDEX)

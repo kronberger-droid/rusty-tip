@@ -1,17 +1,12 @@
 use std::time::Instant;
 
-use crate::action::{
-    Action, ActionContext, ActionOutput, ActionRegistry, DataStore,
-};
+use crate::action::{Action, ActionContext, ActionOutput, ActionRegistry, DataStore};
 use crate::event::{Event, EventBus, EventEmitter, Observer};
 use crate::machine_state::{MachineState, StateField, ValidationPolicy};
 use crate::spm_controller::SpmController;
 use crate::spm_error::SpmError;
 
-use super::{
-    CompareOp, Condition, ShutdownFlag, Step, StepOutcome, Workflow,
-    WorkflowOutcome,
-};
+use super::{CompareOp, Condition, ShutdownFlag, Step, StepOutcome, Workflow, WorkflowOutcome};
 
 /// Executes workflows by walking the Step tree.
 ///
@@ -29,10 +24,7 @@ pub struct WorkflowExecutor {
 }
 
 impl WorkflowExecutor {
-    pub fn new(
-        registry: ActionRegistry,
-        controller: Box<dyn SpmController>,
-    ) -> Self {
+    pub fn new(registry: ActionRegistry, controller: Box<dyn SpmController>) -> Self {
         Self {
             registry,
             controller,
@@ -87,10 +79,7 @@ impl WorkflowExecutor {
     }
 
     /// Execute a complete workflow.
-    pub fn run(
-        &mut self,
-        workflow: &Workflow,
-    ) -> Result<WorkflowOutcome, SpmError> {
+    pub fn run(&mut self, workflow: &Workflow) -> Result<WorkflowOutcome, SpmError> {
         self.events.emit(Event::custom(
             "workflow_started",
             serde_json::json!({ "name": &workflow.name }),
@@ -227,15 +216,14 @@ impl WorkflowExecutor {
             }
 
             Step::Wait { duration_ms } => {
-                let deadline = std::time::Instant::now()
-                    + std::time::Duration::from_millis(*duration_ms);
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_millis(*duration_ms);
                 let poll = std::time::Duration::from_millis(50);
                 while std::time::Instant::now() < deadline {
                     if self.shutdown.is_requested() {
                         return Ok(StepOutcome::Shutdown);
                     }
-                    let remaining = deadline
-                        .saturating_duration_since(std::time::Instant::now());
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
                     std::thread::sleep(poll.min(remaining));
                 }
                 Ok(StepOutcome::Completed(ActionOutput::Unit))
@@ -278,11 +266,8 @@ impl WorkflowExecutor {
         match action.execute(&mut ctx) {
             Ok(output) => {
                 let duration = start.elapsed();
-                self.events.emit(Event::action_completed(
-                    action.name(),
-                    &output,
-                    duration,
-                ));
+                self.events
+                    .emit(Event::action_completed(action.name(), &output, duration));
 
                 if self.policy != ValidationPolicy::Disabled {
                     action.apply_to_state(&output, &mut self.state);
@@ -360,10 +345,7 @@ impl WorkflowExecutor {
     /// In Strict mode, auto-insert Query resolvers for any required field
     /// that is Unknown/Uninitialized, then recheck. Advisory logs and
     /// proceeds. Disabled is a no-op.
-    fn enforce_preconditions(
-        &mut self,
-        action: &dyn Action,
-    ) -> Result<(), SpmError> {
+    fn enforce_preconditions(&mut self, action: &dyn Action) -> Result<(), SpmError> {
         if self.policy == ValidationPolicy::Disabled {
             return Ok(());
         }
@@ -431,20 +413,13 @@ impl WorkflowExecutor {
                 resolver.apply_to_state(&output, &mut self.state);
             }
             Err(e) => {
-                log::warn!(
-                    "Resolver '{}' for {:?} failed: {e}",
-                    resolver.name(),
-                    field
-                );
+                log::warn!("Resolver '{}' for {:?} failed: {e}", resolver.name(), field);
             }
         }
     }
 
     /// Evaluate a condition against the current DataStore.
-    fn evaluate_condition(
-        &self,
-        condition: &Condition,
-    ) -> Result<bool, SpmError> {
+    fn evaluate_condition(&self, condition: &Condition) -> Result<bool, SpmError> {
         match condition {
             Condition::Compare {
                 variable,
@@ -486,9 +461,7 @@ impl WorkflowExecutor {
                 Ok(false)
             }
 
-            Condition::Not { condition } => {
-                Ok(!self.evaluate_condition(condition)?)
-            }
+            Condition::Not { condition } => Ok(!self.evaluate_condition(condition)?),
         }
     }
 
@@ -496,12 +469,10 @@ impl WorkflowExecutor {
     ///
     /// Handles both raw f64 values and `ActionOutput::Value` stored by actions.
     fn resolve_variable(&self, name: &str) -> Result<f64, SpmError> {
-        let json = self.store.get_raw(name).ok_or_else(|| {
-            SpmError::Workflow(format!(
-                "Variable '{}' not found in store",
-                name
-            ))
-        })?;
+        let json = self
+            .store
+            .get_raw(name)
+            .ok_or_else(|| SpmError::Workflow(format!("Variable '{}' not found in store", name)))?;
 
         // Try direct f64
         if let Some(v) = json.as_f64() {
@@ -509,8 +480,7 @@ impl WorkflowExecutor {
         }
 
         // Try deserializing as ActionOutput
-        if let Ok(output) = serde_json::from_value::<ActionOutput>(json.clone())
-        {
+        if let Ok(output) = serde_json::from_value::<ActionOutput>(json.clone()) {
             match output {
                 ActionOutput::Value(v) => return Ok(v),
                 ActionOutput::Values(_) => {
@@ -548,16 +518,11 @@ mod tests {
     use crate::action::{Action, ActionContext, ActionOutput, ActionRegistry};
     use crate::event::ChannelForwarder;
     use crate::spm_controller::{
-        AcquisitionMode, Capability, DataStreamStatus, SpmController,
-        TriggerSetup,
+        AcquisitionMode, Capability, DataStreamStatus, SpmController, TriggerSetup,
     };
-    use crate::workflow::{
-        CompareOp, Condition, Step, Workflow, WorkflowOutcome,
-    };
+    use crate::workflow::{CompareOp, Condition, Step, Workflow, WorkflowOutcome};
     use nanonis_rs::oscilloscope::OsciData;
-    use nanonis_rs::scan::{
-        ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder,
-    };
+    use nanonis_rs::scan::{ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder};
     use nanonis_rs::tip_recovery::TipShaperConfig;
     use nanonis_rs::{Position, motor::*};
     use serde::{Deserialize, Serialize};
@@ -582,11 +547,7 @@ mod tests {
             [Capability::Bias, Capability::Signals].into()
         }
 
-        fn read_signal(
-            &mut self,
-            index: u32,
-            _wait: bool,
-        ) -> crate::spm_controller::Result<f64> {
+        fn read_signal(&mut self, index: u32, _wait: bool) -> crate::spm_controller::Result<f64> {
             Ok(index as f64 * 0.1)
         }
         fn read_signals(
@@ -596,18 +557,13 @@ mod tests {
         ) -> crate::spm_controller::Result<Vec<f64>> {
             Ok(indices.iter().map(|&i| i as f64 * 0.1).collect())
         }
-        fn signal_names(
-            &mut self,
-        ) -> crate::spm_controller::Result<Vec<String>> {
+        fn signal_names(&mut self) -> crate::spm_controller::Result<Vec<String>> {
             Ok(vec!["Z".into(), "Current".into()])
         }
         fn get_bias(&mut self) -> crate::spm_controller::Result<f64> {
             Ok(self.bias)
         }
-        fn set_bias(
-            &mut self,
-            voltage: f64,
-        ) -> crate::spm_controller::Result<()> {
+        fn set_bias(&mut self, voltage: f64) -> crate::spm_controller::Result<()> {
             self.bias = voltage;
             Ok(())
         }
@@ -620,24 +576,13 @@ mod tests {
         ) -> crate::spm_controller::Result<()> {
             Ok(())
         }
-        fn withdraw(
-            &mut self,
-            _w: bool,
-            _t: Duration,
-        ) -> crate::spm_controller::Result<()> {
+        fn withdraw(&mut self, _w: bool, _t: Duration) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn auto_approach(
-            &mut self,
-            _w: bool,
-            _t: Duration,
-        ) -> crate::spm_controller::Result<()> {
+        fn auto_approach(&mut self, _w: bool, _t: Duration) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn set_z_setpoint(
-            &mut self,
-            _s: f64,
-        ) -> crate::spm_controller::Result<()> {
+        fn set_z_setpoint(&mut self, _s: f64) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
         fn set_z_home(
@@ -652,22 +597,13 @@ mod tests {
         }
         fn z_controller_status(
             &mut self,
-        ) -> crate::spm_controller::Result<
-            crate::spm_controller::ZControllerStatus,
-        > {
+        ) -> crate::spm_controller::Result<crate::spm_controller::ZControllerStatus> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn get_position(
-            &mut self,
-            _w: bool,
-        ) -> crate::spm_controller::Result<Position> {
+        fn get_position(&mut self, _w: bool) -> crate::spm_controller::Result<Position> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn set_position(
-            &mut self,
-            _p: Position,
-            _w: bool,
-        ) -> crate::spm_controller::Result<()> {
+        fn set_position(&mut self, _p: Position, _w: bool) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
         fn move_motor(
@@ -705,34 +641,23 @@ mod tests {
         fn scan_status(&mut self) -> crate::spm_controller::Result<bool> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn scan_props_get(
-            &mut self,
-        ) -> crate::spm_controller::Result<ScanProps> {
+        fn scan_props_get(&mut self) -> crate::spm_controller::Result<ScanProps> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn scan_props_set(
-            &mut self,
-            _p: ScanPropsBuilder,
-        ) -> crate::spm_controller::Result<()> {
+        fn scan_props_set(&mut self, _p: ScanPropsBuilder) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn scan_speed_get(
-            &mut self,
-        ) -> crate::spm_controller::Result<ScanConfig> {
+        fn scan_speed_get(&mut self) -> crate::spm_controller::Result<ScanConfig> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn scan_speed_set(
-            &mut self,
-            _c: ScanConfig,
-        ) -> crate::spm_controller::Result<()> {
+        fn scan_speed_set(&mut self, _c: ScanConfig) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
         fn scan_frame_data_grab(
             &mut self,
             _c: u32,
             _f: bool,
-        ) -> crate::spm_controller::Result<(String, Vec<Vec<f32>>, bool)>
-        {
+        ) -> crate::spm_controller::Result<(String, Vec<Vec<f32>>, bool)> {
             Err(SpmError::Unsupported("mock".into()))
         }
         fn osci_read(
@@ -751,9 +676,7 @@ mod tests {
         ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn pll_center_freq_shift(
-            &mut self,
-        ) -> crate::spm_controller::Result<()> {
+        fn pll_center_freq_shift(&mut self) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
         fn safe_tip_configure(
@@ -764,15 +687,10 @@ mod tests {
         ) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn safe_tip_status(
-            &mut self,
-        ) -> crate::spm_controller::Result<(bool, bool, f64)> {
+        fn safe_tip_status(&mut self) -> crate::spm_controller::Result<(bool, bool, f64)> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn safe_tip_set_enabled(
-            &mut self,
-            _e: bool,
-        ) -> crate::spm_controller::Result<()> {
+        fn safe_tip_set_enabled(&mut self, _e: bool) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
         fn safe_tip_enabled(&mut self) -> crate::spm_controller::Result<bool> {
@@ -791,9 +709,7 @@ mod tests {
         fn data_stream_stop(&mut self) -> crate::spm_controller::Result<()> {
             Err(SpmError::Unsupported("mock".into()))
         }
-        fn data_stream_status(
-            &mut self,
-        ) -> crate::spm_controller::Result<DataStreamStatus> {
+        fn data_stream_status(&mut self) -> crate::spm_controller::Result<DataStreamStatus> {
             Err(SpmError::Unsupported("mock".into()))
         }
     }
@@ -810,10 +726,7 @@ mod tests {
         fn description(&self) -> &str {
             "Increment 'counter' in the store"
         }
-        fn execute(
-            &self,
-            ctx: &mut ActionContext,
-        ) -> std::result::Result<ActionOutput, SpmError> {
+        fn execute(&self, ctx: &mut ActionContext) -> std::result::Result<ActionOutput, SpmError> {
             let current: f64 = ctx.store.get("counter").unwrap_or(0.0);
             let next = current + 1.0;
             ctx.store.set("counter", &next)?;
@@ -868,8 +781,8 @@ mod tests {
     #[test]
     fn do_step_unknown_action_fails() {
         let mut exec = make_executor();
-        let wf = Workflow::new("test", "")
-            .step(Step::action("nonexistent", serde_json::Value::Null));
+        let wf =
+            Workflow::new("test", "").step(Step::action("nonexistent", serde_json::Value::Null));
         let result = exec.run(&wf);
         assert!(result.is_err());
     }
@@ -1191,8 +1104,7 @@ mod tests {
     fn shutdown_stops_workflow() {
         let mut exec = make_executor();
         exec.shutdown_flag().request();
-        let wf = Workflow::new("test", "")
-            .step(Step::action("increment", serde_json::Value::Null));
+        let wf = Workflow::new("test", "").step(Step::action("increment", serde_json::Value::Null));
         let result = exec.run(&wf).unwrap();
         assert!(matches!(result, WorkflowOutcome::StoppedByUser));
         // The action should not have run
@@ -1236,8 +1148,8 @@ mod tests {
         let mut exec = make_executor();
         exec.add_observer(Box::new(ChannelForwarder::new(tx)));
 
-        let wf = Workflow::new("test_wf", "")
-            .step(Step::action("read_bias", serde_json::Value::Null));
+        let wf =
+            Workflow::new("test_wf", "").step(Step::action("read_bias", serde_json::Value::Null));
         exec.run(&wf).unwrap();
 
         let events = collect_events(&rx);
@@ -1272,13 +1184,16 @@ mod tests {
         let mut exec = make_executor();
         exec.add_observer(Box::new(ChannelForwarder::new(tx)));
 
-        let wf = Workflow::new("test", "")
-            .step(Step::action("read_bias", serde_json::Value::Null));
+        let wf = Workflow::new("test", "").step(Step::action("read_bias", serde_json::Value::Null));
         exec.run(&wf).unwrap();
 
         let events = collect_events(&rx);
-        let has_action_started = events.iter().any(|e| matches!(e, Event::ActionStarted { action, .. } if action == "read_bias"));
-        let has_action_completed = events.iter().any(|e| matches!(e, Event::ActionCompleted { action, .. } if action == "read_bias"));
+        let has_action_started = events
+            .iter()
+            .any(|e| matches!(e, Event::ActionStarted { action, .. } if action == "read_bias"));
+        let has_action_completed = events
+            .iter()
+            .any(|e| matches!(e, Event::ActionCompleted { action, .. } if action == "read_bias"));
         assert!(has_action_started, "Should emit ActionStarted");
         assert!(has_action_completed, "Should emit ActionCompleted");
     }
@@ -1289,12 +1204,14 @@ mod tests {
         let mut exec = make_executor();
         exec.add_observer(Box::new(ChannelForwarder::new(tx)));
 
-        let wf = Workflow::new("test", "")
-            .step(Step::action("nonexistent", serde_json::Value::Null));
+        let wf =
+            Workflow::new("test", "").step(Step::action("nonexistent", serde_json::Value::Null));
         let _ = exec.run(&wf); // will fail
 
         let events = collect_events(&rx);
-        let has_workflow_failed = events.iter().any(|e| matches!(e, Event::Custom { kind, .. } if kind == "workflow_failed"));
+        let has_workflow_failed = events
+            .iter()
+            .any(|e| matches!(e, Event::Custom { kind, .. } if kind == "workflow_failed"));
         assert!(has_workflow_failed, "Should emit workflow_failed event");
     }
 
@@ -1353,15 +1270,10 @@ mod tests {
     #[test]
     fn step_convenience_constructors() {
         let action = Step::action("read_bias", serde_json::Value::Null);
-        assert!(
-            matches!(action, Step::Do { action, .. } if action == "read_bias")
-        );
+        assert!(matches!(action, Step::Do { action, .. } if action == "read_bias"));
 
-        let action_store =
-            Step::action_store("read_bias", serde_json::json!({}), "bias");
-        assert!(
-            matches!(action_store, Step::Do { store_as: Some(key), .. } if key == "bias")
-        );
+        let action_store = Step::action_store("read_bias", serde_json::json!({}), "bias");
+        assert!(matches!(action_store, Step::Do { store_as: Some(key), .. } if key == "bias"));
 
         let seq = Step::sequence(vec![]);
         assert!(matches!(seq, Step::Sequence { .. }));
@@ -1428,30 +1340,24 @@ mod tests {
         fn description(&self) -> &str {
             "test action that requires approached tip"
         }
-        fn execute(
-            &self,
-            _ctx: &mut ActionContext,
-        ) -> Result<ActionOutput, SpmError> {
+        fn execute(&self, _ctx: &mut ActionContext) -> Result<ActionOutput, SpmError> {
             Ok(ActionOutput::Unit)
         }
         fn expects(&self) -> crate::machine_state::StateRequirements {
-            crate::machine_state::StateRequirements::none()
-                .tip(TipEngagement::Approached)
+            crate::machine_state::StateRequirements::none().tip(TipEngagement::Approached)
         }
     }
 
     fn exec_with_policy(policy: ValidationPolicy) -> WorkflowExecutor {
         let mut reg = ActionRegistry::new();
         reg.register::<ApproachedOnly>();
-        let mut exec =
-            WorkflowExecutor::new(reg, Box::new(MockController::new()));
+        let mut exec = WorkflowExecutor::new(reg, Box::new(MockController::new()));
         exec.set_policy(policy);
         exec
     }
 
     fn approached_only_wf() -> Workflow {
-        Workflow::new("t", "")
-            .step(Step::action("approached_only", serde_json::Value::Null))
+        Workflow::new("t", "").step(Step::action("approached_only", serde_json::Value::Null))
     }
 
     #[test]
@@ -1486,8 +1392,7 @@ mod tests {
     #[test]
     fn set_bias_updates_state_in_strict_mode() {
         let reg = crate::action::builtin_registry();
-        let mut exec =
-            WorkflowExecutor::new(reg, Box::new(MockController::new()));
+        let mut exec = WorkflowExecutor::new(reg, Box::new(MockController::new()));
         exec.set_policy(ValidationPolicy::Strict);
         let wf = Workflow::new("t", "").step(Step::action(
             "set_bias",

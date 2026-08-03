@@ -89,18 +89,15 @@ impl BufferedTCPReader {
         oversampling: f32,
     ) -> Result<Self, NanonisError> {
         let tcp_stream = TCPLoggerStream::new(host, port)?;
-        let (tcp_receiver, stream_handle) =
-            tcp_stream.spawn_background_reader();
+        let (tcp_receiver, stream_handle) = tcp_stream.spawn_background_reader();
 
-        let buffer =
-            Arc::new(RwLock::new(VecDeque::with_capacity(buffer_size)));
+        let buffer = Arc::new(RwLock::new(VecDeque::with_capacity(buffer_size)));
         let buffer_clone = buffer.clone();
 
         let shutdown_signal = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown_signal.clone();
 
-        let stream_error: Arc<Mutex<Option<String>>> =
-            Arc::new(Mutex::new(None));
+        let stream_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let stream_error_clone = stream_error.clone();
 
         let start_time = Instant::now();
@@ -110,24 +107,22 @@ impl BufferedTCPReader {
 
         let buffering_thread = thread::Builder::new()
             .name("tcp-logger-buffer".into())
-            .spawn(
-            move || -> Result<(), NanonisError> {
+            .spawn(move || -> Result<(), NanonisError> {
                 log::debug!("Started buffering thread for TCP logger data");
 
                 while !shutdown_clone.load(Ordering::Relaxed) {
-                    match tcp_receiver.recv_timeout(Duration::from_millis(100))
-                    {
+                    match tcp_receiver.recv_timeout(Duration::from_millis(100)) {
                         Ok(signal_frame) => {
                             // Skip the first frame (signal indices metadata)
                             if signal_frame.counter == 0 {
-                                log::debug!("Skipping metadata frame (counter=0) with signal indices");
+                                log::debug!(
+                                    "Skipping metadata frame (counter=0) with signal indices"
+                                );
                                 continue;
                             }
 
-                            let timestamped_frame = TimestampedSignalFrame::new(
-                                signal_frame,
-                                start_time,
-                            );
+                            let timestamped_frame =
+                                TimestampedSignalFrame::new(signal_frame, start_time);
 
                             {
                                 let mut buffer = buffer_clone.write();
@@ -163,8 +158,8 @@ impl BufferedTCPReader {
                     }
                 }
                 Ok(())
-            },
-        ).expect("failed to spawn tcp-logger-buffer thread");
+            })
+            .expect("failed to spawn tcp-logger-buffer thread");
 
         Ok(Self {
             buffer,
@@ -255,10 +250,7 @@ impl BufferedTCPReader {
     /// # Thread Safety
     /// This method acquires a lock on the buffer briefly to copy matching frames.
     /// Lock is held for minimal time to avoid blocking the buffering thread.
-    pub fn get_data_since(
-        &self,
-        since: Instant,
-    ) -> Vec<TimestampedSignalFrame> {
+    pub fn get_data_since(&self, since: Instant) -> Vec<TimestampedSignalFrame> {
         let buffer = self.buffer.read();
         buffer
             .iter()
@@ -282,11 +274,7 @@ impl BufferedTCPReader {
     /// # Usage
     /// This is the core method for synchronized data collection during actions.
     /// Typically used to get data before/during/after specific operations.
-    pub fn get_data_between(
-        &self,
-        start: Instant,
-        end: Instant,
-    ) -> Vec<TimestampedSignalFrame> {
+    pub fn get_data_between(&self, start: Instant, end: Instant) -> Vec<TimestampedSignalFrame> {
         let buffer = self.buffer.read();
         buffer
             .iter()
@@ -309,10 +297,7 @@ impl BufferedTCPReader {
     /// # Usage
     /// Convenient for real-time monitoring and getting recent signal history
     /// without needing to track specific timestamps
-    pub fn get_recent_data(
-        &self,
-        duration: Duration,
-    ) -> Vec<TimestampedSignalFrame> {
+    pub fn get_recent_data(&self, duration: Duration) -> Vec<TimestampedSignalFrame> {
         let since = Instant::now() - duration;
         self.get_data_since(since)
     }
@@ -361,9 +346,7 @@ impl BufferedTCPReader {
         let buffer = self.buffer.read();
         let count = buffer.len();
         let capacity = self.max_buffer_size;
-        let time_span = if let (Some(first), Some(last)) =
-            (buffer.front(), buffer.back())
-        {
+        let time_span = if let (Some(first), Some(last)) = (buffer.front(), buffer.back()) {
             last.timestamp.duration_since(first.timestamp)
         } else {
             Duration::ZERO
@@ -386,10 +369,7 @@ impl BufferedTCPReader {
     /// ```rust,ignore
     /// let recent_100 = tcp_reader.get_recent_frames(100);
     /// ```
-    pub fn get_recent_frames(
-        &self,
-        count: usize,
-    ) -> Vec<TimestampedSignalFrame> {
+    pub fn get_recent_frames(&self, count: usize) -> Vec<TimestampedSignalFrame> {
         let buffer = self.buffer.read();
         buffer.iter().rev().take(count).cloned().collect()
     }
@@ -410,10 +390,7 @@ impl BufferedTCPReader {
     /// ```rust,ignore
     /// let baseline = tcp_reader.get_oldest_frames(50);
     /// ```
-    pub fn get_oldest_frames(
-        &self,
-        count: usize,
-    ) -> Vec<TimestampedSignalFrame> {
+    pub fn get_oldest_frames(&self, count: usize) -> Vec<TimestampedSignalFrame> {
         let buffer = self.buffer.read();
         buffer.iter().take(count).cloned().collect()
     }
@@ -456,11 +433,7 @@ impl BufferedTCPReader {
     /// // Get frames 50-149 (middle section of buffer)
     /// let middle_data = tcp_reader.get_frame_range(50, 100);
     /// ```
-    pub fn get_frame_range(
-        &self,
-        start_idx: usize,
-        count: usize,
-    ) -> Vec<TimestampedSignalFrame> {
+    pub fn get_frame_range(&self, start_idx: usize, count: usize) -> Vec<TimestampedSignalFrame> {
         let buffer = self.buffer.read();
 
         buffer.iter().skip(start_idx).take(count).cloned().collect()
@@ -520,9 +493,9 @@ impl BufferedTCPReader {
     pub fn stop(&mut self) -> Result<(), NanonisError> {
         self.shutdown_signal.store(true, Ordering::Relaxed);
         if let Some(handle) = self.buffering_thread.take() {
-            handle.join().unwrap_or_else(|_| {
-                Err(NanonisError::Protocol("Buffering thread panicked".into()))
-            })
+            handle
+                .join()
+                .unwrap_or_else(|_| Err(NanonisError::Protocol("Buffering thread panicked".into())))
         } else {
             Ok(())
         }

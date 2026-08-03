@@ -16,12 +16,10 @@ fn shipped_configs_parse_and_validate() {
             continue;
         }
 
-        let cfg = rusty_tip::config::load_config(&path).unwrap_or_else(|e| {
-            panic!("{} failed to parse: {e}", path.display())
-        });
-        cfg.validate().unwrap_or_else(|e| {
-            panic!("{} failed to validate: {e}", path.display())
-        });
+        let cfg = rusty_tip::config::load_config(&path)
+            .unwrap_or_else(|e| panic!("{} failed to parse: {e}", path.display()));
+        cfg.validate()
+            .unwrap_or_else(|e| panic!("{} failed to validate: {e}", path.display()));
         checked.push(path);
     }
 
@@ -68,8 +66,7 @@ voltage = 5.0
     )
     .expect("write temp config");
 
-    let cfg = rusty_tip::config::load_config(&path)
-        .expect("a partial stability table should load");
+    let cfg = rusty_tip::config::load_config(&path).expect("a partial stability table should load");
 
     assert!(
         !cfg.tip_prep.stability.check_stability,

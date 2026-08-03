@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use nanonis_rs::motor::{
-    MotorDirection, MotorDisplacement, MovementMode, Position3D,
-};
+use nanonis_rs::motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D};
 
 use crate::action::util::Wait;
 use crate::action::z_controller::{CalibratedApproach, Withdraw};
@@ -65,11 +63,8 @@ impl Action for MoveMotor {
         vec![Capability::Motor]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
-        ctx.controller.move_motor(
-            self.direction.clone().into(),
-            self.steps,
-            self.wait,
-        )?;
+        ctx.controller
+            .move_motor(self.direction.clone().into(), self.steps, self.wait)?;
         Ok(ActionOutput::Unit)
     }
 }

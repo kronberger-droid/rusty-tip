@@ -42,9 +42,7 @@ pub use nanonis_rs::motor::{
 };
 
 // Re-export nanonis-rs scan types
-pub use nanonis_rs::scan::{
-    ScanAction, ScanConfig, ScanDirection, ScanFrame, ScanPropsBuilder,
-};
+pub use nanonis_rs::scan::{ScanAction, ScanConfig, ScanDirection, ScanFrame, ScanPropsBuilder};
 
 // Re-export nanonis-rs oscilloscope types
 pub use nanonis_rs::oscilloscope::{

@@ -6,8 +6,7 @@ use crate::action::pll::CenterFreqShift;
 use crate::action::util::Wait;
 use crate::action::{Action, ActionContext, ActionOutput};
 use crate::machine_state::{
-    ActionKind, MachineState, ScanActivity, StateEffects, StateField,
-    TipEngagement,
+    ActionKind, MachineState, ScanActivity, StateEffects, StateField, TipEngagement,
 };
 use crate::spm_controller::{Capability, ZControllerStatus};
 
@@ -329,10 +328,7 @@ impl Action for CalibratedApproach {
 
             // 6. Center freq shift (non-fatal if it fails)
             if let Err(e) = CenterFreqShift.execute(ctx) {
-                log::warn!(
-                    "Failed to center frequency shift: {} (continuing)",
-                    e
-                );
+                log::warn!("Failed to center frequency shift: {} (continuing)", e);
             }
 
             // 7. Final approach with centered freq shift
@@ -342,9 +338,7 @@ impl Action for CalibratedApproach {
         })();
 
         // 8. Always restore safe-tip state before propagating errors
-        if !was_enabled
-            && let Err(e) = ctx.controller.safe_tip_set_enabled(false)
-        {
+        if !was_enabled && let Err(e) = ctx.controller.safe_tip_set_enabled(false) {
             log::error!("Failed to restore safe-tip state: {}", e);
         }
 
