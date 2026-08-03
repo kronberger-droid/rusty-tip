@@ -864,13 +864,15 @@ fn read_stable(
     config: &AppConfig,
     freq_shift_index: u32,
 ) -> Result<f64, Box<dyn std::error::Error>> {
+    let gates = &config.tip_prep.signal_stability;
     let output = execute_logged(
         &ReadStableSignal {
             index: freq_shift_index,
             num_samples: config.data_acquisition.stable_signal_samples,
-            max_std_dev: config.data_acquisition.max_std_dev,
-            max_slope: config.data_acquisition.max_slope,
-            max_retries: config.data_acquisition.stable_read_retries,
+            max_std_dev: gates.max_std_dev_hz as f64,
+            max_slope: gates.max_slope_hz_per_s as f64,
+            max_retries: gates.read_retry_count as usize,
+            sample_rate_hz: config.data_acquisition.sample_rate as f64,
         },
         ctx,
     )?;

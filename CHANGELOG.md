@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+The v2 stack (`SpmController` trait, action/event system, `tip_prep::runner`)
+replaces the v1 `ActionDriver`/`TipController` code. Only the stability-gate
+changes are listed here; see the commit history for the rewrite itself.
+
+### Changed
+
+- **Breaking (config):** the signal-read gates moved out of `[data_acquisition]`
+  and into `[tip_prep.signal_stability]`, which is now the only place they live.
+  `max_std_dev`, `max_slope` and `stable_read_retries` under `[data_acquisition]`
+  are gone; use `max_std_dev_hz`, `max_slope_hz_per_s` and `read_retry_count`.
+  An old config still parses, but its gates are silently ignored, so it runs on
+  the defaults. `stable_signal_samples` stays where it is.
+- `signal_stability.data_collection_duration_ms` and `read_timeout_secs` are
+  accepted but unused: the v2 read path sizes its batch from
+  `stable_signal_samples` and bounds a read by `read_retry_count`.
+
+### Fixed
+
+- Re-applied the 0.2.2 drift fix to the v2 read path. `ReadStableSignal` had
+  inherited the per-sample regression slope, so its drift tolerance still scaled
+  with the batch size. It now converts to Hz/s using the stream's sample rate,
+  and its defaults are the 0.2.3 values (1.5 Hz, 0.5 Hz/s) rather than the
+  pre-fix 1.0 Hz / 0.01 Hz-per-sample pair.
+
 ## [0.2.3] - 2026-05-27
 
 ### Added
