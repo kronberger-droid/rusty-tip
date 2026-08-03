@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-08-03
 
 The v2 stack (`SpmController` trait, action/event system, `tip_prep::runner`)
 replaces the v1 `ActionDriver`/`TipController` code. Only the stability-gate
@@ -13,6 +13,8 @@ changes are listed here; see the commit history for the rewrite itself.
 
 ### Changed
 
+- **Breaking (CLI):** the v2 binary is now called `tip-prep`, not `tip-prep-v2`.
+  It replaces the v1 binary of the same name, which is gone.
 - **Breaking (config):** the signal-read gates moved out of `[data_acquisition]`
   and into `[tip_prep.signal_stability]`, which is now the only place they live.
   `max_std_dev`, `max_slope` and `stable_read_retries` under `[data_acquisition]`
@@ -25,6 +27,9 @@ changes are listed here; see the commit history for the rewrite itself.
 
 ### Fixed
 
+- `nix build .#tip-prep` built nothing: the flake still passed `--bin tip-prep`
+  while the crate only defined `tip-prep-v2`. The package versions are now read
+  from `Cargo.toml` rather than hardcoded, so they cannot drift again.
 - Re-applied the 0.2.2 drift fix to the v2 read path. `ReadStableSignal` had
   inherited the per-sample regression slope, so its drift tolerance still scaled
   with the batch size. It now converts to Hz/s using the stream's sample rate,
