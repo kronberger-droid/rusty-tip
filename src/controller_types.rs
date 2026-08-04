@@ -24,6 +24,12 @@ pub enum BiasSweepPolarity {
 // ============================================================================
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+// `default` at the container level so a config may set only the stability
+// fields it cares about — `configs/tip_prep_no_stability.toml` sets just
+// `check_stability = false` — and the rest fall back to `Default`. Without this,
+// naming the `[tip_prep.stability]` table at all forced every field to be spelled
+// out, which made that config fail to load with a bare "missing field" error.
+#[serde(default)]
 pub struct StabilityConfig {
     /// Whether to perform stability checking
     /// When true, performs a scan with bias sweep to verify tip stability
@@ -96,9 +102,10 @@ impl StabilityConfig {
 // POLARITY
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PolaritySign {
+    #[default]
     Positive,
     Negative,
 }
@@ -109,12 +116,6 @@ impl PolaritySign {
             PolaritySign::Positive => PolaritySign::Negative,
             PolaritySign::Negative => PolaritySign::Positive,
         }
-    }
-}
-
-impl Default for PolaritySign {
-    fn default() -> Self {
-        Self::Positive
     }
 }
 
@@ -288,8 +289,9 @@ impl Default for PulseMethod {
 // ============================================================================
 
 /// Current action being performed by the controller
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum ControllerAction {
+    #[default]
     Idle,
     Initializing,
     LoadingLayout,
@@ -302,17 +304,14 @@ pub enum ControllerAction {
     MeasuringSignal,
     Pulsing,
     StabilityCheck,
-    StabilitySweep { sweep: u32, total: u32 },
+    StabilitySweep {
+        sweep: u32,
+        total: u32,
+    },
     Repositioning,
     Completed,
     Stopped,
     Error(String),
-}
-
-impl Default for ControllerAction {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 /// Snapshot of the controller's current state for GUI display

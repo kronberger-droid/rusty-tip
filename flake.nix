@@ -3,19 +3,16 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    fenix = {
-      url = "github:nix-community/fenix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs = {
     self,
     nixpkgs,
-    fenix,
     ...
   }: let
     forAllSystems = nixpkgs.lib.genAttrs ["x86_64-linux" "aarch64-linux"];
+    # Single source of truth, so the packages cannot drift from the crate.
+    version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
   in {
     packages = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
@@ -37,7 +34,7 @@
     in {
       tip-prep-gui = pkgs.rustPlatform.buildRustPackage {
         pname = "tip-prep-gui";
-        version = "0.1.0";
+        inherit version;
         src = ./.;
         cargoLock.lockFile = ./Cargo.lock;
         buildFeatures = ["gui"];
@@ -49,7 +46,7 @@
 
       tip-prep = pkgs.rustPlatform.buildRustPackage {
         pname = "tip-prep";
-        version = "0.1.0";
+        inherit version;
         src = ./.;
         cargoLock.lockFile = ./Cargo.lock;
         cargoBuildFlags = ["--bin" "tip-prep"];
@@ -59,7 +56,7 @@
 
       tip-prep-gui-windows = pkgs.pkgsCross.mingwW64.rustPlatform.buildRustPackage {
         pname = "tip-prep-gui";
-        version = "0.1.0";
+        inherit version;
         src = ./.;
         cargoLock.lockFile = ./Cargo.lock;
         buildFeatures = ["gui"];
@@ -73,16 +70,6 @@
 
     devShells = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
-      toolchain = fenix.packages.${system}.combine [
-        (fenix.packages.${system}.stable.withComponents [
-          "cargo"
-          "clippy"
-          "rust-src"
-          "rustc"
-          "rustfmt"
-        ])
-        fenix.packages.${system}.targets.x86_64-pc-windows-gnu.stable.rust-std
-      ];
       guiDeps = with pkgs; [
         wayland
         wayland-protocols
@@ -101,32 +88,26 @@
     in {
       default = pkgs.mkShell {
         nativeBuildInputs =
-          [
-            toolchain
-            fenix.packages.${system}.rust-analyzer
-            pkgs.pkg-config
-            pkgs.gcc
-            pkgs.cargo-expand
-            pkgs.cargo-dist
-          ]
+          (with pkgs; [
+            cargo
+            clippy
+            rustc
+            rustfmt
+            rust-analyzer
+            pkg-config
+            gcc
+            cargo-expand
+            cargo-dist
+          ])
           ++ guiDeps;
 
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath guiDeps;
+        RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
 
         shellHook = ''
           # Activate the repo's git hooks (pre-push rustfmt check).
           git config core.hooksPath .githooks 2>/dev/null || true
         '';
-      };
-
-      windows = pkgs.mkShell {
-        nativeBuildInputs = [
-          toolchain
-          fenix.packages.${system}.rust-analyzer
-          pkgs.pkg-config
-          pkgs.pkgsCross.mingwW64.stdenv.cc
-          pkgs.pkgsCross.mingwW64.windows.pthreads
-        ];
       };
     });
   };

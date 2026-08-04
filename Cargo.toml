@@ -1,7 +1,7 @@
 [package]
 name = "rusty-tip"
-version = "0.2.3"
-edition = "2021"
+version = "0.3.0"
+edition = "2024"
 description = "Rust library for Nanonis SPM system control via TCP"
 repository = "https://github.com/kronberger-droid/rusty-tip"
 license = "MIT"
@@ -14,6 +14,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "tip-prep"
 path = "bin/tip-prep/main.rs"
+
+[[bin]]
+name = "cuox-finder"
+path = "bin/cuox-finder/main.rs"
 
 [[bin]]
 name = "tip-prep-gui"
@@ -36,6 +40,8 @@ parking_lot = "0.12"
 config = { version = "0.15.18", features = [ "toml" ] }
 clap = { version = "4.5.53", features = ["derive"] }
 crossbeam-channel = "0.5"
+rayon = "1.10"
+image = "0.25"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["consoleapi", "processenv", "wincon", "handleapi", "winbase"] }

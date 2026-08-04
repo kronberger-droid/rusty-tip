@@ -1,28 +1,19 @@
 use serde::{Deserialize, Serialize};
 
 // Re-export nanonis-rs types from their respective submodules
-pub use nanonis_rs::bias::PulseMode;
 pub use nanonis_rs::motor::{
     Amplitude, Frequency, MotorAxis, MotorDirection, MotorDisplacement, MotorGroup, MotorMovement,
     MovementMode, Position3D, StepCount,
 };
 pub use nanonis_rs::oscilloscope::{
-    OsciTriggerMode, OscilloscopeIndex, OversamplingIndex, SampleCount, TimebaseIndex,
+    OsciData, OsciTriggerMode, OscilloscopeIndex, OversamplingIndex, SampleCount, TimebaseIndex,
     TriggerConfig, TriggerLevel, TriggerMode, TriggerSlope,
 };
-pub use nanonis_rs::scan::{ScanAction, ScanConfig, ScanDirection, ScanFrame};
-pub use nanonis_rs::signals::SignalFrame;
-pub use nanonis_rs::tcplog::TCPLogStatus;
-pub use nanonis_rs::z_ctrl::ZControllerHold;
-pub use nanonis_rs::Position;
-// DataToGet is extended locally with Stable variant
 
-use std::time::{Duration, Instant};
-
-/// Signal stability statistics computed by rusty-tip.
+/// Signal stability statistics for oscilloscope data analysis.
 ///
-/// Previously provided by nanonis-rs; as of 0.4.0 its `OsciData` is a pure
-/// protocol type, so this application-level analysis lives here.
+/// Previously lived in nanonis-rs but is application-level analysis,
+/// not protocol data.
 #[derive(Debug, Clone)]
 pub struct SignalStats {
     pub mean: f64,
@@ -32,66 +23,55 @@ pub struct SignalStats {
     pub stability_method: String,
 }
 
-/// Oscilloscope reading (t0/dt/size/data from nanonis-rs) plus rusty-tip's
-/// stability analysis. nanonis-rs 0.4.0 made its `OsciData` a pure protocol
-/// type, so the stability fields are tracked here.
+/// Extension trait adding stability analysis fields to `OsciData`.
+///
+/// The base `OsciData` in nanonis-rs is now a pure protocol type.
+/// Stability tracking is application-level and lives here.
 #[derive(Debug, Clone)]
-pub struct OsciData {
-    pub t0: f64,
-    pub dt: f64,
-    pub size: i32,
-    pub data: Vec<f64>,
+pub struct StableOsciData {
+    pub osci: OsciData,
     pub signal_stats: Option<SignalStats>,
     pub is_stable: bool,
     pub fallback_value: Option<f64>,
 }
 
-impl OsciData {
-    /// Stable reading with no extra statistics attached.
-    pub fn new_stable(t0: f64, dt: f64, size: i32, data: Vec<f64>) -> Self {
+impl StableOsciData {
+    pub fn stable(osci: OsciData) -> Self {
         Self {
-            t0,
-            dt,
-            size,
-            data,
+            osci,
             signal_stats: None,
             is_stable: true,
             fallback_value: None,
         }
     }
 
-    /// Stable reading with computed statistics.
-    pub fn new_with_stats(t0: f64, dt: f64, size: i32, data: Vec<f64>, stats: SignalStats) -> Self {
+    pub fn with_stats(osci: OsciData, stats: SignalStats) -> Self {
         Self {
-            t0,
-            dt,
-            size,
-            data,
+            osci,
             signal_stats: Some(stats),
             is_stable: true,
             fallback_value: None,
         }
     }
 
-    /// Unstable reading; carries a single fallback value (e.g. the mean).
-    pub fn new_unstable_with_fallback(
-        t0: f64,
-        dt: f64,
-        size: i32,
-        data: Vec<f64>,
-        fallback_value: f64,
-    ) -> Self {
+    pub fn unstable_with_fallback(osci: OsciData, fallback: f64) -> Self {
         Self {
-            t0,
-            dt,
-            size,
-            data,
+            osci,
             signal_stats: None,
             is_stable: false,
-            fallback_value: Some(fallback_value),
+            fallback_value: Some(fallback),
         }
     }
 }
+pub use nanonis_rs::Position;
+pub use nanonis_rs::bias::PulseMode;
+pub use nanonis_rs::scan::{ScanAction, ScanConfig, ScanDirection, ScanFrame};
+pub use nanonis_rs::signals::SignalFrame;
+pub use nanonis_rs::tcplog::TCPLogStatus;
+pub use nanonis_rs::z_ctrl::ZControllerHold;
+// DataToGet is extended locally with Stable variant
+
+use std::time::{Duration, Instant};
 
 /// Simple tip shape - matches original controller
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
@@ -142,198 +122,6 @@ impl TimestampedSignalFrame {
             timestamp,
             relative_time: timestamp.duration_since(start_time),
         }
-    }
-}
-
-// ==================== Experiment Data with Lightweight Frames ====================
-
-/// Complete experiment result containing action outcome and synchronized signal data
-/// Now uses lightweight SignalFrame structures for better memory efficiency
-#[derive(Debug)]
-pub struct ExperimentData {
-    /// Result of the executed action
-    pub action_result: crate::actions::ActionResult,
-    /// Lightweight signal frames (much more memory efficient)
-    pub signal_frames: Vec<TimestampedSignalFrame>,
-    /// TCP logger configuration for context (stored once, not per frame)
-    pub tcp_config: crate::action_driver::TCPReaderConfig,
-    /// When the action started
-    pub action_start: Instant,
-    /// When the action ended  
-    pub action_end: Instant,
-    /// Total action duration
-    pub total_duration: Duration,
-}
-
-/// Experiment data for action chain execution with timing for each action
-#[derive(Debug)]
-pub struct ChainExperimentData {
-    /// Results of each action in the chain
-    pub action_results: Vec<crate::actions::ActionResult>,
-    /// All signal frames collected during the entire chain execution
-    pub signal_frames: Vec<TimestampedSignalFrame>,
-    /// TCP logger configuration for context
-    pub tcp_config: crate::action_driver::TCPReaderConfig,
-    /// Start and end times for each action in the chain
-    pub action_timings: Vec<(Instant, Instant)>,
-    /// When the entire chain started
-    pub chain_start: Instant,
-    /// When the entire chain ended
-    pub chain_end: Instant,
-    /// Duration of entire chain execution
-    pub total_duration: Duration,
-}
-
-impl ExperimentData {
-    /// Get signal data captured during action execution
-    pub fn data_during_action(&self) -> Vec<&TimestampedSignalFrame> {
-        self.signal_frames
-            .iter()
-            .filter(|frame| {
-                frame.timestamp >= self.action_start && frame.timestamp <= self.action_end
-            })
-            .collect()
-    }
-
-    /// Get signal data before action execution
-    pub fn data_before_action(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
-        let cutoff = self.action_start - duration;
-        self.signal_frames
-            .iter()
-            .filter(|frame| frame.timestamp >= cutoff && frame.timestamp < self.action_start)
-            .collect()
-    }
-
-    /// Get signal data after action execution
-    pub fn data_after_action(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
-        let cutoff = self.action_end + duration;
-        self.signal_frames
-            .iter()
-            .filter(|frame| frame.timestamp > self.action_end && frame.timestamp <= cutoff)
-            .collect()
-    }
-}
-
-impl ChainExperimentData {
-    /// Get signal data captured during a specific action in the chain
-    ///
-    /// # Arguments
-    /// * `action_index` - Index of the action in the chain (0-based)
-    ///
-    /// # Returns
-    /// Vector of signal frames collected during the specified action
-    pub fn data_during_action(&self, action_index: usize) -> Vec<&TimestampedSignalFrame> {
-        if let Some((start, end)) = self.action_timings.get(action_index) {
-            self.signal_frames
-                .iter()
-                .filter(|frame| frame.timestamp >= *start && frame.timestamp <= *end)
-                .collect()
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// Get signal data captured between two actions in the chain
-    ///
-    /// # Arguments
-    /// * `action1_index` - Index of first action (end time)
-    /// * `action2_index` - Index of second action (start time)
-    ///
-    /// # Returns
-    /// Vector of signal frames collected between the two specified actions
-    pub fn data_between_actions(
-        &self,
-        action1_index: usize,
-        action2_index: usize,
-    ) -> Vec<&TimestampedSignalFrame> {
-        if let (Some((_, end1)), Some((start2, _))) = (
-            self.action_timings.get(action1_index),
-            self.action_timings.get(action2_index),
-        ) {
-            self.signal_frames
-                .iter()
-                .filter(|frame| frame.timestamp > *end1 && frame.timestamp < *start2)
-                .collect()
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// Get signal data before the chain execution
-    ///
-    /// # Arguments
-    /// * `duration` - How far back from chain start to collect data
-    ///
-    /// # Returns
-    /// Vector of signal frames from before the chain started
-    pub fn data_before_chain(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
-        let cutoff = self.chain_start - duration;
-        self.signal_frames
-            .iter()
-            .filter(|frame| frame.timestamp >= cutoff && frame.timestamp < self.chain_start)
-            .collect()
-    }
-
-    /// Get signal data after the chain execution
-    ///
-    /// # Arguments
-    /// * `duration` - How far forward from chain end to collect data
-    ///
-    /// # Returns
-    /// Vector of signal frames from after the chain ended
-    pub fn data_after_chain(&self, duration: Duration) -> Vec<&TimestampedSignalFrame> {
-        let cutoff = self.chain_end + duration;
-        self.signal_frames
-            .iter()
-            .filter(|frame| frame.timestamp > self.chain_end && frame.timestamp <= cutoff)
-            .collect()
-    }
-
-    /// Get all signal data for the entire chain execution
-    ///
-    /// # Returns
-    /// Vector of signal frames from chain start to chain end
-    pub fn data_for_entire_chain(&self) -> Vec<&TimestampedSignalFrame> {
-        self.signal_frames
-            .iter()
-            .filter(|frame| {
-                frame.timestamp >= self.chain_start && frame.timestamp <= self.chain_end
-            })
-            .collect()
-    }
-
-    /// Get timing information for a specific action
-    ///
-    /// # Arguments
-    /// * `action_index` - Index of the action in the chain
-    ///
-    /// # Returns
-    /// Optional tuple of (start_time, end_time, duration)
-    pub fn action_timing(&self, action_index: usize) -> Option<(Instant, Instant, Duration)> {
-        self.action_timings
-            .get(action_index)
-            .map(|(start, end)| (*start, *end, end.duration_since(*start)))
-    }
-
-    /// Get summary statistics for the chain execution
-    ///
-    /// # Returns
-    /// Tuple of (total_actions, successful_actions, total_frames, chain_duration)
-    pub fn chain_summary(&self) -> (usize, usize, usize, Duration) {
-        let total_actions = self.action_results.len();
-        let successful_actions = self
-            .action_results
-            .iter()
-            .filter(|result| matches!(result, crate::actions::ActionResult::Success))
-            .count();
-        let total_frames = self.signal_frames.len();
-
-        (
-            total_actions,
-            successful_actions,
-            total_frames,
-            self.total_duration,
-        )
     }
 }
 

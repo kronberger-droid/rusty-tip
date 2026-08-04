@@ -1,5 +1,5 @@
 use log::debug;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::{io::Write, path::PathBuf};
 
 use crate::NanonisError;

@@ -116,12 +116,12 @@ impl Signal {
             )));
         }
 
-        if let Some(ch) = tcp_channel {
-            if ch > 23 {
-                return Err(NanonisError::Protocol(format!(
-                    "TCP Channel {ch} is out of range (0-23) "
-                )));
-            }
+        if let Some(ch) = tcp_channel
+            && ch > 23
+        {
+            return Err(NanonisError::Protocol(format!(
+                "TCP Channel {ch} is out of range (0-23) "
+            )));
         }
 
         Ok(Self {
@@ -218,22 +218,13 @@ impl SignalRegistryBuilder {
     pub fn from_signal_names(mut self, signal_names: &[String]) -> Self {
         for (index, name) in signal_names.iter().enumerate() {
             let clean_name = name.split('(').next().unwrap().trim();
+            let tcp_channel = self.nanonis_to_tcp.get(&(index as u8)).copied();
 
-            let signal;
-
-            if let Some(tcp_channel) = self.nanonis_to_tcp.get(&(index as u8)).copied() {
-                signal = Signal {
-                    name: name.clone(),
-                    index: index as u8,
-                    tcp_channel: Some(tcp_channel),
-                };
-            } else {
-                signal = Signal {
-                    name: name.clone(),
-                    index: index as u8,
-                    tcp_channel: None,
-                };
-            }
+            let signal = Signal {
+                name: name.clone(),
+                index: index as u8,
+                tcp_channel,
+            };
             self.signals.insert(name.to_lowercase(), signal.clone());
 
             if clean_name != name {
@@ -334,9 +325,18 @@ impl SignalRegistry {
             .collect()
     }
 
-    /// Get signal by name, returning the new Signal type
+    /// Get signal by name, matched case-insensitively against registered
+    /// aliases. Nanonis firmware has returned differing capitalizations
+    /// across versions (e.g. "freq shift" vs "Freq Shift"), so lookup
+    /// tolerates both.
     pub fn get_by_name(&self, name: &str) -> Option<&Signal> {
-        self.get(name)
+        if let Some(signal) = self.get(name) {
+            return Some(signal);
+        }
+        self.0
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v)
     }
 
     /// Get signal by Nanonis index, returning the new Signal type

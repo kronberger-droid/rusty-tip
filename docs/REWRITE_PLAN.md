@@ -12,13 +12,14 @@ workflow automation platform. This document covers both the foundation work need
 2. [Phase 0: Stabilize nanonis-rs](#phase-0-stabilize-nanonis-rs)
 3. [Phase 1: Hardware Abstraction Layer](#phase-1-hardware-abstraction-layer)
 4. [Phase 2: Trait-Based Action System](#phase-2-trait-based-action-system)
-5. [Phase 3: Event and Observation System](#phase-3-event-and-observation-system)
-6. [Phase 4: Workflow Engine](#phase-4-workflow-engine)
-7. [Phase 5: LLM Integration Layer](#phase-5-llm-integration-layer)
-8. [Phase 6: Data Pipeline](#phase-6-data-pipeline)
-9. [Phase 7: Reimplement tip-prep](#phase-7-reimplement-tip-prep)
-10. [Design Decisions](#design-decisions)
-11. [Migration Strategy](#migration-strategy)
+5. [Phase 3: Machine State Tracking](#phase-3-machine-state-tracking)
+6. [Phase 4: Event and Observation System](#phase-4-event-and-observation-system)
+7. [Phase 5: Workflow Engine](#phase-5-workflow-engine)
+8. [Phase 6: LLM Integration Layer](#phase-6-llm-integration-layer)
+9. [Phase 7: Data Pipeline](#phase-7-data-pipeline)
+10. [Phase 8: Procedure Trait and Reimplement tip-prep](#phase-8-procedure-trait-and-reimplement-tip-prep)
+11. [Design Decisions](#design-decisions)
+12. [Migration Strategy](#migration-strategy)
 
 ---
 
@@ -407,7 +408,354 @@ These map directly to the current ~30 Action enum variants:
 
 ---
 
-## Phase 3: Event and Observation System
+## Phase 3: Machine State Tracking
+
+### Goal
+
+Ensure that the machine state is always known. Every action, every procedure, and every
+error path must leave the system in a state that is either fully known or explicitly
+marked as unknown. No action or runner should ever return with the machine in an
+ambiguous, untracked state.
+
+This is the foundation for action-chain safety validation: before executing an action,
+the framework checks that the current machine state satisfies the action's preconditions.
+If it does not, the framework either refuses to proceed (on real hardware) or logs a
+warning (on simulated controllers).
+
+### The state model
+
+```rust
+/// A value whose tracking status is explicit.
+#[derive(Debug, Clone, PartialEq)]
+enum Tracked<T> {
+    /// Known value, set by a successful action or verified by a query.
+    Known(T),
+    /// Was known, but a failed action made it uncertain.
+    /// Requires a Query action to re-establish.
+    Unknown,
+    /// Never set -- procedure has not initialized this field yet.
+    Uninitialized,
+}
+
+/// Software model of the physical machine state.
+///
+/// This is a best-effort model that is updated by actions on success and
+/// degraded to Unknown on error. It is NOT a live mirror of the hardware --
+/// it reflects what the software believes to be true based on the actions
+/// it has executed.
+#[derive(Debug, Clone)]
+struct MachineState {
+    tip: Tracked<TipEngagement>,
+    bias_v: Tracked<f64>,
+    z_setpoint_a: Tracked<f64>,
+    z_controller: Tracked<ZControllerStatus>,
+    scan: Tracked<ScanActivity>,
+    safe_tip_enabled: Tracked<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TipEngagement {
+    Approached,
+    Withdrawn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ScanActivity {
+    Running,
+    Stopped,
+}
+```
+
+**Design insight**: `Uninitialized` vs `Unknown` matters for lifecycle clarity. At
+procedure startup, everything is `Uninitialized` -- the system knows nothing about what
+the previous user or procedure left behind. The `prepare()` step runs initialization
+and query actions that promote fields to `Known`. During execution, only failed actions
+demote `Known` to `Unknown`. This distinction lets the framework give different error
+messages: "bias has not been initialized" vs "bias is unknown due to a previous timeout"
+-- both block execution, but for different reasons.
+
+Motor position is intentionally excluded. Moving the coarse motor is never a safety
+hazard (the tip is withdrawn during motor moves). Scan properties (speed, continuous,
+bouncy) are also excluded for now -- they can be added later if needed.
+
+### Action classification
+
+Actions are classified by their side-effect profile, which determines the recovery
+policy the framework applies:
+
+```rust
+/// How an action interacts with the physical hardware state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActionKind {
+    /// Pure read -- no physical side effects. Safe to auto-insert
+    /// for state recovery when a field is Unknown.
+    Query,
+    /// Modifies physical hardware state. Must be explicitly placed
+    /// by the programmer or workflow. Never auto-inserted.
+    Mutate,
+}
+```
+
+| Kind | Physical side effects | Auto-insert for recovery | Examples |
+|---|---|---|---|
+| Query | None | Yes | `ReadBias`, `ReadSignal`, `ZControllerStatus`, `ReadScanStatus` |
+| Mutate | Yes | Never | `SetBias`, `Withdraw`, `CalibratedApproach`, `BiasPulse`, `ScanControl` |
+
+### Extending the Action trait
+
+The Action trait gains four new methods, all with backwards-compatible defaults so that
+existing actions compile without changes:
+
+```rust
+pub trait Action: Send + Sync {
+    // --- existing ---
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn requires(&self) -> Vec<Capability> { vec![] }
+    fn execute(&self, ctx: &mut ActionContext) -> Result<ActionOutput>;
+
+    // --- new ---
+
+    /// Whether this action is a pure read or mutates hardware.
+    /// Default: Mutate (conservative -- forces explicit opt-in for Query).
+    fn kind(&self) -> ActionKind { ActionKind::Mutate }
+
+    /// What machine state this action needs to proceed.
+    /// Default: no requirements (always valid).
+    fn expects(&self) -> StateRequirements { StateRequirements::none() }
+
+    /// How this action changes the machine state model on success.
+    /// Used for pre-execution chain validation (simulating a chain
+    /// without running it) and for the static "what will happen" view.
+    /// Default: no state changes.
+    fn effects(&self) -> StateEffects { StateEffects::none() }
+
+    /// Update machine state from the actual execution result.
+    ///
+    /// Called by the framework after a successful execute(). For simple
+    /// actions, this applies the same changes as effects(). For actions
+    /// with conditional outcomes (e.g., AutoApproach might fail to reach
+    /// the surface), this can inspect the ActionOutput to determine the
+    /// actual state change.
+    ///
+    /// For Query actions, this is where the queried value is written into
+    /// the MachineState, promoting an Unknown field to Known.
+    ///
+    /// Default: applies effects().
+    fn apply_to_state(&self, output: &ActionOutput, state: &mut MachineState) {
+        self.effects().apply(state);
+    }
+}
+```
+
+**Design insight**: `effects()` and `apply_to_state()` serve different purposes.
+`effects()` describes what *will* happen and is used for static chain validation before
+any hardware call. `apply_to_state()` describes what *did* happen and can inspect the
+actual `ActionOutput` to make the state update conditional on the result. For most
+actions these are equivalent. For actions like `AutoApproach` where the outcome is
+uncertain (it might time out), `apply_to_state()` can check whether the approach
+actually succeeded before setting `tip = Approached`.
+
+### Annotating existing actions
+
+```rust
+impl Action for ReadBias {
+    fn kind(&self) -> ActionKind { ActionKind::Query }
+    // expects: none (can always read bias)
+    // effects: none (doesn't change hardware)
+    fn apply_to_state(&self, output: &ActionOutput, state: &mut MachineState) {
+        if let ActionOutput::Value(v) = output {
+            state.bias_v = Tracked::Known(*v);
+        }
+    }
+}
+
+impl Action for SetBias {
+    fn kind(&self) -> ActionKind { ActionKind::Mutate }
+    // expects: none (Nanonis accepts SetBias in any state)
+    fn effects(&self) -> StateEffects {
+        StateEffects::new().set_bias(self.voltage)
+    }
+}
+
+impl Action for BiasPulse {
+    fn kind(&self) -> ActionKind { ActionKind::Mutate }
+    fn expects(&self) -> StateRequirements {
+        StateRequirements::new().tip(TipEngagement::Approached)
+    }
+    // effects: none (bias returns to previous value after pulse)
+}
+
+impl Action for Withdraw {
+    fn kind(&self) -> ActionKind { ActionKind::Mutate }
+    // expects: none (withdrawing when already withdrawn is a no-op)
+    fn effects(&self) -> StateEffects {
+        StateEffects::new().set_tip(TipEngagement::Withdrawn)
+    }
+}
+
+impl Action for CalibratedApproach {
+    fn kind(&self) -> ActionKind { ActionKind::Mutate }
+    // expects: none (handles both approached and withdrawn initial states)
+    fn effects(&self) -> StateEffects {
+        StateEffects::new()
+            .set_tip(TipEngagement::Approached)
+            .set_z_controller(ZControllerStatus::On)
+    }
+}
+
+impl Action for ScanControl {
+    fn kind(&self) -> ActionKind { ActionKind::Mutate }
+    fn expects(&self) -> StateRequirements {
+        match self.action {
+            ScanActionParam::Start => {
+                StateRequirements::new().tip(TipEngagement::Approached)
+            }
+            ScanActionParam::Stop => StateRequirements::none(),
+        }
+    }
+    fn effects(&self) -> StateEffects {
+        match self.action {
+            ScanActionParam::Start => {
+                StateEffects::new().set_scan(ScanActivity::Running)
+            }
+            ScanActionParam::Stop => {
+                StateEffects::new().set_scan(ScanActivity::Stopped)
+            }
+        }
+    }
+}
+```
+
+### Validation policy
+
+The enforcement strictness is a property of the executor, not the actions. Actions
+always declare the same preconditions and effects -- the executor decides what to do
+when preconditions are not met:
+
+```rust
+/// How strictly the executor enforces action preconditions.
+enum ValidationPolicy {
+    /// Log warnings but execute anyway. For simulation and testing.
+    /// Useful for LLM training: the LLM can see what violations it
+    /// caused without the run aborting.
+    Advisory,
+    /// Hard gate with automatic Query-based recovery for Unknown fields.
+    /// For real hardware. See recovery logic below.
+    Strict,
+}
+```
+
+### Automatic state recovery (Query actions only)
+
+When the executor encounters an `Unknown` field that an action requires, it can
+automatically resolve it by running a side-effect-free Query action:
+
+```
+for each unmet requirement:
+    if field is Unknown AND a Query action exists that resolves it:
+        → auto-execute the Query action
+        → update MachineState from the query result
+        → re-check the requirement with the now-Known value
+    if field is still unmet (wrong value, Uninitialized, or no recovery action):
+        → hard error, refuse to proceed
+```
+
+The key safety invariant: **automatic recovery never changes the physical state of the
+machine.** It only queries hardware to update the software model. This means auto-recovery
+is always safe -- the worst case is a redundant read that takes a few milliseconds.
+
+Mutate actions are never auto-inserted. If the framework determines that `tip = Withdrawn`
+but the next action needs `tip = Approached`, it does not auto-insert an approach. That
+would be an implicit state change with parameters the framework cannot know (which bias?
+which timeout? center freq shift?). The caller must explicitly place the approach action.
+
+### Error state degradation
+
+When an action fails, the framework degrades the fields that action was supposed to
+modify to `Unknown`:
+
+```rust
+fn execute_tracked(
+    action: &dyn Action,
+    ctx: &mut ActionContext,
+    state: &mut MachineState,
+) -> Result<ActionOutput> {
+    // 1. Check preconditions (with auto-recovery for Query actions)
+    resolve_and_check(action, ctx, state)?;
+
+    // 2. Execute
+    match action.execute(ctx) {
+        Ok(output) => {
+            // 3a. Success: update model from actual result
+            action.apply_to_state(&output, state);
+            Ok(output)
+        }
+        Err(e) => {
+            // 3b. Failure: degrade affected fields to Unknown
+            action.effects().degrade(state);
+            Err(e)
+        }
+    }
+}
+```
+
+`degrade()` sets every field that `effects()` would have modified to `Unknown`. Fields
+not mentioned in `effects()` are untouched -- the framework assumes the failed action
+did not modify them. This is conservative: a `SetBias` failure leaves `bias_v = Unknown`
+but `tip`, `scan`, etc. remain at their previous known values.
+
+### Chain validation (pre-execution)
+
+With `effects()` declared on every action, the framework can validate an entire action
+chain before executing it:
+
+```rust
+fn validate_chain(
+    actions: &[&dyn Action],
+    initial_state: &MachineState,
+) -> Result<(), Vec<ValidationError>> {
+    let mut simulated = initial_state.clone();
+    let mut errors = vec![];
+
+    for (i, action) in actions.iter().enumerate() {
+        if let Err(e) = action.expects().check(&simulated) {
+            errors.push(ValidationError {
+                step: i,
+                action: action.name().to_string(),
+                violation: e,
+            });
+        }
+        // Advance simulated state regardless (to catch later errors too)
+        action.effects().apply(&mut simulated);
+    }
+
+    if errors.is_empty() { Ok(()) } else { Err(errors) }
+}
+```
+
+This is critical for LLM-generated workflows: the LLM proposes a chain, the framework
+validates it before any hardware call, and returns specific error messages if the chain
+is invalid. The LLM can fix the chain and resubmit. No tip is harmed in the process.
+
+### Trust model
+
+The machine state model is a software-side best-effort tracker. It can drift from
+hardware reality if an external actor changes the hardware state (e.g., the user
+manually adjusts bias in the Nanonis GUI while a procedure is running).
+
+The design assumes the software is the **sole writer** to the hardware during procedure
+execution. To enforce this socially, the GUI should display a persistent overlay window
+("rusty-tip is controlling the instrument") that discourages manual interaction. True
+technical enforcement (headless Nanonis, input blocking) may be investigated later but
+is not required for the model to be useful.
+
+At procedure boundaries (startup, after long pauses, after errors), the framework should
+run verification queries to re-sync the model with hardware reality.
+
+---
+
+## Phase 4: Event and Observation System
 
 ### Goal
 
@@ -512,7 +860,7 @@ growth during long experiments.
 
 ---
 
-## Phase 4: Workflow Engine
+## Phase 5: Workflow Engine
 
 ### Goal
 
@@ -773,7 +1121,7 @@ the key architectural principle. The workflow is the skeleton; actions are the m
 
 ---
 
-## Phase 5: LLM Integration Layer
+## Phase 6: LLM Integration Layer
 
 ### Goal
 
@@ -803,29 +1151,27 @@ impl ActionRegistry {
 is zero glue code, zero manual schema maintenance. When a developer adds a new action
 with `#[derive(JsonSchema)]`, it automatically becomes available as an LLM tool.
 
-### System state description
+### System state for LLM context
+
+The `MachineState` from Phase 3 serves double duty: it is both the safety model for
+action validation and the state description for LLM context. This avoids maintaining
+two parallel state representations:
 
 ```rust
-pub struct SystemState {
-    pub tip_shape: TipShape,
-    pub current_bias: f64,
-    pub z_position: f64,
-    pub position: Position,
-    pub recent_signals: HashMap<String, Vec<f64>>,
-    pub cycle_count: u32,
-    pub elapsed: Duration,
-}
-
-impl SystemState {
-    /// Generate a natural-language summary for LLM context
+impl MachineState {
+    /// Generate a natural-language summary for LLM context.
+    /// Unknown/Uninitialized fields are reported explicitly so the LLM
+    /// knows what it doesn't know.
     pub fn describe(&self) -> String {
         format!(
-            "Tip state: {:?}. Bias: {:.3}V. Z: {:.2}nm. \
-             Position: ({:.1}, {:.1})um. Cycle: {}. Elapsed: {:.0}s.",
-            self.tip_shape, self.current_bias,
-            self.z_position * 1e9,
-            self.position.x * 1e6, self.position.y * 1e6,
-            self.cycle_count, self.elapsed.as_secs_f64(),
+            "Tip: {}. Bias: {}. Z-setpoint: {}. Z-controller: {}. \
+             Scan: {}. Safe-tip: {}.",
+            self.tip.describe("tip engagement"),
+            self.bias_v.describe_v("bias"),
+            self.z_setpoint_a.describe_a("setpoint"),
+            self.z_controller.describe("z-controller"),
+            self.scan.describe("scan"),
+            self.safe_tip_enabled.describe("safe-tip"),
         )
     }
 
@@ -866,7 +1212,7 @@ avoids coupling to a specific LLM provider. The actual LLM loop lives in the bin
 
 ---
 
-## Phase 6: Data Pipeline
+## Phase 7: Data Pipeline
 
 ### Goal
 
@@ -932,21 +1278,185 @@ as `Event::DataCollected`. A `DataCollector` observer accumulates signal reading
 
 ---
 
-## Phase 7: Reimplement tip-prep
+## Phase 8: Procedure Trait and Reimplement tip-prep
 
 ### Goal
 
-Rewrite the `tip-prep` binary using the new architecture, demonstrating that all
-components work together.
+Introduce the `Procedure` trait as the abstraction for high-level SPM procedures, then
+rewrite tip-prep as its first implementation. The Procedure trait captures the lifecycle
+pattern that all procedures share: precondition checking, guaranteed cleanup, state
+tracking, and shutdown handling.
 
-### What changes
+### The Procedure trait
 
-- `TipController` is replaced by a `Workflow` definition (JSON/TOML)
-- `ActionDriver` is replaced by `WorkflowExecutor` + `NanonisController`
+```rust
+/// A high-level SPM procedure with lifecycle guarantees.
+///
+/// The framework handles the lifecycle:
+/// 1. Verify required_initial_state() against current MachineState
+/// 2. Call run()
+/// 3. Call cleanup() unconditionally (even if run() returned Err)
+/// 4. Verify guaranteed_final_state() matches actual state
+///
+/// Procedure authors write run() and cleanup(). The framework handles
+/// the rest.
+pub trait Procedure: Send {
+    /// Human-readable name for logging and GUI display.
+    fn name(&self) -> &str;
+
+    /// What machine state must be true before this procedure starts.
+    /// The framework verifies this and refuses to start if unmet.
+    /// Fields that are Uninitialized or Unknown trigger an error unless
+    /// a Query action can resolve them.
+    fn required_initial_state(&self) -> StateRequirements;
+
+    /// What machine state this procedure guarantees on successful exit.
+    /// Used for procedure chaining: the next procedure's
+    /// required_initial_state() can rely on this.
+    fn guaranteed_final_state(&self) -> StateEffects;
+
+    /// The procedure's main logic.
+    ///
+    /// All action execution should go through ctx.execute(), which handles
+    /// state tracking, validation, and event emission automatically.
+    fn run(&mut self, ctx: &mut ProcedureContext) -> Result<Outcome>;
+
+    /// Cleanup that runs unconditionally, even if run() failed or was
+    /// interrupted by shutdown.
+    ///
+    /// Should bring the machine to a safe, known state. At minimum:
+    /// withdraw the tip if it was approached during the procedure.
+    ///
+    /// Errors in cleanup are logged but do not replace the original error.
+    fn cleanup(&self, ctx: &mut ProcedureContext);
+}
+```
+
+### ProcedureContext
+
+Extends ActionContext with MachineState and provides the `execute()` method that
+performs automatic state tracking:
+
+```rust
+pub struct ProcedureContext<'a> {
+    pub controller: &'a mut dyn SpmController,
+    pub state: &'a mut MachineState,
+    pub store: &'a mut DataStore,
+    pub events: &'a dyn EventEmitter,
+    pub shutdown: &'a ShutdownFlag,
+    pub policy: ValidationPolicy,
+}
+
+impl<'a> ProcedureContext<'a> {
+    /// Execute an action with full state tracking.
+    ///
+    /// 1. Check expects() against current MachineState
+    /// 2. Auto-recover Unknown fields via Query actions (Strict mode)
+    /// 3. Execute the action
+    /// 4. On success: call apply_to_state()
+    /// 5. On failure: degrade affected fields to Unknown
+    pub fn execute(&mut self, action: &dyn Action) -> Result<ActionOutput> {
+        execute_tracked(action, self)
+    }
+}
+```
+
+### Procedure runner (framework-side)
+
+```rust
+pub fn run_procedure(
+    procedure: &mut dyn Procedure,
+    controller: Box<dyn SpmController>,
+    events: &EventBus,
+    shutdown: &ShutdownFlag,
+    policy: ValidationPolicy,
+) -> Result<Outcome> {
+    let mut state = MachineState::uninitialized();
+    let mut store = DataStore::new();
+
+    // Initialize controller
+    controller.prepare()?;
+
+    // Build context
+    let mut ctx = ProcedureContext {
+        controller: &mut *controller,
+        state: &mut state,
+        store: &mut store,
+        events,
+        shutdown,
+        policy,
+    };
+
+    // Verify initial state (will auto-query to resolve Uninitialized fields)
+    resolve_and_check_requirements(
+        &procedure.required_initial_state(),
+        &mut ctx,
+    )?;
+
+    // Run procedure, then always cleanup
+    let result = procedure.run(&mut ctx);
+    procedure.cleanup(&mut ctx);
+    controller.teardown();
+
+    result
+}
+```
+
+### Tip-prep as a Procedure
+
+The current `run_tip_prep()` free function becomes `struct TipPrep` implementing
+`Procedure`:
+
+```rust
+pub struct TipPrep {
+    config: AppConfig,
+    freq_shift_index: u32,
+}
+
+impl Procedure for TipPrep {
+    fn name(&self) -> &str { "tip_prep" }
+
+    fn required_initial_state(&self) -> StateRequirements {
+        // Tip-prep starts from scratch -- it initializes everything itself.
+        // No requirements on entry state.
+        StateRequirements::none()
+    }
+
+    fn guaranteed_final_state(&self) -> StateEffects {
+        // On successful completion: tip is withdrawn, safe-tip enabled
+        StateEffects::new()
+            .set_tip(TipEngagement::Withdrawn)
+            .set_safe_tip(true)
+    }
+
+    fn run(&mut self, ctx: &mut ProcedureContext) -> Result<Outcome> {
+        // SetBias, SetZSetpoint, CalibratedApproach, pulse loop, etc.
+        // All via ctx.execute(&action) -- state tracked automatically
+        // ...
+    }
+
+    fn cleanup(&self, ctx: &mut ProcedureContext) {
+        let _ = ctx.execute(&Withdraw::default());
+    }
+}
+```
+
+**Design insight**: `TipPrep` requires no initial state because it begins by setting bias,
+setpoint, and approaching -- it establishes its own known state. A future
+`SpectroscopyCampaign` procedure might require `tip = Approached` and
+`bias_v = Known(_)`, relying on a previous procedure having set those up. The
+`guaranteed_final_state()` contract is what enables safe procedure chaining.
+
+### What changes from current implementation
+
+- `TipController` is replaced by `TipPrep` implementing `Procedure`
+- `ActionDriver` is replaced by `ProcedureContext` + `NanonisController`
 - The `Action` enum is replaced by individual action structs in the registry
 - `Logger<ActionLogEntry>` is replaced by a `FileLogger` observer
 - The GUI's `crossbeam_channel<ControllerState>` is replaced by a `ChannelForwarder`
   observer
+- Manual state management in the runner (save/restore scan props, bias, etc.) is
+  replaced by the framework's `MachineState` tracking
 
 ### What stays
 
@@ -966,25 +1476,22 @@ fn main() -> Result<()> {
     // 2. Create hardware controller
     let controller = NanonisController::new(&config)?;
 
-    // 3. Create action registry with all built-in actions
-    let registry = ActionRegistry::default_spm();
+    // 3. Create procedure
+    let mut procedure = TipPrep::new(config.clone(), freq_shift_index);
 
-    // 4. Build the workflow
-    let workflow = if let Some(path) = &config.workflow_file {
-        // Load from file (new capability)
-        Workflow::load(path)?
-    } else {
-        // Build the default tip-prep workflow from config (backward compat)
-        build_tip_prep_workflow(&config)?
-    };
+    // 4. Set up observers
+    let events = EventBus::new();
+    events.add_observer(Box::new(ConsoleLogger::new(config.verbosity)));
+    events.add_observer(Box::new(FileLogger::new(&config.log_path)?));
 
-    // 5. Create executor with observers
-    let mut executor = WorkflowExecutor::new(registry, Box::new(controller));
-    executor.add_observer(Box::new(ConsoleLogger::new(config.verbosity)));
-    executor.add_observer(Box::new(FileLogger::new(&config.log_path)?));
-
-    // 6. Run
-    let outcome = executor.run(&workflow)?;
+    // 5. Run with strict validation on real hardware
+    let outcome = run_procedure(
+        &mut procedure,
+        Box::new(controller),
+        &events,
+        &ShutdownFlag::new(),
+        ValidationPolicy::Strict,
+    )?;
     println!("Outcome: {:?}", outcome);
     Ok(())
 }
@@ -1027,6 +1534,29 @@ fn main() -> Result<()> {
   and directly consumable by LLMs
 - The performance cost (serialization/deserialization) is negligible vs TCP latency
 
+### Why trust-the-model for machine state
+
+The MachineState is a software-side model that is not continuously synchronized with
+hardware. This is a deliberate choice:
+
+- **Querying hardware for every check would be slow.** Each TCP round-trip is ~1ms.
+  Checking 6 fields before every action adds 6ms of overhead per action. In a tight
+  pulse loop doing hundreds of cycles, this adds up.
+- **The software is the sole writer.** During procedure execution, nothing else should be
+  touching the hardware. The overlay window / headless approach enforces this socially.
+- **Query-on-Unknown provides the safety net.** When something goes wrong (timeout,
+  error), the affected field drops to Unknown. The next action that needs that field
+  triggers an automatic query. This is verify-on-demand exactly where it matters: at
+  error recovery boundaries, not on every single call.
+- **Advisory mode enables safe exploration.** Simulated controllers use Advisory policy
+  where violations are logged but not blocked. This lets LLMs learn from mistakes
+  without risk. The same action annotations work in both modes -- only the enforcement
+  changes.
+
+The alternative -- continuous hardware polling -- would be correct but wasteful. The
+state model is a cache with explicit invalidation (on error). Caches that know when
+they're stale are safe caches.
+
 ### Why a simple workflow language instead of a full scripting engine
 
 - LLMs generate simple JSON structures more reliably than complex programs
@@ -1066,23 +1596,32 @@ binary stop working.
 - Convert actions one at a time from enum variants to trait structs
 - Both systems coexist; nothing breaks
 
-### Step 4: Add the Event system (Phase 3)
+### Step 4: Add Machine State Tracking (Phase 3)
+- Define `MachineState`, `Tracked<T>`, `ActionKind`, `StateRequirements`, `StateEffects`
+- Add `kind()`, `expects()`, `effects()`, `apply_to_state()` to Action trait with defaults
+- Annotate safety-critical actions (Withdraw, Approach, SetBias, BiasPulse, ScanControl)
+- Implement `execute_tracked()` with auto-recovery logic
+- Add `ValidationPolicy` (Advisory/Strict)
+- This is purely additive -- existing code continues to work with the default annotations
+
+### Step 5: Add the Event system (Phase 4)
 - Define `Event`, `Observer`, `EventBus`
 - Wire into `ActionContext`
 - Add observers for console, file, channel
 - The existing `Logger` and `ControllerState` channel still work
 
-### Step 5: Build the Workflow engine (Phase 4)
+### Step 6: Build the Workflow engine (Phase 5)
 - Define `Step`, `Condition`, `Workflow`, `WorkflowExecutor`
 - Test with simple workflows against `MockController`
 - This is pure new code; nothing existing changes
 
-### Step 6: Port tip-prep logic to a Workflow (Phase 7)
-- Write `build_tip_prep_workflow()` that constructs the tip-prep workflow from config
-- Replace `TipController::run()` with `WorkflowExecutor::run()`
-- This is the switchover point -- the old `TipController` is retired
+### Step 7: Port tip-prep to Procedure trait (Phase 8)
+- Define the `Procedure` trait and `ProcedureContext`
+- Implement `TipPrep` as the first Procedure
+- Replace `TipController::run()` and `run_tip_prep()` with `run_procedure()`
+- This is the switchover point -- the old implementations are retired
 
-### Step 7: Add LLM integration (Phase 5) and Data pipeline (Phase 6)
+### Step 8: Add LLM integration (Phase 6) and Data pipeline (Phase 7)
 - These are additive features on top of the working system
 - Can be done in any order, at any pace
 - No existing functionality is affected
@@ -1096,13 +1635,20 @@ binary stop working.
 | 0: Fix nanonis-rs | ~100 lines | ~300 lines modified | Low -- bug fixes |
 | 1: Hardware trait | ~400 lines | ~50 lines | Low -- additive |
 | 2: Action system | ~1500 lines | ~200 lines | Medium -- core redesign |
-| 3: Event system | ~500 lines | ~100 lines | Low -- additive |
-| 4: Workflow engine | ~800 lines | None | Medium -- new logic |
-| 5: LLM integration | ~300 lines | None | Low -- additive |
-| 6: Data pipeline | ~400 lines | ~100 lines | Low -- additive |
-| 7: Port tip-prep | ~200 lines | ~500 lines removed | Medium -- integration |
+| 3: Machine state | ~600 lines | ~200 lines (action annotations) | Medium -- cross-cutting |
+| 4: Event system | ~500 lines | ~100 lines | Low -- additive |
+| 5: Workflow engine | ~800 lines | None | Medium -- new logic |
+| 6: LLM integration | ~300 lines | None | Low -- additive |
+| 7: Data pipeline | ~400 lines | ~100 lines | Low -- additive |
+| 8: Procedure + tip-prep | ~400 lines | ~500 lines removed | Medium -- integration |
 
-Phases 0 through 4 are required to reimplement `tip-prep`. Phases 5-6 are
+Phases 0 through 5 are required to reimplement `tip-prep`. Phases 6-7 are
 enhancements that can come later. The total new code for the critical path is
-approximately 3300 lines of Rust, offset by removing ~500 lines of existing code
+approximately 3800 lines of Rust, offset by removing ~500 lines of existing code
 (`TipController`, the `Action` enum match arms, the old logger integration).
+
+Phase 3 (Machine State) is the new addition that enables action-chain safety validation.
+It adds ~600 lines of infrastructure (MachineState, Tracked, validation logic, recovery
+logic) plus ~200 lines of annotations spread across existing actions. The upfront cost
+is moderate; the payoff is that every future action and procedure gets safety validation
+for free.

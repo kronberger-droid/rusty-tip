@@ -1,10 +1,6 @@
-// Include shared config module from tip-prep
-#[path = "../tip-prep/config.rs"]
-mod config;
-
 mod app;
 
-use app::{init_logging, TipPrepApp};
+use app::{TipPrepApp, init_logging};
 use log::LevelFilter;
 
 fn main() -> eframe::Result<()> {

@@ -1,23 +1,30 @@
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use eframe::egui;
-use egui_plot::{Bar, BarChart, Plot};
-use log::{error, info, LevelFilter};
-use std::collections::VecDeque;
+use egui_plot::{HLine, Line, Plot, PlotPoints, Points};
+use log::{LevelFilter, error, info};
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use rusty_tip::{ActionDriver, Signal, TCPReaderConfig, TipStateConfig};
-
-use crate::config::{
-    load_config, AppConfig, ConsoleConfig, DataAcquisitionConfig, ExperimentLoggingConfig,
-    NanonisConfig, SignalStabilityConfig, TcpChannelMapping, TimingConfig, TipPrepConfig,
+use rusty_tip::config::{
+    AppConfig, ConsoleConfig, DataAcquisitionConfig, ExperimentLoggingConfig, NanonisConfig,
+    SignalStabilityConfig, TcpChannelMapping, TimingConfig, TipPrepConfig,
+    load_config_with_fallback,
 };
+use rusty_tip::event::{
+    ChannelForwarder, ConsoleLogger, Event, EventAccumulator, EventBus, FileLogger,
+};
+use rusty_tip::mock_controller::{MockController, models};
+use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
+use rusty_tip::signal_registry::SignalRegistry;
+use rusty_tip::spm_controller::SpmController;
+use rusty_tip::spm_error::SpmError;
+use rusty_tip::tip_prep::{Outcome, run_tip_prep};
+use rusty_tip::workflow::ShutdownFlag;
 use rusty_tip::{
-    BiasSweepPolarity, ControllerAction, ControllerState, PolaritySign, PulseMethod,
-    RandomPolaritySwitch, StabilityConfig, TipController, TipControllerConfig, TipShape,
+    BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, StabilityConfig,
 };
 
 // ============================================================================
@@ -94,6 +101,67 @@ pub enum RunStatus {
 }
 
 // ============================================================================
+// Tip Prep State -- populated from Event stream
+// ============================================================================
+
+#[derive(Debug, Clone, Default)]
+struct TipPrepState {
+    cycle: usize,
+    elapsed_secs: f64,
+    freq_shift: Option<f64>,
+    pulse_voltage: f64,
+    phase: String,
+    is_sharp: bool,
+}
+
+// ============================================================================
+// Time-series data point for plots
+// ============================================================================
+
+#[derive(Debug, Clone)]
+struct DataPoint {
+    time_s: f64,
+    value: f64,
+}
+
+/// Upper bound on plotted freq-shift points; oldest are dropped past this.
+const MAX_PLOT_POINTS: usize = 20_000;
+
+/// Radius of the per-measurement markers. Both series are discrete measurements,
+/// so they are drawn as points with a connecting line — a bare `Line` renders
+/// nothing at all until the second point arrives.
+const MARKER_RADIUS: f32 = 2.5;
+
+/// Plot colours for one theme.
+struct PlotColors {
+    freq_shift: egui::Color32,
+    pulse_voltage: egui::Color32,
+    bounds: egui::Color32,
+}
+
+impl PlotColors {
+    /// The dark-theme palette is tuned for a dark background: pale series and
+    /// very transparent bound lines. Both wash out badly on white, so light mode
+    /// gets saturated, darker equivalents and far more opaque bounds — this is
+    /// what makes a screenshot survive being printed.
+    fn for_theme(dark_mode: bool) -> Self {
+        if dark_mode {
+            Self {
+                freq_shift: egui::Color32::LIGHT_BLUE,
+                pulse_voltage: egui::Color32::from_rgb(255, 165, 0),
+                bounds: egui::Color32::from_rgba_unmultiplied(0, 255, 0, 80),
+            }
+        } else {
+            Self {
+                freq_shift: egui::Color32::from_rgb(0, 84, 159),
+                pulse_voltage: egui::Color32::from_rgb(191, 87, 0),
+                bounds: egui::Color32::from_rgba_unmultiplied(0, 120, 40, 180),
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Editable Configuration
 // ============================================================================
 
@@ -126,6 +194,7 @@ pub struct EditableConfig {
 
     // Data Acquisition
     pub sample_rate: String,
+    pub stable_signal_samples: String,
 
     // Experiment Logging
     pub logging_enabled: bool,
@@ -191,6 +260,7 @@ impl Default for EditableConfig {
             layout_file: String::new(),
             settings_file: String::new(),
             sample_rate: "2000".to_string(),
+            stable_signal_samples: "100".to_string(),
             logging_enabled: true,
             logging_output_path: "./experiments".to_string(),
             verbosity: "info".to_string(),
@@ -230,7 +300,6 @@ impl Default for EditableConfig {
 
 impl EditableConfig {
     pub fn from_app_config(app_config: &AppConfig) -> Self {
-        // Extract pulse method parameters
         let (
             pulse_method_type,
             pulse_voltage,
@@ -335,6 +404,10 @@ impl EditableConfig {
             layout_file: app_config.nanonis.layout_file.clone().unwrap_or_default(),
             settings_file: app_config.nanonis.settings_file.clone().unwrap_or_default(),
             sample_rate: app_config.data_acquisition.sample_rate.to_string(),
+            stable_signal_samples: app_config
+                .data_acquisition
+                .stable_signal_samples
+                .to_string(),
             logging_enabled: app_config.experiment_logging.enabled,
             logging_output_path: app_config.experiment_logging.output_path.clone(),
             verbosity: app_config.console.verbosity.clone(),
@@ -350,9 +423,9 @@ impl EditableConfig {
                 .max_duration_secs
                 .map(|d| d.to_string())
                 .unwrap_or_default(),
-            initial_bias_v: (app_config.tip_prep.initial_bias_v * 1000.0).to_string(), // Convert to mV for display
-            initial_z_setpoint_pa: (app_config.tip_prep.initial_z_setpoint_a * 1e12).to_string(), // Convert to pA
-            safe_tip_threshold_pa: (app_config.tip_prep.safe_tip_threshold * 1e12).to_string(), // Convert A to pA
+            initial_bias_v: (app_config.tip_prep.initial_bias_v * 1000.0).to_string(),
+            initial_z_setpoint_pa: (app_config.tip_prep.initial_z_setpoint_a * 1e12).to_string(),
+            safe_tip_threshold_pa: (app_config.tip_prep.safe_tip_threshold * 1e12).to_string(),
             check_stability: app_config.tip_prep.stability.check_stability,
             stable_tip_allowed_change: app_config
                 .tip_prep
@@ -410,6 +483,10 @@ impl EditableConfig {
             .sample_rate
             .parse()
             .map_err(|_| "Invalid sample rate")?;
+        let stable_signal_samples: usize = self
+            .stable_signal_samples
+            .parse()
+            .map_err(|_| "Invalid stable signal samples")?;
         let sharp_tip_lower: f32 = self
             .sharp_tip_lower
             .parse()
@@ -445,7 +522,6 @@ impl EditableConfig {
             .parse()
             .map_err(|_| "Invalid safe tip threshold")?;
 
-        // Parse scan speed (nm/s to m/s)
         let scan_speed_m_s: Option<f32> = if self.scan_speed_nm_s.is_empty() {
             None
         } else {
@@ -457,7 +533,6 @@ impl EditableConfig {
             )
         };
 
-        // Random polarity switch
         let random_polarity_switch = if self.random_polarity_enabled {
             Some(RandomPolaritySwitch {
                 enabled: true,
@@ -543,6 +618,8 @@ impl EditableConfig {
             data_acquisition: DataAcquisitionConfig {
                 data_port,
                 sample_rate,
+                stable_signal_samples,
+                ..Default::default()
             },
             experiment_logging: ExperimentLoggingConfig {
                 enabled: self.logging_enabled,
@@ -581,9 +658,9 @@ impl EditableConfig {
                     polarity_mode: self.polarity_mode,
                     scan_speed_m_s,
                 },
-                initial_bias_v: initial_bias_mv / 1000.0, // Convert mV to V
-                initial_z_setpoint_a: initial_z_setpoint_pa * 1e-12, // Convert pA to A
-                safe_tip_threshold: safe_tip_threshold_pa * 1e-12, // Convert pA to A
+                initial_bias_v: initial_bias_mv / 1000.0,
+                initial_z_setpoint_a: initial_z_setpoint_pa * 1e-12,
+                safe_tip_threshold: safe_tip_threshold_pa * 1e-12,
                 timing: TimingConfig::default(),
                 signal_stability: self.signal_stability.clone(),
             },
@@ -627,22 +704,36 @@ pub struct TipPrepApp {
 
     // Controller state
     controller_thread: Option<JoinHandle<()>>,
-    shutdown_flag: Option<Arc<AtomicBool>>,
+    shutdown_flag: Option<ShutdownFlag>,
     run_status: RunStatus,
     start_time: Option<Instant>,
 
-    // Real-time state from controller
-    state_receiver: Option<Receiver<ControllerState>>,
-    current_state: Option<ControllerState>,
+    /// Run against the mock controller instead of real hardware. Runtime-only,
+    /// deliberately not part of `EditableConfig` — it must never end up in a
+    /// saved TOML and be mistaken for a hardware setting.
+    simulate: bool,
 
-    // Persist last known freq shift (survives state updates that might have None)
-    last_freq_shift: Option<f32>,
+    /// Light / dark / follow-system. egui defaults to following the system
+    /// theme, which gives a dark UI on a dark desktop — fine on screen, but
+    /// screenshots of it print badly, so this is selectable.
+    theme: egui::ThemePreference,
 
-    // History of freq_shift values for bar graph
-    freq_shift_history: VecDeque<f64>,
+    // Real-time state from V2 event stream
+    event_receiver: Option<Receiver<Event>>,
+    tip_state: TipPrepState,
+
+    // Time-series data for plots
+    freq_shift_history: Vec<DataPoint>,
+    voltage_history: Vec<DataPoint>,
+
+    // Sharp tip bounds for overlay (cached from config at start)
+    sharp_bounds: Option<(f64, f64)>,
+
+    // Last known action name from events
+    current_action: String,
 
     // Messages
-    message: Option<(String, bool)>, // (message, is_error)
+    message: Option<(String, bool)>,
 
     // Log messages for display
     log_messages: Vec<String>,
@@ -660,10 +751,14 @@ impl TipPrepApp {
             shutdown_flag: None,
             run_status: RunStatus::Idle,
             start_time: None,
-            state_receiver: None,
-            current_state: None,
-            last_freq_shift: None,
-            freq_shift_history: VecDeque::with_capacity(100),
+            simulate: false,
+            theme: egui::ThemePreference::System,
+            event_receiver: None,
+            tip_state: TipPrepState::default(),
+            freq_shift_history: Vec::new(),
+            voltage_history: Vec::new(),
+            sharp_bounds: None,
+            current_action: String::new(),
             message: None,
             log_messages: Vec::new(),
             log_receiver: None,
@@ -681,7 +776,7 @@ impl TipPrepApp {
     fn load_config_from_file(&mut self) {
         let config_path = Path::new(&self.load_path);
         if config_path.exists() {
-            match load_config(Some(config_path)) {
+            match load_config_with_fallback(Some(config_path)) {
                 Ok(app_config) => {
                     self.config = EditableConfig::from_app_config(&app_config);
                     self.message = Some(("Config loaded".to_string(), false));
@@ -696,7 +791,6 @@ impl TipPrepApp {
     }
 
     fn save_config_to_file(&mut self) {
-        // Add .toml extension if not present
         let save_path = if self.save_path.to_lowercase().ends_with(".toml") {
             self.save_path.clone()
         } else {
@@ -704,21 +798,19 @@ impl TipPrepApp {
         };
 
         match self.config.to_app_config() {
-            Ok(app_config) => {
-                match toml::to_string_pretty(&app_config) {
-                    Ok(toml_str) => {
-                        if let Err(e) = std::fs::write(&save_path, toml_str) {
-                            self.message = Some((format!("Write failed: {}", e), true));
-                        } else {
-                            self.save_path = save_path; // Update with the actual path used
-                            self.message = Some(("Config saved".to_string(), false));
-                        }
-                    }
-                    Err(e) => {
-                        self.message = Some((format!("Serialize failed: {}", e), true));
+            Ok(app_config) => match toml::to_string_pretty(&app_config) {
+                Ok(toml_str) => {
+                    if let Err(e) = std::fs::write(&save_path, toml_str) {
+                        self.message = Some((format!("Write failed: {}", e), true));
+                    } else {
+                        self.save_path = save_path;
+                        self.message = Some(("Config saved".to_string(), false));
                     }
                 }
-            }
+                Err(e) => {
+                    self.message = Some((format!("Serialize failed: {}", e), true));
+                }
+            },
             Err(e) => {
                 self.message = Some((format!("Invalid config: {}", e), true));
             }
@@ -734,15 +826,22 @@ impl TipPrepApp {
             }
         };
 
-        let shutdown_flag = Arc::new(AtomicBool::new(false));
-        self.shutdown_flag = Some(shutdown_flag.clone());
+        // Cache sharp bounds for plot overlay
+        self.sharp_bounds = Some((
+            config.tip_prep.sharp_tip_bounds[0] as f64,
+            config.tip_prep.sharp_tip_bounds[1] as f64,
+        ));
 
-        // Create channel for state updates
-        let (state_tx, state_rx) = unbounded();
-        self.state_receiver = Some(state_rx);
+        let shutdown = ShutdownFlag::new();
+        self.shutdown_flag = Some(shutdown.clone());
 
+        // Create channel for event forwarding
+        let (event_tx, event_rx) = unbounded();
+        self.event_receiver = Some(event_rx);
+
+        let simulate = self.simulate;
         let handle = thread::spawn(move || {
-            if let Err(e) = run_controller(config, shutdown_flag, state_tx) {
+            if let Err(e) = run_controller(config, shutdown, event_tx, simulate) {
                 error!("Controller error: {}", e);
             }
         });
@@ -750,81 +849,140 @@ impl TipPrepApp {
         self.controller_thread = Some(handle);
         self.run_status = RunStatus::Running;
         self.start_time = Some(Instant::now());
-        self.current_state = None;
-        self.last_freq_shift = None;
+        self.tip_state = TipPrepState::default();
         self.freq_shift_history.clear();
+        self.voltage_history.clear();
+        self.current_action.clear();
         self.log_messages.clear();
         info!("Controller started");
         self.message = Some(("Controller started".to_string(), false));
     }
 
-    fn poll_state(&mut self) {
+    fn drain_events(&mut self) {
         // Poll log messages
         if let Some(rx) = &self.log_receiver {
             while let Ok(msg) = rx.try_recv() {
                 self.log_messages.push(msg);
-                // Keep log size reasonable
                 if self.log_messages.len() > 1000 {
                     self.log_messages.drain(0..200);
                 }
             }
         }
 
-        // Poll controller state
-        if let Some(rx) = &self.state_receiver {
-            while let Ok(state) = rx.try_recv() {
-                if let Some(fs) = state.freq_shift {
-                    self.last_freq_shift = Some(fs);
-                    if self.freq_shift_history.len() >= 100 {
-                        self.freq_shift_history.pop_front();
+        // Poll events from the V2 event bus.
+        //
+        // One clock for every plotted series: the runner's own `elapsed_secs`
+        // and the GUI's `start_time` differ by thread-start latency, and mixing
+        // them puts a visible kink in the trace.
+        let elapsed_now = self
+            .start_time
+            .map(|t| t.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
+
+        if let Some(rx) = &self.event_receiver {
+            while let Ok(event) = rx.try_recv() {
+                match &event {
+                    Event::Custom { kind, data } if kind == "tip_prep_state" => {
+                        // Parse TipPrepSnapshot from JSON
+                        if let Some(cycle) = data.get("cycle").and_then(|v| v.as_u64()) {
+                            self.tip_state.cycle = cycle as usize;
+                        }
+                        if let Some(elapsed) = data.get("elapsed_secs").and_then(|v| v.as_f64()) {
+                            self.tip_state.elapsed_secs = elapsed;
+                        }
+                        // Only the status readout — the freq-shift *plot* is fed
+                        // by the per-sample `signal_samples` stream below, which
+                        // covers these same reads at full resolution.
+                        if let Some(fs) = data.get("freq_shift").and_then(|v| v.as_f64()) {
+                            self.tip_state.freq_shift = Some(fs);
+                        }
+                        if let Some(pv) = data.get("pulse_voltage").and_then(|v| v.as_f64()) {
+                            self.tip_state.pulse_voltage = pv;
+                            self.voltage_history.push(DataPoint {
+                                time_s: elapsed_now,
+                                value: pv,
+                            });
+                        }
+                        if let Some(sharp) = data.get("is_sharp").and_then(|v| v.as_bool()) {
+                            self.tip_state.is_sharp = sharp;
+                        }
+                        if let Some(phase) = data.get("phase").and_then(|v| v.as_str()) {
+                            self.tip_state.phase = phase.to_string();
+                        }
                     }
-                    self.freq_shift_history.push_back(fs as f64);
+                    Event::DataCollected { label, value, .. } if label == "stable_read" => {
+                        // One point per measurement: a stable read *is* a single
+                        // measurement of the frequency shift, averaged from a
+                        // sample batch. Every stable read in the tip-prep routine
+                        // goes through `read_stable(.., freq_shift_index)`, so
+                        // this stream is the freq-shift channel. The event carries
+                        // `index` if that ever stops being true.
+                        if let Some(v) = value.get("value").and_then(|v| v.as_f64()) {
+                            self.freq_shift_history.push(DataPoint {
+                                time_s: elapsed_now,
+                                value: v,
+                            });
+
+                            // Bound memory on long runs.
+                            if self.freq_shift_history.len() > MAX_PLOT_POINTS {
+                                let excess = self.freq_shift_history.len() - MAX_PLOT_POINTS;
+                                self.freq_shift_history.drain(0..excess);
+                            }
+                        }
+                    }
+                    Event::ActionStarted { action, .. } => {
+                        self.current_action = action.clone();
+                    }
+                    Event::Custom { kind, .. }
+                        if kind == "workflow_completed"
+                            || kind == "workflow_failed"
+                            || kind == "workflow_stopped" =>
+                    {
+                        // These are handled by check_controller_status via thread join
+                    }
+                    _ => {}
                 }
-                self.current_state = Some(state);
             }
         }
     }
 
     fn stop_controller(&mut self) {
-        if let Some(flag) = &self.shutdown_flag {
-            flag.store(true, Ordering::SeqCst);
+        if let Some(ref flag) = self.shutdown_flag {
+            flag.request();
         }
         self.message = Some(("Stop requested...".to_string(), false));
     }
 
     fn check_controller_status(&mut self) {
-        // Poll for state updates
-        self.poll_state();
+        self.drain_events();
 
         if let Some(handle) = &self.controller_thread {
             if handle.is_finished() {
                 self.controller_thread = None;
                 self.shutdown_flag = None;
-                self.state_receiver = None;
+                self.event_receiver = None;
 
                 if matches!(self.run_status, RunStatus::Running) {
-                    // Check the last action to determine final status
-                    match self.current_state.as_ref().map(|s| &s.current_action) {
-                        Some(ControllerAction::Completed) => {
+                    // Determine outcome from the last phase
+                    match self.tip_state.phase.as_str() {
+                        "stable" => {
                             self.run_status = RunStatus::Completed;
                             self.message =
                                 Some(("Tip preparation completed successfully".to_string(), false));
                         }
-                        Some(ControllerAction::Stopped) => {
-                            self.run_status = RunStatus::Idle;
-                            self.message = Some(("Controller stopped by user".to_string(), false));
-                        }
-                        Some(ControllerAction::Error(e)) => {
-                            self.run_status = RunStatus::Error(e.clone());
-                            self.message = Some((format!("Error: {}", e), true));
-                        }
                         _ => {
-                            // Thread finished but action wasn't Completed/Stopped/Error
-                            // This likely means an unexpected error occurred
-                            self.run_status =
-                                RunStatus::Error("Unexpected termination".to_string());
-                            self.message =
-                                Some(("Controller terminated unexpectedly".to_string(), true));
+                            // Thread finished -- could be stopped, cycle limit, timeout, or error
+                            // We check shutdown first
+                            self.run_status = RunStatus::Idle;
+                            if self.message.is_none()
+                                || self
+                                    .message
+                                    .as_ref()
+                                    .map(|(m, _)| m == "Stop requested...")
+                                    .unwrap_or(false)
+                            {
+                                self.message = Some(("Controller finished".to_string(), false));
+                            }
                         }
                     }
                 }
@@ -833,36 +991,28 @@ impl TipPrepApp {
     }
 
     fn tip_shape_text(&self) -> &str {
-        match self.current_state.as_ref().map(|s| s.tip_shape) {
-            Some(TipShape::Blunt) => "Blunt",
-            Some(TipShape::Sharp) => "Sharp",
-            Some(TipShape::Stable) => "Stable",
-            None => "-",
+        if self.tip_state.phase == "stable" {
+            "Stable"
+        } else if self.tip_state.is_sharp {
+            "Sharp"
+        } else if self.tip_state.cycle > 0 {
+            "Blunt"
+        } else {
+            "-"
         }
     }
 
-    fn action_text(&self) -> String {
-        match self.current_state.as_ref().map(|s| &s.current_action) {
-            Some(ControllerAction::Idle) => "Idle".to_string(),
-            Some(ControllerAction::Initializing) => "Initializing...".to_string(),
-            Some(ControllerAction::LoadingLayout) => "Loading layout...".to_string(),
-            Some(ControllerAction::LoadingSettings) => "Loading settings...".to_string(),
-            Some(ControllerAction::SettingBias) => "Setting bias...".to_string(),
-            Some(ControllerAction::SettingSetpoint) => "Setting setpoint...".to_string(),
-            Some(ControllerAction::Approaching) => "Approaching".to_string(),
-            Some(ControllerAction::Withdrawing) => "Withdrawing".to_string(),
-            Some(ControllerAction::CenteringFreqShift) => "Centering freq shift".to_string(),
-            Some(ControllerAction::MeasuringSignal) => "Measuring signal".to_string(),
-            Some(ControllerAction::Pulsing) => "Pulsing".to_string(),
-            Some(ControllerAction::StabilityCheck) => "Stability check".to_string(),
-            Some(ControllerAction::StabilitySweep { sweep, total }) => {
-                format!("Stability sweep {}/{}", sweep, total)
+    fn action_text(&self) -> &str {
+        if self.current_action.is_empty() {
+            match self.tip_state.phase.as_str() {
+                "pulsing" => "Pulsing",
+                "confirming" => "Confirming sharpness",
+                "stability_check" => "Stability check",
+                "stable" => "Completed",
+                _ => "-",
             }
-            Some(ControllerAction::Repositioning) => "Repositioning".to_string(),
-            Some(ControllerAction::Completed) => "Completed".to_string(),
-            Some(ControllerAction::Stopped) => "Stopped".to_string(),
-            Some(ControllerAction::Error(e)) => format!("Error: {}", e),
-            None => "-".to_string(),
+        } else {
+            &self.current_action
         }
     }
 
@@ -912,43 +1062,46 @@ impl TipPrepApp {
                             ui.end_row();
 
                             ui.label("Tip Shape:");
-                            let shape_color = match self.current_state.as_ref().map(|s| s.tip_shape)
-                            {
-                                Some(TipShape::Blunt) => egui::Color32::RED,
-                                Some(TipShape::Sharp) => egui::Color32::YELLOW,
-                                Some(TipShape::Stable) => egui::Color32::GREEN,
-                                None => egui::Color32::GRAY,
+                            let shape_color = match self.tip_shape_text() {
+                                "Blunt" => egui::Color32::RED,
+                                "Sharp" => egui::Color32::YELLOW,
+                                "Stable" => egui::Color32::GREEN,
+                                _ => egui::Color32::GRAY,
                             };
                             ui.colored_label(shape_color, self.tip_shape_text());
                             ui.end_row();
 
+                            ui.label("Phase:");
+                            ui.label(if self.tip_state.phase.is_empty() {
+                                "-"
+                            } else {
+                                &self.tip_state.phase
+                            });
+                            ui.end_row();
+
                             ui.label("Cycle Count:");
-                            ui.label(
-                                self.current_state
-                                    .as_ref()
-                                    .map(|s| s.cycle_count.to_string())
-                                    .unwrap_or_else(|| "-".to_string()),
-                            );
+                            if self.tip_state.cycle > 0 {
+                                ui.label(self.tip_state.cycle.to_string());
+                            } else {
+                                ui.label("-");
+                            }
                             ui.end_row();
 
                             ui.label("Freq Shift:");
                             ui.label(
-                                self.current_state
-                                    .as_ref()
-                                    .and_then(|s| s.freq_shift)
-                                    .or(self.last_freq_shift)
+                                self.tip_state
+                                    .freq_shift
                                     .map(|f| format!("{:.2} Hz", f))
                                     .unwrap_or_else(|| "-".to_string()),
                             );
                             ui.end_row();
 
                             ui.label("Pulse Voltage:");
-                            ui.label(
-                                self.current_state
-                                    .as_ref()
-                                    .map(|s| format!("{:.2} V", s.pulse_voltage))
-                                    .unwrap_or_else(|| "-".to_string()),
-                            );
+                            if self.tip_state.cycle > 0 {
+                                ui.label(format!("{:.2} V", self.tip_state.pulse_voltage));
+                            } else {
+                                ui.label("-");
+                            }
                             ui.end_row();
 
                             ui.label("Elapsed:");
@@ -985,7 +1138,22 @@ impl TipPrepApp {
                     {
                         self.stop_controller();
                     }
+
+                    ui.add_enabled_ui(!self.is_running(), |ui| {
+                        ui.checkbox(&mut self.simulate, "Simulate").on_hover_text(
+                            "Run against the in-memory mock controller \
+                                 instead of the Nanonis system. No hardware \
+                                 is contacted.",
+                        );
+                    });
                 });
+
+                if self.simulate {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(255, 165, 0),
+                        "Simulation - no hardware connected",
+                    );
+                }
             });
 
             ui.add_space(10.0);
@@ -1016,24 +1184,73 @@ impl TipPrepApp {
             });
         });
 
-        // Freq shift history bar graph
+        // Freq shift time-series plot
         ui.add_space(10.0);
         ui.label("Freq Shift History");
-        let bars: Vec<Bar> = self
+
+        let fs_xy: Vec<[f64; 2]> = self
             .freq_shift_history
             .iter()
-            .enumerate()
-            .map(|(i, &val)| Bar::new(i as f64, val))
+            .map(|dp| [dp.time_s, dp.value])
             .collect();
-        let chart = BarChart::new("Freq Shift (Hz)", bars);
+        let colors = PlotColors::for_theme(ui.visuals().dark_mode);
+        let fs_line =
+            Line::new("Freq Shift (Hz)", PlotPoints::from(fs_xy.clone())).color(colors.freq_shift);
+        let fs_marks = Points::new("Measurements", PlotPoints::from(fs_xy))
+            .color(colors.freq_shift)
+            .radius(MARKER_RADIUS);
+
         Plot::new("freq_shift_plot")
-            .height(150.0)
+            .height(120.0)
             .allow_drag(false)
             .allow_zoom(false)
             .allow_scroll(false)
+            .x_axis_label("Time (s)")
             .y_axis_label("Hz")
             .show(ui, |plot_ui| {
-                plot_ui.bar_chart(chart);
+                plot_ui.line(fs_line);
+                plot_ui.points(fs_marks);
+
+                // Draw sharp bounds as horizontal lines
+                if let Some((lower, upper)) = self.sharp_bounds {
+                    plot_ui.hline(
+                        HLine::new("Lower bound", lower)
+                            .color(colors.bounds)
+                            .style(egui_plot::LineStyle::Dashed { length: 5.0 }),
+                    );
+                    plot_ui.hline(
+                        HLine::new("Upper bound", upper)
+                            .color(colors.bounds)
+                            .style(egui_plot::LineStyle::Dashed { length: 5.0 }),
+                    );
+                }
+            });
+
+        // Voltage time-series plot
+        ui.add_space(5.0);
+        ui.label("Pulse Voltage History");
+
+        let v_xy: Vec<[f64; 2]> = self
+            .voltage_history
+            .iter()
+            .map(|dp| [dp.time_s, dp.value])
+            .collect();
+        let v_line = Line::new("Pulse Voltage (V)", PlotPoints::from(v_xy.clone()))
+            .color(colors.pulse_voltage);
+        let v_marks = Points::new("Pulses", PlotPoints::from(v_xy))
+            .color(colors.pulse_voltage)
+            .radius(MARKER_RADIUS);
+
+        Plot::new("voltage_plot")
+            .height(100.0)
+            .allow_drag(false)
+            .allow_zoom(false)
+            .allow_scroll(false)
+            .x_axis_label("Time (s)")
+            .y_axis_label("V")
+            .show(ui, |plot_ui| {
+                plot_ui.line(v_line);
+                plot_ui.points(v_marks);
             });
     }
 
@@ -1042,7 +1259,6 @@ impl TipPrepApp {
             // Load/Save Section
             ui.heading("Load / Save Configuration");
             egui::Frame::group(ui.style()).show(ui, |ui| {
-                // Load section
                 ui.horizontal(|ui| {
                     ui.label("Load from:");
                     ui.add(egui::TextEdit::singleline(&mut self.load_path).desired_width(300.0));
@@ -1064,7 +1280,6 @@ impl TipPrepApp {
 
                 ui.add_space(5.0);
 
-                // Save section
                 ui.horizontal(|ui| {
                     ui.label("Save to:");
                     ui.add(egui::TextEdit::singleline(&mut self.save_path).desired_width(300.0));
@@ -1118,6 +1333,13 @@ impl TipPrepApp {
                         ui.label("Sample Rate (Hz):");
                         ui.add(
                             egui::TextEdit::singleline(&mut self.config.sample_rate)
+                                .desired_width(80.0),
+                        );
+                        ui.end_row();
+
+                        ui.label("Stable Signal Samples:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.config.stable_signal_samples)
                                 .desired_width(80.0),
                         );
                         ui.end_row();
@@ -1351,7 +1573,6 @@ impl TipPrepApp {
                         });
                         ui.end_row();
 
-                        // Random polarity switch (applies to all methods)
                         ui.label("Random Polarity Switch:");
                         ui.checkbox(&mut self.config.random_polarity_enabled, "Enabled");
                         ui.end_row();
@@ -1504,16 +1725,14 @@ impl TipPrepApp {
                 ui.label("Map Nanonis signal indices to TCP channel indices:");
                 ui.add_space(5.0);
 
-                // Header
                 ui.horizontal(|ui| {
                     ui.label("Nanonis Index");
                     ui.add_space(20.0);
                     ui.label("TCP Channel");
                     ui.add_space(20.0);
-                    ui.label(""); // Placeholder for remove button
+                    ui.label("");
                 });
 
-                // Existing mappings
                 let mut to_remove: Option<usize> = None;
                 for (idx, mapping) in self.config.tcp_channel_mappings.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
@@ -1533,14 +1752,12 @@ impl TipPrepApp {
                     });
                 }
 
-                // Remove marked mapping
                 if let Some(idx) = to_remove {
                     self.config.tcp_channel_mappings.remove(idx);
                 }
 
                 ui.add_space(5.0);
 
-                // Add new mapping button
                 if ui.button("Add Mapping").clicked() {
                     self.config
                         .tcp_channel_mappings
@@ -1569,90 +1786,212 @@ impl TipPrepApp {
     }
 }
 
+// ============================================================================
+// V2 Controller Runner (background thread)
+// ============================================================================
+
 fn run_controller(
     config: AppConfig,
-    shutdown_flag: Arc<AtomicBool>,
-    state_tx: crossbeam_channel::Sender<ControllerState>,
+    shutdown: ShutdownFlag,
+    event_tx: Sender<Event>,
+    simulate: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    info!("Setting up controller...");
-
-    // Signal-read stability gates, configurable via [tip_prep.signal_stability]
-    let ss = &config.tip_prep.signal_stability;
-    let tip_state_config = TipStateConfig {
-        max_std_dev: ss.max_std_dev_hz,
-        max_slope: ss.max_slope_hz_per_s,
-        data_collection_duration: std::time::Duration::from_millis(ss.data_collection_duration_ms),
-        read_timeout: std::time::Duration::from_secs(ss.read_timeout_secs),
-        read_retry_count: ss.read_retry_count,
+    let (controller, freq_shift_index) = if simulate {
+        build_mock_backend(&config)?
+    } else {
+        build_nanonis_backend(&config)?
     };
 
-    // Setup driver
-    let mut builder =
-        ActionDriver::builder(&config.nanonis.host_ip, config.nanonis.control_ports[0])
-            .with_tcp_reader(TCPReaderConfig {
-                stream_port: config.data_acquisition.data_port,
-                oversampling: (2000 / config.data_acquisition.sample_rate) as i32,
-                ..Default::default()
-            })
-            .with_tip_state_config(tip_state_config);
+    // Setup event bus with ChannelForwarder for GUI
+    let mut events = EventBus::new();
+    events.add_observer(Box::new(ConsoleLogger));
+    events.add_observer(Box::new(ChannelForwarder::new(event_tx)));
 
-    // Add custom TCP channel mapping if configured
+    if config.experiment_logging.enabled {
+        let log_dir = std::path::PathBuf::from(&config.experiment_logging.output_path);
+        std::fs::create_dir_all(&log_dir)?;
+        let filename = format!(
+            "tip_prep_{}.jsonl",
+            chrono::Utc::now().format("%Y%m%d_%H%M%S")
+        );
+        let file = std::fs::File::create(log_dir.join(filename))?;
+        events.add_observer(Box::new(FileLogger::new(file)));
+    }
+
+    events.add_observer(Box::new(EventAccumulator::new(500)));
+
+    // Run tip preparation
+    let result = run_tip_prep(controller, &events, &shutdown, &config, freq_shift_index);
+
+    // Convert ShutdownRequested to StoppedByUser
+    let result = match result {
+        Err(e)
+            if e.downcast_ref::<SpmError>()
+                .is_some_and(|e| matches!(e, SpmError::ShutdownRequested)) =>
+        {
+            Ok(Outcome::StoppedByUser)
+        }
+        other => other,
+    };
+
+    match &result {
+        Ok(Outcome::Completed) => {
+            info!("Tip preparation completed successfully!")
+        }
+        Ok(Outcome::StoppedByUser) => info!("Tip preparation stopped by user"),
+        Ok(Outcome::CycleLimit(n)) => error!("Max cycles ({}) exceeded", n),
+        Ok(Outcome::TimedOut(d)) => {
+            error!("Max duration ({:.0}s) exceeded", d.as_secs_f64())
+        }
+        Err(e) => error!("Tip preparation failed: {}", e),
+    }
+
+    Ok(())
+}
+
+/// Boxed controller plus the resolved freq-shift signal index.
+type Backend = (Box<dyn SpmController>, u32);
+
+/// Index of `"freq shift"` in [`MockController`]'s fixed channel layout. Checked
+/// against the registry in [`build_mock_backend`] so a change to the mock's
+/// `signal_names` surfaces as an error instead of a silently wrong channel.
+const MOCK_FREQ_SHIFT_INDEX: u32 = 2;
+
+/// Connect to the real Nanonis system and set up its TCP data stream.
+fn build_nanonis_backend(
+    config: &AppConfig,
+) -> Result<Backend, Box<dyn std::error::Error + Send + Sync>> {
+    info!("Setting up V2 controller...");
+
+    let client = rusty_tip::NanonisClient::builder()
+        .address(&config.nanonis.host_ip)
+        .port(config.nanonis.control_ports[0])
+        .build()?;
+    let setup = NanonisSetupConfig {
+        layout_file: config.nanonis.layout_file.clone(),
+        settings_file: config.nanonis.settings_file.clone(),
+        safe_tip_threshold_a: config.tip_prep.safe_tip_threshold as f64,
+        ..Default::default()
+    };
+    let mut controller = NanonisController::new(client, setup);
+    info!("Connected to Nanonis system");
+
+    let signal_names = controller.signal_names()?;
+    let registry = build_signal_registry(&signal_names, config);
+    let freq_shift_index = registry
+        .get_by_name("freq shift")
+        .ok_or("Frequency shift signal not found in registry")?
+        .index as u32;
+
+    setup_tcp_stream(&mut controller, &registry, config)?;
+
+    Ok((Box::new(controller), freq_shift_index))
+}
+
+/// Drive the routine against the in-memory mock — no hardware, no TCP stream.
+///
+/// The tip model is `models::realistic`, so the frequency shift responds to the
+/// voltages the routine actually chooses and carries noise and drift, rather
+/// than stepping between two constants. Seeded, so a run is reproducible.
+fn build_mock_backend(
+    config: &AppConfig,
+) -> Result<Backend, Box<dyn std::error::Error + Send + Sync>> {
+    info!("Simulation mode: running against the mock controller (no hardware)");
+
+    let mut mock = MockController::builder()
+        .freq_shift_index(MOCK_FREQ_SHIFT_INDEX)
+        .freq_shift(models::realistic(models::RealisticParams::default()))
+        // Within-batch scatter, well under the default 1.0 Hz `max_std_dev` so
+        // ReadStableSignal's statistics do real work without stalling in retries.
+        .sample_noise_hz(0.25)
+        .build();
+
+    // Resolve the index through the same registry path the real backend uses,
+    // so simulation exercises the lookup instead of bypassing it.
+    let signal_names = mock.signal_names()?;
+    let registry = build_signal_registry(&signal_names, config);
+    let resolved = registry
+        .get_by_name("freq shift")
+        .ok_or("Frequency shift signal not found in mock registry")?
+        .index as u32;
+
+    if resolved != MOCK_FREQ_SHIFT_INDEX {
+        return Err(format!(
+            "mock freq-shift index drifted: registry resolved {resolved}, \
+             mock model answers for {MOCK_FREQ_SHIFT_INDEX}"
+        )
+        .into());
+    }
+
+    Ok((Box::new(mock), resolved))
+}
+
+fn build_signal_registry(signal_names: &[String], config: &AppConfig) -> SignalRegistry {
+    let mut builder = SignalRegistry::builder().with_standard_map();
+
     if let Some(ref mappings) = config.tcp_channel_mapping {
         let tcp_map: Vec<(u8, u8)> = mappings
             .iter()
             .map(|m| (m.nanonis_index, m.tcp_channel))
             .collect();
-        builder = builder.with_custom_tcp_mapping(&tcp_map);
+        builder = builder.add_tcp_map(&tcp_map);
     }
 
-    let driver = builder.build()?;
+    builder
+        .from_signal_names(signal_names)
+        .create_aliases()
+        .build()
+}
 
-    // Get frequency shift signal
-    let freq_shift: Signal = driver
-        .signal_registry()
-        .get_by_name("freq shift")
-        .ok_or("Frequency shift signal not found")?
-        .clone();
+fn setup_tcp_stream(
+    controller: &mut NanonisController,
+    registry: &SignalRegistry,
+    config: &AppConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let tcp_signals = registry.tcp_signals();
+    if tcp_signals.is_empty() {
+        log::warn!("No TCP channel mappings found - falling back to polling");
+        return Ok(());
+    }
 
-    // Create tip controller config
-    let tip_config = TipControllerConfig {
-        freq_shift_signal: freq_shift,
-        sharp_tip_bounds: (
-            config.tip_prep.sharp_tip_bounds[0],
-            config.tip_prep.sharp_tip_bounds[1],
-        ),
-        pulse_method: config.pulse_method.clone(),
-        allowed_change_for_stable: config.tip_prep.stability.stable_tip_allowed_change,
-        check_stability: config.tip_prep.stability.check_stability,
-        max_cycles: config.tip_prep.max_cycles,
-        max_duration: config.tip_prep.max_duration_secs.map(Duration::from_secs),
-        stability_config: config.tip_prep.stability.clone(),
-        layout_file: config.nanonis.layout_file.clone(),
-        settings_file: config.nanonis.settings_file.clone(),
-        initial_bias_v: config.tip_prep.initial_bias_v,
-        initial_z_setpoint_a: config.tip_prep.initial_z_setpoint_a,
-        safe_tip_threshold: config.tip_prep.safe_tip_threshold,
-        pulse_width: Duration::from_millis(config.tip_prep.timing.pulse_width_ms),
-        post_approach_settle: Duration::from_millis(config.tip_prep.timing.post_approach_settle_ms),
-        post_reposition_settle: Duration::from_millis(
-            config.tip_prep.timing.post_reposition_settle_ms,
-        ),
-        buffer_clear_wait: Duration::from_millis(config.tip_prep.timing.buffer_clear_wait_ms),
-        post_pulse_settle: Duration::from_millis(config.tip_prep.timing.post_pulse_settle_ms),
-        reposition_steps: (
-            config.tip_prep.timing.reposition_steps[0],
-            config.tip_prep.timing.reposition_steps[1],
-        ),
-        status_interval: config.tip_prep.timing.status_interval,
-    };
+    let mut tcp_channels: Vec<i32> = tcp_signals
+        .iter()
+        .filter_map(|s| s.tcp_channel.map(|ch| ch as i32))
+        .collect();
+    tcp_channels.sort();
+    tcp_channels.dedup();
 
-    // Create controller and run
-    let mut controller = TipController::new(driver, tip_config);
-    controller.set_shutdown_flag(shutdown_flag);
-    controller.set_state_sender(state_tx);
-    controller.run()?;
+    let tcp_to_position: HashMap<u8, usize> = tcp_channels
+        .iter()
+        .enumerate()
+        .map(|(pos, &ch)| (ch as u8, pos))
+        .collect();
 
-    info!("Controller finished");
+    let mut signal_mapping: HashMap<u32, usize> = HashMap::new();
+    for signal in &tcp_signals {
+        if let Some(tcp_ch) = signal.tcp_channel {
+            if let Some(&position) = tcp_to_position.get(&tcp_ch) {
+                signal_mapping.insert(signal.index as u32, position);
+            }
+        }
+    }
+
+    let oversampling = config.data_acquisition.sample_rate as i32;
+    controller.data_stream_configure(&tcp_channels, oversampling)?;
+    controller.set_channel_mapping(signal_mapping);
+
+    let buffer_size = 10_000;
+    controller.start_tcp_reader(
+        &config.nanonis.host_ip,
+        config.data_acquisition.data_port,
+        buffer_size,
+    )?;
+
+    let _ = controller.data_stream_stop();
+    std::thread::sleep(Duration::from_millis(200));
+    controller.data_stream_start()?;
+    info!("TCP data stream started");
+
     Ok(())
 }
 
@@ -1660,8 +1999,7 @@ impl eframe::App for TipPrepApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.check_controller_status();
 
-        // Request periodic repaint to prevent "waiting for idle" messages
-        // and keep UI responsive during controller operation
+        ctx.set_theme(self.theme);
         ctx.request_repaint_after(Duration::from_millis(100));
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -1683,6 +2021,39 @@ impl eframe::App for TipPrepApp {
                 {
                     self.current_tab = Tab::Configuration;
                 }
+
+                // Right-aligned so it stays out of the way of the tabs.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    egui::ComboBox::from_id_salt("theme_selector")
+                        .selected_text(match self.theme {
+                            egui::ThemePreference::Light => "Light",
+                            egui::ThemePreference::Dark => "Dark",
+                            egui::ThemePreference::System => "System",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.theme,
+                                egui::ThemePreference::System,
+                                "System",
+                            );
+                            ui.selectable_value(
+                                &mut self.theme,
+                                egui::ThemePreference::Light,
+                                "Light",
+                            );
+                            ui.selectable_value(
+                                &mut self.theme,
+                                egui::ThemePreference::Dark,
+                                "Dark",
+                            );
+                        })
+                        .response
+                        .on_hover_text(
+                            "Light prints far better than dark — the plots \
+                                 pick higher-contrast colours to match.",
+                        );
+                    ui.label("Theme:");
+                });
             });
 
             ui.separator();
