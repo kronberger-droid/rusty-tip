@@ -7,9 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.0] - 2026-08-04
 
+**This release is an experimental rewrite. Treat it as a preview of where the
+project is going, not as the version to run an instrument from.**
+
 The v2 stack (`SpmController` trait, action/event system, `tip_prep::runner`)
-replaces the v1 `ActionDriver`/`TipController` code. Only the stability-gate
-changes are listed here; see the commit history for the rewrite itself.
+replaces the v1 `ActionDriver`/`TipController` code.
+It has not been validated on a real microscope yet, since every test here runs
+against `MockController`.
+The stability gates in particular were re-derived into the new read path and
+carry the thresholds calibrated for v1, thus they may well need retuning once
+this meets a tip.
+
+Expect `SpmController`, the action system and the config format to keep moving
+through 0.3.x, and expect the rough edges to come off as the routine gets
+machine time.
+If you need the last version that has run on hardware, use
+[0.2.3](https://github.com/kronberger-droid/rusty-tip/releases/tag/v0.2.3).
+
+Only the stability-gate changes are listed below; see the commit history for the
+rewrite itself.
 
 ### Changed
 

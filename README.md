@@ -5,8 +5,21 @@
 [![License: MIT](https://img.shields.io/crates/l/rusty-tip)](https://github.com/kronberger-droid/rusty-tip/blob/main/LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/kronberger-droid/rusty-tip)](https://github.com/kronberger-droid/rusty-tip/releases)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20325230.svg)](https://doi.org/10.5281/zenodo.20325230)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kronberger-droid/rusty-tip)
 
 Rust library and tools for automated STM/AFM tip preparation on Nanonis SPM systems.
+
+> [!WARNING]
+> **0.3.0 is an experimental rewrite.**
+> The control path was rebuilt around the `SpmController` trait and a new
+> action/event system, and it has not run on a real microscope yet: every test
+> in this release exercises `MockController`. The stability thresholds were
+> calibrated against the v1 code path and may need retuning.
+>
+> Expect the API and the config format to keep moving through 0.3.x, and expect
+> this to settle as the routine gets machine time. For the last version that has
+> run on hardware, see
+> [0.2.3](https://github.com/kronberger-droid/rusty-tip/releases/tag/v0.2.3).
 
 ## Overview
 
