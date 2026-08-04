@@ -14,15 +14,12 @@ authors:
     given-names: Martin
     affiliation: "Institute of Applied Physics, TU Wien, Vienna, Austria"
     email: kronberger@iap.tuwien.ac.at
-version: 0.2.1
-date-released: "2026-05-21"
+version: 0.3.0
+date-released: "2026-08-04"
 identifiers:
   - type: doi
     value: 10.5281/zenodo.20325230
     description: "Concept DOI — always resolves to the latest version"
-  - type: doi
-    value: 10.5281/zenodo.20325231
-    description: "Versioned DOI for the v0.2.1 release"
 license: MIT
 repository-code: "https://github.com/kronberger-droid/rusty-tip"
 url: "https://github.com/kronberger-droid/rusty-tip"
