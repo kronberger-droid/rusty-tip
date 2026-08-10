@@ -23,7 +23,7 @@
 //! use rusty_tip::event::EventBus;
 //! use rusty_tip::workflow::ShutdownFlag;
 //! use rusty_tip::config::AppConfig;
-//! use rusty_tip::tip_prep::run_tip_prep;
+//! use rusty_tip::tip_prep::{TipPrepParams, run_tip_prep};
 //!
 //! let freq_shift_index = rusty_tip::SignalIndex(0);
 //! // Tip is blunt (-40 Hz) until 3 pulses land, then sharp (-1 Hz). Conditioning
@@ -37,10 +37,12 @@
 //!
 //! let outcome = run_tip_prep(
 //!     Box::new(mock),
-//!     &EventBus::new(),
-//!     &ShutdownFlag::new(),
-//!     &AppConfig::default(),
-//!     freq_shift_index,
+//!     TipPrepParams {
+//!         events: &EventBus::new(),
+//!         shutdown: &ShutdownFlag::new(),
+//!         config: &AppConfig::default(),
+//!         freq_shift: freq_shift_index,
+//!     },
 //! );
 //!
 //! println!("pulses fired: {}", obs.lock().pulses.len());

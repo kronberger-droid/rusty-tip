@@ -19,7 +19,7 @@ use rusty_tip::mock_controller::{MockController, models};
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
 use rusty_tip::signal_registry::SignalRegistry;
 use rusty_tip::spm_controller::SpmController;
-use rusty_tip::tip_prep::{Outcome, run_tip_prep};
+use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 use rusty_tip::{
     BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, SignalIndex,
@@ -1820,7 +1820,15 @@ fn run_controller(
     events.add_observer(Box::new(EventAccumulator::new(500)));
 
     // Run tip preparation
-    let result = run_tip_prep(controller, &events, &shutdown, &config, freq_shift_index);
+    let result = run_tip_prep(
+        controller,
+        TipPrepParams {
+            events: &events,
+            shutdown: &shutdown,
+            config: &config,
+            freq_shift: freq_shift_index,
+        },
+    );
 
     match &result {
         Ok(Outcome::Completed) => {

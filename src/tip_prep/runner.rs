@@ -63,6 +63,17 @@ struct SweepPlan {
 // Entry point
 // ============================================================================
 
+/// Everything a tip-preparation run needs besides the controller.
+pub struct TipPrepParams<'a> {
+    /// Event sink for observers (console, file log, GUI).
+    pub events: &'a EventBus,
+    /// Cooperative cancellation flag (Ctrl+C, GUI stop button).
+    pub shutdown: &'a ShutdownFlag,
+    pub config: &'a AppConfig,
+    /// The frequency-shift signal driving sharpness decisions.
+    pub freq_shift: SignalIndex,
+}
+
 /// Run the full tip preparation algorithm.
 ///
 /// This is the top-level entry point that owns the controller life cycle
@@ -73,14 +84,17 @@ struct SweepPlan {
 /// end, so it surfaces as `Ok(Outcome::StoppedByUser)`, never as an error.
 pub fn run_tip_prep(
     mut controller: Box<dyn SpmController>,
-    events: &EventBus,
-    shutdown: &ShutdownFlag,
-    config: &AppConfig,
-    freq_shift_index: SignalIndex,
+    params: TipPrepParams<'_>,
 ) -> Result<Outcome, SpmError> {
+    let TipPrepParams {
+        events,
+        shutdown,
+        config,
+        freq_shift,
+    } = params;
     controller.prepare()?;
 
-    let result = run_tip_prep_inner(&mut *controller, events, shutdown, config, freq_shift_index);
+    let result = run_tip_prep_inner(&mut *controller, events, shutdown, config, freq_shift);
 
     log::info!("Cleanup starting...");
     cleanup(&mut *controller, events);
