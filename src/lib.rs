@@ -30,7 +30,7 @@ pub use controller_types::{
     RandomPolaritySwitch, StabilityConfig, TipControllerConfig, TipStateConfig,
 };
 pub use plotting::{plot_values, plot_values_with_range};
-pub use signal_registry::{Signal, SignalRegistry};
+pub use signal_registry::{Signal, SignalIndex, SignalRegistry};
 pub use types::TipShape;
 
 // Re-export nanonis-rs core types

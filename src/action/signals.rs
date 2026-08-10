@@ -5,11 +5,12 @@ use serde::{Deserialize, Serialize};
 use crate::action::{Action, ActionContext, ActionOutput};
 use crate::event::Event;
 use crate::machine_state::ActionKind;
+use crate::signal_registry::SignalIndex;
 use crate::spm_controller::Capability;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadSignal {
-    pub index: u32,
+    pub index: SignalIndex,
     #[serde(default = "super::default_true")]
     pub wait_for_newest: bool,
 }
@@ -17,7 +18,7 @@ pub struct ReadSignal {
 impl Default for ReadSignal {
     fn default() -> Self {
         Self {
-            index: 0,
+            index: SignalIndex(0),
             wait_for_newest: true,
         }
     }
@@ -47,7 +48,7 @@ impl Action for ReadSignal {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadSignals {
-    pub indices: Vec<u32>,
+    pub indices: Vec<SignalIndex>,
     #[serde(default = "super::default_true")]
     pub wait_for_newest: bool,
 }
@@ -130,7 +131,7 @@ impl Action for ReadSignalNames {
 /// signal is not stable. Returns the mean of the stable batch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadStableSignal {
-    pub index: u32,
+    pub index: SignalIndex,
     #[serde(default = "default_num_samples")]
     pub num_samples: usize,
     /// Noise gate: maximum standard deviation of the batch, in Hz.
@@ -171,7 +172,7 @@ fn default_sample_rate_hz() -> f64 {
 impl Default for ReadStableSignal {
     fn default() -> Self {
         Self {
-            index: 0,
+            index: SignalIndex(0),
             num_samples: default_num_samples(),
             max_std_dev: default_max_std_dev(),
             max_slope: default_max_slope(),
@@ -305,7 +306,7 @@ impl Action for ReadStableSignal {
 #[allow(clippy::too_many_arguments)]
 fn emit_measurement(
     ctx: &ActionContext,
-    index: u32,
+    index: SignalIndex,
     n: usize,
     mean: f64,
     std_dev: f64,
