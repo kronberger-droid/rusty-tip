@@ -12,8 +12,8 @@ use rusty_tip::config::AppConfig;
 use rusty_tip::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
 use rusty_tip::event::{Event, EventBus, Observer};
 use rusty_tip::mock_controller::{FaultKind, MockController, models};
+use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
-use rusty_tip::workflow::ShutdownFlag;
 
 const FREQ_SHIFT_INDEX: SignalIndex = SignalIndex(2);
 

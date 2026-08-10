@@ -6,7 +6,8 @@ use crate::machine_state::{MachineState, StateField, ValidationPolicy};
 use crate::spm_controller::SpmController;
 use crate::spm_error::SpmError;
 
-use super::{CompareOp, Condition, ShutdownFlag, Step, StepOutcome, Workflow, WorkflowOutcome};
+use super::{CompareOp, Condition, Step, StepOutcome, Workflow, WorkflowOutcome};
+use crate::shutdown::ShutdownFlag;
 
 /// Executes workflows by walking the Step tree.
 ///

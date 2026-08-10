@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Thread-safe flag for graceful workflow cancellation.
+/// Thread-safe flag for graceful cancellation of a running routine.
 ///
-/// Share an `Arc<AtomicBool>` between the executor and the signal handler
-/// (or GUI stop button). The executor checks this between steps.
+/// Share an `Arc<AtomicBool>` between the running routine and the signal
+/// handler (or GUI stop button). The routine checks it between steps.
 #[derive(Debug, Clone)]
 pub struct ShutdownFlag {
     flag: Arc<AtomicBool>,
