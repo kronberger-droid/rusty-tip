@@ -91,6 +91,9 @@ fn default_post_approach_settle_ms() -> u64 {
 fn default_post_reposition_settle_ms() -> u64 {
     1000
 }
+fn default_post_move_settle_ms() -> u64 {
+    500
+}
 fn default_buffer_clear_wait_ms() -> u64 {
     500
 }
@@ -112,6 +115,11 @@ pub struct TimingConfig {
     pub post_approach_settle_ms: u64,
     #[serde(default = "default_post_reposition_settle_ms")]
     pub post_reposition_settle_ms: u64,
+    /// Settle time between the motor move and the approach during a
+    /// reposition. Was hard-coded at 500 ms (V1 parity) before it became
+    /// configurable.
+    #[serde(default = "default_post_move_settle_ms")]
+    pub post_move_settle_ms: u64,
     #[serde(default = "default_buffer_clear_wait_ms")]
     pub buffer_clear_wait_ms: u64,
     #[serde(default = "default_post_pulse_settle_ms")]
@@ -128,6 +136,7 @@ impl Default for TimingConfig {
             pulse_width_ms: default_pulse_width_ms(),
             post_approach_settle_ms: default_post_approach_settle_ms(),
             post_reposition_settle_ms: default_post_reposition_settle_ms(),
+            post_move_settle_ms: default_post_move_settle_ms(),
             buffer_clear_wait_ms: default_buffer_clear_wait_ms(),
             post_pulse_settle_ms: default_post_pulse_settle_ms(),
             reposition_steps: default_reposition_steps(),

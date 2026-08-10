@@ -9,7 +9,7 @@ use crate::action::signals::ReadStableSignal;
 use crate::action::util::Wait;
 use crate::action::z_controller::{CalibratedApproach, SetZSetpoint, Withdraw};
 use crate::action::{Action, ActionContext, ActionOutput, DataStore};
-use crate::config::{AppConfig, TipPrepConfig};
+use crate::config::{AppConfig, TimingConfig, TipPrepConfig};
 use crate::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
 use crate::event::{Event, EventBus};
 use crate::signal_registry::SignalIndex;
@@ -271,20 +271,7 @@ fn run_tip_prep_inner(
         )?;
 
         // Reposition immediately: get away from pulse site
-        execute_logged(
-            // V1 parity: post_move_settle_ms matches V1's hardcoded 500ms
-            // between motor and approach; post_approach_settle_ms ends the
-            // whole reposition (V1's `Wait(post_reposition_settle)` after
-            // SafeReposition returned).
-            &Reposition {
-                x_steps: config.tip_prep.timing.reposition_steps[0],
-                y_steps: config.tip_prep.timing.reposition_steps[1],
-                post_move_settle_ms: 500,
-                post_approach_settle_ms: config.tip_prep.timing.post_reposition_settle_ms,
-                ..Default::default()
-            },
-            &mut ctx,
-        )?;
+        reposition_to_fresh_spot(&mut ctx, &config.tip_prep.timing)?;
 
         // Measure at new position (after reposition)
         let freq_shift = read_stable(&mut ctx, config, freq_shift_index)?;
@@ -378,20 +365,7 @@ fn confirm_sharp(
             return Err(SpmError::ShutdownRequested);
         }
 
-        execute_logged(
-            // V1 parity: post_move_settle_ms matches V1's hardcoded 500ms
-            // between motor and approach; post_approach_settle_ms ends the
-            // whole reposition (V1's `Wait(post_reposition_settle)` after
-            // SafeReposition returned).
-            &Reposition {
-                x_steps: config.tip_prep.timing.reposition_steps[0],
-                y_steps: config.tip_prep.timing.reposition_steps[1],
-                post_move_settle_ms: 500,
-                post_approach_settle_ms: config.tip_prep.timing.post_reposition_settle_ms,
-                ..Default::default()
-            },
-            ctx,
-        )?;
+        reposition_to_fresh_spot(ctx, &config.tip_prep.timing)?;
 
         if shutdown.is_requested() {
             return Err(SpmError::ShutdownRequested);
@@ -570,20 +544,7 @@ fn check_stability(
             ctx,
         )?;
 
-        execute_logged(
-            // V1 parity: post_move_settle_ms matches V1's hardcoded 500ms
-            // between motor and approach; post_approach_settle_ms ends the
-            // whole reposition (V1's `Wait(post_reposition_settle)` after
-            // SafeReposition returned).
-            &Reposition {
-                x_steps: config.tip_prep.timing.reposition_steps[0],
-                y_steps: config.tip_prep.timing.reposition_steps[1],
-                post_move_settle_ms: 500,
-                post_approach_settle_ms: config.tip_prep.timing.post_reposition_settle_ms,
-                ..Default::default()
-            },
-            ctx,
-        )?;
+        reposition_to_fresh_spot(ctx, &config.tip_prep.timing)?;
 
         Ok(StabilityOutcome::Unstable)
     }
@@ -853,6 +814,28 @@ pub fn interruptible_sleep(duration: Duration, shutdown: &ShutdownFlag) -> Resul
         remaining = remaining.saturating_sub(sleep_for);
     }
     Ok(())
+}
+
+/// Move to a fresh surface spot: withdraw, step the motors, re-approach.
+///
+/// V1 parity: `post_move_settle_ms` sits between the motor move and the
+/// approach (V1 hard-coded 500 ms there); `post_approach_settle_ms` ends
+/// the whole reposition (V1's `Wait(post_reposition_settle)` after
+/// `SafeReposition` returned).
+fn reposition_to_fresh_spot(
+    ctx: &mut ActionContext,
+    timing: &TimingConfig,
+) -> Result<ActionOutput, SpmError> {
+    execute_logged(
+        &Reposition {
+            x_steps: timing.reposition_steps[0],
+            y_steps: timing.reposition_steps[1],
+            post_move_settle_ms: timing.post_move_settle_ms,
+            post_approach_settle_ms: timing.post_reposition_settle_ms,
+            ..Default::default()
+        },
+        ctx,
+    )
 }
 
 /// Execute an action with event logging (start/complete/fail events).
