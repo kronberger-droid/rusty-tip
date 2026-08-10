@@ -1,3 +1,8 @@
+// Indexed `for r in .. { for c in .. }` loops over 2D frames are the natural
+// idiom for the window arithmetic in this module; iterator chains over nested
+// rows obscure which region is being scanned.
+#![allow(clippy::needless_range_loop)]
+
 use ndarray::Array2;
 use rayon::prelude::*;
 use serde_json::json;

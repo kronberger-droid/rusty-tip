@@ -757,8 +757,10 @@ impl MockControllerBuilder {
 
     /// Finish building.
     pub fn build(self) -> MockController {
-        let mut obs = MockObservations::default();
-        obs.connected = self.start_connected;
+        let obs = MockObservations {
+            connected: self.start_connected,
+            ..Default::default()
+        };
         MockController {
             obs: Arc::new(Mutex::new(obs)),
             freq_shift_index: self.freq_shift_index,
