@@ -67,13 +67,16 @@ struct SweepPlan {
 /// This is the top-level entry point that owns the controller life cycle
 /// (prepare/teardown). It calls `run_tip_prep_inner()` for the main loop,
 /// then always cleans up regardless of the outcome.
+///
+/// A shutdown request (Ctrl+C, GUI stop) is an expected way for a run to
+/// end, so it surfaces as `Ok(Outcome::StoppedByUser)`, never as an error.
 pub fn run_tip_prep(
     mut controller: Box<dyn SpmController>,
     events: &EventBus,
     shutdown: &ShutdownFlag,
     config: &AppConfig,
     freq_shift_index: u32,
-) -> Result<Outcome, Box<dyn std::error::Error>> {
+) -> Result<Outcome, SpmError> {
     controller.prepare()?;
 
     let result = run_tip_prep_inner(&mut *controller, events, shutdown, config, freq_shift_index);
@@ -82,7 +85,10 @@ pub fn run_tip_prep(
     cleanup(&mut *controller, events);
     log::info!("Cleanup complete");
 
-    result
+    match result {
+        Err(SpmError::ShutdownRequested) => Ok(Outcome::StoppedByUser),
+        other => other,
+    }
 }
 
 // ============================================================================
@@ -95,7 +101,7 @@ fn run_tip_prep_inner(
     shutdown: &ShutdownFlag,
     config: &AppConfig,
     freq_shift_index: u32,
-) -> Result<Outcome, Box<dyn std::error::Error>> {
+) -> Result<Outcome, SpmError> {
     let mut store = DataStore::new();
 
     // Pre-loop initialization: bias, setpoint, approach, buffer clear
@@ -348,13 +354,13 @@ fn confirm_sharp(
     bounds: (f64, f64),
     config: &AppConfig,
     shutdown: &ShutdownFlag,
-) -> Result<(bool, Option<f64>), Box<dyn std::error::Error>> {
+) -> Result<(bool, Option<f64>), SpmError> {
     const CONFIRMATION_READS: usize = 3;
     let mut last_freq_shift = None;
 
     for i in 0..CONFIRMATION_READS {
         if shutdown.is_requested() {
-            return Err(SpmError::ShutdownRequested.into());
+            return Err(SpmError::ShutdownRequested);
         }
 
         execute_logged(
@@ -373,7 +379,7 @@ fn confirm_sharp(
         )?;
 
         if shutdown.is_requested() {
-            return Err(SpmError::ShutdownRequested.into());
+            return Err(SpmError::ShutdownRequested);
         }
 
         let fs = read_stable(ctx, config, freq_shift_index)?;
@@ -405,7 +411,7 @@ fn check_stability(
     config: &AppConfig,
     shutdown: &ShutdownFlag,
     pulse_state: &mut PulseState,
-) -> Result<StabilityOutcome, Box<dyn std::error::Error>> {
+) -> Result<StabilityOutcome, SpmError> {
     ctx.events.emit(Event::custom(
         "tip_prep_state",
         serde_json::json!({ "phase": "confirming" }),
@@ -481,7 +487,7 @@ fn check_stability(
     for plan in &sweep_plans {
         if shutdown.is_requested() {
             restore_scan_speed(ctx, original_speed);
-            return Err(SpmError::ShutdownRequested.into());
+            return Err(SpmError::ShutdownRequested);
         }
 
         prepare_for_sweep(ctx, plan, &config.tip_prep)?;
@@ -610,7 +616,7 @@ fn prepare_for_sweep(
     ctx: &mut ActionContext,
     plan: &SweepPlan,
     tip_prep: &TipPrepConfig,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), SpmError> {
     execute_logged(&Withdraw::default(), ctx)?;
 
     execute_logged(
@@ -649,7 +655,7 @@ fn execute_stability_sweep(
     plan: &SweepPlan,
     tip_prep: &TipPrepConfig,
     shutdown: &ShutdownFlag,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), SpmError> {
     let sc = &tip_prep.stability;
 
     log::info!(
@@ -709,7 +715,7 @@ fn execute_stability_sweep_inner(
     plan: &SweepPlan,
     sc: &crate::controller_types::StabilityConfig,
     shutdown: &ShutdownFlag,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), SpmError> {
     // Start scan
     execute_logged(
         &ScanControl {
@@ -723,7 +729,7 @@ fn execute_stability_sweep_inner(
     let mut scan_started = false;
     for _ in 0..50 {
         if shutdown.is_requested() {
-            return Err(SpmError::ShutdownRequested.into());
+            return Err(SpmError::ShutdownRequested);
         }
         std::thread::sleep(Duration::from_millis(100));
         if ctx.controller.scan_status()? {
@@ -733,7 +739,9 @@ fn execute_stability_sweep_inner(
     }
 
     if !scan_started {
-        return Err("Scan failed to start within 5 seconds".into());
+        return Err(SpmError::Timeout(
+            "scan failed to start within 5 seconds".into(),
+        ));
     }
 
     // Step bias through range
@@ -743,7 +751,7 @@ fn execute_stability_sweep_inner(
 
     for step in 0..sc.bias_steps {
         if shutdown.is_requested() {
-            return Err(SpmError::ShutdownRequested.into());
+            return Err(SpmError::ShutdownRequested);
         }
 
         execute_logged(
@@ -780,7 +788,7 @@ fn measure_final_freq_shift(
     ctx: &mut ActionContext,
     config: &AppConfig,
     freq_shift_index: u32,
-) -> Result<f64, Box<dyn std::error::Error>> {
+) -> Result<f64, SpmError> {
     log::info!("Measuring final freq_shift after sweeps");
 
     execute_logged(&Withdraw::default(), ctx)?;
@@ -818,15 +826,12 @@ fn restore_scan_speed(ctx: &mut ActionContext, original: Option<nanonis_rs::scan
 // ============================================================================
 
 /// Sleep in small chunks so shutdown can interrupt.
-pub fn interruptible_sleep(
-    duration: Duration,
-    shutdown: &ShutdownFlag,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn interruptible_sleep(duration: Duration, shutdown: &ShutdownFlag) -> Result<(), SpmError> {
     let chunk = Duration::from_millis(10);
     let mut remaining = duration;
     while remaining > Duration::ZERO {
         if shutdown.is_requested() {
-            return Err(SpmError::ShutdownRequested.into());
+            return Err(SpmError::ShutdownRequested);
         }
         let sleep_for = remaining.min(chunk);
         std::thread::sleep(sleep_for);
@@ -863,7 +868,7 @@ fn read_stable(
     ctx: &mut ActionContext,
     config: &AppConfig,
     freq_shift_index: u32,
-) -> Result<f64, Box<dyn std::error::Error>> {
+) -> Result<f64, SpmError> {
     let gates = &config.tip_prep.signal_stability;
     let output = execute_logged(
         &ReadStableSignal {
@@ -878,6 +883,9 @@ fn read_stable(
     )?;
     match output {
         ActionOutput::Value(v) => Ok(v),
-        other => Err(format!("ReadStableSignal returned unexpected output: {:?}", other).into()),
+        other => Err(SpmError::Protocol(format!(
+            "ReadStableSignal returned unexpected output: {:?}",
+            other
+        ))),
     }
 }

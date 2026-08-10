@@ -9,7 +9,6 @@ use rusty_tip::event::{ConsoleLogger, EventAccumulator, EventBus, FileLogger};
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
 use rusty_tip::signal_registry::SignalRegistry;
 use rusty_tip::spm_controller::SpmController;
-use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::{Outcome, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 
@@ -145,17 +144,6 @@ fn run() -> Result<(), RunError> {
         freq_shift_index,
     );
 
-    // Convert ShutdownRequested errors into StoppedByUser outcome
-    let result = match result {
-        Err(e)
-            if e.downcast_ref::<SpmError>()
-                .is_some_and(|e| matches!(e, SpmError::ShutdownRequested)) =>
-        {
-            Ok(Outcome::StoppedByUser)
-        }
-        other => other,
-    };
-
     match result {
         Ok(Outcome::Completed) => {
             info!("Tip preparation completed successfully!");
@@ -175,7 +163,7 @@ fn run() -> Result<(), RunError> {
         }
         Err(e) => {
             error!("Tip preparation failed: {}", e);
-            Err(RunError::Fatal(e))
+            Err(RunError::Fatal(Box::new(e)))
         }
     }
 }
