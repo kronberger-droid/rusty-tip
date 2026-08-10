@@ -1,33 +1,37 @@
-pub mod action;
-pub mod analyzer;
-pub mod buffered_tcp_reader;
-pub mod config;
-pub mod controller_types;
-pub mod error;
-pub mod event;
-pub mod logger;
-pub mod machine_state;
+// -- Hardware abstraction --
 pub mod mock_controller;
 pub mod nanonis_controller;
-pub mod plotting;
-pub mod signal_registry;
 pub mod spm_controller;
 pub mod spm_error;
+
+// -- Actions and orchestration --
+pub mod action;
+pub mod machine_state;
 pub mod tip_prep;
-pub mod types;
-pub mod utils;
 pub mod workflow;
+
+// -- Configuration and observability --
+pub mod config;
+pub mod controller_types;
+pub mod event;
+pub mod signal_registry;
+
+// -- Analysis and display --
+pub mod analyzer;
+pub mod plotting;
+pub mod types;
+
+// -- Internal plumbing (not part of the public API) --
+mod buffered_tcp_reader;
+pub(crate) mod utils;
 
 pub use controller_types::{
     BiasSweepPolarity, ControllerAction, ControllerState, PolaritySign, PulseMethod,
     RandomPolaritySwitch, StabilityConfig, TipControllerConfig, TipStateConfig,
 };
-pub use error::{Error, RunOutcome};
-pub use logger::Logger;
 pub use plotting::{plot_values, plot_values_with_range};
 pub use signal_registry::{Signal, SignalRegistry};
-pub use types::{SessionMetadata, TimestampedSignalFrame, TipShape};
-pub use utils::{PollError, poll_until, poll_with_timeout};
+pub use types::TipShape;
 
 // Re-export nanonis-rs core types
 pub use nanonis_rs::{
