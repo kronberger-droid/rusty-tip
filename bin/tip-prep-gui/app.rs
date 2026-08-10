@@ -2,7 +2,6 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use eframe::egui;
 use egui_plot::{HLine, Line, Plot, PlotPoints, Points};
 use log::{LevelFilter, error, info};
-use std::collections::HashMap;
 use std::path::Path;
 
 use std::thread::{self, JoinHandle};
@@ -17,7 +16,7 @@ use rusty_tip::event::{
     ChannelForwarder, ConsoleLogger, Event, EventAccumulator, EventBus, FileLogger,
 };
 use rusty_tip::mock_controller::{MockController, models};
-use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
+use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
 use rusty_tip::signal_registry::SignalRegistry;
 use rusty_tip::spm_controller::SpmController;
 use rusty_tip::tip_prep::{Outcome, run_tip_prep};
@@ -1937,50 +1936,12 @@ fn setup_tcp_stream(
     registry: &SignalRegistry,
     config: &AppConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let tcp_signals = registry.tcp_signals();
-    if tcp_signals.is_empty() {
-        log::warn!("No TCP channel mappings found - falling back to polling");
-        return Ok(());
-    }
-
-    let mut tcp_channels: Vec<i32> = tcp_signals
-        .iter()
-        .filter_map(|s| s.tcp_channel.map(|ch| ch as i32))
-        .collect();
-    tcp_channels.sort();
-    tcp_channels.dedup();
-
-    let tcp_to_position: HashMap<u8, usize> = tcp_channels
-        .iter()
-        .enumerate()
-        .map(|(pos, &ch)| (ch as u8, pos))
-        .collect();
-
-    let mut signal_mapping: HashMap<SignalIndex, usize> = HashMap::new();
-    for signal in &tcp_signals {
-        if let Some(tcp_ch) = signal.tcp_channel {
-            if let Some(&position) = tcp_to_position.get(&tcp_ch) {
-                signal_mapping.insert(signal.signal_index(), position);
-            }
-        }
-    }
-
-    let oversampling = config.data_acquisition.sample_rate as i32;
-    controller.data_stream_configure(&tcp_channels, oversampling)?;
-    controller.set_channel_mapping(signal_mapping);
-
-    let buffer_size = 10_000;
-    controller.start_tcp_reader(
+    let stream = StreamSetup::new(
         &config.nanonis.host_ip,
         config.data_acquisition.data_port,
-        buffer_size,
-    )?;
-
-    let _ = controller.data_stream_stop();
-    std::thread::sleep(Duration::from_millis(200));
-    controller.data_stream_start()?;
-    info!("TCP data stream started");
-
+        config.data_acquisition.sample_rate as i32,
+    );
+    controller.start_streaming(registry, &stream)?;
     Ok(())
 }
 

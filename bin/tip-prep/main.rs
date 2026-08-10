@@ -2,12 +2,12 @@ use chrono::Utc;
 use clap::Parser;
 use env_logger::Env;
 use log::{LevelFilter, error, info};
-use std::{collections::HashMap, fs, io, path::PathBuf, process::ExitCode, time::Duration};
+use std::{fs, io, path::PathBuf, process::ExitCode};
 
 use rusty_tip::config::{AppConfig, load_config};
 use rusty_tip::event::{ConsoleLogger, EventAccumulator, EventBus, FileLogger};
-use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
-use rusty_tip::signal_registry::{SignalIndex, SignalRegistry};
+use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
+use rusty_tip::signal_registry::SignalRegistry;
 use rusty_tip::spm_controller::SpmController;
 use rusty_tip::tip_prep::{Outcome, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
@@ -177,61 +177,12 @@ fn setup_tcp_stream(
     registry: &SignalRegistry,
     config: &AppConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let tcp_signals = registry.tcp_signals();
-    if tcp_signals.is_empty() {
-        log::warn!(
-            "No signals with TCP channel mappings found - stable signal reads will fall back to polling"
-        );
-        return Ok(());
-    }
-
-    let mut tcp_channels: Vec<i32> = tcp_signals
-        .iter()
-        .filter_map(|s| s.tcp_channel.map(|ch| ch as i32))
-        .collect();
-    tcp_channels.sort();
-    tcp_channels.dedup();
-
-    let tcp_to_position: HashMap<u8, usize> = tcp_channels
-        .iter()
-        .enumerate()
-        .map(|(pos, &ch)| (ch as u8, pos))
-        .collect();
-
-    let mut signal_mapping: HashMap<SignalIndex, usize> = HashMap::new();
-    for signal in &tcp_signals {
-        if let Some(tcp_ch) = signal.tcp_channel
-            && let Some(&position) = tcp_to_position.get(&tcp_ch)
-        {
-            signal_mapping.insert(signal.signal_index(), position);
-        }
-    }
-
-    info!(
-        "TCP stream: {} channels, {} signals mapped",
-        tcp_channels.len(),
-        signal_mapping.len()
-    );
-
-    let oversampling = config.data_acquisition.sample_rate as i32;
-    controller.data_stream_configure(&tcp_channels, oversampling)?;
-    controller.set_channel_mapping(signal_mapping);
-
-    // Stop any lingering stream from a prior session, then start a fresh one
-    // BEFORE attaching the reader — otherwise the reader's first frames may
-    // be stale bytes left in the TCP buffer from the previous session.
-    let _ = controller.data_stream_stop();
-    std::thread::sleep(Duration::from_millis(200));
-    controller.data_stream_start()?;
-
-    let buffer_size = 10_000;
-    controller.start_tcp_reader(
+    let stream = StreamSetup::new(
         &config.nanonis.host_ip,
         config.data_acquisition.data_port,
-        buffer_size,
-    )?;
-    info!("TCP data stream started");
-
+        config.data_acquisition.sample_rate as i32,
+    );
+    controller.start_streaming(registry, &stream)?;
     Ok(())
 }
 
