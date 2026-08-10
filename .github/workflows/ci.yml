@@ -1,0 +1,52 @@
+# PR gate: formatting, lints, tests, spelling.
+#
+# Complements release.yml (cargo-dist) and publish-crates.yml, which only run
+# on version tags. The job names here are referenced by the protect-main
+# ruleset as required status checks, so renaming a job means updating the
+# ruleset too.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --features gui -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # --all-targets skips doctests (cargo quirk), so run them separately;
+      # the doctests are what compile-check the README-style API examples.
+      - run: cargo test --all-targets
+      - run: cargo test --doc
+
+  typos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: crate-ci/typos@v1.49.0
