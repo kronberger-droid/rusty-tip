@@ -38,8 +38,8 @@ use rusty_tip::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
 use rusty_tip::event::{ConsoleLogger, EventBus};
 use rusty_tip::mock_controller::models::RealisticParams;
 use rusty_tip::mock_controller::{FaultKind, FreqShiftModel, MockController, models};
+use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
-use rusty_tip::workflow::ShutdownFlag;
 
 /// Signal index the mock's tip model answers for (arbitrary, but the mock and
 /// `run_tip_prep` must agree on it).

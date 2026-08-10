@@ -12,10 +12,10 @@ use crate::action::{Action, ActionContext, ActionOutput, DataStore};
 use crate::config::{AppConfig, TimingConfig, TipPrepConfig};
 use crate::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
 use crate::event::{Event, EventBus};
+use crate::shutdown::ShutdownFlag;
 use crate::signal_registry::SignalIndex;
 use crate::spm_controller::SpmController;
 use crate::spm_error::SpmError;
-use crate::workflow::ShutdownFlag;
 
 use super::PulseState;
 

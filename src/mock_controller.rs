@@ -21,7 +21,7 @@
 //! ```no_run
 //! use rusty_tip::mock_controller::{MockController, models};
 //! use rusty_tip::event::EventBus;
-//! use rusty_tip::workflow::ShutdownFlag;
+//! use rusty_tip::shutdown::ShutdownFlag;
 //! use rusty_tip::config::AppConfig;
 //! use rusty_tip::tip_prep::{TipPrepParams, run_tip_prep};
 //!
