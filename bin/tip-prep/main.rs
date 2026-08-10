@@ -7,7 +7,7 @@ use std::{collections::HashMap, fs, io, path::PathBuf, process::ExitCode, time::
 use rusty_tip::config::{AppConfig, load_config};
 use rusty_tip::event::{ConsoleLogger, EventAccumulator, EventBus, FileLogger};
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
-use rusty_tip::signal_registry::SignalRegistry;
+use rusty_tip::signal_registry::{SignalIndex, SignalRegistry};
 use rusty_tip::spm_controller::SpmController;
 use rusty_tip::tip_prep::{Outcome, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
@@ -121,7 +121,7 @@ fn run() -> Result<(), RunError> {
             .map(|ch| format!(", TCP channel {}", ch))
             .unwrap_or_default()
     );
-    let freq_shift_index = freq_shift_signal.index as u32;
+    let freq_shift_index = freq_shift_signal.signal_index();
 
     // Setup TCP data stream for stable signal reading
     setup_tcp_stream(&mut controller, &registry, &config)?;
@@ -198,12 +198,12 @@ fn setup_tcp_stream(
         .map(|(pos, &ch)| (ch as u8, pos))
         .collect();
 
-    let mut signal_mapping: HashMap<u32, usize> = HashMap::new();
+    let mut signal_mapping: HashMap<SignalIndex, usize> = HashMap::new();
     for signal in &tcp_signals {
         if let Some(tcp_ch) = signal.tcp_channel
             && let Some(&position) = tcp_to_position.get(&tcp_ch)
         {
-            signal_mapping.insert(signal.index as u32, position);
+            signal_mapping.insert(signal.signal_index(), position);
         }
     }
 

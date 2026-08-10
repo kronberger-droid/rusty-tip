@@ -23,7 +23,8 @@ use rusty_tip::spm_controller::SpmController;
 use rusty_tip::tip_prep::{Outcome, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 use rusty_tip::{
-    BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, StabilityConfig,
+    BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, SignalIndex,
+    StabilityConfig,
 };
 
 // ============================================================================
@@ -1838,12 +1839,12 @@ fn run_controller(
 }
 
 /// Boxed controller plus the resolved freq-shift signal index.
-type Backend = (Box<dyn SpmController>, u32);
+type Backend = (Box<dyn SpmController>, SignalIndex);
 
 /// Index of `"freq shift"` in [`MockController`]'s fixed channel layout. Checked
 /// against the registry in [`build_mock_backend`] so a change to the mock's
 /// `signal_names` surfaces as an error instead of a silently wrong channel.
-const MOCK_FREQ_SHIFT_INDEX: u32 = 2;
+const MOCK_FREQ_SHIFT_INDEX: SignalIndex = SignalIndex(2);
 
 /// Connect to the real Nanonis system and set up its TCP data stream.
 fn build_nanonis_backend(
@@ -1869,7 +1870,7 @@ fn build_nanonis_backend(
     let freq_shift_index = registry
         .get_by_name("freq shift")
         .ok_or("Frequency shift signal not found in registry")?
-        .index as u32;
+        .signal_index();
 
     setup_tcp_stream(&mut controller, &registry, config)?;
 
@@ -1901,7 +1902,7 @@ fn build_mock_backend(
     let resolved = registry
         .get_by_name("freq shift")
         .ok_or("Frequency shift signal not found in mock registry")?
-        .index as u32;
+        .signal_index();
 
     if resolved != MOCK_FREQ_SHIFT_INDEX {
         return Err(format!(
@@ -1955,11 +1956,11 @@ fn setup_tcp_stream(
         .map(|(pos, &ch)| (ch as u8, pos))
         .collect();
 
-    let mut signal_mapping: HashMap<u32, usize> = HashMap::new();
+    let mut signal_mapping: HashMap<SignalIndex, usize> = HashMap::new();
     for signal in &tcp_signals {
         if let Some(tcp_ch) = signal.tcp_channel {
             if let Some(&position) = tcp_to_position.get(&tcp_ch) {
-                signal_mapping.insert(signal.index as u32, position);
+                signal_mapping.insert(signal.signal_index(), position);
             }
         }
     }

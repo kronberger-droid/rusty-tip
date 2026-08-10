@@ -32,6 +32,7 @@ use std::time::Duration;
 use env_logger::Env;
 use log::info;
 
+use rusty_tip::SignalIndex;
 use rusty_tip::config::AppConfig;
 use rusty_tip::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
 use rusty_tip::event::{ConsoleLogger, EventBus};
@@ -42,7 +43,7 @@ use rusty_tip::workflow::ShutdownFlag;
 
 /// Signal index the mock's tip model answers for (arbitrary, but the mock and
 /// `run_tip_prep` must agree on it).
-const FREQ_SHIFT_INDEX: u32 = 2;
+const FREQ_SHIFT_INDEX: SignalIndex = SignalIndex(2);
 
 fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("info"))

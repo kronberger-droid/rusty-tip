@@ -13,6 +13,7 @@ use nanonis_rs::{
 
 use std::collections::HashSet;
 
+use crate::signal_registry::SignalIndex;
 use crate::spm_error::SpmError;
 
 pub type DataStreamStatus = TCPLogStatus;
@@ -101,8 +102,8 @@ pub trait SpmController: Send {
     }
 
     // -- Signals --
-    fn read_signal(&mut self, index: u32, wait_for_newest: bool) -> Result<f64>;
-    fn read_signals(&mut self, indices: &[u32], wait_for_newest: bool) -> Result<Vec<f64>>;
+    fn read_signal(&mut self, index: SignalIndex, wait_for_newest: bool) -> Result<f64>;
+    fn read_signals(&mut self, indices: &[SignalIndex], wait_for_newest: bool) -> Result<Vec<f64>>;
     fn signal_names(&mut self) -> Result<Vec<String>>;
 
     // -- Bias --
@@ -209,7 +210,7 @@ pub trait SpmController: Send {
     /// this to collect frames from the stream instead.
     ///
     /// `index` is the same signal index used by `read_signal`.
-    fn read_signal_samples(&mut self, index: u32, num_samples: usize) -> Result<Vec<f64>> {
+    fn read_signal_samples(&mut self, index: SignalIndex, num_samples: usize) -> Result<Vec<f64>> {
         if num_samples == 0 {
             return Err(SpmError::Protocol(
                 "read_signal_samples: num_samples must be > 0".into(),
@@ -225,7 +226,7 @@ pub trait SpmController: Send {
     /// Read a noise-reduced signal value by averaging multiple samples.
     ///
     /// Convenience wrapper around `read_signal_samples` that returns the mean.
-    fn read_stable_signal(&mut self, index: u32, num_samples: usize) -> Result<f64> {
+    fn read_stable_signal(&mut self, index: SignalIndex, num_samples: usize) -> Result<f64> {
         let samples = self.read_signal_samples(index, num_samples)?;
         let mean = samples.iter().sum::<f64>() / samples.len() as f64;
         Ok(mean)

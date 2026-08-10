@@ -12,6 +12,7 @@ use nanonis_rs::{
 use std::collections::HashSet;
 
 use crate::buffered_tcp_reader::BufferedTCPReader;
+use crate::signal_registry::SignalIndex;
 use crate::spm_controller::{
     AcquisitionMode, Capability, DataStreamStatus, Result, SpmController, TriggerSetup,
     ZControllerStatus, ZHomeMode,
@@ -59,7 +60,7 @@ pub struct NanonisController {
     tcp_reader: Option<BufferedTCPReader>,
     /// Maps Nanonis signal index -> position in SignalFrame.data array.
     /// Set by the caller via `set_channel_mapping` before starting the TCP reader.
-    signal_to_data_position: HashMap<u32, usize>,
+    signal_to_data_position: HashMap<SignalIndex, usize>,
     /// Number of channels configured in the TCP data stream.
     /// Set by `data_stream_configure`, used by `start_tcp_reader`.
     configured_channel_count: Option<u32>,
@@ -160,7 +161,7 @@ impl NanonisController {
     /// The caller should compute this from their `SignalRegistry`: for each signal
     /// of interest, find its `tcp_channel` and then its position in the configured
     /// channel list (the order passed to `data_stream_configure`).
-    pub fn set_channel_mapping(&mut self, mapping: HashMap<u32, usize>) {
+    pub fn set_channel_mapping(&mut self, mapping: HashMap<SignalIndex, usize>) {
         self.signal_to_data_position = mapping;
         log::debug!(
             "Channel mapping set: {} signals mapped to data positions",
@@ -384,19 +385,19 @@ impl SpmController for NanonisController {
 
     // -- Signals --
 
-    fn read_signal(&mut self, index: u32, wait_for_newest: bool) -> Result<f64> {
-        let index_u8 = u8::try_from(index).map_err(|_| {
+    fn read_signal(&mut self, index: SignalIndex, wait_for_newest: bool) -> Result<f64> {
+        let index_u8 = u8::try_from(index.0).map_err(|_| {
             SpmError::Protocol(format!("Signal index {} exceeds u8 range (max 255)", index))
         })?;
         let val = self.client.signal_val_get(index_u8, wait_for_newest)?;
         Ok(val as f64)
     }
 
-    fn read_signals(&mut self, indices: &[u32], wait_for_newest: bool) -> Result<Vec<f64>> {
+    fn read_signals(&mut self, indices: &[SignalIndex], wait_for_newest: bool) -> Result<Vec<f64>> {
         let indices_i32: Vec<i32> = indices
             .iter()
             .map(|&i| {
-                i32::try_from(i).map_err(|_| {
+                i32::try_from(i.0).map_err(|_| {
                     SpmError::Protocol(format!("Signal index {} exceeds i32 range", i))
                 })
             })
@@ -743,7 +744,7 @@ impl SpmController for NanonisController {
 
     // -- Signal Reading (TCP stream override) --
 
-    fn read_signal_samples(&mut self, index: u32, num_samples: usize) -> Result<Vec<f64>> {
+    fn read_signal_samples(&mut self, index: SignalIndex, num_samples: usize) -> Result<Vec<f64>> {
         if num_samples == 0 {
             return Err(SpmError::Protocol(
                 "read_signal_samples: num_samples must be > 0".into(),
