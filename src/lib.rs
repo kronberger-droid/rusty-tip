@@ -14,6 +14,7 @@ pub mod workflow;
 pub mod config;
 pub mod controller_types;
 pub mod event;
+pub mod shutdown;
 pub mod signal_registry;
 
 // -- Analysis and display --
@@ -29,6 +30,7 @@ pub use controller_types::{
     BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, StabilityConfig,
 };
 pub use plotting::{plot_values, plot_values_with_range};
+pub use shutdown::ShutdownFlag;
 pub use signal_registry::{Signal, SignalIndex, SignalRegistry};
 pub use types::TipShape;
 

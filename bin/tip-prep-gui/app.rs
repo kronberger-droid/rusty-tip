@@ -17,11 +17,11 @@ use rusty_tip::event::{
 };
 use rusty_tip::mock_controller::{MockController, models};
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
+use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::SignalRegistry;
 use rusty_tip::spm_controller::SpmController;
 use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
-use rusty_tip::workflow::ShutdownFlag;
 use rusty_tip::{
     BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, SignalIndex,
     StabilityConfig,

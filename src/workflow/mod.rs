@@ -1,8 +1,13 @@
+//! Declarative workflow definitions and their executor.
+//!
+//! **Experimental.** This layer has no production consumer yet and is
+//! expected to be redesigned around the routine-harness interface; expect
+//! breaking changes or removal in 0.5.x. The tip-prep routine in
+//! [`crate::tip_prep`] is the supported automation path today.
+
 mod executor;
-mod shutdown;
 
 pub use executor::WorkflowExecutor;
-pub use shutdown::ShutdownFlag;
 
 use std::collections::HashMap;
 
