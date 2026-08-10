@@ -486,11 +486,11 @@ impl EditableConfig {
             .stable_signal_samples
             .parse()
             .map_err(|_| "Invalid stable signal samples")?;
-        let sharp_tip_lower: f32 = self
+        let sharp_tip_lower: f64 = self
             .sharp_tip_lower
             .parse()
             .map_err(|_| "Invalid sharp tip lower bound")?;
-        let sharp_tip_upper: f32 = self
+        let sharp_tip_upper: f64 = self
             .sharp_tip_upper
             .parse()
             .map_err(|_| "Invalid sharp tip upper bound")?;
@@ -508,25 +508,25 @@ impl EditableConfig {
                     .map_err(|_| "Invalid max duration")?,
             )
         };
-        let initial_bias_mv: f32 = self
+        let initial_bias_mv: f64 = self
             .initial_bias_v
             .parse()
             .map_err(|_| "Invalid initial bias")?;
-        let initial_z_setpoint_pa: f32 = self
+        let initial_z_setpoint_pa: f64 = self
             .initial_z_setpoint_pa
             .parse()
             .map_err(|_| "Invalid Z setpoint")?;
-        let safe_tip_threshold_pa: f32 = self
+        let safe_tip_threshold_pa: f64 = self
             .safe_tip_threshold_pa
             .parse()
             .map_err(|_| "Invalid safe tip threshold")?;
 
-        let scan_speed_m_s: Option<f32> = if self.scan_speed_nm_s.is_empty() {
+        let scan_speed_m_s: Option<f64> = if self.scan_speed_nm_s.is_empty() {
             None
         } else {
             Some(
                 self.scan_speed_nm_s
-                    .parse::<f32>()
+                    .parse::<f64>()
                     .map_err(|_| "Invalid scan speed")?
                     * 1e-9,
             )
@@ -827,8 +827,8 @@ impl TipPrepApp {
 
         // Cache sharp bounds for plot overlay
         self.sharp_bounds = Some((
-            config.tip_prep.sharp_tip_bounds[0] as f64,
-            config.tip_prep.sharp_tip_bounds[1] as f64,
+            config.tip_prep.sharp_tip_bounds[0],
+            config.tip_prep.sharp_tip_bounds[1],
         ));
 
         let shutdown = ShutdownFlag::new();
@@ -955,33 +955,33 @@ impl TipPrepApp {
     fn check_controller_status(&mut self) {
         self.drain_events();
 
-        if let Some(handle) = &self.controller_thread {
-            if handle.is_finished() {
-                self.controller_thread = None;
-                self.shutdown_flag = None;
-                self.event_receiver = None;
+        if let Some(handle) = &self.controller_thread
+            && handle.is_finished()
+        {
+            self.controller_thread = None;
+            self.shutdown_flag = None;
+            self.event_receiver = None;
 
-                if matches!(self.run_status, RunStatus::Running) {
-                    // Determine outcome from the last phase
-                    match self.tip_state.phase.as_str() {
-                        "stable" => {
-                            self.run_status = RunStatus::Completed;
-                            self.message =
-                                Some(("Tip preparation completed successfully".to_string(), false));
-                        }
-                        _ => {
-                            // Thread finished -- could be stopped, cycle limit, timeout, or error
-                            // We check shutdown first
-                            self.run_status = RunStatus::Idle;
-                            if self.message.is_none()
-                                || self
-                                    .message
-                                    .as_ref()
-                                    .map(|(m, _)| m == "Stop requested...")
-                                    .unwrap_or(false)
-                            {
-                                self.message = Some(("Controller finished".to_string(), false));
-                            }
+            if matches!(self.run_status, RunStatus::Running) {
+                // Determine outcome from the last phase
+                match self.tip_state.phase.as_str() {
+                    "stable" => {
+                        self.run_status = RunStatus::Completed;
+                        self.message =
+                            Some(("Tip preparation completed successfully".to_string(), false));
+                    }
+                    _ => {
+                        // Thread finished -- could be stopped, cycle limit, timeout, or error
+                        // We check shutdown first
+                        self.run_status = RunStatus::Idle;
+                        if self.message.is_none()
+                            || self
+                                .message
+                                .as_ref()
+                                .map(|(m, _)| m == "Stop requested...")
+                                .unwrap_or(false)
+                        {
+                            self.message = Some(("Controller finished".to_string(), false));
                         }
                     }
                 }
@@ -1261,13 +1261,12 @@ impl TipPrepApp {
                 ui.horizontal(|ui| {
                     ui.label("Load from:");
                     ui.add(egui::TextEdit::singleline(&mut self.load_path).desired_width(300.0));
-                    if ui.button("Browse...").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
+                    if ui.button("Browse...").clicked()
+                        && let Some(path) = rfd::FileDialog::new()
                             .add_filter("TOML", &["toml"])
                             .pick_file()
-                        {
-                            self.load_path = path.display().to_string();
-                        }
+                    {
+                        self.load_path = path.display().to_string();
                     }
                     if ui
                         .add_enabled(!self.load_path.is_empty(), egui::Button::new("Load"))
@@ -1282,13 +1281,12 @@ impl TipPrepApp {
                 ui.horizontal(|ui| {
                     ui.label("Save to:");
                     ui.add(egui::TextEdit::singleline(&mut self.save_path).desired_width(300.0));
-                    if ui.button("Browse...").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
+                    if ui.button("Browse...").clicked()
+                        && let Some(path) = rfd::FileDialog::new()
                             .add_filter("TOML", &["toml"])
                             .save_file()
-                        {
-                            self.save_path = path.display().to_string();
-                        }
+                    {
+                        self.save_path = path.display().to_string();
                     }
                     if ui
                         .add_enabled(!self.save_path.is_empty(), egui::Button::new("Save"))
@@ -1349,13 +1347,12 @@ impl TipPrepApp {
                                 egui::TextEdit::singleline(&mut self.config.layout_file)
                                     .desired_width(200.0),
                             );
-                            if ui.button("...").clicked() {
-                                if let Some(path) = rfd::FileDialog::new()
+                            if ui.button("...").clicked()
+                                && let Some(path) = rfd::FileDialog::new()
                                     .add_filter("Layout", &["lyt"])
                                     .pick_file()
-                                {
-                                    self.config.layout_file = path.display().to_string();
-                                }
+                            {
+                                self.config.layout_file = path.display().to_string();
                             }
                         });
                         ui.end_row();
@@ -1366,13 +1363,12 @@ impl TipPrepApp {
                                 egui::TextEdit::singleline(&mut self.config.settings_file)
                                     .desired_width(200.0),
                             );
-                            if ui.button("...").clicked() {
-                                if let Some(path) = rfd::FileDialog::new()
+                            if ui.button("...").clicked()
+                                && let Some(path) = rfd::FileDialog::new()
                                     .add_filter("Settings", &["ini"])
                                     .pick_file()
-                                {
-                                    self.config.settings_file = path.display().to_string();
-                                }
+                            {
+                                self.config.settings_file = path.display().to_string();
                             }
                         });
                         ui.end_row();
@@ -1696,10 +1692,10 @@ impl TipPrepApp {
                                 egui::TextEdit::singleline(&mut self.config.logging_output_path)
                                     .desired_width(200.0),
                             );
-                            if ui.button("...").clicked() {
-                                if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                                    self.config.logging_output_path = path.display().to_string();
-                                }
+                            if ui.button("...").clicked()
+                                && let Some(path) = rfd::FileDialog::new().pick_folder()
+                            {
+                                self.config.logging_output_path = path.display().to_string();
                             }
                         });
                         ui.end_row();
@@ -1866,7 +1862,7 @@ fn build_nanonis_backend(
     let setup = NanonisSetupConfig {
         layout_file: config.nanonis.layout_file.clone(),
         settings_file: config.nanonis.settings_file.clone(),
-        safe_tip_threshold_a: config.tip_prep.safe_tip_threshold as f64,
+        safe_tip_threshold_a: config.tip_prep.safe_tip_threshold,
         ..Default::default()
     };
     let mut controller = NanonisController::new(client, setup);

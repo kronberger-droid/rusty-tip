@@ -133,18 +133,16 @@ impl NanonisController {
         while collected.len() < num_samples && start.elapsed() < timeout {
             // Check if the stream reader thread died before waiting the
             // full timeout — provides an immediate, descriptive error.
-            if !reader.is_buffering() {
-                if let Some(err_msg) = reader.stream_error() {
-                    return Err(SpmError::Io {
-                        source: std::io::Error::new(
-                            std::io::ErrorKind::ConnectionAborted,
-                            err_msg.clone(),
-                        ),
-                        context: format!(
-                            "TCP data stream died during sample collection: {err_msg}"
-                        ),
-                    });
-                }
+            if !reader.is_buffering()
+                && let Some(err_msg) = reader.stream_error()
+            {
+                return Err(SpmError::Io {
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::ConnectionAborted,
+                        err_msg.clone(),
+                    ),
+                    context: format!("TCP data stream died during sample collection: {err_msg}"),
+                });
             }
 
             let new_frames = reader.get_data_since(cursor);

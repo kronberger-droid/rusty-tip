@@ -130,14 +130,14 @@ fn run_tip_prep_inner(
         log::info!("Initializing...");
         execute_logged(
             &SetBias {
-                voltage: config.tip_prep.initial_bias_v as f64,
+                voltage: config.tip_prep.initial_bias_v,
             },
             &mut ctx,
         )?;
 
         execute_logged(
             &SetZSetpoint {
-                setpoint: config.tip_prep.initial_z_setpoint_a as f64,
+                setpoint: config.tip_prep.initial_z_setpoint_a,
             },
             &mut ctx,
         )?;
@@ -169,8 +169,8 @@ fn run_tip_prep_inner(
     }
 
     let bounds = (
-        config.tip_prep.sharp_tip_bounds[0] as f64,
-        config.tip_prep.sharp_tip_bounds[1] as f64,
+        config.tip_prep.sharp_tip_bounds[0],
+        config.tip_prep.sharp_tip_bounds[1],
     );
 
     let max_cycles = config.tip_prep.max_cycles.unwrap_or(usize::MAX);
@@ -446,8 +446,9 @@ fn check_stability(
         && let Some(ref orig) = original_speed
     {
         let mut new_config = *orig;
-        new_config.forward_linear_speed_m_s = target_speed;
-        new_config.backward_linear_speed_m_s = target_speed;
+        // ScanConfig is the nanonis-rs wire format, which carries f32 speeds.
+        new_config.forward_linear_speed_m_s = target_speed as f32;
+        new_config.backward_linear_speed_m_s = target_speed as f32;
         new_config.keep_parameter_constant = 1;
         if let Err(e) = ctx.controller.scan_speed_set(new_config) {
             log::warn!("Failed to set scan speed: {}", e);
@@ -491,7 +492,7 @@ fn check_stability(
 
     // Step 6: Compare
     let change = (final_fs - baseline).abs();
-    let threshold = config.tip_prep.stability.stable_tip_allowed_change as f64;
+    let threshold = config.tip_prep.stability.stable_tip_allowed_change;
     let is_stable = change <= threshold;
 
     log::info!(
@@ -560,27 +561,27 @@ fn build_sweep_plans(tip_prep: &TipPrepConfig, _method: &PulseMethod) -> Vec<Swe
 
     match sc.polarity_mode {
         BiasSweepPolarity::Positive => vec![SweepPlan {
-            starting_bias: range.1 as f64,
-            bias_range: (range.1 as f64, range.0 as f64),
+            starting_bias: range.1,
+            bias_range: (range.1, range.0),
             index: 1,
             total: 1,
         }],
         BiasSweepPolarity::Negative => vec![SweepPlan {
-            starting_bias: -(range.1 as f64),
-            bias_range: (-(range.1 as f64), -(range.0 as f64)),
+            starting_bias: -range.1,
+            bias_range: (-range.1, -range.0),
             index: 1,
             total: 1,
         }],
         BiasSweepPolarity::Both => vec![
             SweepPlan {
-                starting_bias: range.1 as f64,
-                bias_range: (range.1 as f64, range.0 as f64),
+                starting_bias: range.1,
+                bias_range: (range.1, range.0),
                 index: 1,
                 total: 2,
             },
             SweepPlan {
-                starting_bias: -(range.1 as f64),
-                bias_range: (-(range.1 as f64), -(range.0 as f64)),
+                starting_bias: -range.1,
+                bias_range: (-range.1, -range.0),
                 index: 2,
                 total: 2,
             },
@@ -772,7 +773,7 @@ fn measure_final_freq_shift(
 
     execute_logged(
         &SetBias {
-            voltage: config.tip_prep.initial_bias_v as f64,
+            voltage: config.tip_prep.initial_bias_v,
         },
         ctx,
     )?;
@@ -876,8 +877,8 @@ fn read_stable(
         &ReadStableSignal {
             index: freq_shift_index,
             num_samples: config.data_acquisition.stable_signal_samples,
-            max_std_dev: gates.max_std_dev_hz as f64,
-            max_slope: gates.max_slope_hz_per_s as f64,
+            max_std_dev: gates.max_std_dev_hz,
+            max_slope: gates.max_slope_hz_per_s,
             max_retries: gates.read_retry_count as usize,
             sample_rate_hz: config.data_acquisition.sample_rate as f64,
         },
