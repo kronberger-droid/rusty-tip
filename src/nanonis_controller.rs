@@ -196,7 +196,7 @@ impl NanonisController {
             ));
         }
 
-        let reader = BufferedTCPReader::new(host, data_port, buffer_size, num_channels, 1.0)
+        let reader = BufferedTCPReader::new(host, data_port, buffer_size)
             .map_err(|e| SpmError::Protocol(format!("Failed to start TCP reader: {}", e)))?;
 
         self.tcp_reader = Some(reader);
