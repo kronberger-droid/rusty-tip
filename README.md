@@ -7,7 +7,9 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20325230.svg)](https://doi.org/10.5281/zenodo.20325230)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kronberger-droid/rusty-tip)
 
-Rust library and tools for automated STM/AFM tip preparation on Nanonis SPM systems.
+A Rust library for building automated scanning probe microscopy routines,
+shipping with automated STM/AFM tip preparation as its first end-to-end
+routine.
 
 > [!WARNING]
 > **The 0.3.x/0.4.x line is an experimental rewrite.**
@@ -20,11 +22,18 @@ Rust library and tools for automated STM/AFM tip preparation on Nanonis SPM syst
 > machine time. For the last version that has run on hardware, see
 > [0.2.3](https://github.com/kronberger-droid/rusty-tip/releases/tag/v0.2.3).
 
-rusty-tip conditions an SPM tip automatically: it pulses, repositions, measures
-the frequency shift, and repeats until the tip is sharp and provably stable.
-The control logic is written against a hardware-abstraction trait
-(`SpmController`), so the same routine runs against a Nanonis system over TCP,
-or against an in-memory mock for tests and simulation.
+The core of rusty-tip is a library for writing SPM automation: a
+hardware-abstraction trait (`SpmController`), a vocabulary of composable
+actions with capability checking, an event stream for observability, and a
+scriptable mock controller so routines can be developed and tested without
+instrument time. Routines written against it are hardware-agnostic; today
+Nanonis (over TCP) is the only instrument backend, and the trait is the seam
+for adding others.
+
+The first routine built on this foundation, and the proof of concept for the
+design, is automated tip preparation: pulse, reposition, measure the
+frequency shift, repeat until the tip is sharp and provably stable. It ships
+as a CLI (`tip-prep`) and a GUI (`tip-prep-gui`).
 
 ```mermaid
 flowchart TB
@@ -56,7 +65,7 @@ cargo build --release --features gui  # + tip-prep-gui
 
 As a library: `cargo add rusty-tip`.
 
-## Quickstart
+## Quickstart: tip preparation
 
 ```bash
 tip-prep --config path/to/config.toml
@@ -92,15 +101,16 @@ without hardware.
 
 ## Documentation
 
-- **[Configuration reference](docs/tip-prep/config.md)** — every section and
-  field, pulse strategies, stability checking, TCP channel mapping
-- **[How tip preparation works](docs/tip-prep/algorithm.md)** — the algorithm,
-  cycle by cycle
 - **[Library guide](docs/library.md)** — the action system, implementing
-  `SpmController`, running the routine from your own code
+  `SpmController` for your hardware, writing routines of your own
+- **[Configuration reference](docs/tip-prep/config.md)** — every section and
+  field of the tip-prep config, pulse strategies, stability checking, TCP
+  channel mapping
+- **[How tip preparation works](docs/tip-prep/algorithm.md)** — the routine,
+  cycle by cycle
 - **[CHANGELOG](CHANGELOG.md)** — release notes
 
-## Requirements
+## Requirements (Nanonis backend)
 
 - Nanonis SPM controller with TCP interface enabled
 - Configured TCP data logging (typically port 6590)

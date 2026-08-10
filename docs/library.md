@@ -1,8 +1,9 @@
 # Library guide
 
-`rusty-tip` is usable as a library: bring your own binary, compose the
-built-in actions, or implement `SpmController` for non-Nanonis hardware.
-Current as of 0.4.0.
+The library is the product: routines like tip-prep are applications built on
+it. This guide covers the pieces you compose your own automation from —
+running the shipped routine, the action system, implementing `SpmController`
+for other hardware — current as of 0.4.0.
 
 ## Running the tip-prep routine
 
