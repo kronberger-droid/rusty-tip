@@ -864,7 +864,11 @@ pub fn execute_logged(
     let start = std::time::Instant::now();
     ctx.events
         .emit(Event::action_started(&name, serde_json::json!({})));
-    match action.execute(ctx) {
+    let result = match crate::action::check_capabilities(action, ctx.controller) {
+        Ok(()) => action.execute(ctx),
+        Err(e) => Err(e),
+    };
+    match result {
         Ok(output) => {
             ctx.events
                 .emit(Event::action_completed(&name, &output, start.elapsed()));
