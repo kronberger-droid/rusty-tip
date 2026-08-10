@@ -9,7 +9,7 @@ use rusty_tip::event::{ConsoleLogger, EventAccumulator, EventBus, FileLogger};
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
 use rusty_tip::signal_registry::SignalRegistry;
 use rusty_tip::spm_controller::SpmController;
-use rusty_tip::tip_prep::{Outcome, run_tip_prep};
+use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 
 /// Rusty Tip Preparation Tool
@@ -138,10 +138,12 @@ fn run() -> Result<(), RunError> {
     // Run tip preparation using library function
     let result = run_tip_prep(
         Box::new(controller),
-        &events,
-        &shutdown,
-        &config,
-        freq_shift_index,
+        TipPrepParams {
+            events: &events,
+            shutdown: &shutdown,
+            config: &config,
+            freq_shift: freq_shift_index,
+        },
     );
 
     match result {
