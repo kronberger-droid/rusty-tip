@@ -1,0 +1,5 @@
+# Nanonis-exported files are machine-generated and must round-trip verbatim:
+# "Setp Slide" and "continous" are the literal key names the instrument
+# writes, so "fixing" them would corrupt the file for Nanonis.
+[files]
+extend-exclude = ["settings/*.ini"]

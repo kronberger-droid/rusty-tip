@@ -82,9 +82,8 @@ fn main() {
     events.add_observer(Box::new(ConsoleLogger));
 
     let shutdown = ShutdownFlag::new();
-    if plan.request_shutdown_after.is_some() {
+    if let Some(delay) = plan.request_shutdown_after {
         let flag = shutdown.clone();
-        let delay = plan.request_shutdown_after.unwrap();
         thread::spawn(move || {
             thread::sleep(delay);
             info!(">>> simulating Ctrl+C: requesting graceful shutdown");
