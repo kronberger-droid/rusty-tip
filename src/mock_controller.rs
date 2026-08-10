@@ -23,9 +23,9 @@
 //! use rusty_tip::event::EventBus;
 //! use rusty_tip::workflow::ShutdownFlag;
 //! use rusty_tip::config::AppConfig;
-//! use rusty_tip::tip_prep::run_tip_prep;
+//! use rusty_tip::tip_prep::{TipPrepParams, run_tip_prep};
 //!
-//! let freq_shift_index = 0;
+//! let freq_shift_index = rusty_tip::SignalIndex(0);
 //! // Tip is blunt (-40 Hz) until 3 pulses land, then sharp (-1 Hz). Conditioning
 //! // drives the shift *up* toward the sharp window; see [`models::realistic`]
 //! // for a model that follows real conditioning statistics.
@@ -37,10 +37,12 @@
 //!
 //! let outcome = run_tip_prep(
 //!     Box::new(mock),
-//!     &EventBus::new(),
-//!     &ShutdownFlag::new(),
-//!     &AppConfig::default(),
-//!     freq_shift_index,
+//!     TipPrepParams {
+//!         events: &EventBus::new(),
+//!         shutdown: &ShutdownFlag::new(),
+//!         config: &AppConfig::default(),
+//!         freq_shift: freq_shift_index,
+//!     },
 //! );
 //!
 //! println!("pulses fired: {}", obs.lock().pulses.len());
@@ -61,6 +63,7 @@ use nanonis_rs::scan::{
 use nanonis_rs::tcplog::TCPLogStatus;
 use nanonis_rs::tip_recovery::TipShaperConfig;
 
+use crate::signal_registry::SignalIndex;
 use crate::spm_controller::{
     AcquisitionMode, Capability, DataStreamStatus, Result, SpmController, TriggerSetup,
     ZControllerStatus, ZHomeMode,
@@ -248,7 +251,7 @@ struct ScheduledFault {
 /// [`MockController::builder`].
 pub struct MockController {
     obs: Arc<Mutex<MockObservations>>,
-    freq_shift_index: u32,
+    freq_shift_index: SignalIndex,
     model: FreqShiftModel,
     /// Value returned for any non-freq-shift signal index.
     default_signal: f64,
@@ -315,7 +318,7 @@ impl MockController {
     }
 
     /// Evaluate the tip model for the freq-shift channel; constant otherwise.
-    fn signal_value(&mut self, index: u32) -> f64 {
+    fn signal_value(&mut self, index: SignalIndex) -> f64 {
         if index != self.freq_shift_index {
             return self.default_signal;
         }
@@ -364,12 +367,12 @@ impl SpmController for MockController {
 
     // -- Signals --
 
-    fn read_signal(&mut self, index: u32, _wait: bool) -> Result<f64> {
+    fn read_signal(&mut self, index: SignalIndex, _wait: bool) -> Result<f64> {
         self.enter("read_signal")?;
         Ok(self.signal_value(index))
     }
 
-    fn read_signals(&mut self, indices: &[u32], _wait: bool) -> Result<Vec<f64>> {
+    fn read_signals(&mut self, indices: &[SignalIndex], _wait: bool) -> Result<Vec<f64>> {
         self.enter("read_signals")?;
         Ok(indices.iter().map(|&i| self.signal_value(i)).collect())
     }
@@ -384,7 +387,7 @@ impl SpmController for MockController {
         ])
     }
 
-    fn read_signal_samples(&mut self, index: u32, num_samples: usize) -> Result<Vec<f64>> {
+    fn read_signal_samples(&mut self, index: SignalIndex, num_samples: usize) -> Result<Vec<f64>> {
         self.enter("read_signal_samples")?;
         if num_samples == 0 {
             return Err(SpmError::Protocol(
@@ -652,7 +655,7 @@ impl SpmController for MockController {
 
 /// Builder for [`MockController`].
 pub struct MockControllerBuilder {
-    freq_shift_index: u32,
+    freq_shift_index: SignalIndex,
     model: FreqShiftModel,
     default_signal: f64,
     sample_noise_hz: f64,
@@ -666,7 +669,7 @@ pub struct MockControllerBuilder {
 impl MockControllerBuilder {
     fn new() -> Self {
         Self {
-            freq_shift_index: 0,
+            freq_shift_index: SignalIndex(0),
             // Default: an obstinately blunt tip (+100 Hz, far outside any sane
             // sharp-tip bound) so a forgotten model yields CycleLimit, not a
             // spurious success.
@@ -682,8 +685,8 @@ impl MockControllerBuilder {
     }
 
     /// Set which signal index the tip model answers for. Must match the
-    /// `freq_shift_index` you pass to `run_tip_prep`.
-    pub fn freq_shift_index(mut self, index: u32) -> Self {
+    /// freq-shift index you pass to `run_tip_prep`.
+    pub fn freq_shift_index(mut self, index: SignalIndex) -> Self {
         self.freq_shift_index = index;
         self
     }
@@ -1024,27 +1027,27 @@ mod tests {
     #[test]
     fn model_drives_freq_shift_channel_only() {
         let mut mock = MockController::builder()
-            .freq_shift_index(7)
+            .freq_shift_index(SignalIndex(7))
             .freq_shift(models::always(-1.5))
             .default_signal(42.0)
             .build();
 
-        assert_eq!(mock.read_signal(7, true).unwrap(), -1.5);
-        assert_eq!(mock.read_signal(3, true).unwrap(), 42.0);
+        assert_eq!(mock.read_signal(SignalIndex(7), true).unwrap(), -1.5);
+        assert_eq!(mock.read_signal(SignalIndex(3), true).unwrap(), 42.0);
     }
 
     #[test]
     fn sharpens_after_tracks_pulse_count() {
         let mut mock = MockController::builder()
-            .freq_shift_index(0)
+            .freq_shift_index(SignalIndex(0))
             .freq_shift(models::sharpens_after(2, 40.0, -1.0))
             .build();
 
-        assert_eq!(mock.read_signal(0, true).unwrap(), 40.0); // 0 pulses
+        assert_eq!(mock.read_signal(SignalIndex(0), true).unwrap(), 40.0); // 0 pulses
         mock.bias_pulse(5.0, Duration::ZERO, true, true).unwrap();
-        assert_eq!(mock.read_signal(0, true).unwrap(), 40.0); // 1 pulse
+        assert_eq!(mock.read_signal(SignalIndex(0), true).unwrap(), 40.0); // 1 pulse
         mock.bias_pulse(5.0, Duration::ZERO, true, true).unwrap();
-        assert_eq!(mock.read_signal(0, true).unwrap(), -1.0); // 2 pulses
+        assert_eq!(mock.read_signal(SignalIndex(0), true).unwrap(), -1.0); // 2 pulses
     }
 
     #[test]
@@ -1052,10 +1055,10 @@ mod tests {
         let mut mock = MockController::builder()
             .freq_shift(models::scripted(vec![10.0, -1.0, -5.0]))
             .build();
-        assert_eq!(mock.read_signal(0, true).unwrap(), 10.0);
-        assert_eq!(mock.read_signal(0, true).unwrap(), -1.0);
-        assert_eq!(mock.read_signal(0, true).unwrap(), -5.0);
-        assert_eq!(mock.read_signal(0, true).unwrap(), -5.0); // clamped
+        assert_eq!(mock.read_signal(SignalIndex(0), true).unwrap(), 10.0);
+        assert_eq!(mock.read_signal(SignalIndex(0), true).unwrap(), -1.0);
+        assert_eq!(mock.read_signal(SignalIndex(0), true).unwrap(), -5.0);
+        assert_eq!(mock.read_signal(SignalIndex(0), true).unwrap(), -5.0); // clamped
     }
 
     #[test]
@@ -1075,7 +1078,7 @@ mod tests {
         let mut mock = MockController::builder()
             .freq_shift(models::always(-1.0))
             .build();
-        let samples = mock.read_signal_samples(0, 64).unwrap();
+        let samples = mock.read_signal_samples(SignalIndex(0), 64).unwrap();
         assert_eq!(samples.len(), 64);
         assert!(samples.iter().all(|&v| v == -1.0));
     }
@@ -1087,7 +1090,7 @@ mod tests {
             .sample_noise_hz(0.3)
             .build();
 
-        let samples = mock.read_signal_samples(0, 512).unwrap();
+        let samples = mock.read_signal_samples(SignalIndex(0), 512).unwrap();
         let (mean, std_dev, _) = crate::action::signals::compute_stability_metrics(&samples);
 
         // Scattered, but centered on the model value.
@@ -1098,12 +1101,12 @@ mod tests {
     #[test]
     fn sample_noise_leaves_other_channels_constant() {
         let mut mock = MockController::builder()
-            .freq_shift_index(2)
+            .freq_shift_index(SignalIndex(2))
             .default_signal(7.0)
             .sample_noise_hz(0.5)
             .build();
 
-        let samples = mock.read_signal_samples(0, 32).unwrap();
+        let samples = mock.read_signal_samples(SignalIndex(0), 32).unwrap();
         assert!(samples.iter().all(|&v| v == 7.0));
     }
 
@@ -1117,7 +1120,7 @@ mod tests {
             (0..5)
                 .map(|_| {
                     mock.bias_pulse(4.0, Duration::ZERO, true, true).unwrap();
-                    mock.read_signal(0, true).unwrap()
+                    mock.read_signal(SignalIndex(0), true).unwrap()
                 })
                 .collect::<Vec<_>>()
         };
@@ -1136,7 +1139,7 @@ mod tests {
         let mut values = Vec::new();
         for _ in 0..600 {
             mock.bias_pulse(4.0, Duration::ZERO, true, true).unwrap();
-            values.push(mock.read_signal(0, true).unwrap());
+            values.push(mock.read_signal(SignalIndex(0), true).unwrap());
         }
 
         // Robust statistics, not mean/sd: the deep excursions are a heavy
@@ -1192,7 +1195,7 @@ mod tests {
         let mut values = Vec::new();
         for _ in 0..800 {
             mock.bias_pulse(4.0, Duration::ZERO, true, true).unwrap();
-            values.push(mock.read_signal(0, true).unwrap());
+            values.push(mock.read_signal(SignalIndex(0), true).unwrap());
         }
 
         let n = values.len();
@@ -1221,7 +1224,7 @@ mod tests {
         let mut deepest = 0.0f64;
         for _ in 0..2000 {
             mock.bias_pulse(4.0, Duration::ZERO, true, true).unwrap();
-            deepest = deepest.min(mock.read_signal(0, true).unwrap());
+            deepest = deepest.min(mock.read_signal(SignalIndex(0), true).unwrap());
         }
 
         let threshold = params.baseline - params.excursion_depth.0;
@@ -1243,7 +1246,7 @@ mod tests {
 
         for _ in 0..500 {
             mock.bias_pulse(5.0, Duration::ZERO, true, true).unwrap();
-            let v = mock.read_signal(0, true).unwrap();
+            let v = mock.read_signal(SignalIndex(0), true).unwrap();
             assert!(v < 0.5, "shift should stay negative, got {v}");
         }
     }

@@ -547,15 +547,19 @@ mod tests {
             [Capability::Bias, Capability::Signals].into()
         }
 
-        fn read_signal(&mut self, index: u32, _wait: bool) -> crate::spm_controller::Result<f64> {
-            Ok(index as f64 * 0.1)
+        fn read_signal(
+            &mut self,
+            index: crate::signal_registry::SignalIndex,
+            _wait: bool,
+        ) -> crate::spm_controller::Result<f64> {
+            Ok(index.0 as f64 * 0.1)
         }
         fn read_signals(
             &mut self,
-            indices: &[u32],
+            indices: &[crate::signal_registry::SignalIndex],
             _wait: bool,
         ) -> crate::spm_controller::Result<Vec<f64>> {
-            Ok(indices.iter().map(|&i| i as f64 * 0.1).collect())
+            Ok(indices.iter().map(|&i| i.0 as f64 * 0.1).collect())
         }
         fn signal_names(&mut self) -> crate::spm_controller::Result<Vec<String>> {
             Ok(vec!["Z".into(), "Current".into()])

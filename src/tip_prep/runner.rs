@@ -12,6 +12,7 @@ use crate::action::{Action, ActionContext, ActionOutput, DataStore};
 use crate::config::{AppConfig, TipPrepConfig};
 use crate::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
 use crate::event::{Event, EventBus};
+use crate::signal_registry::SignalIndex;
 use crate::spm_controller::SpmController;
 use crate::spm_error::SpmError;
 use crate::workflow::ShutdownFlag;
@@ -62,6 +63,17 @@ struct SweepPlan {
 // Entry point
 // ============================================================================
 
+/// Everything a tip-preparation run needs besides the controller.
+pub struct TipPrepParams<'a> {
+    /// Event sink for observers (console, file log, GUI).
+    pub events: &'a EventBus,
+    /// Cooperative cancellation flag (Ctrl+C, GUI stop button).
+    pub shutdown: &'a ShutdownFlag,
+    pub config: &'a AppConfig,
+    /// The frequency-shift signal driving sharpness decisions.
+    pub freq_shift: SignalIndex,
+}
+
 /// Run the full tip preparation algorithm.
 ///
 /// This is the top-level entry point that owns the controller life cycle
@@ -72,14 +84,17 @@ struct SweepPlan {
 /// end, so it surfaces as `Ok(Outcome::StoppedByUser)`, never as an error.
 pub fn run_tip_prep(
     mut controller: Box<dyn SpmController>,
-    events: &EventBus,
-    shutdown: &ShutdownFlag,
-    config: &AppConfig,
-    freq_shift_index: u32,
+    params: TipPrepParams<'_>,
 ) -> Result<Outcome, SpmError> {
+    let TipPrepParams {
+        events,
+        shutdown,
+        config,
+        freq_shift,
+    } = params;
     controller.prepare()?;
 
-    let result = run_tip_prep_inner(&mut *controller, events, shutdown, config, freq_shift_index);
+    let result = run_tip_prep_inner(&mut *controller, events, shutdown, config, freq_shift);
 
     log::info!("Cleanup starting...");
     cleanup(&mut *controller, events);
@@ -100,7 +115,7 @@ fn run_tip_prep_inner(
     events: &EventBus,
     shutdown: &ShutdownFlag,
     config: &AppConfig,
-    freq_shift_index: u32,
+    freq_shift_index: SignalIndex,
 ) -> Result<Outcome, SpmError> {
     let mut store = DataStore::new();
 
@@ -350,7 +365,7 @@ fn cleanup(controller: &mut dyn SpmController, events: &EventBus) {
 
 fn confirm_sharp(
     ctx: &mut ActionContext,
-    freq_shift_index: u32,
+    freq_shift_index: SignalIndex,
     bounds: (f64, f64),
     config: &AppConfig,
     shutdown: &ShutdownFlag,
@@ -406,7 +421,7 @@ fn confirm_sharp(
 
 fn check_stability(
     ctx: &mut ActionContext,
-    freq_shift_index: u32,
+    freq_shift_index: SignalIndex,
     bounds: (f64, f64),
     config: &AppConfig,
     shutdown: &ShutdownFlag,
@@ -787,7 +802,7 @@ fn restore_scan_props(ctx: &mut ActionContext, original: &nanonis_rs::scan::Scan
 fn measure_final_freq_shift(
     ctx: &mut ActionContext,
     config: &AppConfig,
-    freq_shift_index: u32,
+    freq_shift_index: SignalIndex,
 ) -> Result<f64, SpmError> {
     log::info!("Measuring final freq_shift after sweeps");
 
@@ -867,7 +882,7 @@ pub fn execute_logged(
 fn read_stable(
     ctx: &mut ActionContext,
     config: &AppConfig,
-    freq_shift_index: u32,
+    freq_shift_index: SignalIndex,
 ) -> Result<f64, SpmError> {
     let gates = &config.tip_prep.signal_stability;
     let output = execute_logged(

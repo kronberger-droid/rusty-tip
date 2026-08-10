@@ -2,7 +2,6 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use eframe::egui;
 use egui_plot::{HLine, Line, Plot, PlotPoints, Points};
 use log::{LevelFilter, error, info};
-use std::collections::HashMap;
 use std::path::Path;
 
 use std::thread::{self, JoinHandle};
@@ -17,13 +16,14 @@ use rusty_tip::event::{
     ChannelForwarder, ConsoleLogger, Event, EventAccumulator, EventBus, FileLogger,
 };
 use rusty_tip::mock_controller::{MockController, models};
-use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
+use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
 use rusty_tip::signal_registry::SignalRegistry;
 use rusty_tip::spm_controller::SpmController;
-use rusty_tip::tip_prep::{Outcome, run_tip_prep};
+use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 use rusty_tip::{
-    BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, StabilityConfig,
+    BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, SignalIndex,
+    StabilityConfig,
 };
 
 // ============================================================================
@@ -1820,7 +1820,15 @@ fn run_controller(
     events.add_observer(Box::new(EventAccumulator::new(500)));
 
     // Run tip preparation
-    let result = run_tip_prep(controller, &events, &shutdown, &config, freq_shift_index);
+    let result = run_tip_prep(
+        controller,
+        TipPrepParams {
+            events: &events,
+            shutdown: &shutdown,
+            config: &config,
+            freq_shift: freq_shift_index,
+        },
+    );
 
     match &result {
         Ok(Outcome::Completed) => {
@@ -1838,12 +1846,12 @@ fn run_controller(
 }
 
 /// Boxed controller plus the resolved freq-shift signal index.
-type Backend = (Box<dyn SpmController>, u32);
+type Backend = (Box<dyn SpmController>, SignalIndex);
 
 /// Index of `"freq shift"` in [`MockController`]'s fixed channel layout. Checked
 /// against the registry in [`build_mock_backend`] so a change to the mock's
 /// `signal_names` surfaces as an error instead of a silently wrong channel.
-const MOCK_FREQ_SHIFT_INDEX: u32 = 2;
+const MOCK_FREQ_SHIFT_INDEX: SignalIndex = SignalIndex(2);
 
 /// Connect to the real Nanonis system and set up its TCP data stream.
 fn build_nanonis_backend(
@@ -1869,7 +1877,7 @@ fn build_nanonis_backend(
     let freq_shift_index = registry
         .get_by_name("freq shift")
         .ok_or("Frequency shift signal not found in registry")?
-        .index as u32;
+        .signal_index();
 
     setup_tcp_stream(&mut controller, &registry, config)?;
 
@@ -1901,7 +1909,7 @@ fn build_mock_backend(
     let resolved = registry
         .get_by_name("freq shift")
         .ok_or("Frequency shift signal not found in mock registry")?
-        .index as u32;
+        .signal_index();
 
     if resolved != MOCK_FREQ_SHIFT_INDEX {
         return Err(format!(
@@ -1936,50 +1944,12 @@ fn setup_tcp_stream(
     registry: &SignalRegistry,
     config: &AppConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let tcp_signals = registry.tcp_signals();
-    if tcp_signals.is_empty() {
-        log::warn!("No TCP channel mappings found - falling back to polling");
-        return Ok(());
-    }
-
-    let mut tcp_channels: Vec<i32> = tcp_signals
-        .iter()
-        .filter_map(|s| s.tcp_channel.map(|ch| ch as i32))
-        .collect();
-    tcp_channels.sort();
-    tcp_channels.dedup();
-
-    let tcp_to_position: HashMap<u8, usize> = tcp_channels
-        .iter()
-        .enumerate()
-        .map(|(pos, &ch)| (ch as u8, pos))
-        .collect();
-
-    let mut signal_mapping: HashMap<u32, usize> = HashMap::new();
-    for signal in &tcp_signals {
-        if let Some(tcp_ch) = signal.tcp_channel {
-            if let Some(&position) = tcp_to_position.get(&tcp_ch) {
-                signal_mapping.insert(signal.index as u32, position);
-            }
-        }
-    }
-
-    let oversampling = config.data_acquisition.sample_rate as i32;
-    controller.data_stream_configure(&tcp_channels, oversampling)?;
-    controller.set_channel_mapping(signal_mapping);
-
-    let buffer_size = 10_000;
-    controller.start_tcp_reader(
+    let stream = StreamSetup::new(
         &config.nanonis.host_ip,
         config.data_acquisition.data_port,
-        buffer_size,
-    )?;
-
-    let _ = controller.data_stream_stop();
-    std::thread::sleep(Duration::from_millis(200));
-    controller.data_stream_start()?;
-    info!("TCP data stream started");
-
+        config.data_acquisition.sample_rate as i32,
+    );
+    controller.start_streaming(registry, &stream)?;
     Ok(())
 }
 

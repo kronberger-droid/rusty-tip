@@ -7,14 +7,15 @@
 
 use std::sync::{Arc, Mutex as StdMutex};
 
+use rusty_tip::SignalIndex;
 use rusty_tip::config::AppConfig;
 use rusty_tip::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
 use rusty_tip::event::{Event, EventBus, Observer};
 use rusty_tip::mock_controller::{FaultKind, MockController, models};
-use rusty_tip::tip_prep::{Outcome, run_tip_prep};
+use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 
-const FREQ_SHIFT_INDEX: u32 = 2;
+const FREQ_SHIFT_INDEX: SignalIndex = SignalIndex(2);
 
 /// A config tuned for fast tests: zero settle times, a handful of samples,
 /// sharp-tip window of `[-2, 0]` Hz. Mutate the returned value per scenario.
@@ -92,10 +93,12 @@ fn already_sharp_completes_when_stability_disabled() {
 
     let outcome = run_tip_prep(
         Box::new(mock),
-        &EventBus::new(),
-        &ShutdownFlag::new(),
-        &fast_config(),
-        FREQ_SHIFT_INDEX,
+        TipPrepParams {
+            events: &EventBus::new(),
+            shutdown: &ShutdownFlag::new(),
+            config: &fast_config(),
+            freq_shift: FREQ_SHIFT_INDEX,
+        },
     )
     .expect("routine should not error");
 
@@ -133,10 +136,12 @@ fn already_sharp_and_stable_completes_through_full_sweep() {
 
     let outcome = run_tip_prep(
         Box::new(mock),
-        &bus,
-        &ShutdownFlag::new(),
-        &cfg,
-        FREQ_SHIFT_INDEX,
+        TipPrepParams {
+            events: &bus,
+            shutdown: &ShutdownFlag::new(),
+            config: &cfg,
+            freq_shift: FREQ_SHIFT_INDEX,
+        },
     )
     .expect("routine should not error");
 
@@ -169,10 +174,12 @@ fn tip_sharpens_after_pulses_then_completes() {
 
     let outcome = run_tip_prep(
         Box::new(mock),
-        &EventBus::new(),
-        &ShutdownFlag::new(),
-        &fast_config(),
-        FREQ_SHIFT_INDEX,
+        TipPrepParams {
+            events: &EventBus::new(),
+            shutdown: &ShutdownFlag::new(),
+            config: &fast_config(),
+            freq_shift: FREQ_SHIFT_INDEX,
+        },
     )
     .expect("routine should not error");
 
@@ -205,10 +212,12 @@ fn blunt_tip_hits_cycle_limit() {
 
     let outcome = run_tip_prep(
         Box::new(mock),
-        &EventBus::new(),
-        &ShutdownFlag::new(),
-        &cfg,
-        FREQ_SHIFT_INDEX,
+        TipPrepParams {
+            events: &EventBus::new(),
+            shutdown: &ShutdownFlag::new(),
+            config: &cfg,
+            freq_shift: FREQ_SHIFT_INDEX,
+        },
     )
     .expect("routine should not error");
 
@@ -237,10 +246,12 @@ fn shutdown_before_loop_stops_by_user() {
 
     let outcome = run_tip_prep(
         Box::new(mock),
-        &EventBus::new(),
-        &shutdown,
-        &fast_config(),
-        FREQ_SHIFT_INDEX,
+        TipPrepParams {
+            events: &EventBus::new(),
+            shutdown: &shutdown,
+            config: &fast_config(),
+            freq_shift: FREQ_SHIFT_INDEX,
+        },
     )
     .expect("routine should not error");
 
@@ -264,10 +275,12 @@ fn io_fault_mid_run_propagates_but_still_cleans_up() {
 
     let result = run_tip_prep(
         Box::new(mock),
-        &EventBus::new(),
-        &ShutdownFlag::new(),
-        &fast_config(),
-        FREQ_SHIFT_INDEX,
+        TipPrepParams {
+            events: &EventBus::new(),
+            shutdown: &ShutdownFlag::new(),
+            config: &fast_config(),
+            freq_shift: FREQ_SHIFT_INDEX,
+        },
     );
 
     let spm = match result {
@@ -315,10 +328,12 @@ fn withdraw_fault_during_cleanup_is_swallowed() {
 
     let outcome = run_tip_prep(
         Box::new(mock),
-        &EventBus::new(),
-        &ShutdownFlag::new(),
-        &cfg,
-        FREQ_SHIFT_INDEX,
+        TipPrepParams {
+            events: &EventBus::new(),
+            shutdown: &ShutdownFlag::new(),
+            config: &cfg,
+            freq_shift: FREQ_SHIFT_INDEX,
+        },
     )
     .expect("a failing cleanup withdraw must not turn into a routine error");
 
@@ -368,10 +383,12 @@ fn sharp_but_unstable_fires_max_pulse_then_cycle_limit() {
 
     let outcome = run_tip_prep(
         Box::new(mock),
-        &EventBus::new(),
-        &ShutdownFlag::new(),
-        &cfg,
-        FREQ_SHIFT_INDEX,
+        TipPrepParams {
+            events: &EventBus::new(),
+            shutdown: &ShutdownFlag::new(),
+            config: &cfg,
+            freq_shift: FREQ_SHIFT_INDEX,
+        },
     )
     .expect("routine should not error");
 
@@ -447,10 +464,12 @@ fn realistic_model_completes_and_publishes_measurements() {
 
     let outcome = run_tip_prep(
         Box::new(mock),
-        &events,
-        &ShutdownFlag::new(),
-        &cfg,
-        FREQ_SHIFT_INDEX,
+        TipPrepParams {
+            events: &events,
+            shutdown: &ShutdownFlag::new(),
+            config: &cfg,
+            freq_shift: FREQ_SHIFT_INDEX,
+        },
     )
     .expect("routine should not error");
 
