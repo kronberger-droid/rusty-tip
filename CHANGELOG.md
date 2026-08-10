@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-10
+
+An API-cleanup release on the experimental v2 line. The public surface now
+matches what the production tip-prep path actually supports, and the safety
+metadata the action layer always advertised is enforced on every execution
+path. Like 0.3.0 this is mock-validated only; nothing here has met a tip yet.
+
+Config files from 0.3.0 parse unchanged: the float widening accepts the same
+TOML, and the one new timing field defaults to the previously hard-coded value.
+
+### Changed
+
+- **Breaking (library):** `run_tip_prep` returns `Result<Outcome, SpmError>`
+  instead of a boxed error, takes its context as one `TipPrepParams` struct
+  instead of four positional arguments, and maps a shutdown request to
+  `Outcome::StoppedByUser` itself, thus callers no longer downcast to tell
+  Ctrl+C apart from a real failure.
+- **Breaking (library):** every signal-read command takes a `SignalIndex`
+  newtype instead of a bare `u32`, so a signal index can no longer be confused
+  with a TCP channel or a frame position. `serde(transparent)` keeps action
+  JSON and event logs byte-identical. `SignalRegistry::from_controller` builds
+  the name lookup straight from the controller that will serve the reads.
+- **Breaking (library):** `ShutdownFlag` moved from `workflow::` to a
+  top-level `shutdown` module (re-exported at the crate root). The `workflow`
+  module is marked experimental pending the routine-harness redesign.
+- **Breaking (library):** config structs store `f64` end to end; the `as f64`
+  casts at every consumer are gone. The only remaining cast sits at the
+  nanonis-rs wire boundary, where `ScanConfig` genuinely carries `f32`.
+- `Action::requires()` is now enforced on every execution path: an action
+  whose capability the controller lacks fails with `SpmError::Unsupported`
+  before any command reaches hardware. Previously only the unused workflow
+  executor checked.
+- TCP stream setup lives in `NanonisController::start_streaming`; the CLI and
+  GUI no longer carry hand-rolled copies of the channel-map plumbing.
+- The settle between motor move and approach during a reposition is
+  configurable as `tip_prep.timing.post_move_settle_ms` (default 500 ms, the
+  previously hard-coded value).
+
+### Removed
+
+- **Breaking (library):** dead v1 API: `Error`/`RunOutcome`, `Logger`,
+  `ControllerAction`, `ControllerState`, `TipStateConfig`,
+  `TipControllerConfig`, the unused `BufferedTCPReader` query methods and
+  `poll_with_timeout`. `buffered_tcp_reader` and `utils` are private now.
+
+### Fixed
+
+- The GUI attached the TCP stream reader before stopping and restarting the
+  logger, so a run could consume stale frames left over from a previous
+  session. Both frontends now share the CLI's corrected ordering via
+  `start_streaming`.
+
 ## [0.3.0] - 2026-08-04
 
 **This release is an experimental rewrite. Treat it as a preview of where the
