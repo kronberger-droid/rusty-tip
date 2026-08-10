@@ -21,12 +21,17 @@ routine.
 > Expect the API and the config format to keep moving until the rewrite gets
 > machine time. For the last version that has run on hardware, see
 > [0.2.3](https://github.com/kronberger-droid/rusty-tip/releases/tag/v0.2.3).
+>
+> If you need a stable interface to program against today, use
+> [nanonis-rs](https://crates.io/crates/nanonis-rs), the Nanonis TCP client
+> this library is built on, or the official Python package
+> [nanonis_spm](https://github.com/SPECS-Zurich-GmbH/nanonis_spm) from SPECS.
 
 The core of rusty-tip is a library for writing SPM automation: a
 hardware-abstraction trait (`SpmController`), a vocabulary of composable
 actions with capability checking, an event stream for observability, and a
 scriptable mock controller so routines can be developed and tested without
-instrument time. Routines written against it are hardware-agnostic; today
+instrument time. Routines written against it are controller-agnostic; today
 Nanonis (over TCP) is the only instrument backend, and the trait is the seam
 for adding others.
 

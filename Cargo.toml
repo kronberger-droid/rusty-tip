@@ -2,7 +2,7 @@
 name = "rusty-tip"
 version = "0.4.0"
 edition = "2024"
-description = "Rust library for Nanonis SPM system control via TCP"
+description = "Write controller-agnostic scanning probe microscopy automation in Rust, starting with automated tip preparation on Nanonis systems"
 repository = "https://github.com/kronberger-droid/rusty-tip"
 license = "MIT"
 authors = ["Martin Kronberger <kronberger@proton.me>"]
