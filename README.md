@@ -35,21 +35,6 @@ design, is automated tip preparation: pulse, reposition, measure the
 frequency shift, repeat until the tip is sharp and provably stable. It ships
 as a CLI (`tip-prep`) and a GUI (`tip-prep-gui`).
 
-```mermaid
-flowchart TB
-    cli["tip-prep (CLI)"] --> runner
-    gui["tip-prep-gui (egui)"] --> runner
-    subgraph lib["rusty-tip library"]
-        runner["tip_prep runner"] --> actions["action system"]
-        workflow["workflow engine (experimental)"] --> actions
-        actions --> trait["SpmController trait"]
-        runner -.events.-> bus["EventBus (console, JSONL log, GUI)"]
-        analyzer["analyzer (CuOx row detection)"]
-    end
-    trait --> nanonis["NanonisController (nanonis-rs TCP + data stream)"]
-    trait --> mock["MockController (tests, simulation)"]
-```
-
 ## Installation
 
 Pre-built binaries from [GitHub Releases](https://github.com/kronberger-droid/rusty-tip/releases):
