@@ -9,7 +9,7 @@ use crate::action::signals::ReadStableSignal;
 use crate::action::util::Wait;
 use crate::action::z_controller::{CalibratedApproach, SetZSetpoint, Withdraw};
 use crate::action::{Action, ActionContext, ActionOutput, DataStore};
-use crate::config::{AppConfig, TipPrepConfig};
+use crate::config::{AppConfig, TimingConfig, TipPrepConfig};
 use crate::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
 use crate::event::{Event, EventBus};
 use crate::signal_registry::SignalIndex;
@@ -130,14 +130,14 @@ fn run_tip_prep_inner(
         log::info!("Initializing...");
         execute_logged(
             &SetBias {
-                voltage: config.tip_prep.initial_bias_v as f64,
+                voltage: config.tip_prep.initial_bias_v,
             },
             &mut ctx,
         )?;
 
         execute_logged(
             &SetZSetpoint {
-                setpoint: config.tip_prep.initial_z_setpoint_a as f64,
+                setpoint: config.tip_prep.initial_z_setpoint_a,
             },
             &mut ctx,
         )?;
@@ -169,8 +169,8 @@ fn run_tip_prep_inner(
     }
 
     let bounds = (
-        config.tip_prep.sharp_tip_bounds[0] as f64,
-        config.tip_prep.sharp_tip_bounds[1] as f64,
+        config.tip_prep.sharp_tip_bounds[0],
+        config.tip_prep.sharp_tip_bounds[1],
     );
 
     let max_cycles = config.tip_prep.max_cycles.unwrap_or(usize::MAX);
@@ -271,20 +271,7 @@ fn run_tip_prep_inner(
         )?;
 
         // Reposition immediately: get away from pulse site
-        execute_logged(
-            // V1 parity: post_move_settle_ms matches V1's hardcoded 500ms
-            // between motor and approach; post_approach_settle_ms ends the
-            // whole reposition (V1's `Wait(post_reposition_settle)` after
-            // SafeReposition returned).
-            &Reposition {
-                x_steps: config.tip_prep.timing.reposition_steps[0],
-                y_steps: config.tip_prep.timing.reposition_steps[1],
-                post_move_settle_ms: 500,
-                post_approach_settle_ms: config.tip_prep.timing.post_reposition_settle_ms,
-                ..Default::default()
-            },
-            &mut ctx,
-        )?;
+        reposition_to_fresh_spot(&mut ctx, &config.tip_prep.timing)?;
 
         // Measure at new position (after reposition)
         let freq_shift = read_stable(&mut ctx, config, freq_shift_index)?;
@@ -378,20 +365,7 @@ fn confirm_sharp(
             return Err(SpmError::ShutdownRequested);
         }
 
-        execute_logged(
-            // V1 parity: post_move_settle_ms matches V1's hardcoded 500ms
-            // between motor and approach; post_approach_settle_ms ends the
-            // whole reposition (V1's `Wait(post_reposition_settle)` after
-            // SafeReposition returned).
-            &Reposition {
-                x_steps: config.tip_prep.timing.reposition_steps[0],
-                y_steps: config.tip_prep.timing.reposition_steps[1],
-                post_move_settle_ms: 500,
-                post_approach_settle_ms: config.tip_prep.timing.post_reposition_settle_ms,
-                ..Default::default()
-            },
-            ctx,
-        )?;
+        reposition_to_fresh_spot(ctx, &config.tip_prep.timing)?;
 
         if shutdown.is_requested() {
             return Err(SpmError::ShutdownRequested);
@@ -472,8 +446,9 @@ fn check_stability(
         && let Some(ref orig) = original_speed
     {
         let mut new_config = *orig;
-        new_config.forward_linear_speed_m_s = target_speed;
-        new_config.backward_linear_speed_m_s = target_speed;
+        // ScanConfig is the nanonis-rs wire format, which carries f32 speeds.
+        new_config.forward_linear_speed_m_s = target_speed as f32;
+        new_config.backward_linear_speed_m_s = target_speed as f32;
         new_config.keep_parameter_constant = 1;
         if let Err(e) = ctx.controller.scan_speed_set(new_config) {
             log::warn!("Failed to set scan speed: {}", e);
@@ -517,7 +492,7 @@ fn check_stability(
 
     // Step 6: Compare
     let change = (final_fs - baseline).abs();
-    let threshold = config.tip_prep.stability.stable_tip_allowed_change as f64;
+    let threshold = config.tip_prep.stability.stable_tip_allowed_change;
     let is_stable = change <= threshold;
 
     log::info!(
@@ -570,20 +545,7 @@ fn check_stability(
             ctx,
         )?;
 
-        execute_logged(
-            // V1 parity: post_move_settle_ms matches V1's hardcoded 500ms
-            // between motor and approach; post_approach_settle_ms ends the
-            // whole reposition (V1's `Wait(post_reposition_settle)` after
-            // SafeReposition returned).
-            &Reposition {
-                x_steps: config.tip_prep.timing.reposition_steps[0],
-                y_steps: config.tip_prep.timing.reposition_steps[1],
-                post_move_settle_ms: 500,
-                post_approach_settle_ms: config.tip_prep.timing.post_reposition_settle_ms,
-                ..Default::default()
-            },
-            ctx,
-        )?;
+        reposition_to_fresh_spot(ctx, &config.tip_prep.timing)?;
 
         Ok(StabilityOutcome::Unstable)
     }
@@ -599,27 +561,27 @@ fn build_sweep_plans(tip_prep: &TipPrepConfig, _method: &PulseMethod) -> Vec<Swe
 
     match sc.polarity_mode {
         BiasSweepPolarity::Positive => vec![SweepPlan {
-            starting_bias: range.1 as f64,
-            bias_range: (range.1 as f64, range.0 as f64),
+            starting_bias: range.1,
+            bias_range: (range.1, range.0),
             index: 1,
             total: 1,
         }],
         BiasSweepPolarity::Negative => vec![SweepPlan {
-            starting_bias: -(range.1 as f64),
-            bias_range: (-(range.1 as f64), -(range.0 as f64)),
+            starting_bias: -range.1,
+            bias_range: (-range.1, -range.0),
             index: 1,
             total: 1,
         }],
         BiasSweepPolarity::Both => vec![
             SweepPlan {
-                starting_bias: range.1 as f64,
-                bias_range: (range.1 as f64, range.0 as f64),
+                starting_bias: range.1,
+                bias_range: (range.1, range.0),
                 index: 1,
                 total: 2,
             },
             SweepPlan {
-                starting_bias: -(range.1 as f64),
-                bias_range: (-(range.1 as f64), -(range.0 as f64)),
+                starting_bias: -range.1,
+                bias_range: (-range.1, -range.0),
                 index: 2,
                 total: 2,
             },
@@ -811,7 +773,7 @@ fn measure_final_freq_shift(
 
     execute_logged(
         &SetBias {
-            voltage: config.tip_prep.initial_bias_v as f64,
+            voltage: config.tip_prep.initial_bias_v,
         },
         ctx,
     )?;
@@ -855,6 +817,28 @@ pub fn interruptible_sleep(duration: Duration, shutdown: &ShutdownFlag) -> Resul
     Ok(())
 }
 
+/// Move to a fresh surface spot: withdraw, step the motors, re-approach.
+///
+/// V1 parity: `post_move_settle_ms` sits between the motor move and the
+/// approach (V1 hard-coded 500 ms there); `post_approach_settle_ms` ends
+/// the whole reposition (V1's `Wait(post_reposition_settle)` after
+/// `SafeReposition` returned).
+fn reposition_to_fresh_spot(
+    ctx: &mut ActionContext,
+    timing: &TimingConfig,
+) -> Result<ActionOutput, SpmError> {
+    execute_logged(
+        &Reposition {
+            x_steps: timing.reposition_steps[0],
+            y_steps: timing.reposition_steps[1],
+            post_move_settle_ms: timing.post_move_settle_ms,
+            post_approach_settle_ms: timing.post_reposition_settle_ms,
+            ..Default::default()
+        },
+        ctx,
+    )
+}
+
 /// Execute an action with event logging (start/complete/fail events).
 pub fn execute_logged(
     action: &dyn Action,
@@ -864,7 +848,11 @@ pub fn execute_logged(
     let start = std::time::Instant::now();
     ctx.events
         .emit(Event::action_started(&name, serde_json::json!({})));
-    match action.execute(ctx) {
+    let result = match crate::action::check_capabilities(action, ctx.controller) {
+        Ok(()) => action.execute(ctx),
+        Err(e) => Err(e),
+    };
+    match result {
         Ok(output) => {
             ctx.events
                 .emit(Event::action_completed(&name, &output, start.elapsed()));
@@ -889,8 +877,8 @@ fn read_stable(
         &ReadStableSignal {
             index: freq_shift_index,
             num_samples: config.data_acquisition.stable_signal_samples,
-            max_std_dev: gates.max_std_dev_hz as f64,
-            max_slope: gates.max_slope_hz_per_s as f64,
+            max_std_dev: gates.max_std_dev_hz,
+            max_slope: gates.max_slope_hz_per_s,
             max_retries: gates.read_retry_count as usize,
             sample_rate_hz: config.data_acquisition.sample_rate as f64,
         },

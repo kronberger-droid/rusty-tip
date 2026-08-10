@@ -20,7 +20,7 @@ pub use registry::{ActionFactory, ActionInfo, ActionRegistry};
 pub use store::DataStore;
 
 use crate::machine_state::{ActionKind, MachineState, StateEffects, StateField, StateRequirements};
-use crate::spm_controller::Capability;
+use crate::spm_controller::{Capability, SpmController};
 use crate::spm_error::SpmError;
 
 /// Shared serde default for boolean fields that should default to `true`.
@@ -117,6 +117,29 @@ pub trait Action: Send + Sync {
         ctx.store.set(key, &output)?;
         Ok(output)
     }
+}
+
+/// Verify the controller supports every capability `action` requires.
+///
+/// Every execution path calls this before running an action, so a
+/// capability violation surfaces as a clear `Unsupported` error before
+/// any command reaches the hardware, instead of a mid-action failure.
+pub fn check_capabilities(action: &dyn Action, controller: &dyn SpmController) -> Result<()> {
+    let required = action.requires();
+    if required.is_empty() {
+        return Ok(());
+    }
+    let caps = controller.capabilities();
+    for cap in &required {
+        if !caps.contains(cap) {
+            return Err(SpmError::Unsupported(format!(
+                "Action '{}' requires {:?}, which the controller does not support",
+                action.name(),
+                cap,
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Create an ActionRegistry pre-loaded with all built-in actions.

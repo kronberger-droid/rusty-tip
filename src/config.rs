@@ -73,13 +73,13 @@ pub struct ConsoleConfig {
     pub verbosity: String,
 }
 
-fn default_initial_bias_v() -> f32 {
+fn default_initial_bias_v() -> f64 {
     -500e-3
 }
-fn default_initial_z_setpoint_a() -> f32 {
+fn default_initial_z_setpoint_a() -> f64 {
     100e-12
 }
-fn default_safe_tip_threshold() -> f32 {
+fn default_safe_tip_threshold() -> f64 {
     1e-9
 }
 fn default_pulse_width_ms() -> u64 {
@@ -90,6 +90,9 @@ fn default_post_approach_settle_ms() -> u64 {
 }
 fn default_post_reposition_settle_ms() -> u64 {
     1000
+}
+fn default_post_move_settle_ms() -> u64 {
+    500
 }
 fn default_buffer_clear_wait_ms() -> u64 {
     500
@@ -112,6 +115,11 @@ pub struct TimingConfig {
     pub post_approach_settle_ms: u64,
     #[serde(default = "default_post_reposition_settle_ms")]
     pub post_reposition_settle_ms: u64,
+    /// Settle time between the motor move and the approach during a
+    /// reposition. Was hard-coded at 500 ms (V1 parity) before it became
+    /// configurable.
+    #[serde(default = "default_post_move_settle_ms")]
+    pub post_move_settle_ms: u64,
     #[serde(default = "default_buffer_clear_wait_ms")]
     pub buffer_clear_wait_ms: u64,
     #[serde(default = "default_post_pulse_settle_ms")]
@@ -128,6 +136,7 @@ impl Default for TimingConfig {
             pulse_width_ms: default_pulse_width_ms(),
             post_approach_settle_ms: default_post_approach_settle_ms(),
             post_reposition_settle_ms: default_post_reposition_settle_ms(),
+            post_move_settle_ms: default_post_move_settle_ms(),
             buffer_clear_wait_ms: default_buffer_clear_wait_ms(),
             post_pulse_settle_ms: default_post_pulse_settle_ms(),
             reposition_steps: default_reposition_steps(),
@@ -136,11 +145,11 @@ impl Default for TimingConfig {
     }
 }
 
-fn default_max_std_dev_hz() -> f32 {
+fn default_max_std_dev_hz() -> f64 {
     1.5
 }
 
-fn default_max_slope_hz_per_s() -> f32 {
+fn default_max_slope_hz_per_s() -> f64 {
     0.5
 }
 
@@ -163,10 +172,10 @@ fn default_read_retry_count() -> u32 {
 pub struct SignalStabilityConfig {
     /// Maximum standard deviation (Hz) of the reading to count as stable.
     #[serde(default = "default_max_std_dev_hz")]
-    pub max_std_dev_hz: f32,
+    pub max_std_dev_hz: f64,
     /// Maximum drift rate (Hz/s) of the reading to count as stable.
     #[serde(default = "default_max_slope_hz_per_s")]
-    pub max_slope_hz_per_s: f32,
+    pub max_slope_hz_per_s: f64,
     /// Data-collection window (ms) for one stable read.
     ///
     /// Unused by the v2 read path, which sizes its batch from
@@ -200,17 +209,17 @@ impl Default for SignalStabilityConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TipPrepConfig {
-    pub sharp_tip_bounds: [f32; 2],
+    pub sharp_tip_bounds: [f64; 2],
     pub max_cycles: Option<usize>,
     pub max_duration_secs: Option<u64>,
     #[serde(default)]
     pub stability: StabilityConfig,
     #[serde(default = "default_initial_bias_v")]
-    pub initial_bias_v: f32,
+    pub initial_bias_v: f64,
     #[serde(default = "default_initial_z_setpoint_a")]
-    pub initial_z_setpoint_a: f32,
+    pub initial_z_setpoint_a: f64,
     #[serde(default = "default_safe_tip_threshold")]
-    pub safe_tip_threshold: f32,
+    pub safe_tip_threshold: f64,
     #[serde(default)]
     pub timing: TimingConfig,
     /// Signal-read stability thresholds (frequency-shift noise/drift gates)

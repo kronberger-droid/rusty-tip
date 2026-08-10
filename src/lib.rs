@@ -26,8 +26,7 @@ mod buffered_tcp_reader;
 pub(crate) mod utils;
 
 pub use controller_types::{
-    BiasSweepPolarity, ControllerAction, ControllerState, PolaritySign, PulseMethod,
-    RandomPolaritySwitch, StabilityConfig, TipControllerConfig, TipStateConfig,
+    BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, StabilityConfig,
 };
 pub use plotting::{plot_values, plot_values_with_range};
 pub use signal_registry::{Signal, SignalIndex, SignalRegistry};

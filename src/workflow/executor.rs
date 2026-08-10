@@ -240,20 +240,7 @@ impl WorkflowExecutor {
     ) -> Result<StepOutcome, SpmError> {
         let action = self.registry.create(action_name, params.clone())?;
 
-        // Check required capabilities before running
-        let required = action.requires();
-        if !required.is_empty() {
-            let caps = self.controller.capabilities();
-            for cap in &required {
-                if !caps.contains(cap) {
-                    return Err(SpmError::Unsupported(format!(
-                        "Action '{}' requires {:?}, which the controller does not support",
-                        action.name(),
-                        cap,
-                    )));
-                }
-            }
-        }
+        crate::action::check_capabilities(&*action, &*self.controller)?;
 
         self.enforce_preconditions(&*action)?;
 

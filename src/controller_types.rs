@@ -1,7 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
-
-use crate::Signal;
 
 // ============================================================================
 // BIAS SWEEP POLARITY
@@ -38,10 +35,10 @@ pub struct StabilityConfig {
     /// Maximum allowed change in signal for tip to be considered stable (in Hz)
     /// During the bias sweep, if the signal changes more than this threshold,
     /// the tip is considered unstable
-    pub stable_tip_allowed_change: f32,
+    pub stable_tip_allowed_change: f64,
     /// Bias voltage range for stability sweep (lower, upper) in V
     /// Must be positive magnitude-only; polarity_mode determines sign
-    pub bias_range: (f32, f32),
+    pub bias_range: (f64, f64),
     /// Number of steps in the bias sweep
     pub bias_steps: u16,
     /// Time to wait at each step in ms
@@ -52,7 +49,7 @@ pub struct StabilityConfig {
     #[serde(default)]
     pub polarity_mode: BiasSweepPolarity,
     /// Scan speed for stability check in m/s (None = use current scan speed)
-    pub scan_speed_m_s: Option<f32>,
+    pub scan_speed_m_s: Option<f64>,
 }
 
 impl Default for StabilityConfig {
@@ -142,17 +139,17 @@ fn default_enabled() -> bool {
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum PulseMethod {
     Fixed {
-        voltage: f32,
+        voltage: f64,
         #[serde(default)]
         polarity: PolaritySign,
         #[serde(default, alias = "random_switch")]
         random_polarity_switch: Option<RandomPolaritySwitch>,
     },
     Stepping {
-        voltage_bounds: (f32, f32),
+        voltage_bounds: (f64, f64),
         voltage_steps: u16,
         cycles_before_step: u16,
-        threshold_value: f32,
+        threshold_value: f64,
         #[serde(default)]
         polarity: PolaritySign,
         #[serde(default, alias = "random_switch")]
@@ -164,8 +161,8 @@ pub enum PulseMethod {
     /// If freq_shift is outside linear_clamp range, pulse with max voltage
     /// If freq_shift is inside linear_clamp range, linearly interpolate voltage
     Linear {
-        voltage_bounds: (f32, f32),
-        linear_clamp: (f32, f32),
+        voltage_bounds: (f64, f64),
+        linear_clamp: (f64, f64),
         #[serde(default)]
         polarity: PolaritySign,
         #[serde(default, alias = "random_switch")]
@@ -176,10 +173,10 @@ pub enum PulseMethod {
 impl PulseMethod {
     #[allow(dead_code)]
     pub fn stepping_fixed_threshold(
-        voltage_bounds: (f32, f32),
+        voltage_bounds: (f64, f64),
         voltage_steps: u16,
         cycles_before_step: u16,
-        threshold_value: f32,
+        threshold_value: f64,
         polarity: PolaritySign,
         random_polarity_switch: Option<RandomPolaritySwitch>,
     ) -> PulseMethod {
@@ -202,7 +199,7 @@ impl PulseMethod {
     }
 
     /// Get the maximum voltage from this pulse method configuration
-    pub fn max_voltage(&self) -> f32 {
+    pub fn max_voltage(&self) -> f64 {
         match self {
             PulseMethod::Fixed { voltage, .. } => *voltage,
             PulseMethod::Stepping { voltage_bounds, .. } => voltage_bounds.1,
@@ -280,150 +277,6 @@ impl Default for PulseMethod {
             threshold_value: 0.1,
             polarity: PolaritySign::Positive,
             random_polarity_switch: None,
-        }
-    }
-}
-
-// ============================================================================
-// CONTROLLER ACTION & STATE
-// ============================================================================
-
-/// Current action being performed by the controller
-#[derive(Debug, Clone, Default, PartialEq)]
-pub enum ControllerAction {
-    #[default]
-    Idle,
-    Initializing,
-    LoadingLayout,
-    LoadingSettings,
-    SettingBias,
-    SettingSetpoint,
-    Approaching,
-    Withdrawing,
-    CenteringFreqShift,
-    MeasuringSignal,
-    Pulsing,
-    StabilityCheck,
-    StabilitySweep {
-        sweep: u32,
-        total: u32,
-    },
-    Repositioning,
-    Completed,
-    Stopped,
-    Error(String),
-}
-
-/// Snapshot of the controller's current state for GUI display
-#[derive(Debug, Clone, Default)]
-pub struct ControllerState {
-    pub tip_shape: crate::TipShape,
-    pub cycle_count: u32,
-    pub pulse_voltage: f32,
-    pub freq_shift: Option<f32>,
-    pub elapsed_secs: f64,
-    pub current_action: ControllerAction,
-}
-
-// ============================================================================
-// TIP STATE CONFIG (for action_driver constants)
-// ============================================================================
-
-/// Configuration for tip state checking in ActionDriver
-#[derive(Debug, Clone)]
-pub struct TipStateConfig {
-    /// Maximum standard deviation for stable signal (Hz)
-    pub max_std_dev: f32,
-    /// Maximum drift rate for stable signal (Hz per second)
-    pub max_slope: f32,
-    /// Duration of data collection for tip state checking
-    pub data_collection_duration: Duration,
-    /// Timeout for stable signal reading during tip state check
-    pub read_timeout: Duration,
-    /// Number of retries for stable signal reading
-    pub read_retry_count: u32,
-}
-
-impl Default for TipStateConfig {
-    fn default() -> Self {
-        Self {
-            max_std_dev: 1.5, // Hz; ~typical tip noise (fluctuates, stable mean); tune at runtime
-            max_slope: 0.5,   // Hz/s; ~0.25 Hz drift over a 500 ms window
-            data_collection_duration: Duration::from_millis(500),
-            read_timeout: Duration::from_secs(15),
-            read_retry_count: 3,
-        }
-    }
-}
-
-// ============================================================================
-// TIP CONTROLLER CONFIG
-// ============================================================================
-
-pub struct TipControllerConfig {
-    pub freq_shift_signal: Signal,
-    pub sharp_tip_bounds: (f32, f32),
-    pub pulse_method: PulseMethod,
-    pub allowed_change_for_stable: f32,
-    pub max_cycles: Option<usize>,
-    pub max_duration: Option<Duration>,
-    pub check_stability: bool,
-    pub stability_config: StabilityConfig,
-    /// Optional path to a Nanonis layout file to load during initialization
-    pub layout_file: Option<String>,
-    /// Optional path to a Nanonis settings file to load during initialization
-    pub settings_file: Option<String>,
-    /// Initial bias voltage (V) set before the first approach
-    pub initial_bias_v: f32,
-    /// Initial Z-controller setpoint (A) set before the first approach
-    pub initial_z_setpoint_a: f32,
-    /// Safe tip threshold (A) for safe tip configuration
-    pub safe_tip_threshold: f32,
-    /// Pulse width for tip pulsing
-    pub pulse_width: Duration,
-    /// Wait time after approach for signal to stabilize before first measurement
-    pub post_approach_settle: Duration,
-    /// Wait time after reposition for signal to stabilize
-    pub post_reposition_settle: Duration,
-    /// Wait time after clearing TCP buffer to accumulate fresh data
-    pub buffer_clear_wait: Duration,
-    /// Wait time after a bias pulse for signal to settle
-    pub post_pulse_settle: Duration,
-    /// Number of motor steps for repositioning (x, y)
-    pub reposition_steps: (i16, i16),
-    /// Report progress every N cycles
-    pub status_interval: usize,
-}
-
-impl Default for TipControllerConfig {
-    fn default() -> Self {
-        let freq_shift_signal = Signal::new_unchecked("freq_shift", 76, Some(18));
-
-        Self {
-            freq_shift_signal,
-            sharp_tip_bounds: (-2.0, 0.0),
-            pulse_method: PulseMethod::Fixed {
-                voltage: 4.0,
-                polarity: PolaritySign::Positive,
-                random_polarity_switch: None,
-            },
-            allowed_change_for_stable: 0.2,
-            max_cycles: Some(1000),
-            max_duration: Some(Duration::from_secs(3600)), // 1 hour
-            check_stability: true,
-            stability_config: StabilityConfig::default(),
-            layout_file: None,
-            settings_file: None,
-            initial_bias_v: -500e-3,
-            initial_z_setpoint_a: 100e-12,
-            safe_tip_threshold: 1e-9,
-            pulse_width: Duration::from_millis(50),
-            post_approach_settle: Duration::from_millis(2000),
-            post_reposition_settle: Duration::from_millis(1000),
-            buffer_clear_wait: Duration::from_millis(500),
-            post_pulse_settle: Duration::from_secs(1),
-            reposition_steps: (3i16, 3i16),
-            status_interval: 10,
         }
     }
 }
