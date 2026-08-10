@@ -12,7 +12,7 @@ use nanonis_rs::{
 use std::collections::HashSet;
 
 use crate::buffered_tcp_reader::BufferedTCPReader;
-use crate::signal_registry::SignalIndex;
+use crate::signal_registry::{SignalIndex, SignalRegistry};
 use crate::spm_controller::{
     AcquisitionMode, Capability, DataStreamStatus, Result, SpmController, TriggerSetup,
     ZControllerStatus, ZHomeMode,
@@ -50,6 +50,29 @@ impl Default for NanonisSetupConfig {
             z_home_position_m: 50e-9,
             safe_tip_threshold_a: 1e-9,
             tcp_refresh_output: Some(3),
+        }
+    }
+}
+
+/// Endpoint and tuning for [`NanonisController::start_streaming`].
+pub struct StreamSetup {
+    /// Host serving the TCP logger data stream (usually the Nanonis host).
+    pub host: String,
+    /// TCP logger data port (typically 6590).
+    pub data_port: u16,
+    /// Oversampling value passed to the TCP logger.
+    pub oversampling: i32,
+    /// Frames kept in the reader's circular buffer.
+    pub buffer_size: usize,
+}
+
+impl StreamSetup {
+    pub fn new(host: impl Into<String>, data_port: u16, oversampling: i32) -> Self {
+        Self {
+            host: host.into(),
+            data_port,
+            oversampling,
+            buffer_size: 10_000,
         }
     }
 }
@@ -156,12 +179,79 @@ impl NanonisController {
         Ok(collected)
     }
 
-    /// Set the mapping from Nanonis signal indices to TCP data array positions.
+    /// Configure and start the TCP logger data stream for every signal in
+    /// `registry` that has a TCP channel mapping, then attach the buffered
+    /// reader that `read_signal_samples` pulls from.
     ///
-    /// The caller should compute this from their `SignalRegistry`: for each signal
-    /// of interest, find its `tcp_channel` and then its position in the configured
-    /// channel list (the order passed to `data_stream_configure`).
-    pub fn set_channel_mapping(&mut self, mapping: HashMap<SignalIndex, usize>) {
+    /// Bridges the three coordinate systems around the stream: the registry
+    /// supplies (signal index, TCP channel) per signal, and the position of
+    /// that channel in the sorted channel list is where the signal's values
+    /// appear inside each streamed frame.
+    ///
+    /// Returns `Ok(false)` without touching the hardware when the registry
+    /// has no TCP-mapped signals; signal-sample reads then fall back to
+    /// polling `read_signal`.
+    pub fn start_streaming(
+        &mut self,
+        registry: &SignalRegistry,
+        setup: &StreamSetup,
+    ) -> Result<bool> {
+        let tcp_signals = registry.tcp_signals();
+        if tcp_signals.is_empty() {
+            log::warn!(
+                "No signals with TCP channel mappings found - stable signal reads will fall back to polling"
+            );
+            return Ok(false);
+        }
+
+        let mut tcp_channels: Vec<i32> = tcp_signals
+            .iter()
+            .filter_map(|s| s.tcp_channel.map(|ch| ch as i32))
+            .collect();
+        tcp_channels.sort_unstable();
+        tcp_channels.dedup();
+
+        let tcp_to_position: HashMap<u8, usize> = tcp_channels
+            .iter()
+            .enumerate()
+            .map(|(pos, &ch)| (ch as u8, pos))
+            .collect();
+
+        let mut signal_mapping: HashMap<SignalIndex, usize> = HashMap::new();
+        for signal in &tcp_signals {
+            if let Some(tcp_ch) = signal.tcp_channel
+                && let Some(&position) = tcp_to_position.get(&tcp_ch)
+            {
+                signal_mapping.insert(signal.signal_index(), position);
+            }
+        }
+
+        log::info!(
+            "TCP stream: {} channels, {} signals mapped",
+            tcp_channels.len(),
+            signal_mapping.len()
+        );
+
+        self.data_stream_configure(&tcp_channels, setup.oversampling)?;
+        self.set_channel_mapping(signal_mapping);
+
+        // Stop any lingering stream from a prior session, then start a fresh
+        // one BEFORE attaching the reader — otherwise the reader's first
+        // frames may be stale bytes left in the TCP buffer from the previous
+        // session.
+        let _ = self.data_stream_stop();
+        std::thread::sleep(Duration::from_millis(200));
+        self.data_stream_start()?;
+
+        self.start_tcp_reader(&setup.host, setup.data_port, setup.buffer_size)?;
+        log::info!("TCP data stream started");
+        Ok(true)
+    }
+
+    /// Set the mapping from Nanonis signal indices to TCP data array positions:
+    /// for each signal of interest, its `tcp_channel`'s position in the
+    /// configured channel list (the order passed to `data_stream_configure`).
+    fn set_channel_mapping(&mut self, mapping: HashMap<SignalIndex, usize>) {
         self.signal_to_data_position = mapping;
         log::debug!(
             "Channel mapping set: {} signals mapped to data positions",
@@ -174,12 +264,7 @@ impl NanonisController {
     /// Call `set_channel_mapping` and `data_stream_configure` before this.
     /// Connects to the TCP logger data port and spawns the background
     /// buffering thread.
-    pub fn start_tcp_reader(
-        &mut self,
-        host: &str,
-        data_port: u16,
-        buffer_size: usize,
-    ) -> Result<()> {
+    fn start_tcp_reader(&mut self, host: &str, data_port: u16, buffer_size: usize) -> Result<()> {
         if self.tcp_reader.is_some() {
             log::warn!("TCP reader already running, stopping previous instance");
             self.stop_tcp_reader()?;
