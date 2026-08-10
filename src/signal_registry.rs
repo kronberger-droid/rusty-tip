@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::NanonisError;
+use crate::spm_controller::SpmController;
+use crate::spm_error::SpmError;
 use std::{collections::HashMap, fmt, ops::Deref};
 
 /// Index of a signal slot on the controller, as used by every signal-read
@@ -312,6 +314,18 @@ impl SignalRegistryBuilder {
         self
     }
 
+    /// Pull the signal-name list from any controller.
+    ///
+    /// The registry's index-for-name answers are only correct if the names
+    /// come from the controller that will serve the reads, so prefer this
+    /// over `from_signal_names` with a hand-carried list. Add TCP mappings
+    /// (`with_standard_map`, `add_tcp_map`) BEFORE calling it, since each
+    /// signal's `tcp_channel` is resolved as names are added.
+    pub fn from_controller(self, controller: &mut dyn SpmController) -> Result<Self, SpmError> {
+        let names = controller.signal_names()?;
+        Ok(self.from_signal_names(&names))
+    }
+
     pub fn build(self) -> SignalRegistry {
         SignalRegistry(self.signals)
     }
@@ -320,6 +334,17 @@ impl SignalRegistryBuilder {
 impl SignalRegistry {
     pub fn builder() -> SignalRegistryBuilder {
         SignalRegistryBuilder::default()
+    }
+
+    /// Build a registry (with aliases, no TCP mappings) straight from a
+    /// controller's reported signal names. Works against any
+    /// [`SpmController`]; controllers with a TCP data stream should go
+    /// through [`SignalRegistry::builder`] to add channel mappings first.
+    pub fn from_controller(controller: &mut dyn SpmController) -> Result<Self, SpmError> {
+        Ok(Self::builder()
+            .from_controller(controller)?
+            .create_aliases()
+            .build())
     }
 
     pub fn with_hardcoded_tcp_mapping(signal_names: &[String]) -> Self {

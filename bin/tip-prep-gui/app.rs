@@ -19,6 +19,7 @@ use rusty_tip::mock_controller::{MockController, models};
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
 use rusty_tip::signal_registry::SignalRegistry;
 use rusty_tip::spm_controller::SpmController;
+use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 use rusty_tip::{
@@ -1868,8 +1869,7 @@ fn build_nanonis_backend(
     let mut controller = NanonisController::new(client, setup);
     info!("Connected to Nanonis system");
 
-    let signal_names = controller.signal_names()?;
-    let registry = build_signal_registry(&signal_names, config);
+    let registry = build_signal_registry(&mut controller, config)?;
     let freq_shift_index = registry
         .get_by_name("freq shift")
         .ok_or("Frequency shift signal not found in registry")?
@@ -1900,8 +1900,7 @@ fn build_mock_backend(
 
     // Resolve the index through the same registry path the real backend uses,
     // so simulation exercises the lookup instead of bypassing it.
-    let signal_names = mock.signal_names()?;
-    let registry = build_signal_registry(&signal_names, config);
+    let registry = build_signal_registry(&mut mock, config)?;
     let resolved = registry
         .get_by_name("freq shift")
         .ok_or("Frequency shift signal not found in mock registry")?
@@ -1918,7 +1917,10 @@ fn build_mock_backend(
     Ok((Box::new(mock), resolved))
 }
 
-fn build_signal_registry(signal_names: &[String], config: &AppConfig) -> SignalRegistry {
+fn build_signal_registry(
+    controller: &mut dyn SpmController,
+    config: &AppConfig,
+) -> Result<SignalRegistry, SpmError> {
     let mut builder = SignalRegistry::builder().with_standard_map();
 
     if let Some(ref mappings) = config.tcp_channel_mapping {
@@ -1929,10 +1931,10 @@ fn build_signal_registry(signal_names: &[String], config: &AppConfig) -> SignalR
         builder = builder.add_tcp_map(&tcp_map);
     }
 
-    builder
-        .from_signal_names(signal_names)
+    Ok(builder
+        .from_controller(controller)?
         .create_aliases()
-        .build()
+        .build())
 }
 
 fn setup_tcp_stream(
