@@ -1,7 +1,31 @@
 use serde::{Deserialize, Serialize};
 
 use crate::NanonisError;
-use std::{collections::HashMap, ops::Deref};
+use std::{collections::HashMap, fmt, ops::Deref};
+
+/// Index of a signal slot on the controller, as used by every signal-read
+/// command.
+///
+/// A dedicated type rather than a bare `u32` so a signal index cannot be
+/// confused with the two other coordinate systems around the data stream:
+/// the TCP channel number (0-23) and the position inside a streamed frame.
+/// Obtain one from the [`SignalRegistry`] via [`Signal::signal_index`] so
+/// the index is always backed by a name the hardware actually reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SignalIndex(pub u32);
+
+impl fmt::Display for SignalIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<u32> for SignalIndex {
+    fn from(index: u32) -> Self {
+        SignalIndex(index)
+    }
+}
 
 /// Generate common aliases for signal names
 fn generate_signal_aliases(name: &str) -> Vec<String> {
@@ -108,6 +132,11 @@ pub struct Signal {
 }
 
 impl Signal {
+    /// The index to pass to signal-read commands for this signal.
+    pub fn signal_index(&self) -> SignalIndex {
+        SignalIndex(self.index as u32)
+    }
+
     /// Create a new Signal with validation
     pub fn new(name: String, index: u8, tcp_channel: Option<u8>) -> Result<Self, NanonisError> {
         if index > 127 {

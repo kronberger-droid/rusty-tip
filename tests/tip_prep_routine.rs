@@ -7,6 +7,7 @@
 
 use std::sync::{Arc, Mutex as StdMutex};
 
+use rusty_tip::SignalIndex;
 use rusty_tip::config::AppConfig;
 use rusty_tip::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
 use rusty_tip::event::{Event, EventBus, Observer};
@@ -14,7 +15,7 @@ use rusty_tip::mock_controller::{FaultKind, MockController, models};
 use rusty_tip::tip_prep::{Outcome, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 
-const FREQ_SHIFT_INDEX: u32 = 2;
+const FREQ_SHIFT_INDEX: SignalIndex = SignalIndex(2);
 
 /// A config tuned for fast tests: zero settle times, a handful of samples,
 /// sharp-tip window of `[-2, 0]` Hz. Mutate the returned value per scenario.
