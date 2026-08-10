@@ -619,7 +619,6 @@ impl EditableConfig {
                 data_port,
                 sample_rate,
                 stable_signal_samples,
-                ..Default::default()
             },
             experiment_logging: ExperimentLoggingConfig {
                 enabled: self.logging_enabled,
@@ -703,7 +702,7 @@ pub struct TipPrepApp {
     save_path: String,
 
     // Controller state
-    controller_thread: Option<JoinHandle<()>>,
+    controller_thread: Option<JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>>>,
     shutdown_flag: Option<ShutdownFlag>,
     run_status: RunStatus,
     start_time: Option<Instant>,
@@ -841,9 +840,11 @@ impl TipPrepApp {
 
         let simulate = self.simulate;
         let handle = thread::spawn(move || {
-            if let Err(e) = run_controller(config, shutdown, event_tx, simulate) {
+            let result = run_controller(config, shutdown, event_tx, simulate);
+            if let Err(ref e) = result {
                 error!("Controller error: {}", e);
             }
+            result
         });
 
         self.controller_thread = Some(handle);
@@ -956,35 +957,55 @@ impl TipPrepApp {
     fn check_controller_status(&mut self) {
         self.drain_events();
 
-        if let Some(handle) = &self.controller_thread
-            && handle.is_finished()
+        if self
+            .controller_thread
+            .as_ref()
+            .is_some_and(|h| h.is_finished())
         {
-            self.controller_thread = None;
+            let handle = self
+                .controller_thread
+                .take()
+                .expect("checked is_some above");
             self.shutdown_flag = None;
             self.event_receiver = None;
 
+            // The thread is finished, so join() returns immediately; it hands
+            // back the runner's Result (or the panic payload).
+            let run_result = handle.join();
+
             if matches!(self.run_status, RunStatus::Running) {
-                // Determine outcome from the last phase
-                match self.tip_state.phase.as_str() {
-                    "stable" => {
-                        self.run_status = RunStatus::Completed;
-                        self.message =
-                            Some(("Tip preparation completed successfully".to_string(), false));
+                match run_result {
+                    Err(_) => {
+                        self.run_status =
+                            RunStatus::Error("controller thread panicked".to_string());
+                        self.message = Some(("Controller thread panicked".to_string(), true));
                     }
-                    _ => {
-                        // Thread finished -- could be stopped, cycle limit, timeout, or error
-                        // We check shutdown first
-                        self.run_status = RunStatus::Idle;
-                        if self.message.is_none()
-                            || self
-                                .message
-                                .as_ref()
-                                .map(|(m, _)| m == "Stop requested...")
-                                .unwrap_or(false)
-                        {
-                            self.message = Some(("Controller finished".to_string(), false));
+                    Ok(Err(e)) => {
+                        self.run_status = RunStatus::Error(e.to_string());
+                        self.message = Some((format!("Tip preparation failed: {e}"), true));
+                    }
+                    // Clean exit: determine the outcome from the last phase
+                    Ok(Ok(())) => match self.tip_state.phase.as_str() {
+                        "stable" => {
+                            self.run_status = RunStatus::Completed;
+                            self.message =
+                                Some(("Tip preparation completed successfully".to_string(), false));
                         }
-                    }
+                        _ => {
+                            // Thread finished -- could be stopped, cycle limit, or timeout
+                            // We check shutdown first
+                            self.run_status = RunStatus::Idle;
+                            if self.message.is_none()
+                                || self
+                                    .message
+                                    .as_ref()
+                                    .map(|(m, _)| m == "Stop requested...")
+                                    .unwrap_or(false)
+                            {
+                                self.message = Some(("Controller finished".to_string(), false));
+                            }
+                        }
+                    },
                 }
             }
         }
@@ -1054,7 +1075,10 @@ impl TipPrepApp {
                                 RunStatus::Error(_) => egui::Color32::RED,
                                 RunStatus::Idle => egui::Color32::GRAY,
                             };
-                            ui.colored_label(status_color, self.status_text());
+                            let status_label = ui.colored_label(status_color, self.status_text());
+                            if let RunStatus::Error(e) = &self.run_status {
+                                status_label.on_hover_text(e);
+                            }
                             ui.end_row();
 
                             ui.label("Current Action:");
