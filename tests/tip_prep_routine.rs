@@ -11,7 +11,6 @@ use rusty_tip::config::AppConfig;
 use rusty_tip::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
 use rusty_tip::event::{Event, EventBus, Observer};
 use rusty_tip::mock_controller::{FaultKind, MockController, models};
-use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::{Outcome, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 
@@ -271,16 +270,13 @@ fn io_fault_mid_run_propagates_but_still_cleans_up() {
         FREQ_SHIFT_INDEX,
     );
 
-    let err = match result {
+    let spm = match result {
         Err(e) => e,
         Ok(o) => panic!(
             "auto_approach fault should surface as an error, got {}",
             outcome_name(&o)
         ),
     };
-    let spm = err
-        .downcast_ref::<SpmError>()
-        .expect("error should be an SpmError");
     assert!(
         spm.is_connection_error(),
         "expected a connection-class error"

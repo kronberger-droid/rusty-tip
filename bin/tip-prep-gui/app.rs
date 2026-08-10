@@ -20,7 +20,6 @@ use rusty_tip::mock_controller::{MockController, models};
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
 use rusty_tip::signal_registry::SignalRegistry;
 use rusty_tip::spm_controller::SpmController;
-use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::{Outcome, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 use rusty_tip::{
@@ -1822,17 +1821,6 @@ fn run_controller(
 
     // Run tip preparation
     let result = run_tip_prep(controller, &events, &shutdown, &config, freq_shift_index);
-
-    // Convert ShutdownRequested to StoppedByUser
-    let result = match result {
-        Err(e)
-            if e.downcast_ref::<SpmError>()
-                .is_some_and(|e| matches!(e, SpmError::ShutdownRequested)) =>
-        {
-            Ok(Outcome::StoppedByUser)
-        }
-        other => other,
-    };
 
     match &result {
         Ok(Outcome::Completed) => {
