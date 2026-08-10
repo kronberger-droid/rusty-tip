@@ -9,6 +9,7 @@ use rusty_tip::event::{ConsoleLogger, EventAccumulator, EventBus, FileLogger};
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
 use rusty_tip::signal_registry::SignalRegistry;
 use rusty_tip::spm_controller::SpmController;
+use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
 use rusty_tip::workflow::ShutdownFlag;
 
@@ -101,15 +102,14 @@ fn run() -> Result<(), RunError> {
     let setup = NanonisSetupConfig {
         layout_file: config.nanonis.layout_file.clone(),
         settings_file: config.nanonis.settings_file.clone(),
-        safe_tip_threshold_a: config.tip_prep.safe_tip_threshold as f64,
+        safe_tip_threshold_a: config.tip_prep.safe_tip_threshold,
         ..Default::default()
     };
     let mut controller = NanonisController::new(client, setup);
     info!("Connected to Nanonis system");
 
     // Build signal registry
-    let signal_names = controller.signal_names()?;
-    let registry = build_signal_registry(&signal_names, &config);
+    let registry = build_signal_registry(&mut controller, &config)?;
     let freq_shift_signal = registry
         .get_by_name("freq shift")
         .ok_or("Frequency shift signal not found in registry")?;
@@ -242,7 +242,10 @@ fn log_random_switch(switch: &Option<rusty_tip::RandomPolaritySwitch>) {
     }
 }
 
-fn build_signal_registry(signal_names: &[String], config: &AppConfig) -> SignalRegistry {
+fn build_signal_registry(
+    controller: &mut dyn SpmController,
+    config: &AppConfig,
+) -> Result<SignalRegistry, SpmError> {
     let mut builder = SignalRegistry::builder().with_standard_map();
 
     if let Some(ref mappings) = config.tcp_channel_mapping {
@@ -253,10 +256,10 @@ fn build_signal_registry(signal_names: &[String], config: &AppConfig) -> SignalR
         builder = builder.add_tcp_map(&tcp_map);
     }
 
-    builder
-        .from_signal_names(signal_names)
+    Ok(builder
+        .from_controller(controller)?
         .create_aliases()
-        .build()
+        .build())
 }
 
 fn setup_event_bus(config: &AppConfig) -> Result<EventBus, Box<dyn std::error::Error>> {

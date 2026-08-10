@@ -887,7 +887,7 @@ mod tests {
         let score = build_score_map(&img, 5);
         let angle = detect_angle(&score);
         assert!(
-            angle < 10.0 || angle > 170.0,
+            !(10.0..=170.0).contains(&angle),
             "Horizontal bands: angle should be near 0/180, got {}",
             angle
         );
