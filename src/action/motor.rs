@@ -5,8 +5,7 @@ use nanonis_rs::motor::{MotorDirection, MotorDisplacement, MovementMode, Positio
 use crate::action::util::Wait;
 use crate::action::z_controller::{CalibratedApproach, Withdraw};
 use crate::action::{Action, ActionContext, ActionOutput};
-use crate::machine_state::{StateEffects, StateRequirements, TipEngagement};
-use crate::spm_controller::{Capability, ZControllerStatus};
+use crate::spm_controller::Capability;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MoveMotor {
@@ -98,15 +97,6 @@ impl Action for MoveMotor3D {
     }
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Motor]
-    }
-
-    /// Coarse motor moves are not atomic across axes — the underlying driver
-    /// issues one blocking move per nonzero axis in sequence, so a mid-move
-    /// error leaves the tip partially displaced. Require the tip to be
-    /// withdrawn so a partial move cannot end with the tip in unexpected XY
-    /// above an engaged z-controller.
-    fn expects(&self) -> StateRequirements {
-        StateRequirements::none().tip(TipEngagement::Withdrawn)
     }
 
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
@@ -248,13 +238,6 @@ impl Action for Reposition {
     }
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::ZController, Capability::Motor, Capability::Pll]
-    }
-
-    fn effects(&self) -> StateEffects {
-        // Net effect: tip ends up approached after withdraw + move + approach
-        StateEffects::none()
-            .set_tip(TipEngagement::Approached)
-            .set_z_controller(ZControllerStatus::On)
     }
 
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {

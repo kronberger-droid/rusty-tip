@@ -131,13 +131,12 @@ and pulse-voltage strategies, written entirely in these verbs.
 
 ## The action system
 
-Underneath the subsystem handles, every SPM operation is an action: a
-serializable struct that executes against an `ActionContext`. The handles
-construct and execute these for you — you only reach for actions directly
-when you need the serializable form (e.g. constructing operations from JSON)
-or an operation without the harness. Actions declare the hardware
-capabilities they need, and execution fails with `Unsupported` before
-touching hardware if the controller lacks one.
+Underneath the subsystem handles, every SPM operation is an action: a struct
+that executes against an `ActionContext`. The handles construct and execute
+these for you, so reach for actions directly only when you want an operation
+the handles do not expose, or one without the harness around it. Actions
+declare the hardware capabilities they need, and execution fails with
+`Unsupported` before touching hardware if the controller lacks one.
 
 ```rust
 use rusty_tip::SignalIndex;
@@ -176,8 +175,8 @@ let output = ReadStableSignal {
 
 ### Built-in actions
 
-`action::builtin_registry()` returns an `ActionRegistry` with all of these,
-constructible by name from JSON parameters:
+The action layer implements these operations. Routines reach the common ones
+through the subsystem handles rather than constructing actions directly:
 
 | Category | Actions |
 |----------|---------|
@@ -231,11 +230,3 @@ Everything observable flows through the `EventBus`: action started/completed/
 failed, measurements with their batch statistics, and routine state
 snapshots. Attach observers (`ConsoleLogger`, `FileLogger` for JSONL,
 `ChannelForwarder` for GUIs) to consume them.
-
-## Workflow engine (deprecated)
-
-The `workflow` module holds a declarative `Step`/`Condition` tree executor.
-The routine harness (`routine` module) is its replacement: control flow
-belongs in Rust, where the compiler and the borrow checker can see it, not
-in a condition tree. The executor has no production consumer and is expected
-to be removed in 0.5.x. New automations should implement `Routine`.
