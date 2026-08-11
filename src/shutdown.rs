@@ -1,45 +1,74 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+use parking_lot::{Condvar, Mutex};
 
 /// Thread-safe flag for graceful cancellation of a running routine.
 ///
-/// Share an `Arc<AtomicBool>` between the running routine and the signal
-/// handler (or GUI stop button). The routine checks it between steps.
+/// Clone the flag into the signal handler (or GUI stop button) and call
+/// [`request()`](Self::request) there; the running routine checks
+/// [`is_requested()`](Self::is_requested) between steps and sleeps with
+/// [`wait_timeout()`](Self::wait_timeout).
+///
+/// Backed by a condition variable rather than a bare `AtomicBool`, so a
+/// shutdown request wakes sleeping waiters immediately instead of being
+/// noticed at the next poll interval.
 #[derive(Debug, Clone)]
 pub struct ShutdownFlag {
-    flag: Arc<AtomicBool>,
+    inner: Arc<Inner>,
+}
+
+#[derive(Debug)]
+struct Inner {
+    requested: Mutex<bool>,
+    cvar: Condvar,
 }
 
 impl ShutdownFlag {
     pub fn new() -> Self {
         Self {
-            flag: Arc::new(AtomicBool::new(false)),
+            inner: Arc::new(Inner {
+                requested: Mutex::new(false),
+                cvar: Condvar::new(),
+            }),
         }
     }
 
-    /// Wrap an existing flag (e.g. from a signal handler).
-    pub fn from_arc(flag: Arc<AtomicBool>) -> Self {
-        Self { flag }
-    }
-
-    /// Request shutdown.
+    /// Request shutdown and wake every thread blocked in `wait_timeout`.
     pub fn request(&self) {
-        self.flag.store(true, Ordering::SeqCst);
+        *self.inner.requested.lock() = true;
+        self.inner.cvar.notify_all();
     }
 
     /// Check if shutdown has been requested.
     pub fn is_requested(&self) -> bool {
-        self.flag.load(Ordering::SeqCst)
+        *self.inner.requested.lock()
     }
 
-    /// Reset the flag (e.g. for reuse across multiple workflow runs).
+    /// Reset the flag (e.g. for reuse across multiple runs).
     pub fn reset(&self) {
-        self.flag.store(false, Ordering::SeqCst);
+        *self.inner.requested.lock() = false;
     }
 
-    /// Get a clone of the underlying Arc for sharing with signal handlers.
-    pub fn arc(&self) -> Arc<AtomicBool> {
-        self.flag.clone()
+    /// Block for up to `timeout`, returning early if shutdown is requested.
+    ///
+    /// Returns `true` if shutdown was requested (immediately if it already
+    /// was), `false` if the full timeout elapsed. This is the interruptible
+    /// replacement for `std::thread::sleep` in routine code.
+    pub fn wait_timeout(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut requested = self.inner.requested.lock();
+        while !*requested {
+            if self
+                .inner
+                .cvar
+                .wait_until(&mut requested, deadline)
+                .timed_out()
+            {
+                return *requested;
+            }
+        }
+        true
     }
 }
 
@@ -83,19 +112,39 @@ mod tests {
     }
 
     #[test]
-    fn from_arc_shares_state() {
-        let raw = Arc::new(AtomicBool::new(false));
-        let flag = ShutdownFlag::from_arc(raw.clone());
-        raw.store(true, Ordering::SeqCst);
-        assert!(flag.is_requested());
+    fn wait_timeout_elapses_when_not_requested() {
+        let flag = ShutdownFlag::new();
+        let start = Instant::now();
+        assert!(!flag.wait_timeout(Duration::from_millis(20)));
+        assert!(start.elapsed() >= Duration::from_millis(20));
     }
 
     #[test]
-    fn arc_returns_shared_reference() {
+    fn wait_timeout_returns_immediately_when_already_requested() {
         let flag = ShutdownFlag::new();
-        let arc = flag.arc();
         flag.request();
-        assert!(arc.load(Ordering::SeqCst));
+        let start = Instant::now();
+        assert!(flag.wait_timeout(Duration::from_secs(10)));
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn request_wakes_a_sleeping_waiter() {
+        let flag = ShutdownFlag::new();
+        let waiter = flag.clone();
+        let handle = std::thread::spawn(move || {
+            let start = Instant::now();
+            let requested = waiter.wait_timeout(Duration::from_secs(10));
+            (requested, start.elapsed())
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        flag.request();
+        let (requested, waited) = handle.join().unwrap();
+        assert!(requested);
+        assert!(
+            waited < Duration::from_secs(5),
+            "waiter should wake on request, not sleep out the timeout (waited {waited:?})"
+        );
     }
 
     #[test]

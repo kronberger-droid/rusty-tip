@@ -2,8 +2,9 @@
 
 The library is the product: routines like tip-prep are applications built on
 it. This guide covers the pieces you compose your own automation from —
-running the shipped routine, the action system, implementing `SpmController`
-for other hardware — current as of 0.4.0.
+running the shipped routine, writing a routine of your own against the
+harness, the action system underneath, implementing `SpmController` for
+other hardware — current as of the 0.5.0 development line.
 
 ## Running the tip-prep routine
 
@@ -44,12 +45,99 @@ or `TimedOut`. A shutdown request is an expected ending, never an error.
 For a complete, runnable example against the mock controller, see
 `examples/tip-prep-mock.rs` (`cargo run --example tip-prep-mock`).
 
+## Writing a routine
+
+A routine is a struct implementing `Routine`. Its `run` method receives an
+`Rt` (the routine runtime), which hands out the controller's subsystems and
+absorbs the scaffolding every routine otherwise reimplements: capability
+checks, event logging, interruptible waits, cycle/time budgets, and cleanup
+that must run no matter how a step ends.
+
+```rust
+use rusty_tip::routine::{Outcome, Routine, Rt};
+use rusty_tip::spm_error::SpmError;
+
+struct PulseUntilSharp {
+    target_hz: f64,
+}
+
+impl Routine for PulseUntilSharp {
+    fn name(&self) -> &str {
+        "pulse_until_sharp"
+    }
+
+    fn run(&mut self, rt: &mut Rt) -> Result<Outcome, SpmError> {
+        rt.bias()?.set(-0.5)?;
+        rt.z()?.calibrated_approach()?;
+
+        let mut cycles = rt.cycles(Some(100), None);
+        while let Some(cycle) = cycles.next() {
+            rt.bias()?.pulse(4.0, 50)?;
+            rt.settle(1000)?;
+            let fs = rt.signals()?.read(rusty_tip::SignalIndex(76))?;
+            log::info!("cycle {cycle}: freq shift {fs:.2} Hz");
+            if fs >= self.target_hz {
+                return Ok(Outcome::Completed);
+            }
+        }
+        Ok(cycles.outcome())
+    }
+}
+```
+
+Run it with `run_routine(controller, &events, &shutdown, &mut routine)`,
+which owns the controller life cycle: `prepare()` before, tip withdrawal and
+`teardown()` after, whatever the outcome. A stop request (Ctrl+C, GUI
+button) surfaces as `Outcome::StoppedByUser`, never as an error. "Whatever
+the outcome" covers panics too: a panicking routine is withdrawn and torn
+down first, then the panic is re-raised unchanged.
+
+`run_routine` takes the controller by value, so for now a controller runs
+exactly one routine: there is no way to prepare a tip with one routine and
+measure with the next on the same connection. Sequence such work inside a
+single `Routine` until that changes.
+
+The pieces, in the order you meet them:
+
+- **Subsystem handles** — `rt.bias()?`, `rt.z()?`, `rt.signals()?`,
+  `rt.motor()?`, `rt.scan()?`. Each accessor checks the controller's
+  capabilities (a controller without a motor makes `rt.motor()` fail with
+  `Unsupported` at the call site), and events are emitted for you.
+  The rule for what gets logged: every operation that *changes* the
+  instrument's state emits started/completed/failed, and so does every
+  read whose value is scientific data (`signals().read()`). Reads used
+  for control flow stay silent — `scan().status()` is polled in a loop,
+  and logging that buries the run. Fetch a handle per statement rather
+  than storing it; that keeps borrows from ever overlapping.
+- **`rt.settle(ms)`** — an interruptible wait: a stop request wakes it
+  immediately and surfaces as `ShutdownRequested`. Use it instead of
+  `thread::sleep`, always.
+- **`rt.cycles(max_cycles, max_duration)`** — drives the main loop and
+  turns exhausted budgets and stop requests into the right `Outcome`, so
+  the loop body contains only the science.
+- **`rt.guarded(body, cleanup)`** — runs `cleanup` however `body` ends.
+  For hardware that must be restored (a running scan, a modified scan
+  speed, an engaged tip) even when the work in between fails. The body's
+  error wins; a cleanup error on top of it is logged and emitted as a
+  `cleanup_failed` event, so it never disappears silently. A cleanup
+  that should never fail the run handles its own errors and returns
+  `Ok(())`, which is what the stability sweep does.
+- **`rt.controller()`** — the escape hatch to the bare `SpmController` for
+  anything the handles don't cover; calls through it bypass event logging.
+
+The shipped `TipPrep` routine (`src/tip_prep/runner.rs`) is the reference:
+a full state machine with confirmation reads, a guarded stability sweep,
+and pulse-voltage strategies, written entirely in these verbs.
+
 ## The action system
 
-Every SPM operation is an action: a serializable struct that executes against
-an `ActionContext`. Actions declare the hardware capabilities they need, and
-execution fails with `Unsupported` before touching hardware if the controller
-lacks one.
+Underneath the subsystem handles, every SPM operation is an action: a
+serializable struct that executes against an `ActionContext`. The handles
+construct and execute these for you — you only reach for actions directly
+when you need the serializable form (e.g. constructing operations from JSON)
+or an operation without the harness. Actions declare the hardware
+capabilities they need, and execution fails with `Unsupported` before
+touching hardware if the controller lacks one.
 
 ```rust
 use rusty_tip::SignalIndex;
@@ -144,9 +232,10 @@ failed, measurements with their batch statistics, and routine state
 snapshots. Attach observers (`ConsoleLogger`, `FileLogger` for JSONL,
 `ChannelForwarder` for GUIs) to consume them.
 
-## Workflow engine (experimental)
+## Workflow engine (deprecated)
 
 The `workflow` module holds a declarative `Step`/`Condition` tree executor.
-It has no production consumer yet and is expected to be redesigned around a
-routine-harness interface; expect breaking changes or removal in 0.5.x. New
-automations should follow the shape of `tip_prep::run_tip_prep` instead.
+The routine harness (`routine` module) is its replacement: control flow
+belongs in Rust, where the compiler and the borrow checker can see it, not
+in a condition tree. The executor has no production consumer and is expected
+to be removed in 0.5.x. New automations should implement `Routine`.
