@@ -124,7 +124,7 @@ impl<'a> Rt<'a> {
             return Ok(());
         }
         match self.controller.z_controller_status() {
-            Ok(ZControllerStatus::SafeTip) => Err(SpmError::Workflow(
+            Ok(ZControllerStatus::SafeTip) => Err(SpmError::Routine(
                 "safe-tip protection triggered, aborting".into(),
             )),
             Ok(_) => Ok(()),

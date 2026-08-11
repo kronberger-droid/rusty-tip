@@ -47,6 +47,23 @@ pub struct NanonisSetupConfig {
     pub tcp_refresh_output: Option<i32>,
 }
 
+impl NanonisSetupConfig {
+    /// Build the setup from an [`AppConfig`], leaving the rest at their
+    /// defaults.
+    ///
+    /// Every binary needs this same mapping, and spelling it out per binary is
+    /// how the z-home mode came to differ from what the calibrated approach
+    /// assumes: a field nobody names is a field nobody notices.
+    pub fn from_app_config(config: &crate::config::AppConfig) -> Self {
+        Self {
+            layout_file: config.nanonis.layout_file.clone(),
+            settings_file: config.nanonis.settings_file.clone(),
+            safe_tip_threshold_a: config.tip_prep.safe_tip_threshold,
+            ..Default::default()
+        }
+    }
+}
+
 impl Default for NanonisSetupConfig {
     fn default() -> Self {
         Self {

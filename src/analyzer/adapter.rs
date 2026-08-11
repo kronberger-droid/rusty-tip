@@ -70,7 +70,7 @@ impl Action for RunAnalyzer {
                 .get_raw(&self.source_key)
                 .cloned()
                 .ok_or_else(|| {
-                    SpmError::Workflow(format!(
+                    SpmError::Routine(format!(
                         "RunAnalyzer: no \"{}\" in DataStore. Run GrabScanFrame \
                      (or set source_key) first.",
                         self.source_key
@@ -87,7 +87,7 @@ impl Action for RunAnalyzer {
             .get("data")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .ok_or_else(|| {
-                SpmError::Workflow(format!(
+                SpmError::Routine(format!(
                     "RunAnalyzer: \"{}.data\" missing or not a 2D array",
                     self.source_key
                 ))

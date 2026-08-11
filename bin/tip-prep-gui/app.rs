@@ -1877,12 +1877,7 @@ fn build_nanonis_backend(
         .address(&config.nanonis.host_ip)
         .port(config.nanonis.control_ports[0])
         .build()?;
-    let setup = NanonisSetupConfig {
-        layout_file: config.nanonis.layout_file.clone(),
-        settings_file: config.nanonis.settings_file.clone(),
-        safe_tip_threshold_a: config.tip_prep.safe_tip_threshold,
-        ..Default::default()
-    };
+    let setup = NanonisSetupConfig::from_app_config(config);
     let mut controller = NanonisController::new(client, setup);
     info!("Connected to Nanonis system");
 

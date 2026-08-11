@@ -18,9 +18,9 @@ pub enum SpmError {
     /// Hardware/server reported error
     #[error("Hardware error (code {code}: {message})")]
     Hardware { code: i32, message: String },
-    /// Workflow or execution logic error
+    /// Routine or execution logic error
     #[error("{0}")]
-    Workflow(String),
+    Routine(String),
     /// Operation not supported by the current controller
     #[error("Unsupported: {0}")]
     Unsupported(String),

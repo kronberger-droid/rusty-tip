@@ -32,7 +32,6 @@ pub use plotting::{plot_values, plot_values_with_range};
 pub use routine::{Outcome, Routine, Rt, run_routine};
 pub use shutdown::ShutdownFlag;
 pub use signal_registry::{Signal, SignalIndex, SignalRegistry};
-pub use types::TipShape;
 
 // Re-export nanonis-rs core types
 pub use nanonis_rs::{
