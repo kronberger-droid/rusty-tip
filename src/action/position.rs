@@ -1,13 +1,12 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use nanonis_rs::Position;
 
-use crate::action::{Action, ActionContext, ActionOutput};
+use crate::action::{Action, ActionContext};
 use crate::spm_controller::Capability;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ReadPosition {
-    #[serde(default = "super::default_true")]
     pub wait_for_newest: bool,
 }
 
@@ -20,6 +19,8 @@ impl Default for ReadPosition {
 }
 
 impl Action for ReadPosition {
+    type Output = Vec<(String, f64)>;
+
     fn name(&self) -> &str {
         "read_position"
     }
@@ -29,20 +30,16 @@ impl Action for ReadPosition {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::PiezoPosition]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let pos = ctx.controller.get_position(self.wait_for_newest)?;
-        Ok(ActionOutput::Values(vec![
-            ("x".to_string(), pos.x),
-            ("y".to_string(), pos.y),
-        ]))
+        Ok(vec![("x".to_string(), pos.x), ("y".to_string(), pos.y)])
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SetPosition {
     pub x: f64,
     pub y: f64,
-    #[serde(default = "super::default_true")]
     pub wait: bool,
 }
 
@@ -57,6 +54,8 @@ impl Default for SetPosition {
 }
 
 impl Action for SetPosition {
+    type Output = ();
+
     fn name(&self) -> &str {
         "set_position"
     }
@@ -66,9 +65,9 @@ impl Action for SetPosition {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::PiezoPosition]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let pos = Position::new(self.x, self.y);
         ctx.controller.set_position(pos, self.wait)?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }

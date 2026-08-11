@@ -1,11 +1,11 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::action::{Action, ActionContext, ActionOutput};
+use crate::action::{Action, ActionContext};
 use crate::spm_controller::AcquisitionMode;
 use crate::spm_controller::Capability;
 
 /// Serializable acquisition mode for the oscilloscope.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AcquisitionModeParam {
     Current,
@@ -24,10 +24,9 @@ impl From<AcquisitionModeParam> for AcquisitionMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct OsciRead {
     pub channel: i32,
-    #[serde(default)]
     pub mode: AcquisitionModeParam,
     // Trigger configuration is omitted for now -- the TriggerSetup type
     // aliases nanonis-rs TriggerConfig which doesn't derive Serialize.
@@ -45,6 +44,8 @@ impl Default for OsciRead {
 }
 
 impl Action for OsciRead {
+    type Output = serde_json::Value;
+
     fn name(&self) -> &str {
         "osci_read"
     }
@@ -54,17 +55,17 @@ impl Action for OsciRead {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Oscilloscope]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let data = ctx.controller.osci_read(
             self.channel,
             None, // no trigger override
             self.mode.clone().into(),
         )?;
-        Ok(ActionOutput::Data(serde_json::json!({
+        Ok(serde_json::json!({
             "t0": data.t0,
             "dt": data.dt,
             "size": data.size,
             "data": data.data,
-        })))
+        }))
     }
 }

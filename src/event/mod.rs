@@ -6,8 +6,6 @@ use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 
-use crate::action::ActionOutput;
-
 /// Structured event emitted during execution.
 ///
 /// All variants are `Clone + Serialize` so they can be broadcast to multiple
@@ -63,16 +61,10 @@ impl Event {
         }
     }
 
-    pub fn action_completed(action: &str, output: &ActionOutput, duration: Duration) -> Self {
-        let output_json = match output {
-            ActionOutput::Value(v) => serde_json::json!(v),
-            ActionOutput::Values(vs) => serde_json::json!(vs),
-            ActionOutput::Data(d) => d.clone(),
-            ActionOutput::Unit => serde_json::Value::Null,
-        };
+    pub fn action_completed(action: &str, output: serde_json::Value, duration: Duration) -> Self {
         Event::ActionCompleted {
             action: action.into(),
-            output: output_json,
+            output,
             duration,
             timestamp: SystemTime::now(),
         }
@@ -194,9 +186,9 @@ mod tests {
     }
 
     #[test]
-    fn event_action_completed_converts_output() {
-        let output = ActionOutput::Value(f64::consts::PI);
-        let event = Event::action_completed("read_bias", &output, Duration::from_millis(50));
+    fn event_action_completed_carries_output() {
+        let output = serde_json::json!(f64::consts::PI);
+        let event = Event::action_completed("read_bias", output, Duration::from_millis(50));
         match event {
             Event::ActionCompleted {
                 output, duration, ..
@@ -210,7 +202,10 @@ mod tests {
 
     #[test]
     fn event_action_completed_unit_is_null() {
-        let event = Event::action_completed("wait", &ActionOutput::Unit, Duration::ZERO);
+        // `()` outputs serialize to null, which is what an action that only
+        // commands the hardware records.
+        let output = serde_json::to_value(()).unwrap();
+        let event = Event::action_completed("wait", output, Duration::ZERO);
         match event {
             Event::ActionCompleted { output, .. } => {
                 assert!(output.is_null());
@@ -269,7 +264,7 @@ mod tests {
     #[test]
     fn duration_serializes_as_milliseconds() {
         let event =
-            Event::action_completed("test", &ActionOutput::Unit, Duration::from_millis(1234));
+            Event::action_completed("test", serde_json::Value::Null, Duration::from_millis(1234));
         let json = serde_json::to_value(&event).unwrap();
         let dur_ms = json["duration"].as_f64().unwrap();
         assert!((dur_ms - 1234.0).abs() < 1.0);

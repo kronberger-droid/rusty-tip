@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::action::{Action, ActionContext, ActionOutput};
+use crate::action::{Action, ActionContext};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Wait {
     pub duration_ms: u64,
 }
@@ -16,14 +16,16 @@ impl Default for Wait {
 }
 
 impl Action for Wait {
+    type Output = ();
+
     fn name(&self) -> &str {
         "wait"
     }
     fn description(&self) -> &str {
         "Wait for a specified duration in milliseconds"
     }
-    fn execute(&self, _ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, _ctx: &mut ActionContext) -> super::Result<Self::Output> {
         std::thread::sleep(Duration::from_millis(self.duration_ms));
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }

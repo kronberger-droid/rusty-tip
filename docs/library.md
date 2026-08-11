@@ -230,3 +230,12 @@ Everything observable flows through the `EventBus`: action started/completed/
 failed, measurements with their batch statistics, and routine state
 snapshots. Attach observers (`ConsoleLogger`, `FileLogger` for JSONL,
 `ChannelForwarder` for GUIs) to consume them.
+
+An action's started event carries its parameters and its completed event
+carries its result, both serialized from the action's own types, so the log
+says a pulse was 4.0 V for 50 ms rather than only that a pulse happened:
+
+```json
+{"type":"action_started","action":"bias_pulse","params":{"voltage":4.0,"duration_ms":50,"z_hold":true,"absolute":true}}
+{"type":"action_completed","action":"bias_pulse","output":null,"duration":51.2}
+```

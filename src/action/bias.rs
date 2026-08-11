@@ -1,14 +1,16 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::action::{Action, ActionContext, ActionOutput};
+use crate::action::{Action, ActionContext};
 use crate::spm_controller::{Capability, ZControllerStatus};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ReadBias;
 
 impl Action for ReadBias {
+    type Output = f64;
+
     fn name(&self) -> &str {
         "read_bias"
     }
@@ -18,13 +20,13 @@ impl Action for ReadBias {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Bias]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let voltage = ctx.controller.get_bias()?;
-        Ok(ActionOutput::Value(voltage))
+        Ok(voltage)
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SetBias {
     pub voltage: f64,
 }
@@ -36,6 +38,8 @@ impl Default for SetBias {
 }
 
 impl Action for SetBias {
+    type Output = ();
+
     fn name(&self) -> &str {
         "set_bias"
     }
@@ -45,19 +49,17 @@ impl Action for SetBias {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Bias]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         ctx.controller.set_bias(self.voltage)?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BiasPulse {
     pub voltage: f64,
     pub duration_ms: u64,
-    #[serde(default = "super::default_true")]
     pub z_hold: bool,
-    #[serde(default)]
     pub absolute: bool,
 }
 
@@ -73,6 +75,8 @@ impl Default for BiasPulse {
 }
 
 impl Action for BiasPulse {
+    type Output = ();
+
     fn name(&self) -> &str {
         "bias_pulse"
     }
@@ -82,14 +86,14 @@ impl Action for BiasPulse {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Bias]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         ctx.controller.bias_pulse(
             self.voltage,
             Duration::from_millis(self.duration_ms),
             self.z_hold,
             self.absolute,
         )?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 
     // No effects: bias returns to previous value after pulse
@@ -104,7 +108,7 @@ impl Action for BiasPulse {
 /// 2. Set bias
 ///
 /// Otherwise behaves identically to `SetBias`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SafeSetBias {
     pub voltage: f64,
 }
@@ -116,6 +120,8 @@ impl Default for SafeSetBias {
 }
 
 impl Action for SafeSetBias {
+    type Output = ();
+
     fn name(&self) -> &str {
         "safe_set_bias"
     }
@@ -125,7 +131,7 @@ impl Action for SafeSetBias {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Bias, Capability::ZController]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let current_bias = ctx.controller.get_bias()?;
         let crosses_zero = current_bias.signum() != self.voltage.signum()
             && !(current_bias == 0.0 && self.voltage == 0.0);
@@ -155,6 +161,6 @@ impl Action for SafeSetBias {
         }
 
         ctx.controller.set_bias(self.voltage)?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }

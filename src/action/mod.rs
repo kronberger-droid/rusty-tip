@@ -3,7 +3,6 @@ mod context;
 pub mod data_stream;
 pub mod motor;
 pub mod oscilloscope;
-mod output;
 pub mod pll;
 pub mod position;
 pub mod scan;
@@ -14,16 +13,12 @@ pub mod util;
 pub mod z_controller;
 
 pub use context::ActionContext;
-pub use output::ActionOutput;
 pub use store::DataStore;
+
+use serde::Serialize;
 
 use crate::spm_controller::{Capability, SpmController};
 use crate::spm_error::SpmError;
-
-/// Shared serde default for boolean fields that should default to `true`.
-pub(crate) fn default_true() -> bool {
-    true
-}
 
 type Result<T> = std::result::Result<T, SpmError>;
 
@@ -38,6 +33,14 @@ type Result<T> = std::result::Result<T, SpmError>;
 /// [`Rt`](crate::routine::Rt) hands out, which is where capability checks and
 /// event emission happen.
 pub trait Action: Send + Sync {
+    /// What a successful execution produces: `()` for operations that only
+    /// command the hardware, `f64` for a single reading, a struct or
+    /// `serde_json::Value` for richer results.
+    ///
+    /// The bound exists so the execution layer can put the value into the
+    /// event log without knowing the type.
+    type Output: Serialize;
+
     /// Unique identifier, e.g. "read_signal", "bias_pulse"
     fn name(&self) -> &str;
 
@@ -52,7 +55,7 @@ pub trait Action: Send + Sync {
     }
 
     /// Execute this action against the provided context
-    fn execute(&self, ctx: &mut ActionContext) -> Result<ActionOutput>;
+    fn execute(&self, ctx: &mut ActionContext) -> Result<Self::Output>;
 }
 
 /// Verify the controller supports every capability `action` requires.
@@ -60,7 +63,10 @@ pub trait Action: Send + Sync {
 /// Every execution path calls this before running an action, so a
 /// capability violation surfaces as a clear `Unsupported` error before
 /// any command reaches the hardware, instead of a mid-action failure.
-pub fn check_capabilities(action: &dyn Action, controller: &dyn SpmController) -> Result<()> {
+pub fn check_capabilities<A: Action + ?Sized>(
+    action: &A,
+    controller: &dyn SpmController,
+) -> Result<()> {
     let required = action.requires();
     if required.is_empty() {
         return Ok(());

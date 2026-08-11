@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::action::{Action, ActionContext, ActionOutput, DataStore};
+use crate::action::{Action, ActionContext, DataStore};
 use crate::event::{Event, EventBus, EventEmitter};
 use crate::shutdown::ShutdownFlag;
 use crate::spm_controller::{Capability, SpmController};
@@ -205,7 +205,7 @@ impl<'a> Rt<'a> {
             Ok(value) => {
                 self.events.emit(Event::action_completed(
                     name,
-                    &ActionOutput::Unit,
+                    serde_json::Value::Null,
                     start.elapsed(),
                 ));
                 Ok(value)
@@ -220,11 +220,23 @@ impl<'a> Rt<'a> {
 
     /// Execute an action with capability checking and start/complete/fail
     /// events. All subsystem handle methods funnel through here.
-    pub(crate) fn exec(&mut self, action: &dyn Action) -> Result<ActionOutput, SpmError> {
+    ///
+    /// Returns the action's own output type, so a handle method that reads a
+    /// voltage gets an `f64` rather than something it has to unwrap.
+    ///
+    /// The `Serialize` bound is what puts the action's parameters into the
+    /// started event, so the log records a pulse's voltage and width rather
+    /// than just that a pulse happened. An action that cannot be serialized
+    /// (one holding a trait object, say) stays a valid [`Action`] but cannot
+    /// go through here until it grows a `Serialize` impl.
+    pub(crate) fn exec<A: Action + serde::Serialize>(
+        &mut self,
+        action: &A,
+    ) -> Result<A::Output, SpmError> {
         let name = action.name().to_string();
         let start = Instant::now();
-        self.events
-            .emit(Event::action_started(&name, serde_json::json!({})));
+        let params = serde_json::to_value(action).unwrap_or_default();
+        self.events.emit(Event::action_started(&name, params));
         let mut ctx = ActionContext {
             controller: self.controller,
             store: &mut self.store,
@@ -236,8 +248,11 @@ impl<'a> Rt<'a> {
         };
         match result {
             Ok(output) => {
+                // A value that will not serialize must not fail the action
+                // that already ran; log it as null instead.
+                let json = serde_json::to_value(&output).unwrap_or(serde_json::Value::Null);
                 self.events
-                    .emit(Event::action_completed(&name, &output, start.elapsed()));
+                    .emit(Event::action_completed(&name, json, start.elapsed()));
                 Ok(output)
             }
             Err(e) => {

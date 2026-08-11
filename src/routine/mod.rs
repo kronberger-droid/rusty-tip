@@ -296,6 +296,22 @@ mod tests {
     }
 
     #[test]
+    fn an_actions_parameters_reach_the_event_log() {
+        let mut mock = MockController::builder().build();
+        let (bus, events) = recording_bus();
+        let shutdown = ShutdownFlag::new();
+        let mut rt = Rt::new(&mut mock, &bus, &shutdown);
+
+        rt.bias().unwrap().pulse(4.0, 50).unwrap();
+
+        let events = events.lock().unwrap();
+        let params =
+            started_params(&events, "bias_pulse").expect("the pulse must reach the event log");
+        assert_eq!(params["voltage"], 4.0);
+        assert_eq!(params["duration_ms"], 50);
+    }
+
+    #[test]
     fn guarded_emits_the_cleanup_error_it_swallows() {
         let mut mock = MockController::builder().build();
         let (bus, events) = recording_bus();

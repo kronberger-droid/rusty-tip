@@ -1,17 +1,12 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::action::{Action, ActionContext, ActionOutput};
+use crate::action::{Action, ActionContext};
 use crate::spm_controller::Capability;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ConfigureDataStream {
     pub channels: Vec<i32>,
-    #[serde(default = "default_oversampling")]
     pub oversampling: i32,
-}
-
-fn default_oversampling() -> i32 {
-    10
 }
 
 impl Default for ConfigureDataStream {
@@ -24,6 +19,8 @@ impl Default for ConfigureDataStream {
 }
 
 impl Action for ConfigureDataStream {
+    type Output = ();
+
     fn name(&self) -> &str {
         "configure_data_stream"
     }
@@ -33,17 +30,19 @@ impl Action for ConfigureDataStream {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::DataStream]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         ctx.controller
             .data_stream_configure(&self.channels, self.oversampling)?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct StartDataStream;
 
 impl Action for StartDataStream {
+    type Output = ();
+
     fn name(&self) -> &str {
         "start_data_stream"
     }
@@ -53,16 +52,18 @@ impl Action for StartDataStream {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::DataStream]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         ctx.controller.data_stream_start()?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct StopDataStream;
 
 impl Action for StopDataStream {
+    type Output = ();
+
     fn name(&self) -> &str {
         "stop_data_stream"
     }
@@ -72,16 +73,18 @@ impl Action for StopDataStream {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::DataStream]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         ctx.controller.data_stream_stop()?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ReadDataStreamStatus;
 
 impl Action for ReadDataStreamStatus {
+    type Output = serde_json::Value;
+
     fn name(&self) -> &str {
         "read_data_stream_status"
     }
@@ -91,7 +94,7 @@ impl Action for ReadDataStreamStatus {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::DataStream]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let status = ctx.controller.data_stream_status()?;
         let json = serde_json::to_value(status).map_err(|e| {
             crate::spm_error::SpmError::Protocol(format!(
@@ -99,6 +102,6 @@ impl Action for ReadDataStreamStatus {
                 e
             ))
         })?;
-        Ok(ActionOutput::Data(json))
+        Ok(json)
     }
 }

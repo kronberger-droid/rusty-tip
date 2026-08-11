@@ -1,23 +1,22 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use nanonis_rs::motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D};
 
 use crate::action::util::Wait;
 use crate::action::z_controller::{CalibratedApproach, Withdraw};
-use crate::action::{Action, ActionContext, ActionOutput};
+use crate::action::{Action, ActionContext};
 use crate::spm_controller::Capability;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MoveMotor {
     pub direction: MotorDirectionParam,
     pub steps: u16,
-    #[serde(default = "super::default_true")]
     pub wait: bool,
 }
 
 /// Serializable motor direction that maps to nanonis-rs MotorDirection.
 /// Needed because MotorDirection doesn't derive Serialize/Deserialize.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MotorDirectionParam {
     XPlus,
@@ -52,6 +51,8 @@ impl Default for MoveMotor {
 }
 
 impl Action for MoveMotor {
+    type Output = ();
+
     fn name(&self) -> &str {
         "move_motor"
     }
@@ -61,19 +62,18 @@ impl Action for MoveMotor {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Motor]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         ctx.controller
             .move_motor(self.direction.clone().into(), self.steps, self.wait)?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MoveMotor3D {
     pub x: i16,
     pub y: i16,
     pub z: i16,
-    #[serde(default = "super::default_true")]
     pub wait: bool,
 }
 
@@ -89,6 +89,8 @@ impl Default for MoveMotor3D {
 }
 
 impl Action for MoveMotor3D {
+    type Output = ();
+
     fn name(&self) -> &str {
         "move_motor_3d"
     }
@@ -99,28 +101,27 @@ impl Action for MoveMotor3D {
         vec![Capability::Motor]
     }
 
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let displacement = MotorDisplacement {
             x: self.x,
             y: self.y,
             z: self.z,
         };
         ctx.controller.move_motor_3d(displacement, self.wait)?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MoveMotorClosedLoop {
     pub x: f64,
     pub y: f64,
     pub z: f64,
-    #[serde(default)]
     pub mode: MovementModeParam,
 }
 
 /// Serializable movement mode for closed-loop motor control.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MovementModeParam {
     #[default]
@@ -149,6 +150,8 @@ impl Default for MoveMotorClosedLoop {
 }
 
 impl Action for MoveMotorClosedLoop {
+    type Output = ();
+
     fn name(&self) -> &str {
         "move_motor_closed_loop"
     }
@@ -158,7 +161,7 @@ impl Action for MoveMotorClosedLoop {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Motor]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let target = Position3D {
             x: self.x,
             y: self.y,
@@ -166,14 +169,16 @@ impl Action for MoveMotorClosedLoop {
         };
         ctx.controller
             .move_motor_closed_loop(target, self.mode.clone().into())?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct StopMotor;
 
 impl Action for StopMotor {
+    type Output = ();
+
     fn name(&self) -> &str {
         "stop_motor"
     }
@@ -183,9 +188,9 @@ impl Action for StopMotor {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Motor]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         ctx.controller.stop_motor()?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
 
@@ -197,24 +202,13 @@ impl Action for StopMotor {
 /// 3. Wait for settle
 /// 4. Calibrated approach (approach, small withdraw, center freq shift, re-approach)
 /// 5. Wait for post-approach settle
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Reposition {
     pub x_steps: i16,
     pub y_steps: i16,
-    #[serde(default = "default_z_retract")]
     pub z_retract: i16,
-    #[serde(default = "default_settle_ms")]
     pub post_move_settle_ms: u64,
-    #[serde(default = "default_settle_ms")]
     pub post_approach_settle_ms: u64,
-}
-
-fn default_z_retract() -> i16 {
-    -3
-}
-
-fn default_settle_ms() -> u64 {
-    500
 }
 
 impl Default for Reposition {
@@ -230,6 +224,8 @@ impl Default for Reposition {
 }
 
 impl Action for Reposition {
+    type Output = ();
+
     fn name(&self) -> &str {
         "reposition"
     }
@@ -240,7 +236,7 @@ impl Action for Reposition {
         vec![Capability::ZController, Capability::Motor, Capability::Pll]
     }
 
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         Withdraw::default().execute(ctx)?;
 
         let displacement = MotorDisplacement {
@@ -262,6 +258,6 @@ impl Action for Reposition {
         }
         .execute(ctx)?;
 
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }

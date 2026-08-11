@@ -1,15 +1,15 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use nanonis_rs::scan::{ScanAction, ScanDirection};
 
-use crate::action::{Action, ActionContext, ActionOutput};
+use crate::action::{Action, ActionContext};
 use crate::spm_controller::Capability;
 
 /// DataStore key that `GrabScanFrame` writes and `RunAnalyzer` reads by default.
 pub const DEFAULT_SCAN_FRAME_KEY: &str = "scan_frame";
 
 /// Serializable scan action that maps to nanonis-rs ScanAction.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanActionParam {
     Start,
@@ -30,7 +30,7 @@ impl From<ScanActionParam> for ScanAction {
 }
 
 /// Serializable scan direction.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanDirectionParam {
     #[default]
@@ -47,10 +47,9 @@ impl From<ScanDirectionParam> for ScanDirection {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ScanControl {
     pub action: ScanActionParam,
-    #[serde(default)]
     pub direction: ScanDirectionParam,
 }
 
@@ -64,6 +63,8 @@ impl Default for ScanControl {
 }
 
 impl Action for ScanControl {
+    type Output = ();
+
     fn name(&self) -> &str {
         "scan_control"
     }
@@ -73,10 +74,10 @@ impl Action for ScanControl {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Scanning]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         ctx.controller
             .scan_action(self.action.clone().into(), self.direction.clone().into())?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
 
@@ -86,12 +87,11 @@ impl Action for ScanControl {
 /// ```json
 /// { "channel_name": "...", "data": [[f32, ...], ...], "direction_up": bool }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct GrabScanFrame {
     /// Which scan buffer channel to read (0-based index).
     pub channel_index: u32,
     /// `true` for forward scan direction, `false` for backward.
-    #[serde(default = "super::default_true")]
     pub forward: bool,
 }
 
@@ -105,6 +105,8 @@ impl Default for GrabScanFrame {
 }
 
 impl Action for GrabScanFrame {
+    type Output = serde_json::Value;
+
     fn name(&self) -> &str {
         "grab_scan_frame"
     }
@@ -114,7 +116,7 @@ impl Action for GrabScanFrame {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Scanning]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let (channel_name, data, direction_up) = ctx
             .controller
             .scan_frame_data_grab(self.channel_index, self.forward)?;
@@ -124,14 +126,16 @@ impl Action for GrabScanFrame {
             "direction_up": direction_up,
         });
         ctx.store.set(DEFAULT_SCAN_FRAME_KEY, &result)?;
-        Ok(ActionOutput::Data(result))
+        Ok(result)
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ReadScanStatus;
 
 impl Action for ReadScanStatus {
+    type Output = serde_json::Value;
+
     fn name(&self) -> &str {
         "read_scan_status"
     }
@@ -141,10 +145,8 @@ impl Action for ReadScanStatus {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Scanning]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let running = ctx.controller.scan_status()?;
-        Ok(ActionOutput::Data(
-            serde_json::json!({ "running": running }),
-        ))
+        Ok(serde_json::json!({ "running": running }))
     }
 }

@@ -1,16 +1,15 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::action::{Action, ActionContext, ActionOutput};
+use crate::action::{Action, ActionContext};
 use crate::event::Event;
 use crate::signal_registry::SignalIndex;
 use crate::spm_controller::Capability;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ReadSignal {
     pub index: SignalIndex,
-    #[serde(default = "super::default_true")]
     pub wait_for_newest: bool,
 }
 
@@ -24,6 +23,8 @@ impl Default for ReadSignal {
 }
 
 impl Action for ReadSignal {
+    type Output = f64;
+
     fn name(&self) -> &str {
         "read_signal"
     }
@@ -33,18 +34,17 @@ impl Action for ReadSignal {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Signals]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let val = ctx
             .controller
             .read_signal(self.index, self.wait_for_newest)?;
-        Ok(ActionOutput::Value(val))
+        Ok(val)
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ReadSignals {
     pub indices: Vec<SignalIndex>,
-    #[serde(default = "super::default_true")]
     pub wait_for_newest: bool,
 }
 
@@ -58,6 +58,8 @@ impl Default for ReadSignals {
 }
 
 impl Action for ReadSignals {
+    type Output = Vec<(String, f64)>;
+
     fn name(&self) -> &str {
         "read_signals"
     }
@@ -68,7 +70,7 @@ impl Action for ReadSignals {
         vec![Capability::Signals]
     }
 
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let vals = ctx
             .controller
             .read_signals(&self.indices, self.wait_for_newest)?;
@@ -85,14 +87,16 @@ impl Action for ReadSignals {
             .zip(vals)
             .map(|(idx, val)| (format!("signal_{}", idx), val))
             .collect();
-        Ok(ActionOutput::Values(labeled))
+        Ok(labeled)
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ReadSignalNames;
 
 impl Action for ReadSignalNames {
+    type Output = serde_json::Value;
+
     fn name(&self) -> &str {
         "read_signal_names"
     }
@@ -103,12 +107,12 @@ impl Action for ReadSignalNames {
         vec![Capability::Signals]
     }
 
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let names = ctx.controller.signal_names()?;
         let json = serde_json::to_value(names).map_err(|e| {
             crate::spm_error::SpmError::Protocol(format!("Failed to serialize signal names: {}", e))
         })?;
-        Ok(ActionOutput::Data(json))
+        Ok(json)
     }
 }
 
@@ -118,60 +122,37 @@ impl Action for ReadSignalNames {
 /// standard deviation (Hz) and the drift rate (Hz/s) are within bounds.
 /// Retries with exponential backoff (100ms, 200ms, 400ms, ...) if the
 /// signal is not stable. Returns the mean of the stable batch.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ReadStableSignal {
     pub index: SignalIndex,
-    #[serde(default = "default_num_samples")]
     pub num_samples: usize,
     /// Noise gate: maximum standard deviation of the batch, in Hz.
-    #[serde(default = "default_max_std_dev")]
     pub max_std_dev: f64,
     /// Drift gate: maximum regression slope, in Hz/s.
-    #[serde(default = "default_max_slope")]
     pub max_slope: f64,
-    #[serde(default = "default_max_retries")]
     pub max_retries: usize,
     /// Rate the samples arrive at, used to turn the per-sample regression
     /// slope into Hz/s. Without it the effective drift tolerance would scale
     /// with `num_samples`, so a tip could pass or fail on batch size alone.
-    #[serde(default = "default_sample_rate_hz")]
     pub sample_rate_hz: f64,
-}
-
-fn default_num_samples() -> usize {
-    100
-}
-
-fn default_max_std_dev() -> f64 {
-    1.5
-}
-
-fn default_max_slope() -> f64 {
-    0.5
-}
-
-fn default_max_retries() -> usize {
-    3
-}
-
-fn default_sample_rate_hz() -> f64 {
-    2000.0
 }
 
 impl Default for ReadStableSignal {
     fn default() -> Self {
         Self {
             index: SignalIndex(0),
-            num_samples: default_num_samples(),
-            max_std_dev: default_max_std_dev(),
-            max_slope: default_max_slope(),
-            max_retries: default_max_retries(),
-            sample_rate_hz: default_sample_rate_hz(),
+            num_samples: 100,
+            max_std_dev: 1.5,
+            max_slope: 0.5,
+            max_retries: 3,
+            sample_rate_hz: 2000.0,
         }
     }
 }
 
 impl Action for ReadStableSignal {
+    type Output = f64;
+
     fn name(&self) -> &str {
         "read_stable_signal"
     }
@@ -182,7 +163,7 @@ impl Action for ReadStableSignal {
         vec![Capability::Signals]
     }
 
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         for attempt in 0..=self.max_retries {
             let samples = ctx
                 .controller
@@ -234,7 +215,7 @@ impl Action for ReadStableSignal {
                     slope_per_sample,
                     true,
                 );
-                return Ok(ActionOutput::Value(mean));
+                return Ok(mean);
             }
 
             if attempt < self.max_retries {
@@ -271,7 +252,7 @@ impl Action for ReadStableSignal {
                     slope_per_sample,
                     false,
                 );
-                return Ok(ActionOutput::Value(mean));
+                return Ok(mean);
             }
         }
 
