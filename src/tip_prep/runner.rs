@@ -310,11 +310,11 @@ impl<'a> TipPrep<'a> {
             ));
             Ok(StabilityOutcome::Stable)
         } else {
-            // The post-sweep withdraw in execute_stability_sweep only logs
-            // errors; re-withdraw here with error propagation so a max-voltage
-            // pulse never fires on an engaged tip if the earlier withdraw
-            // silently failed.
-            rt.z()?.withdraw()?;
+            // The tip stays engaged for this pulse, as it was in v1. The
+            // point of the max-voltage pulse is to reshape the tip hard
+            // enough to start over, and a pulse fired on a withdrawn tip
+            // does not reshape anything. `measure_final_freq_shift` has
+            // just re-approached, so the tip is already where it needs to be.
 
             // Fire max pulse and reset to blunt. `fire_max_pulse_voltage` bumps
             // pulse_count and may flip polarity, so capture the effective sign
@@ -472,6 +472,13 @@ impl Routine for TipPrep<'_> {
         "tip_prep"
     }
 
+    /// On, matching v1: this routine approaches constantly (every reposition
+    /// re-approaches), so a safe-tip trip during an approach is the failure
+    /// worth aborting for rather than pulsing on and repositioning over.
+    fn safe_tip_guard(&self) -> bool {
+        true
+    }
+
     fn run(&mut self, rt: &mut Rt) -> Result<Outcome, SpmError> {
         let cfg = self.config;
         let timing = &cfg.tip_prep.timing;
@@ -479,7 +486,8 @@ impl Routine for TipPrep<'_> {
         log::info!("Initializing...");
         rt.bias()?.set(cfg.tip_prep.initial_bias_v)?;
         rt.z()?.set_setpoint(cfg.tip_prep.initial_z_setpoint_a)?;
-        rt.z()?.calibrated_approach()?;
+        rt.z()?
+            .calibrated_approach_within(timing.initial_approach_timeout_ms)?;
 
         // Clear the stream buffer to discard stale pre-approach data
         rt.signals()?.clear_buffer();

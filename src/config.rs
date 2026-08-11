@@ -106,6 +106,9 @@ fn default_reposition_steps() -> [i16; 2] {
 fn default_status_interval() -> usize {
     10
 }
+fn default_initial_approach_timeout_ms() -> u64 {
+    600_000
+}
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TimingConfig {
@@ -128,6 +131,11 @@ pub struct TimingConfig {
     pub reposition_steps: [i16; 2],
     #[serde(default = "default_status_interval")]
     pub status_interval: usize,
+    /// Timeout for the very first approach, which starts from an unknown
+    /// coarse position and can legitimately take minutes. Approaches during
+    /// the run start from a known height and use the shorter action default.
+    #[serde(default = "default_initial_approach_timeout_ms")]
+    pub initial_approach_timeout_ms: u64,
 }
 
 impl Default for TimingConfig {
@@ -141,6 +149,7 @@ impl Default for TimingConfig {
             post_pulse_settle_ms: default_post_pulse_settle_ms(),
             reposition_steps: default_reposition_steps(),
             status_interval: default_status_interval(),
+            initial_approach_timeout_ms: default_initial_approach_timeout_ms(),
         }
     }
 }

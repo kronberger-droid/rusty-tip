@@ -209,6 +209,8 @@ pub struct Reposition {
     pub z_retract: i16,
     pub post_move_settle_ms: u64,
     pub post_approach_settle_ms: u64,
+    /// Passed to the calibrated approach this performs.
+    pub check_safe_tip: bool,
 }
 
 impl Default for Reposition {
@@ -219,6 +221,7 @@ impl Default for Reposition {
             z_retract: -3,
             post_move_settle_ms: 500,
             post_approach_settle_ms: 500,
+            check_safe_tip: false,
         }
     }
 }
@@ -251,7 +254,11 @@ impl Action for Reposition {
         }
         .execute(ctx)?;
 
-        CalibratedApproach::default().execute(ctx)?;
+        CalibratedApproach {
+            check_safe_tip: self.check_safe_tip,
+            ..Default::default()
+        }
+        .execute(ctx)?;
 
         Wait {
             duration_ms: self.post_approach_settle_ms,

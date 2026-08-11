@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An action's `action_started` event now carries its parameters instead
   of an empty object, so the log records that a pulse was 4.0 V for
   50 ms rather than only that a pulse happened.
+- Safe-tip guard for calibrated approaches, restoring the abort-on-trip
+  checks v1 performed. Off unless a routine asks: `Routine::safe_tip_guard`
+  sets it for a whole run and `Rt::set_safe_tip_guard` toggles it around a
+  section. Scoped to the approach on purpose, since that is where the tip
+  is driven at the surface; checking everywhere would mostly misfire.
+  `TipPrep` turns it on, matching v1.
 - Tip preparation is now `TipPrep`, the reference `Routine`
   implementation; `run_tip_prep` keeps its exact signature and behaviour
   as a thin wrapper over `run_routine`.
@@ -51,6 +57,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors out (previously only on completion or shutdown), and waits
   inside the routine wake immediately on a stop request instead of at
   the next poll tick.
+
+### Fixed
+
+- **Regression against 0.2.3, the last version run on hardware, present
+  in the published 0.3.0 and 0.4.0:** the Nanonis z-home mode defaulted
+  to `Absolute`, where 0.2.3 set `Relative`. Neither affected release had
+  met a tip, so no patch was cut for them; run 0.5.0 or later on
+  hardware, or 0.2.3.
+  The calibrated approach homes mid-sequence to back off the surface
+  before centring the frequency shift, which only retracts under
+  `Relative`; `Absolute` sends Z to a fixed coordinate instead.
+- **Regression against 0.2.3:** the max-voltage pulse fired after a
+  failed stability check withdrew the tip first. That pulse exists to
+  reshape the tip hard enough to start over, which needs the tip
+  engaged, as it was in v1.
+- **Regression against 0.2.3:** the first approach of a run shared the
+  300 s action timeout. It starts from an unknown coarse position and
+  gets its own `initial_approach_timeout_ms`, defaulting to the 600 s
+  v1 used. Approaches during a run keep the shorter timeout.
 
 ### Removed
 

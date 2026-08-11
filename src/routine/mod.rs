@@ -96,6 +96,19 @@ pub trait Routine {
     /// Short identifier used in logs and events.
     fn name(&self) -> &str;
 
+    /// Whether calibrated approaches abort when safe-tip protection trips,
+    /// for the whole run. Off by default.
+    ///
+    /// Turn it on for a routine that approaches often. The calibrated
+    /// approach parks the tip just off the surface, out of feedback, while it
+    /// centres the frequency shift; nothing holds the tip off during that
+    /// window, so it can drift in. Safe-tip catches the drift and the guard
+    /// turns that catch into an abort. Within `run`,
+    /// [`Rt::set_safe_tip_guard`] overrides this for a section.
+    fn safe_tip_guard(&self) -> bool {
+        false
+    }
+
     /// Execute the routine to one of its endings.
     ///
     /// Return `Err(SpmError::ShutdownRequested)` freely from anywhere inside
@@ -135,6 +148,7 @@ pub fn run_routine(
     controller.prepare()?;
 
     let mut rt = Rt::new(&mut *controller, events, shutdown);
+    rt.set_safe_tip_guard(routine.safe_tip_guard());
     // AssertUnwindSafe is honest here: nothing observes `rt` or `routine`
     // after a panic except the cleanup below, which only restores hardware
     // before re-raising.
@@ -187,6 +201,7 @@ mod tests {
     use super::*;
     use crate::event::Observer;
     use crate::mock_controller::MockController;
+    use crate::spm_controller::ZControllerStatus;
 
     #[derive(Clone, Default)]
     struct Recorder {
@@ -309,6 +324,70 @@ mod tests {
             started_params(&events, "bias_pulse").expect("the pulse must reach the event log");
         assert_eq!(params["voltage"], 4.0);
         assert_eq!(params["duration_ms"], 50);
+    }
+
+    /// A calibrated approach with the guard armed must abort when the
+    /// controller reports safe-tip protection has tripped.
+    #[test]
+    fn an_armed_guard_aborts_the_approach_on_a_safe_tip_trip() {
+        let mut mock = MockController::builder()
+            .z_controller_status(ZControllerStatus::SafeTip)
+            .build();
+        let (bus, _events) = recording_bus();
+        let shutdown = ShutdownFlag::new();
+        let mut rt = Rt::new(&mut mock, &bus, &shutdown);
+        rt.set_safe_tip_guard(true);
+
+        let err = rt
+            .z()
+            .unwrap()
+            .calibrated_approach()
+            .expect_err("an armed guard must abort on a trip");
+        assert!(
+            err.to_string().contains("safe-tip protection triggered"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// The guard is off unless asked for, so the same trip is ignored.
+    #[test]
+    fn a_disarmed_guard_ignores_a_safe_tip_trip() {
+        let mut mock = MockController::builder()
+            .z_controller_status(ZControllerStatus::SafeTip)
+            .build();
+        let (bus, _events) = recording_bus();
+        let shutdown = ShutdownFlag::new();
+        let mut rt = Rt::new(&mut mock, &bus, &shutdown);
+
+        assert!(!rt.safe_tip_guard(), "the guard must default to off");
+        rt.z()
+            .unwrap()
+            .calibrated_approach()
+            .expect("a disarmed guard must not abort");
+    }
+
+    /// `run_routine` applies the routine's whole-run setting.
+    #[test]
+    fn run_routine_applies_the_routines_safe_tip_setting() {
+        struct Guarded;
+        impl Routine for Guarded {
+            fn name(&self) -> &str {
+                "guarded"
+            }
+            fn safe_tip_guard(&self) -> bool {
+                true
+            }
+            fn run(&mut self, rt: &mut Rt) -> Result<Outcome, SpmError> {
+                assert!(rt.safe_tip_guard(), "run_routine must arm the guard");
+                Ok(Outcome::Completed)
+            }
+        }
+
+        let mock = MockController::builder().build();
+        let (bus, _events) = recording_bus();
+        let outcome = run_routine(Box::new(mock), &bus, &ShutdownFlag::new(), &mut Guarded)
+            .expect("routine should not error");
+        assert_eq!(outcome, Outcome::Completed);
     }
 
     #[test]

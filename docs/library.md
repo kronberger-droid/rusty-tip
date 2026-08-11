@@ -122,6 +122,12 @@ The pieces, in the order you meet them:
   `cleanup_failed` event, so it never disappears silently. A cleanup
   that should never fail the run handles its own errors and returns
   `Ok(())`, which is what the stability sweep does.
+- **`rt.set_safe_tip_guard(bool)`** — when armed, a calibrated approach
+  aborts if the controller reports safe-tip protection has tripped. Off
+  unless asked for: implement `Routine::safe_tip_guard` to arm it for a
+  whole run, or call this to arm it around one section. It covers the
+  approach only, which is where the tip is driven at the surface; checking
+  after every action would mostly catch misfires.
 - **`rt.controller()`** — the escape hatch to the bare `SpmController` for
   anything the handles don't cover; calls through it bypass event logging.
 

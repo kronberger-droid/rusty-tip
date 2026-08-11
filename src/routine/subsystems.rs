@@ -78,7 +78,24 @@ impl ZCtrl<'_, '_> {
     /// Approach with the calibrated sequence: approach, small withdraw,
     /// center the frequency shift, re-approach.
     pub fn calibrated_approach(&mut self) -> Result<()> {
-        self.rt.exec(&CalibratedApproach::default())?;
+        let check_safe_tip = self.rt.safe_tip_guard();
+        self.rt.exec(&CalibratedApproach {
+            check_safe_tip,
+            ..Default::default()
+        })?;
+        Ok(())
+    }
+
+    /// The same sequence with an explicit timeout, for the first approach of
+    /// a run: it starts from an unknown coarse position, so it can take far
+    /// longer than one that begins from a known height.
+    pub fn calibrated_approach_within(&mut self, timeout_ms: u64) -> Result<()> {
+        let check_safe_tip = self.rt.safe_tip_guard();
+        self.rt.exec(&CalibratedApproach {
+            timeout_ms,
+            check_safe_tip,
+            ..Default::default()
+        })?;
         Ok(())
     }
 
@@ -182,7 +199,9 @@ impl Motor<'_, '_> {
     /// Move to a fresh surface spot: withdraw, step the motors, re-approach.
     /// Also needs the `ZController` and `Pll` capabilities.
     pub fn reposition(&mut self, spec: &RepositionSpec) -> Result<()> {
+        let check_safe_tip = self.rt.safe_tip_guard();
         self.rt.exec(&Reposition {
+            check_safe_tip,
             x_steps: spec.x_steps,
             y_steps: spec.y_steps,
             z_retract: spec.z_retract,
