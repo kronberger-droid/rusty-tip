@@ -59,7 +59,12 @@ impl ShutdownFlag {
         let deadline = Instant::now() + timeout;
         let mut requested = self.inner.requested.lock();
         while !*requested {
-            if self.inner.cvar.wait_until(&mut requested, deadline).timed_out() {
+            if self
+                .inner
+                .cvar
+                .wait_until(&mut requested, deadline)
+                .timed_out()
+            {
                 return *requested;
             }
         }
