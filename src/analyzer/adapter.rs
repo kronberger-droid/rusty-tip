@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::action::scan::DEFAULT_SCAN_FRAME_KEY;
-use crate::action::{Action, ActionContext, ActionOutput};
+use crate::action::{Action, ActionContext};
 use crate::spm_error::SpmError;
 
 use super::{Analyzer, AnalyzerInput};
@@ -53,6 +53,8 @@ impl RunAnalyzer {
 }
 
 impl Action for RunAnalyzer {
+    type Output = serde_json::Value;
+
     fn name(&self) -> &str {
         self.analyzer.name()
     }
@@ -61,7 +63,7 @@ impl Action for RunAnalyzer {
         self.analyzer.description()
     }
 
-    fn execute(&self, ctx: &mut ActionContext) -> std::result::Result<ActionOutput, SpmError> {
+    fn execute(&self, ctx: &mut ActionContext) -> Result<Self::Output, SpmError> {
         // Pull scan frame from the DataStore
         let frame: serde_json::Value =
             ctx.store
@@ -102,6 +104,6 @@ impl Action for RunAnalyzer {
         // Store the result under the analyzer's name
         ctx.store.set(self.analyzer.name(), &output.data)?;
 
-        Ok(ActionOutput::Data(output.data))
+        Ok(output.data)
     }
 }

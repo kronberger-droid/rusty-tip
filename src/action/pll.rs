@@ -1,12 +1,14 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::action::{Action, ActionContext, ActionOutput};
+use crate::action::{Action, ActionContext};
 use crate::spm_controller::Capability;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct CenterFreqShift;
 
 impl Action for CenterFreqShift {
+    type Output = ();
+
     fn name(&self) -> &str {
         "center_freq_shift"
     }
@@ -16,8 +18,8 @@ impl Action for CenterFreqShift {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Pll]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         ctx.controller.pll_center_freq_shift()?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }

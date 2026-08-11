@@ -8,7 +8,6 @@
 
 use nanonis_rs::scan::{ScanConfig, ScanProps, ScanPropsBuilder};
 
-use crate::action::ActionOutput;
 use crate::action::bias::{BiasPulse, ReadBias, SetBias};
 use crate::action::motor::{MoveMotor3D, Reposition};
 use crate::action::scan::{ScanActionParam, ScanControl, ScanDirectionParam};
@@ -20,15 +19,6 @@ use crate::spm_error::SpmError;
 use super::Rt;
 
 type Result<T> = std::result::Result<T, SpmError>;
-
-fn expect_value(name: &str, output: ActionOutput) -> Result<f64> {
-    match output {
-        ActionOutput::Value(v) => Ok(v),
-        other => Err(SpmError::Protocol(format!(
-            "{name} returned unexpected output: {other:?}"
-        ))),
-    }
-}
 
 // ============================================================================
 // Bias
@@ -42,8 +32,7 @@ pub struct Bias<'r, 'a> {
 impl Bias<'_, '_> {
     /// Read the current bias voltage in volts.
     pub fn get(&mut self) -> Result<f64> {
-        let output = self.rt.exec(&ReadBias)?;
-        expect_value("read_bias", output)
+        self.rt.exec(&ReadBias)
     }
 
     /// Set the bias voltage in volts.
@@ -127,25 +116,23 @@ pub struct Signals<'r, 'a> {
 impl Signals<'_, '_> {
     /// Read a single signal value.
     pub fn read(&mut self, index: SignalIndex) -> Result<f64> {
-        let output = self.rt.exec(&ReadSignal {
+        self.rt.exec(&ReadSignal {
             index,
             wait_for_newest: true,
-        })?;
-        expect_value("read_signal", output)
+        })
     }
 
     /// Read a noise- and drift-gated signal value (see [`StableReadSpec`]).
     /// Emits one `stable_read` measurement event per accepted batch.
     pub fn read_stable(&mut self, index: SignalIndex, spec: &StableReadSpec) -> Result<f64> {
-        let output = self.rt.exec(&ReadStableSignal {
+        self.rt.exec(&ReadStableSignal {
             index,
             num_samples: spec.num_samples,
             max_std_dev: spec.max_std_dev,
             max_slope: spec.max_slope,
             max_retries: spec.max_retries,
             sample_rate_hz: spec.sample_rate_hz,
-        })?;
-        expect_value("read_stable_signal", output)
+        })
     }
 
     /// Discard buffered stream samples so the next read sees only fresh data.

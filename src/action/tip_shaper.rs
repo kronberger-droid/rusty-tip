@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::action::{Action, ActionContext, ActionOutput};
+use crate::action::{Action, ActionContext};
 use crate::spm_controller::Capability;
 use crate::spm_error::SpmError;
 
@@ -10,7 +10,7 @@ use crate::spm_error::SpmError;
 ///
 /// Maps to nanonis-rs TipShaperConfig but with JSON-friendly field types.
 /// Durations are expressed in milliseconds, voltages in volts, distances in meters.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TipShaperParams {
     pub switch_off_delay_ms: u64,
     pub change_bias: bool,
@@ -61,17 +61,11 @@ impl TipShaperParams {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TipShape {
     pub config: TipShaperParams,
-    #[serde(default = "super::default_true")]
     pub wait: bool,
-    #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
-}
-
-fn default_timeout_ms() -> u64 {
-    10_000
 }
 
 impl Default for TipShape {
@@ -85,6 +79,8 @@ impl Default for TipShape {
 }
 
 impl Action for TipShape {
+    type Output = ();
+
     fn name(&self) -> &str {
         "tip_shape"
     }
@@ -94,10 +90,10 @@ impl Action for TipShape {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::TipShaper]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let config = self.config.to_nanonis_config()?;
         ctx.controller
             .tip_shaper(&config, self.wait, Duration::from_millis(self.timeout_ms))?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }

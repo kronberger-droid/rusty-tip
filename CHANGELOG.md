@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   started/completed/failed events like every other state change, so a
   scan speed altered mid-run is visible in the JSONL log. The scan
   reads (`status`, `props_get`, `speed_get`) stay silent.
+- An action's `action_started` event now carries its parameters instead
+  of an empty object, so the log records that a pulse was 4.0 V for
+  50 ms rather than only that a pulse happened.
 - Tip preparation is now `TipPrep`, the reference `Routine`
   implementation; `run_tip_prep` keeps its exact signature and behaviour
   as a thin wrapper over `run_routine`.
@@ -65,6 +68,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string name existed only to deserialize workflow steps.
 - **Breaking (library):** `Action::execute_and_store` and
   `execute_and_store_as`, which had no callers.
+- **Breaking (library):** `ActionOutput`. `Action` now has an associated
+  `Output` type, so an action that reads a voltage returns `f64` and the
+  handle methods no longer carry a `Protocol` error for an output shape
+  that could not occur. `Event::action_completed` takes the serialized
+  `serde_json::Value` directly; the JSONL output field is unchanged.
+- **Breaking (library):** `Deserialize` on the action structs, along
+  with their `#[serde(default)]` attributes. Deserializing an action by
+  name was the executor's job. `Serialize` stays, since it is what puts
+  an action's parameters into the event log.
 
 ## [0.4.0] - 2026-08-10
 

@@ -1,22 +1,16 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::action::pll::CenterFreqShift;
 use crate::action::util::Wait;
-use crate::action::{Action, ActionContext, ActionOutput};
+use crate::action::{Action, ActionContext};
 use crate::spm_controller::{Capability, ZControllerStatus};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Withdraw {
-    #[serde(default = "super::default_true")]
     pub wait: bool,
-    #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
-}
-
-fn default_timeout_ms() -> u64 {
-    10_000
 }
 
 impl Default for Withdraw {
@@ -29,6 +23,8 @@ impl Default for Withdraw {
 }
 
 impl Action for Withdraw {
+    type Output = ();
+
     fn name(&self) -> &str {
         "withdraw"
     }
@@ -38,23 +34,17 @@ impl Action for Withdraw {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::ZController]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         ctx.controller
             .withdraw(self.wait, Duration::from_millis(self.timeout_ms))?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AutoApproach {
-    #[serde(default = "super::default_true")]
     pub wait: bool,
-    #[serde(default = "default_approach_timeout_ms")]
     pub timeout_ms: u64,
-}
-
-fn default_approach_timeout_ms() -> u64 {
-    300_000 // 5 minutes
 }
 
 impl Default for AutoApproach {
@@ -67,6 +57,8 @@ impl Default for AutoApproach {
 }
 
 impl Action for AutoApproach {
+    type Output = ();
+
     fn name(&self) -> &str {
         "auto_approach"
     }
@@ -76,14 +68,14 @@ impl Action for AutoApproach {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::ZController]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         ctx.controller
             .auto_approach(self.wait, Duration::from_millis(self.timeout_ms))?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SetZSetpoint {
     pub setpoint: f64,
 }
@@ -95,6 +87,8 @@ impl Default for SetZSetpoint {
 }
 
 impl Action for SetZSetpoint {
+    type Output = ();
+
     fn name(&self) -> &str {
         "set_z_setpoint"
     }
@@ -104,17 +98,19 @@ impl Action for SetZSetpoint {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::ZController]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         ctx.controller.set_z_setpoint(self.setpoint)?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
 
 /// Move the tip to the configured Z-home position (small withdraw from surface).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ZHome;
 
 impl Action for ZHome {
+    type Output = ();
+
     fn name(&self) -> &str {
         "z_home"
     }
@@ -124,9 +120,9 @@ impl Action for ZHome {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::ZController]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         ctx.controller.go_z_home()?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
 
@@ -134,10 +130,12 @@ impl Action for ZHome {
 ///
 /// Resolves `StateField::ZController` so the framework can auto-insert this
 /// action when a downstream step requires the field to be Known.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ReadZControllerStatus;
 
 impl Action for ReadZControllerStatus {
+    type Output = serde_json::Value;
+
     fn name(&self) -> &str {
         "read_z_controller_status"
     }
@@ -147,23 +145,25 @@ impl Action for ReadZControllerStatus {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::ZController]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let status = ctx.controller.z_controller_status()?;
         let on = matches!(status, ZControllerStatus::On);
-        Ok(ActionOutput::Data(serde_json::json!({
+        Ok(serde_json::json!({
             "on": on,
             "status": format!("{:?}", status),
-        })))
+        }))
     }
 }
 
 /// Query whether safe-tip crash protection is currently enabled.
 ///
 /// Resolves `StateField::SafeTipEnabled`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ReadSafeTipStatus;
 
 impl Action for ReadSafeTipStatus {
+    type Output = serde_json::Value;
+
     fn name(&self) -> &str {
         "read_safe_tip_status"
     }
@@ -173,21 +173,21 @@ impl Action for ReadSafeTipStatus {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::SafeTip]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let enabled = ctx.controller.safe_tip_enabled()?;
-        Ok(ActionOutput::Data(
-            serde_json::json!({ "enabled": enabled }),
-        ))
+        Ok(serde_json::json!({ "enabled": enabled }))
     }
 }
 
 /// Enable or disable safe-tip crash protection.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct SafeTipSet {
     pub enabled: bool,
 }
 
 impl Action for SafeTipSet {
+    type Output = ();
+
     fn name(&self) -> &str {
         "safe_tip_set"
     }
@@ -197,9 +197,9 @@ impl Action for SafeTipSet {
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::SafeTip]
     }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         ctx.controller.safe_tip_set_enabled(self.enabled)?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
 
@@ -214,11 +214,9 @@ impl Action for SafeTipSet {
 /// 6. Center frequency shift (while slightly withdrawn)
 /// 7. Auto-approach again (final approach with calibrated freq shift)
 /// 8. Restore safe-tip to previous state
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CalibratedApproach {
-    #[serde(default = "super::default_true")]
     pub wait: bool,
-    #[serde(default = "default_approach_timeout_ms")]
     pub timeout_ms: u64,
 }
 
@@ -232,6 +230,8 @@ impl Default for CalibratedApproach {
 }
 
 impl Action for CalibratedApproach {
+    type Output = ();
+
     fn name(&self) -> &str {
         "calibrated_approach"
     }
@@ -242,7 +242,7 @@ impl Action for CalibratedApproach {
         vec![Capability::ZController, Capability::Pll]
     }
 
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
         let timeout = Duration::from_millis(self.timeout_ms);
 
         // 1. Initial approach
@@ -282,6 +282,6 @@ impl Action for CalibratedApproach {
         }
 
         result?;
-        Ok(ActionOutput::Unit)
+        Ok(())
     }
 }
