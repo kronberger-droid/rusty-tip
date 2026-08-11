@@ -88,17 +88,27 @@ impl Routine for PulseUntilSharp {
 Run it with `run_routine(controller, &events, &shutdown, &mut routine)`,
 which owns the controller life cycle: `prepare()` before, tip withdrawal and
 `teardown()` after, whatever the outcome. A stop request (Ctrl+C, GUI
-button) surfaces as `Outcome::StoppedByUser`, never as an error.
+button) surfaces as `Outcome::StoppedByUser`, never as an error. "Whatever
+the outcome" covers panics too: a panicking routine is withdrawn and torn
+down first, then the panic is re-raised unchanged.
+
+`run_routine` takes the controller by value, so for now a controller runs
+exactly one routine: there is no way to prepare a tip with one routine and
+measure with the next on the same connection. Sequence such work inside a
+single `Routine` until that changes.
 
 The pieces, in the order you meet them:
 
 - **Subsystem handles** — `rt.bias()?`, `rt.z()?`, `rt.signals()?`,
   `rt.motor()?`, `rt.scan()?`. Each accessor checks the controller's
   capabilities (a controller without a motor makes `rt.motor()` fail with
-  `Unsupported` at the call site), and every operation emits
-  started/completed/failed events automatically. Fetch a handle per
-  statement rather than storing it; that keeps borrows from ever
-  overlapping.
+  `Unsupported` at the call site), and events are emitted for you.
+  The rule for what gets logged: every operation that *changes* the
+  instrument's state emits started/completed/failed, and so does every
+  read whose value is scientific data (`signals().read()`). Reads used
+  for control flow stay silent — `scan().status()` is polled in a loop,
+  and logging that buries the run. Fetch a handle per statement rather
+  than storing it; that keeps borrows from ever overlapping.
 - **`rt.settle(ms)`** — an interruptible wait: a stop request wakes it
   immediately and surfaces as `ShutdownRequested`. Use it instead of
   `thread::sleep`, always.
@@ -107,7 +117,11 @@ The pieces, in the order you meet them:
   the loop body contains only the science.
 - **`rt.guarded(body, cleanup)`** — runs `cleanup` however `body` ends.
   For hardware that must be restored (a running scan, a modified scan
-  speed, an engaged tip) even when the work in between fails.
+  speed, an engaged tip) even when the work in between fails. The body's
+  error wins; a cleanup error on top of it is logged and emitted as a
+  `cleanup_failed` event, so it never disappears silently. A cleanup
+  that should never fail the run handles its own errors and returns
+  `Ok(())`, which is what the stability sweep does.
 - **`rt.controller()`** — the escape hatch to the bare `SpmController` for
   anything the handles don't cover; calls through it bypass event logging.
 

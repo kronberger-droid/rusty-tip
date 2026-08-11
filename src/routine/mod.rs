@@ -64,9 +64,10 @@ mod subsystems;
 pub use rt::{Cycles, Rt};
 pub use subsystems::{Bias, Motor, RepositionSpec, Scan, Signals, StableReadSpec, ZCtrl};
 
+use std::panic::{self, AssertUnwindSafe};
 use std::time::Duration;
 
-use crate::event::EventBus;
+use crate::event::{Event, EventBus, EventEmitter};
 use crate::shutdown::ShutdownFlag;
 use crate::spm_controller::SpmController;
 use crate::spm_error::SpmError;
@@ -110,6 +111,21 @@ pub trait Routine {
 /// so an error mid-routine never leaves the tip engaged on the surface. A
 /// shutdown request surfaces as `Ok(Outcome::StoppedByUser)`, never as an
 /// error.
+///
+/// "Regardless" includes panics: the routine runs inside
+/// [`catch_unwind`](panic::catch_unwind), so a panicking routine is withdrawn
+/// and torn down before the panic is re-raised unchanged. This relies on the
+/// unwinding panic strategy; under `panic = "abort"` no cleanup can run.
+///
+/// # Limitation: one routine per controller
+///
+/// This takes the controller by value and drops it, so routines cannot yet be
+/// composed — you cannot prepare a tip with one routine and measure with the
+/// next against the same connection. Sequencing work today means writing it as
+/// a single `Routine`. Lifting this needs a borrowing signature and a way to
+/// opt out of the unconditional withdraw (re-approaching between stages loses
+/// the spot and costs an approach cycle); both are deferred until a second
+/// routine exists to design them against.
 pub fn run_routine(
     mut controller: Box<dyn SpmController>,
     events: &EventBus,
@@ -119,7 +135,19 @@ pub fn run_routine(
     controller.prepare()?;
 
     let mut rt = Rt::new(&mut *controller, events, shutdown);
-    let result = routine.run(&mut rt);
+    // AssertUnwindSafe is honest here: nothing observes `rt` or `routine`
+    // after a panic except the cleanup below, which only restores hardware
+    // before re-raising.
+    let caught = panic::catch_unwind(AssertUnwindSafe(|| routine.run(&mut rt)));
+
+    if let Err(payload) = &caught {
+        let message = panic_message(&**payload);
+        log::error!("Routine '{}' panicked: {}", routine.name(), message);
+        events.emit(Event::custom(
+            "routine_panicked",
+            serde_json::json!({ "routine": routine.name(), "message": message }),
+        ));
+    }
 
     log::info!("Cleanup starting...");
     match rt.z() {
@@ -134,8 +162,160 @@ pub fn run_routine(
     controller.teardown();
     log::info!("Cleanup complete");
 
-    match result {
-        Err(SpmError::ShutdownRequested) => Ok(Outcome::StoppedByUser),
-        other => other,
+    match caught {
+        Ok(Err(SpmError::ShutdownRequested)) => Ok(Outcome::StoppedByUser),
+        Ok(other) => other,
+        // Hardware is restored; hand the panic back to the caller untouched.
+        Err(payload) => panic::resume_unwind(payload),
+    }
+}
+
+/// Best-effort rendering of a caught panic payload, which is a `&str` for
+/// `panic!("literal")` and a `String` for formatted messages.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "<non-string panic payload>".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    use super::*;
+    use crate::event::Observer;
+    use crate::mock_controller::MockController;
+
+    #[derive(Clone, Default)]
+    struct Recorder {
+        events: Arc<StdMutex<Vec<Event>>>,
+    }
+
+    impl Observer for Recorder {
+        fn on_event(&self, event: &Event) {
+            self.events.lock().unwrap().push(event.clone());
+        }
+    }
+
+    fn recording_bus() -> (EventBus, Arc<StdMutex<Vec<Event>>>) {
+        let recorder = Recorder::default();
+        let handle = Arc::clone(&recorder.events);
+        let mut bus = EventBus::new();
+        bus.add_observer(Box::new(recorder));
+        (bus, handle)
+    }
+
+    fn custom_event(events: &[Event], wanted: &str) -> Option<serde_json::Value> {
+        events.iter().find_map(|e| match e {
+            Event::Custom { kind, data } if kind == wanted => Some(data.clone()),
+            _ => None,
+        })
+    }
+
+    fn started_params(events: &[Event], wanted: &str) -> Option<serde_json::Value> {
+        events.iter().find_map(|e| match e {
+            Event::ActionStarted { action, params, .. } if action == wanted => Some(params.clone()),
+            _ => None,
+        })
+    }
+
+    struct Panicker;
+
+    impl Routine for Panicker {
+        fn name(&self) -> &str {
+            "panicker"
+        }
+
+        fn run(&mut self, rt: &mut Rt) -> Result<Outcome, SpmError> {
+            rt.bias()?.set(-1.0)?;
+            panic!("routine blew up");
+        }
+    }
+
+    #[test]
+    fn a_panicking_routine_is_still_withdrawn_and_the_panic_re_raised() {
+        let mock = MockController::builder().build();
+        let obs = mock.observations();
+        let (bus, events) = recording_bus();
+
+        let caught = panic::catch_unwind(AssertUnwindSafe(|| {
+            run_routine(Box::new(mock), &bus, &ShutdownFlag::new(), &mut Panicker)
+        }));
+
+        let payload = caught.expect_err("the panic must be re-raised, not swallowed");
+        assert_eq!(panic_message(&*payload), "routine blew up");
+
+        let obs = obs.lock();
+        assert!(
+            obs.withdraw_count >= 1,
+            "cleanup must withdraw even when the routine panicked"
+        );
+        assert!(
+            obs.torn_down,
+            "teardown must run even when the routine panicked"
+        );
+
+        let events = events.lock().unwrap();
+        let data =
+            custom_event(&events, "routine_panicked").expect("the panic must reach the event log");
+        assert_eq!(data["routine"], "panicker");
+        assert_eq!(data["message"], "routine blew up");
+    }
+
+    #[test]
+    fn scan_speed_changes_are_logged_but_scan_reads_are_not() {
+        let mut mock = MockController::builder().build();
+        let (bus, events) = recording_bus();
+        let shutdown = ShutdownFlag::new();
+        let mut rt = Rt::new(&mut mock, &bus, &shutdown);
+
+        let mut config = rt.scan().unwrap().speed_get().unwrap();
+        config.forward_linear_speed_m_s = 5e-9;
+        rt.scan().unwrap().speed_set(config).unwrap();
+        rt.scan().unwrap().status().unwrap();
+
+        let events = events.lock().unwrap();
+        let params = started_params(&events, "scan_speed_set")
+            .expect("a scan speed change must reach the event log");
+        // ScanConfig speeds are f32 on the wire, so the logged value is the
+        // widened f32, not the f64 literal.
+        assert_eq!(
+            params["forward_linear_speed_m_s"].as_f64().unwrap(),
+            5e-9f32 as f64
+        );
+        assert!(
+            started_params(&events, "scan_speed_get").is_none(),
+            "reads must stay silent: speed_get is not a state change"
+        );
+        assert!(
+            started_params(&events, "scan_status").is_none(),
+            "reads must stay silent: status is polled in a loop"
+        );
+    }
+
+    #[test]
+    fn guarded_emits_the_cleanup_error_it_swallows() {
+        let mut mock = MockController::builder().build();
+        let (bus, events) = recording_bus();
+        let shutdown = ShutdownFlag::new();
+        let mut rt = Rt::new(&mut mock, &bus, &shutdown);
+
+        let result: Result<(), SpmError> = rt.guarded(
+            |_| Err(SpmError::Workflow("body failed".into())),
+            |_| Err(SpmError::Workflow("cleanup failed".into())),
+        );
+
+        assert_eq!(
+            result.expect_err("the body error wins").to_string(),
+            "body failed"
+        );
+
+        let events = events.lock().unwrap();
+        let data = custom_event(&events, "cleanup_failed")
+            .expect("a swallowed cleanup failure must still reach the event log");
+        assert_eq!(data["body_error"], "body failed");
+        assert_eq!(data["cleanup_error"], "cleanup failed");
     }
 }

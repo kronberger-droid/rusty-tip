@@ -223,9 +223,10 @@ impl Motor<'_, '_> {
 
 /// Scan control, from [`Rt::scan`].
 ///
-/// `start`/`stop` go through the action layer and emit events; the
-/// property/speed accessors are read/restore plumbing and delegate straight
-/// to the controller.
+/// Everything that changes the scanner's state emits events: `start`/`stop`
+/// through the action layer, `props_set`/`speed_set` directly. The reads
+/// (`status`, `props_get`, `speed_get`) stay silent — `status` in particular
+/// is polled in a loop, and logging a control-flow poll buries the run.
 pub struct Scan<'r, 'a> {
     pub(crate) rt: &'r mut Rt<'a>,
 }
@@ -261,7 +262,11 @@ impl Scan<'_, '_> {
 
     /// Apply scan properties.
     pub fn props_set(&mut self, props: ScanPropsBuilder) -> Result<()> {
-        self.rt.controller().scan_props_set(props)
+        self.rt.logged(
+            "scan_props_set",
+            serde_json::json!({ "props": format!("{props:?}") }),
+            |c| c.scan_props_set(props),
+        )
     }
 
     /// Current scan speed configuration (for save/restore).
@@ -271,6 +276,14 @@ impl Scan<'_, '_> {
 
     /// Apply a scan speed configuration.
     pub fn speed_set(&mut self, config: ScanConfig) -> Result<()> {
-        self.rt.controller().scan_speed_set(config)
+        self.rt.logged(
+            "scan_speed_set",
+            serde_json::json!({
+                "forward_linear_speed_m_s": config.forward_linear_speed_m_s,
+                "backward_linear_speed_m_s": config.backward_linear_speed_m_s,
+                "keep_parameter_constant": config.keep_parameter_constant,
+            }),
+            |c| c.scan_speed_set(config),
+        )
     }
 }

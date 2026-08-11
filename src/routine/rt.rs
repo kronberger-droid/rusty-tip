@@ -133,10 +133,17 @@ impl<'a> Rt<'a> {
     ///
     /// Use this wherever hardware must be restored (stop a scan, restore a
     /// speed, withdraw) even if the work in between fails. Error precedence:
-    /// the body's error wins and a subsequent cleanup failure is logged; if
-    /// the body succeeded, a cleanup failure is propagated. Cleanup that
-    /// should be best-effort only (log, don't fail the run) handles its own
-    /// errors and returns `Ok(())`.
+    /// the body's error wins and a subsequent cleanup failure is logged and
+    /// emitted as a `cleanup_failed` event (so a swallowed failure still
+    /// reaches the event log); if the body succeeded, a cleanup failure is
+    /// propagated. Cleanup that should be best-effort only (log, don't fail
+    /// the run) handles its own errors and returns `Ok(())`.
+    ///
+    /// `cleanup` runs when `body` returns, not when it unwinds: a panic
+    /// inside `body` skips it. [`run_routine`] catches panics at the top
+    /// level so the tip is still withdrawn.
+    ///
+    /// [`run_routine`]: super::run_routine
     pub fn guarded<T>(
         &mut self,
         body: impl FnOnce(&mut Rt<'a>) -> Result<T, SpmError>,
@@ -149,6 +156,13 @@ impl<'a> Rt<'a> {
             (Err(body_err), Ok(())) => Err(body_err),
             (Err(body_err), Err(cleanup_err)) => {
                 log::error!("Cleanup after a failure also failed: {}", cleanup_err);
+                self.events.emit(Event::custom(
+                    "cleanup_failed",
+                    serde_json::json!({
+                        "cleanup_error": cleanup_err.to_string(),
+                        "body_error": body_err.to_string(),
+                    }),
+                ));
                 Err(body_err)
             }
         }
@@ -164,6 +178,43 @@ impl<'a> Rt<'a> {
                 "controller does not support the {:?} subsystem",
                 cap
             )))
+        }
+    }
+
+    /// Emit the same started/completed/failed triple as [`exec`] around a
+    /// direct controller call, for mutations that have no [`Action`] behind
+    /// them.
+    ///
+    /// Handle methods that *change* instrument state go through this or
+    /// [`exec`], so every state change is in the event log; handle methods
+    /// that only observe (`scan().status()` in a poll loop) call the
+    /// controller directly and stay silent. Reads whose value is scientific
+    /// data (`signals().read()`) are measurements, not observations, and go
+    /// through [`exec`].
+    ///
+    /// [`exec`]: Self::exec
+    pub(crate) fn logged<T>(
+        &mut self,
+        name: &str,
+        params: serde_json::Value,
+        op: impl FnOnce(&mut dyn SpmController) -> Result<T, SpmError>,
+    ) -> Result<T, SpmError> {
+        let start = Instant::now();
+        self.events.emit(Event::action_started(name, params));
+        match op(&mut *self.controller) {
+            Ok(value) => {
+                self.events.emit(Event::action_completed(
+                    name,
+                    &ActionOutput::Unit,
+                    start.elapsed(),
+                ));
+                Ok(value)
+            }
+            Err(e) => {
+                self.events
+                    .emit(Event::action_failed(name, &e.to_string(), start.elapsed()));
+                Err(e)
+            }
         }
     }
 

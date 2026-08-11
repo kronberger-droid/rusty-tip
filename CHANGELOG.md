@@ -15,9 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interruptible `settle()`, a `cycles()` driver that turns cycle/time
   budgets into `Outcome`s, and `guarded()` for cleanup that runs however
   the body ends. `run_routine` owns the controller life cycle (prepare,
-  withdraw on exit, teardown) around any routine. Handle operations emit
-  the same started/completed/failed events `execute_logged` used to, so
-  JSONL logs keep their shape.
+  withdraw on exit, teardown) around any routine, including when the
+  routine panics: it catches the unwind, restores the hardware, and
+  re-raises. Handle operations emit the same started/completed/failed
+  events `execute_logged` used to, so JSONL logs keep their shape.
+- Two new events so failures during cleanup stay visible in the JSONL
+  log rather than only in `log`: `cleanup_failed` when `guarded`
+  swallows a cleanup error to preserve the body's, and
+  `routine_panicked` when a routine unwinds.
+- `scan().props_set()` and `scan().speed_set()` now emit
+  started/completed/failed events like every other state change, so a
+  scan speed altered mid-run is visible in the JSONL log. The scan
+  reads (`status`, `props_get`, `speed_get`) stay silent.
 - Tip preparation is now `TipPrep`, the reference `Routine`
   implementation; `run_tip_prep` keeps its exact signature and behaviour
   as a thin wrapper over `run_routine`.
