@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use crate::action::{Action, ActionContext, DataStore};
 use crate::event::{Event, EventBus, EventEmitter};
 use crate::shutdown::ShutdownFlag;
-use crate::spm_controller::{Capability, SpmController};
+use crate::spm_controller::{Capability, SpmController, ZControllerStatus};
 use crate::spm_error::SpmError;
 
 use super::Outcome;
@@ -21,6 +21,7 @@ pub struct Rt<'a> {
     events: &'a EventBus,
     shutdown: &'a ShutdownFlag,
     store: DataStore,
+    safe_tip_guard: bool,
 }
 
 impl<'a> Rt<'a> {
@@ -34,6 +35,7 @@ impl<'a> Rt<'a> {
             events,
             shutdown,
             store: DataStore::new(),
+            safe_tip_guard: false,
         }
     }
 
@@ -84,6 +86,55 @@ impl<'a> Rt<'a> {
             Err(SpmError::ShutdownRequested)
         } else {
             Ok(())
+        }
+    }
+
+    /// Arm or disarm the safe-tip guard for subsequent approaches.
+    ///
+    /// Off unless a routine asks for it, either for its whole run via
+    /// [`Routine::safe_tip_guard`](super::Routine::safe_tip_guard) or around a
+    /// section with this setter. The guard is scoped to the calibrated
+    /// approach rather than to every action, since an approach drives the tip
+    /// at the surface with safe-tip enabled, where a trip means something,
+    /// while the rest of a routine is built not to endanger the tip and would
+    /// mostly produce misfires.
+    pub fn set_safe_tip_guard(&mut self, enabled: bool) {
+        self.safe_tip_guard = enabled;
+    }
+
+    /// Whether the safe-tip guard is currently armed.
+    pub fn safe_tip_guard(&self) -> bool {
+        self.safe_tip_guard
+    }
+
+    /// Bail out if the controller's safe-tip protection has tripped.
+    ///
+    /// The calibrated approach performs this check itself while the guard is
+    /// armed; call it directly only to check at a point of your own choosing.
+    ///
+    /// A controller without [`Capability::SafeTip`] always passes, and a
+    /// status read that itself fails is logged rather than treated as a trip,
+    /// so a flaky read cannot abort an otherwise healthy run.
+    pub fn check_safe_tip(&mut self) -> Result<(), SpmError> {
+        if !self
+            .controller
+            .capabilities()
+            .contains(&Capability::SafeTip)
+        {
+            return Ok(());
+        }
+        match self.controller.z_controller_status() {
+            Ok(ZControllerStatus::SafeTip) => Err(SpmError::Workflow(
+                "safe-tip protection triggered, aborting".into(),
+            )),
+            Ok(_) => Ok(()),
+            Err(e) => {
+                log::warn!(
+                    "Could not read z-controller status for safe-tip check: {}",
+                    e
+                );
+                Ok(())
+            }
         }
     }
 

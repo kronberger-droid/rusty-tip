@@ -267,6 +267,9 @@ pub struct MockController {
     capabilities: HashSet<Capability>,
     position: Position,
     scan_config: ScanConfig,
+    /// Status reported by `z_controller_status`, so a test can simulate
+    /// safe-tip protection tripping.
+    z_status: ZControllerStatus,
 }
 
 impl MockController {
@@ -476,7 +479,7 @@ impl SpmController for MockController {
 
     fn z_controller_status(&mut self) -> Result<ZControllerStatus> {
         self.enter("z_controller_status")?;
-        Ok(ZControllerStatus::On)
+        Ok(self.z_status)
     }
 
     // -- Piezo Positioning --
@@ -664,6 +667,7 @@ pub struct MockControllerBuilder {
     faults_always: HashMap<&'static str, FaultKind>,
     capabilities: HashSet<Capability>,
     start_connected: bool,
+    z_status: ZControllerStatus,
 }
 
 impl MockControllerBuilder {
@@ -681,7 +685,16 @@ impl MockControllerBuilder {
             faults_always: HashMap::new(),
             capabilities: all_capabilities(),
             start_connected: true,
+            z_status: ZControllerStatus::On,
         }
+    }
+
+    /// Status reported by `z_controller_status`. Set it to
+    /// [`ZControllerStatus::SafeTip`] to simulate tip-crash protection
+    /// having tripped.
+    pub fn z_controller_status(mut self, status: ZControllerStatus) -> Self {
+        self.z_status = status;
+        self
     }
 
     /// Set which signal index the tip model answers for. Must match the
@@ -773,6 +786,7 @@ impl MockControllerBuilder {
             capabilities: self.capabilities,
             position: Position::new(0.0, 0.0),
             scan_config: mock_scan_config(),
+            z_status: self.z_status,
         }
     }
 }

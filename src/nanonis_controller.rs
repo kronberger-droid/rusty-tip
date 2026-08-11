@@ -30,6 +30,12 @@ pub struct NanonisSetupConfig {
     /// Nanonis settings file to load. `None` to skip.
     pub settings_file: Option<String>,
     /// Z-controller home mode.
+    ///
+    /// Defaults to [`ZHomeMode::Relative`], which makes `z_home_position_m` a
+    /// retraction from wherever Z currently sits. The calibrated approach
+    /// relies on that: it homes mid-sequence to back off the surface before
+    /// centring the frequency shift. `Absolute` sends Z to a fixed coordinate
+    /// instead, which is not a retraction and depends on where Z zero is.
     pub z_home_mode: ZHomeMode,
     /// Z-controller home position in metres.
     pub z_home_position_m: f64,
@@ -46,7 +52,7 @@ impl Default for NanonisSetupConfig {
         Self {
             layout_file: None,
             settings_file: None,
-            z_home_mode: ZHomeMode::Absolute,
+            z_home_mode: ZHomeMode::Relative,
             z_home_position_m: 50e-9,
             safe_tip_threshold_a: 1e-9,
             tcp_refresh_output: Some(3),
