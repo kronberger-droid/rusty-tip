@@ -5,9 +5,6 @@ use serde::{Deserialize, Serialize};
 use crate::action::pll::CenterFreqShift;
 use crate::action::util::Wait;
 use crate::action::{Action, ActionContext, ActionOutput};
-use crate::machine_state::{
-    ActionKind, MachineState, ScanActivity, StateEffects, StateField, TipEngagement,
-};
 use crate::spm_controller::{Capability, ZControllerStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,12 +42,6 @@ impl Action for Withdraw {
         ctx.controller
             .withdraw(self.wait, Duration::from_millis(self.timeout_ms))?;
         Ok(ActionOutput::Unit)
-    }
-
-    fn effects(&self) -> StateEffects {
-        StateEffects::none()
-            .set_tip(TipEngagement::Withdrawn)
-            .set_scan(ScanActivity::Stopped)
     }
 }
 
@@ -90,12 +81,6 @@ impl Action for AutoApproach {
             .auto_approach(self.wait, Duration::from_millis(self.timeout_ms))?;
         Ok(ActionOutput::Unit)
     }
-
-    fn effects(&self) -> StateEffects {
-        StateEffects::none()
-            .set_tip(TipEngagement::Approached)
-            .set_z_controller(ZControllerStatus::On)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,10 +107,6 @@ impl Action for SetZSetpoint {
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         ctx.controller.set_z_setpoint(self.setpoint)?;
         Ok(ActionOutput::Unit)
-    }
-
-    fn effects(&self) -> StateEffects {
-        StateEffects::none().set_z_setpoint(self.setpoint)
     }
 }
 
@@ -174,24 +155,6 @@ impl Action for ReadZControllerStatus {
             "status": format!("{:?}", status),
         })))
     }
-
-    fn kind(&self) -> ActionKind {
-        ActionKind::Query
-    }
-    fn resolves(&self) -> Vec<StateField> {
-        vec![StateField::ZController]
-    }
-    fn apply_to_state(&self, output: &ActionOutput, state: &mut MachineState) {
-        if let ActionOutput::Data(json) = output
-            && let Some(on) = json.get("on").and_then(|v| v.as_bool())
-        {
-            state.z_controller.set(if on {
-                ZControllerStatus::On
-            } else {
-                ZControllerStatus::Off
-            });
-        }
-    }
 }
 
 /// Query whether safe-tip crash protection is currently enabled.
@@ -216,20 +179,6 @@ impl Action for ReadSafeTipStatus {
             serde_json::json!({ "enabled": enabled }),
         ))
     }
-
-    fn kind(&self) -> ActionKind {
-        ActionKind::Query
-    }
-    fn resolves(&self) -> Vec<StateField> {
-        vec![StateField::SafeTipEnabled]
-    }
-    fn apply_to_state(&self, output: &ActionOutput, state: &mut MachineState) {
-        if let ActionOutput::Data(json) = output
-            && let Some(enabled) = json.get("enabled").and_then(|v| v.as_bool())
-        {
-            state.safe_tip_enabled.set(enabled);
-        }
-    }
 }
 
 /// Enable or disable safe-tip crash protection.
@@ -251,10 +200,6 @@ impl Action for SafeTipSet {
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         ctx.controller.safe_tip_set_enabled(self.enabled)?;
         Ok(ActionOutput::Unit)
-    }
-
-    fn effects(&self) -> StateEffects {
-        StateEffects::none().set_safe_tip(self.enabled)
     }
 }
 
@@ -295,12 +240,6 @@ impl Action for CalibratedApproach {
     }
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::ZController, Capability::Pll]
-    }
-
-    fn effects(&self) -> StateEffects {
-        StateEffects::none()
-            .set_tip(TipEngagement::Approached)
-            .set_z_controller(ZControllerStatus::On)
     }
 
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {

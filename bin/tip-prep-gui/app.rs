@@ -934,13 +934,6 @@ impl TipPrepApp {
                     Event::ActionStarted { action, .. } => {
                         self.current_action = action.clone();
                     }
-                    Event::Custom { kind, .. }
-                        if kind == "workflow_completed"
-                            || kind == "workflow_failed"
-                            || kind == "workflow_stopped" =>
-                    {
-                        // These are handled by check_controller_status via thread join
-                    }
                     _ => {}
                 }
             }
