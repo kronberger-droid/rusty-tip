@@ -49,6 +49,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inside the routine wake immediately on a stop request instead of at
   the next poll tick.
 
+### Removed
+
+- **Breaking (library):** the `workflow` module. Its declarative
+  `Step`/`Condition` executor is replaced by the routine harness, which
+  puts control flow in Rust where the compiler can see it.
+- **Breaking (library):** the `machine_state` module and the `Action`
+  methods that fed it (`kind`, `expects`, `effects`, `resolves`,
+  `apply_to_state`). The state model existed so the executor could
+  decide at runtime whether a step was legal; a `Routine` cannot express
+  an illegal call in the first place, since the subsystem handle is the
+  only way to reach the operation.
+- **Breaking (library):** `ActionRegistry`, `ActionFactory`,
+  `ActionInfo` and `action::builtin_registry()`. Constructing actions by
+  string name existed only to deserialize workflow steps.
+- **Breaking (library):** `Action::execute_and_store` and
+  `execute_and_store_as`, which had no callers.
+
 ## [0.4.0] - 2026-08-10
 
 An API-cleanup release on the experimental v2 line. The public surface now

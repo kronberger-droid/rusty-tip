@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::action::{Action, ActionContext, ActionOutput};
 use crate::event::Event;
-use crate::machine_state::ActionKind;
 use crate::signal_registry::SignalIndex;
 use crate::spm_controller::Capability;
 
@@ -40,10 +39,6 @@ impl Action for ReadSignal {
             .read_signal(self.index, self.wait_for_newest)?;
         Ok(ActionOutput::Value(val))
     }
-
-    fn kind(&self) -> ActionKind {
-        ActionKind::Query
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,9 +68,6 @@ impl Action for ReadSignals {
         vec![Capability::Signals]
     }
 
-    fn kind(&self) -> ActionKind {
-        ActionKind::Query
-    }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let vals = ctx
             .controller
@@ -111,9 +103,6 @@ impl Action for ReadSignalNames {
         vec![Capability::Signals]
     }
 
-    fn kind(&self) -> ActionKind {
-        ActionKind::Query
-    }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let names = ctx.controller.signal_names()?;
         let json = serde_json::to_value(names).map_err(|e| {
@@ -193,9 +182,6 @@ impl Action for ReadStableSignal {
         vec![Capability::Signals]
     }
 
-    fn kind(&self) -> ActionKind {
-        ActionKind::Query
-    }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         for attempt in 0..=self.max_retries {
             let samples = ctx

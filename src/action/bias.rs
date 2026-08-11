@@ -3,9 +3,6 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::action::{Action, ActionContext, ActionOutput};
-use crate::machine_state::{
-    ActionKind, MachineState, StateEffects, StateField, StateRequirements, TipEngagement,
-};
 use crate::spm_controller::{Capability, ZControllerStatus};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -24,18 +21,6 @@ impl Action for ReadBias {
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let voltage = ctx.controller.get_bias()?;
         Ok(ActionOutput::Value(voltage))
-    }
-
-    fn kind(&self) -> ActionKind {
-        ActionKind::Query
-    }
-    fn resolves(&self) -> Vec<StateField> {
-        vec![StateField::BiasV]
-    }
-    fn apply_to_state(&self, output: &ActionOutput, state: &mut MachineState) {
-        if let ActionOutput::Value(v) = output {
-            state.bias_v.set(*v);
-        }
     }
 }
 
@@ -63,10 +48,6 @@ impl Action for SetBias {
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         ctx.controller.set_bias(self.voltage)?;
         Ok(ActionOutput::Unit)
-    }
-
-    fn effects(&self) -> StateEffects {
-        StateEffects::none().set_bias(self.voltage)
     }
 }
 
@@ -111,9 +92,6 @@ impl Action for BiasPulse {
         Ok(ActionOutput::Unit)
     }
 
-    fn expects(&self) -> StateRequirements {
-        StateRequirements::none().tip(TipEngagement::Approached)
-    }
     // No effects: bias returns to previous value after pulse
 }
 

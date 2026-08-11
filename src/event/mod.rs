@@ -245,10 +245,10 @@ mod tests {
 
     #[test]
     fn event_custom() {
-        let event = Event::custom("workflow_started", serde_json::json!({"name": "prep"}));
+        let event = Event::custom("tip_prep_state", serde_json::json!({"name": "prep"}));
         match event {
             Event::Custom { kind, data } => {
-                assert_eq!(kind, "workflow_started");
+                assert_eq!(kind, "tip_prep_state");
                 assert_eq!(data["name"], "prep");
             }
             _ => panic!("Wrong variant"),

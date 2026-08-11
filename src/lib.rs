@@ -6,10 +6,8 @@ pub mod spm_error;
 
 // -- Actions and orchestration --
 pub mod action;
-pub mod machine_state;
 pub mod routine;
 pub mod tip_prep;
-pub mod workflow;
 
 // -- Configuration and observability --
 pub mod config;
