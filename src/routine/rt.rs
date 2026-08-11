@@ -94,10 +94,10 @@ impl<'a> Rt<'a> {
     /// Off unless a routine asks for it, either for its whole run via
     /// [`Routine::safe_tip_guard`](super::Routine::safe_tip_guard) or around a
     /// section with this setter. The guard is scoped to the calibrated
-    /// approach rather than to every action, since an approach drives the tip
-    /// at the surface with safe-tip enabled, where a trip means something,
-    /// while the rest of a routine is built not to endanger the tip and would
-    /// mostly produce misfires.
+    /// approach rather than to every action, since that is the only stretch
+    /// where the tip sits off the surface out of feedback and can drift into
+    /// it. Everywhere else a routine runs in feedback, so the same check
+    /// would mostly report misfires.
     pub fn set_safe_tip_guard(&mut self, enabled: bool) {
         self.safe_tip_guard = enabled;
     }

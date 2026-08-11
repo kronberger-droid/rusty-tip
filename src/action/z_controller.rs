@@ -210,7 +210,7 @@ impl Action for SafeTipSet {
 /// 1. Auto-approach to surface
 /// 2. Wait 200ms
 /// 3. Enable safe-tip protection
-/// 4. Z-home (small withdraw ~50nm from surface)
+/// 4. Z-home (small *relative* withdraw, ~50nm off the surface)
 /// 5. Wait 500ms
 /// 6. Center frequency shift (while slightly withdrawn)
 /// 7. Auto-approach again (final approach with calibrated freq shift)
@@ -220,9 +220,17 @@ pub struct CalibratedApproach {
     pub wait: bool,
     pub timeout_ms: u64,
     /// Abort if safe-tip protection trips during the sequence. Off unless the
-    /// routine asks for it. This is the one place the check earns its keep:
-    /// the tip is driven at the surface here with safe-tip enabled, so a trip
-    /// means something, where elsewhere in a routine it would mostly misfire.
+    /// routine asks for it.
+    ///
+    /// This is the one place the check earns its keep, and it is why safe-tip
+    /// is switched on here at all. Steps 4 to 7 run *out of feedback*: the tip
+    /// is parked a little way off the surface so that centring the frequency
+    /// shift is not corrupted by the sensor drifting with every movement.
+    /// Nothing is holding the tip off the surface during that window, so it
+    /// can drift into it. Safe-tip catches exactly that, and these checks turn
+    /// a catch into an abort instead of an approach that carries on over a
+    /// crashed tip. Back in feedback the protection is not needed, which is
+    /// why step 8 restores it.
     pub check_safe_tip: bool,
 }
 

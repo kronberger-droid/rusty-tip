@@ -99,9 +99,12 @@ pub trait Routine {
     /// Whether calibrated approaches abort when safe-tip protection trips,
     /// for the whole run. Off by default.
     ///
-    /// Turn it on for a routine whose approaches are the risky part, so a
-    /// trip aborts instead of the run continuing over a crashed tip. Within
-    /// `run`, [`Rt::set_safe_tip_guard`] overrides this for a section.
+    /// Turn it on for a routine that approaches often. The calibrated
+    /// approach parks the tip just off the surface, out of feedback, while it
+    /// centres the frequency shift; nothing holds the tip off during that
+    /// window, so it can drift in. Safe-tip catches the drift and the guard
+    /// turns that catch into an abort. Within `run`,
+    /// [`Rt::set_safe_tip_guard`] overrides this for a section.
     fn safe_tip_guard(&self) -> bool {
         false
     }
