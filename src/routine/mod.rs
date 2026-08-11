@@ -398,8 +398,8 @@ mod tests {
         let mut rt = Rt::new(&mut mock, &bus, &shutdown);
 
         let result: Result<(), SpmError> = rt.guarded(
-            |_| Err(SpmError::Workflow("body failed".into())),
-            |_| Err(SpmError::Workflow("cleanup failed".into())),
+            |_| Err(SpmError::Routine("body failed".into())),
+            |_| Err(SpmError::Routine("cleanup failed".into())),
         );
 
         assert_eq!(

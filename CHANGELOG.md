@@ -77,6 +77,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gets its own `initial_approach_timeout_ms`, defaulting to the 600 s
   v1 used. Approaches during a run keep the shorter timeout.
 
+### Changed (continued)
+
+- **Breaking (library):** `SpmError::Workflow` is now `SpmError::Routine`,
+  since the module it was named for no longer exists. The `Display` output
+  is unchanged.
+- `NanonisSetupConfig::from_app_config` replaces the setup struct each
+  binary built by hand. Naming only the fields that come from config is how
+  the z-home mode silently differed from what the approach assumes.
+
 ### Removed
 
 - **Breaking (library):** the `workflow` module. Its declarative
@@ -98,6 +107,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handle methods no longer carry a `Protocol` error for an output shape
   that could not occur. `Event::action_completed` takes the serialized
   `serde_json::Value` directly; the JSONL output field is unchanged.
+- **Breaking (library):** the dead half of `types`: `TipShape`,
+  `SignalStats`, `StableOsciData`, `SessionMetadata`, `DataToGet`,
+  `AutoApproachResult` and `AutoApproachStatus`, none of which had a
+  reference left. `TipShape` also collided by name with the live
+  `action::tip_shaper::TipShape`.
 - **Breaking (library):** `Deserialize` on the action structs, along
   with their `#[serde(default)]` attributes. Deserializing an action by
   name was the executor's job. `Serialize` stays, since it is what puts

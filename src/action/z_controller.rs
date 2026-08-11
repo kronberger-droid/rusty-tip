@@ -254,7 +254,7 @@ fn abort_if_safe_tip(ctx: &mut ActionContext, stage: &str) -> super::Result<()> 
         return Ok(());
     }
     match ctx.controller.z_controller_status() {
-        Ok(ZControllerStatus::SafeTip) => Err(SpmError::Workflow(format!(
+        Ok(ZControllerStatus::SafeTip) => Err(SpmError::Routine(format!(
             "safe-tip protection triggered ({stage}), aborting approach"
         ))),
         Ok(_) => Ok(()),
