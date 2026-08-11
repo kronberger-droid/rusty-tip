@@ -60,8 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Regression against 0.2.3, the last version run on hardware:** the
-  Nanonis z-home mode defaulted to `Absolute`, where v1 set `Relative`.
+- **Regression against 0.2.3, the last version run on hardware, present
+  in the published 0.3.0 and 0.4.0:** the Nanonis z-home mode defaulted
+  to `Absolute`, where 0.2.3 set `Relative`. Neither affected release had
+  met a tip, so no patch was cut for them; run 0.5.0 or later on
+  hardware, or 0.2.3.
   The calibrated approach homes mid-sequence to back off the surface
   before centring the frequency shift, which only retracts under
   `Relative`; `Absolute` sends Z to a fixed coordinate instead.
