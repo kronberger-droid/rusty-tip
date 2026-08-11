@@ -280,11 +280,11 @@ fn setup_event_bus(config: &AppConfig) -> Result<EventBus, Box<dyn std::error::E
 
 fn setup_shutdown_handler() -> ShutdownFlag {
     let shutdown = ShutdownFlag::new();
-    let flag = shutdown.arc();
+    let flag = shutdown.clone();
 
     ctrlc::set_handler(move || {
         info!("Ctrl+C received - initiating graceful shutdown...");
-        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        flag.request();
     })
     .expect("Error setting Ctrl+C handler");
 

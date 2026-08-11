@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Routine harness** (`routine` module): automations are structs
+  implementing `Routine`, run against an `Rt` that hands out
+  capability-checked subsystem handles (`rt.bias()?.set(v)?`), an
+  interruptible `settle()`, a `cycles()` driver that turns cycle/time
+  budgets into `Outcome`s, and `guarded()` for cleanup that runs however
+  the body ends. `run_routine` owns the controller life cycle (prepare,
+  withdraw on exit, teardown) around any routine, including when the
+  routine panics: it catches the unwind, restores the hardware, and
+  re-raises. Handle operations emit the same started/completed/failed
+  events `execute_logged` used to, so JSONL logs keep their shape.
+- Two new events so failures during cleanup stay visible in the JSONL
+  log rather than only in `log`: `cleanup_failed` when `guarded`
+  swallows a cleanup error to preserve the body's, and
+  `routine_panicked` when a routine unwinds.
+- `scan().props_set()` and `scan().speed_set()` now emit
+  started/completed/failed events like every other state change, so a
+  scan speed altered mid-run is visible in the JSONL log. The scan
+  reads (`status`, `props_get`, `speed_get`) stay silent.
+- Tip preparation is now `TipPrep`, the reference `Routine`
+  implementation; `run_tip_prep` keeps its exact signature and behaviour
+  as a thin wrapper over `run_routine`.
+
+### Changed
+
+- **Breaking (library):** `ShutdownFlag` is backed by a condition variable
+  so `request()` wakes sleeping waiters immediately (new `wait_timeout`);
+  `from_arc()` and `arc()` are gone since writes to a raw
+  `Arc<AtomicBool>` could never notify a waiter. Handlers call
+  `request()` on a clone instead.
+- **Breaking (library):** `Outcome` moved to the `routine` module
+  (re-exported from `tip_prep` unchanged) and now derives
+  `Debug`/`Clone`/`Copy`/`PartialEq`/`Eq`.
+- **Breaking (library):** `tip_prep::runner::execute_logged` and
+  `interruptible_sleep` are gone; their jobs moved into the harness
+  (`Rt`'s event-logged execution and `ShutdownFlag::wait_timeout`).
+- The stability check now restores the scan speed even when a sweep
+  errors out (previously only on completion or shutdown), and waits
+  inside the routine wake immediately on a stop request instead of at
+  the next poll tick.
+
 ## [0.4.0] - 2026-08-10
 
 An API-cleanup release on the experimental v2 line. The public surface now
