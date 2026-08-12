@@ -127,15 +127,38 @@ impl Action for ZHome {
     }
 }
 
-/// Query the current Z-controller status (on/off).
-///
-/// Resolves `StateField::ZController` so the framework can auto-insert this
-/// action when a downstream step requires the field to be Known.
+/// Serializable mirror of [`ZControllerStatus`]; nanonis-rs does not
+/// derive `Serialize` on its status enums.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZControllerState {
+    Off,
+    On,
+    Hold,
+    SwitchingOff,
+    SafeTip,
+    Withdrawing,
+}
+
+impl From<ZControllerStatus> for ZControllerState {
+    fn from(s: ZControllerStatus) -> Self {
+        match s {
+            ZControllerStatus::Off => Self::Off,
+            ZControllerStatus::On => Self::On,
+            ZControllerStatus::Hold => Self::Hold,
+            ZControllerStatus::SwitchingOff => Self::SwitchingOff,
+            ZControllerStatus::SafeTip => Self::SafeTip,
+            ZControllerStatus::Withdrawing => Self::Withdrawing,
+        }
+    }
+}
+
+/// Query the current Z-controller status.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ReadZControllerStatus;
 
 impl Action for ReadZControllerStatus {
-    type Output = serde_json::Value;
+    type Output = ZControllerState;
 
     fn name(&self) -> &str {
         "read_z_controller_status"
@@ -147,23 +170,16 @@ impl Action for ReadZControllerStatus {
         vec![Capability::ZController]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
-        let status = ctx.controller.z_controller_status()?;
-        let on = matches!(status, ZControllerStatus::On);
-        Ok(serde_json::json!({
-            "on": on,
-            "status": format!("{:?}", status),
-        }))
+        Ok(ctx.controller.z_controller_status()?.into())
     }
 }
 
 /// Query whether safe-tip crash protection is currently enabled.
-///
-/// Resolves `StateField::SafeTipEnabled`.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ReadSafeTipStatus;
 
 impl Action for ReadSafeTipStatus {
-    type Output = serde_json::Value;
+    type Output = bool;
 
     fn name(&self) -> &str {
         "read_safe_tip_status"
@@ -175,8 +191,7 @@ impl Action for ReadSafeTipStatus {
         vec![Capability::SafeTip]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
-        let enabled = ctx.controller.safe_tip_enabled()?;
-        Ok(serde_json::json!({ "enabled": enabled }))
+        ctx.controller.safe_tip_enabled()
     }
 }
 

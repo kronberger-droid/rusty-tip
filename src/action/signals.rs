@@ -95,7 +95,7 @@ impl Action for ReadSignals {
 pub struct ReadSignalNames;
 
 impl Action for ReadSignalNames {
-    type Output = serde_json::Value;
+    type Output = Vec<String>;
 
     fn name(&self) -> &str {
         "read_signal_names"
@@ -108,11 +108,7 @@ impl Action for ReadSignalNames {
     }
 
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
-        let names = ctx.controller.signal_names()?;
-        let json = serde_json::to_value(names).map_err(|e| {
-            crate::spm_error::SpmError::Protocol(format!("Failed to serialize signal names: {}", e))
-        })?;
-        Ok(json)
+        ctx.controller.signal_names()
     }
 }
 
