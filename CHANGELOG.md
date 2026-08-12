@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Typed `Frame`** (`frame` module): a grabbed scan image as flat
+  row-major `f32` pixels plus channel, dimensions, scan direction and
+  physical geometry from the new `SpmController::scan_frame_get`.
+  `rt.scan()?.grab_frame(channel, forward)` returns one, and its
+  metadata (never the pixels) lands in the event log. `ToNpyPayload`
+  encodes any frame-like payload as npy bytes for transport.
+- **`Classifier` trait** (`classifier` module) with `HttpClassifier`
+  (sync HTTP to a Python sidecar: `GET /info` handshake at connect,
+  `POST /classify` with npy body + JSON metadata header) and
+  `MockClassifier` (scripted verdicts for tests). `rt.classify` runs
+  one and logs model, version, latency and the serialized verdict as
+  events. A reference FastAPI server ships in
+  `python/classifier_server.py`.
+- `SpmError::ClassifierUnavailable`, matchable so routines can fall
+  back to threshold logic when the sidecar is unreachable; contract
+  violations (bad status, malformed JSON) stay `Protocol`.
+
 - **Routine harness** (`routine` module): automations are structs
   implementing `Routine`, run against an `Rt` that hands out
   capability-checked subsystem handles (`rt.bias()?.set(v)?`), an
@@ -42,6 +59,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (library):** `GrabScanFrame` returns a `Frame` instead of
+  writing JSON to the `DataStore`, and `Analyzer::analyze` takes a
+  `&Frame` instead of the deleted `AnalyzerInput`. `RunAnalyzer` is gone:
+  analyzers are plain function calls on grabbed frames.
+- **Breaking (library):** the action outputs that were still
+  `serde_json::Value` are typed: `ReadScanStatus` and `ReadSafeTipStatus`
+  return `bool`, `ReadSignalNames` returns `Vec<String>`,
+  `ReadDataStreamStatus` returns `TCPLogStatus`, `OsciRead` returns
+  `OsciTrace`, `ReadZControllerStatus` returns `ZControllerState` (the
+  last two are serializable mirrors of nanonis-rs types that derive no
+  `Serialize`).
 - **Breaking (library):** `ShutdownFlag` is backed by a condition variable
   so `request()` wakes sleeping waiters immediately (new `wait_timeout`);
   `from_arc()` and `arc()` are gone since writes to a raw
@@ -91,6 +119,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking (library):** the `workflow` module. Its declarative
   `Step`/`Condition` executor is replaced by the routine harness, which
   puts control flow in Rust where the compiler can see it.
+- **Breaking (library):** `DataStore` and `ActionContext.store`. The
+  scan-frame handoff was the store's last use; data now flows between
+  steps as typed values through the routine that runs them.
 - **Breaking (library):** the `machine_state` module and the `Action`
   methods that fed it (`kind`, `expects`, `effects`, `resolves`,
   `apply_to_state`). The state model existed so the executor could
