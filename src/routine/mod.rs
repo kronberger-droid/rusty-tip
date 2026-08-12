@@ -412,4 +412,53 @@ mod tests {
         assert_eq!(data["body_error"], "body failed");
         assert_eq!(data["cleanup_error"], "cleanup failed");
     }
+
+    #[test]
+    fn a_classification_lands_in_the_event_log_with_model_and_verdict() {
+        use crate::classifier::MockClassifier;
+        use crate::frame::Frame;
+
+        #[derive(Debug, serde::Serialize)]
+        struct Verdict {
+            usable: bool,
+        }
+
+        let mut mock = MockController::builder().build();
+        let (bus, events) = recording_bus();
+        let shutdown = ShutdownFlag::new();
+        let mut rt = Rt::new(&mut mock, &bus, &shutdown);
+
+        let mut classifier = MockClassifier::<Frame, Verdict>::new()
+            .with_model("row_finder", "1.2.0")
+            .push_verdict(Verdict { usable: true })
+            .push_error(SpmError::ClassifierUnavailable("sidecar down".into()));
+
+        let frame = Frame::from_rows("Z", vec![vec![0.0; 2]; 2]).unwrap();
+        let verdict = rt.classify(&mut classifier, &frame).unwrap();
+        assert!(verdict.usable);
+
+        let err = rt.classify(&mut classifier, &frame).unwrap_err();
+        assert!(matches!(err, SpmError::ClassifierUnavailable(_)));
+
+        let events = events.lock().unwrap();
+        let done = custom_event(&events, "classification_completed")
+            .expect("a verdict must reach the event log");
+        assert_eq!(done["model"], "row_finder");
+        assert_eq!(done["version"], "1.2.0");
+        assert_eq!(done["verdict"]["usable"], true);
+        assert!(done["latency_ms"].as_f64().is_some());
+
+        let failed = custom_event(&events, "classification_failed")
+            .expect("a failed classification must reach the event log");
+        assert!(
+            failed["error"]
+                .as_str()
+                .unwrap()
+                .contains("Classifier unavailable")
+        );
+
+        // The classifier saw frame metadata, not pixels.
+        assert_eq!(classifier.seen.len(), 2);
+        assert_eq!(classifier.seen[0]["channel_name"], "Z");
+    }
 }

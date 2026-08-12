@@ -18,6 +18,7 @@ pub mod signal_registry;
 
 // -- Analysis and display --
 pub mod analyzer;
+pub mod classifier;
 pub mod frame;
 pub mod plotting;
 pub mod types;
@@ -26,6 +27,7 @@ pub mod types;
 mod buffered_tcp_reader;
 pub(crate) mod utils;
 
+pub use classifier::{Classifier, HttpClassifier, MockClassifier, ModelInfo};
 pub use controller_types::{
     BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, StabilityConfig,
 };

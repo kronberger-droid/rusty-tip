@@ -24,6 +24,11 @@ pub enum SpmError {
     /// Operation not supported by the current controller
     #[error("Unsupported: {0}")]
     Unsupported(String),
+    /// A remote classifier could not be reached (down, refused, timed
+    /// out). Matchable so a routine can fall back to threshold logic; a
+    /// reachable classifier answering wrongly is `Protocol` instead.
+    #[error("Classifier unavailable: {0}")]
+    ClassifierUnavailable(String),
     /// Clean shutdown requested by user (e.g. Ctrl+C)
     #[error("Shutdown requested by user")]
     ShutdownRequested,

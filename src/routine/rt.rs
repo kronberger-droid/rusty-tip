@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use crate::action::{Action, ActionContext};
+use crate::classifier::Classifier;
 use crate::event::{Event, EventBus, EventEmitter};
 use crate::shutdown::ShutdownFlag;
 use crate::spm_controller::{Capability, SpmController, ZControllerStatus};
@@ -306,6 +307,54 @@ impl<'a> Rt<'a> {
             Err(e) => {
                 self.events
                     .emit(Event::action_failed(&name, &e.to_string(), start.elapsed()));
+                Err(e)
+            }
+        }
+    }
+
+    /// Run a classifier on a payload, with the verdict entering the event
+    /// stream: model, version, latency, and the serialized verdict itself.
+    ///
+    /// Verdicts steer what a routine does next, so this is the audited way
+    /// to consult one; calling `classifier.classify` directly leaves no
+    /// trace of why the routine took the branch it took.
+    pub fn classify<C: Classifier>(
+        &mut self,
+        classifier: &mut C,
+        input: &C::Input,
+    ) -> Result<C::Verdict, SpmError> {
+        let model = classifier.model().clone();
+        let start = Instant::now();
+        self.events.emit(Event::custom(
+            "classification_started",
+            serde_json::json!({ "model": model.name, "version": model.version }),
+        ));
+        match classifier.classify(input) {
+            Ok(verdict) => {
+                // Same rule as exec: an unserializable value must not fail
+                // a classification that already ran.
+                let json = serde_json::to_value(&verdict).unwrap_or(serde_json::Value::Null);
+                self.events.emit(Event::custom(
+                    "classification_completed",
+                    serde_json::json!({
+                        "model": model.name,
+                        "version": model.version,
+                        "latency_ms": start.elapsed().as_secs_f64() * 1e3,
+                        "verdict": json,
+                    }),
+                ));
+                Ok(verdict)
+            }
+            Err(e) => {
+                self.events.emit(Event::custom(
+                    "classification_failed",
+                    serde_json::json!({
+                        "model": model.name,
+                        "version": model.version,
+                        "latency_ms": start.elapsed().as_secs_f64() * 1e3,
+                        "error": e.to_string(),
+                    }),
+                ));
                 Err(e)
             }
         }
