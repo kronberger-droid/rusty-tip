@@ -1,7 +1,8 @@
 use clap::Parser;
 use image::ImageReader;
+use rusty_tip::analyzer::Analyzer;
 use rusty_tip::analyzer::cuox_rows::CuoxRowDetector;
-use rusty_tip::analyzer::{Analyzer, AnalyzerInput};
+use rusty_tip::frame::Frame;
 use std::path::PathBuf;
 
 /// Detect CuOx reconstruction rows in STM images of Cu(110).
@@ -69,11 +70,13 @@ fn main() {
     };
 
     // Build input
-    let input = AnalyzerInput {
-        channel_name: "grayscale".into(),
-        data,
-        calibration_m_per_px: cli.calibration.map(|nm| nm * 1e-9),
-    };
+    let mut input = Frame::from_rows("grayscale", data).unwrap_or_else(|e| {
+        eprintln!("Failed to build frame: {}", e);
+        std::process::exit(1);
+    });
+    if let Some(nm) = cli.calibration {
+        input = input.with_uniform_calibration(nm * 1e-9);
+    }
 
     // Run analysis
     let output = detector.analyze(&input).unwrap_or_else(|e| {

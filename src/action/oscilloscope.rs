@@ -43,8 +43,18 @@ impl Default for OsciRead {
     }
 }
 
+/// One oscilloscope acquisition: samples starting at `t0`, spaced `dt`
+/// seconds apart. Serializable mirror of nanonis-rs `OsciData`, which
+/// does not derive `Serialize`.
+#[derive(Debug, Clone, Serialize)]
+pub struct OsciTrace {
+    pub t0: f64,
+    pub dt: f64,
+    pub data: Vec<f64>,
+}
+
 impl Action for OsciRead {
-    type Output = serde_json::Value;
+    type Output = OsciTrace;
 
     fn name(&self) -> &str {
         "osci_read"
@@ -61,11 +71,10 @@ impl Action for OsciRead {
             None, // no trigger override
             self.mode.clone().into(),
         )?;
-        Ok(serde_json::json!({
-            "t0": data.t0,
-            "dt": data.dt,
-            "size": data.size,
-            "data": data.data,
-        }))
+        Ok(OsciTrace {
+            t0: data.t0,
+            dt: data.dt,
+            data: data.data,
+        })
     }
 }

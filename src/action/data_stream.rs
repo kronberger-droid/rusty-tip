@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use nanonis_rs::tcplog::TCPLogStatus;
+
 use crate::action::{Action, ActionContext};
 use crate::spm_controller::Capability;
 
@@ -83,7 +85,7 @@ impl Action for StopDataStream {
 pub struct ReadDataStreamStatus;
 
 impl Action for ReadDataStreamStatus {
-    type Output = serde_json::Value;
+    type Output = TCPLogStatus;
 
     fn name(&self) -> &str {
         "read_data_stream_status"
@@ -95,13 +97,6 @@ impl Action for ReadDataStreamStatus {
         vec![Capability::DataStream]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
-        let status = ctx.controller.data_stream_status()?;
-        let json = serde_json::to_value(status).map_err(|e| {
-            crate::spm_error::SpmError::Protocol(format!(
-                "Failed to serialize data stream status: {}",
-                e
-            ))
-        })?;
-        Ok(json)
+        ctx.controller.data_stream_status()
     }
 }

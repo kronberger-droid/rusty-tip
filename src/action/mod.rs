@@ -7,13 +7,11 @@ pub mod pll;
 pub mod position;
 pub mod scan;
 pub mod signals;
-mod store;
 pub mod tip_shaper;
 pub mod util;
 pub mod z_controller;
 
 pub use context::ActionContext;
-pub use store::DataStore;
 
 use serde::Serialize;
 

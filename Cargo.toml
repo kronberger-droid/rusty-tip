@@ -40,6 +40,7 @@ parking_lot = "0.12"
 config = { version = "0.15.18", features = [ "toml" ] }
 clap = { version = "4.5.53", features = ["derive"] }
 crossbeam-channel = "0.5"
+ureq = { version = "3", features = [ "json" ] }
 rayon = "1.10"
 image = "0.25"
 

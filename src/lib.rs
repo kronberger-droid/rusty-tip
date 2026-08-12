@@ -18,6 +18,8 @@ pub mod signal_registry;
 
 // -- Analysis and display --
 pub mod analyzer;
+pub mod classifier;
+pub mod frame;
 pub mod plotting;
 pub mod types;
 
@@ -25,9 +27,11 @@ pub mod types;
 mod buffered_tcp_reader;
 pub(crate) mod utils;
 
+pub use classifier::{Classifier, HttpClassifier, MockClassifier, ModelInfo};
 pub use controller_types::{
     BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, StabilityConfig,
 };
+pub use frame::{Frame, FrameGeometry, ToNpyPayload};
 pub use plotting::{plot_values, plot_values_with_range};
 pub use routine::{Outcome, Routine, Rt, run_routine};
 pub use shutdown::ShutdownFlag;

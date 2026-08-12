@@ -148,14 +148,12 @@ declare the hardware capabilities they need, and execution fails with
 use rusty_tip::SignalIndex;
 use rusty_tip::action::bias::{BiasPulse, SetBias};
 use rusty_tip::action::signals::ReadStableSignal;
-use rusty_tip::action::{Action, ActionContext, DataStore};
+use rusty_tip::action::{Action, ActionContext};
 use rusty_tip::event::EventBus;
 
-let mut store = DataStore::new();
 let events = EventBus::new();
 let mut ctx = ActionContext {
     controller: &mut *controller,
-    store: &mut store,
     events: &events,
 };
 
@@ -197,6 +195,55 @@ through the subsystem handles rather than constructing actions directly:
 | **PLL** | `CenterFreqShift` |
 | **Data Stream** | `ConfigureDataStream`, `StartDataStream`, `StopDataStream`, `ReadDataStreamStatus` |
 | **Utility** | `Wait` |
+
+## Frames and classifiers
+
+`rt.scan()?.grab_frame(channel, forward)` returns a typed `Frame`: flat
+row-major pixels plus channel, dimensions, scan direction, and the frame's
+physical geometry (center, size, rotation) from the instrument. Analyzers
+(`Analyzer` trait) take a `&Frame` and are plain function calls; frames
+loaded from files carry no geometry or synthesize it from a calibration
+(`Frame::with_uniform_calibration`).
+
+A `Classifier` answers a question about a payload and steers what the
+routine does next, so verdicts belong in the audit trail: consult one
+through `rt.classify`, which logs model, version, latency and the verdict
+itself. The trait separates the question from the transport:
+
+```rust
+use rusty_tip::classifier::HttpClassifier;
+use rusty_tip::Frame;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct RowVerdict {
+    usable: bool,
+    score: f64,
+}
+
+// Handshakes GET /info: a dead sidecar fails here, at setup,
+// not forty minutes into a run.
+let mut rows: HttpClassifier<Frame, RowVerdict> =
+    HttpClassifier::connect("http://localhost:8000")?;
+
+// Inside a routine:
+let frame = rt.scan()?.grab_frame(0, true)?;
+let verdict = rt.classify(&mut rows, &frame)?;
+if verdict.usable {
+    // ...
+}
+```
+
+A new Python-side model costs one verdict struct and an endpoint URL. The
+wire contract (npy body + `X-Payload-Meta` JSON header in, verdict JSON
+out) is documented in `src/classifier/http.rs`, and a complete FastAPI
+reference server ships in `python/classifier_server.py`.
+
+Failure semantics: an unreachable sidecar surfaces as the matchable
+`SpmError::ClassifierUnavailable`, so a routine can fall back to
+threshold logic; a reachable server answering wrongly is `Protocol`,
+since that is a broken deployment and a silent fallback would mask it.
+`MockClassifier` scripts verdicts (and failures) per call for tests.
 
 ## Implementing `SpmController`
 

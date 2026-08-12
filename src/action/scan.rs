@@ -3,10 +3,8 @@ use serde::Serialize;
 use nanonis_rs::scan::{ScanAction, ScanDirection};
 
 use crate::action::{Action, ActionContext};
+use crate::frame::Frame;
 use crate::spm_controller::Capability;
-
-/// DataStore key that `GrabScanFrame` writes and `RunAnalyzer` reads by default.
-pub const DEFAULT_SCAN_FRAME_KEY: &str = "scan_frame";
 
 /// Serializable scan action that maps to nanonis-rs ScanAction.
 #[derive(Debug, Clone, Serialize)]
@@ -81,12 +79,8 @@ impl Action for ScanControl {
     }
 }
 
-/// Grab 2D pixel data from a completed (or in-progress) scan frame.
-///
-/// Stores the result in the DataStore under `"scan_frame"` as:
-/// ```json
-/// { "channel_name": "...", "data": [[f32, ...], ...], "direction_up": bool }
-/// ```
+/// Grab 2D pixel data from a completed (or in-progress) scan frame,
+/// together with the frame's physical geometry.
 #[derive(Debug, Clone, Serialize)]
 pub struct GrabScanFrame {
     /// Which scan buffer channel to read (0-based index).
@@ -105,7 +99,7 @@ impl Default for GrabScanFrame {
 }
 
 impl Action for GrabScanFrame {
-    type Output = serde_json::Value;
+    type Output = Frame;
 
     fn name(&self) -> &str {
         "grab_scan_frame"
@@ -120,13 +114,10 @@ impl Action for GrabScanFrame {
         let (channel_name, data, direction_up) = ctx
             .controller
             .scan_frame_data_grab(self.channel_index, self.forward)?;
-        let result = serde_json::json!({
-            "channel_name": channel_name,
-            "data": data,
-            "direction_up": direction_up,
-        });
-        ctx.store.set(DEFAULT_SCAN_FRAME_KEY, &result)?;
-        Ok(result)
+        let geometry = ctx.controller.scan_frame_get()?;
+        Ok(Frame::from_rows(channel_name, data)?
+            .with_direction(direction_up)
+            .with_geometry(geometry.into()))
     }
 }
 
@@ -134,7 +125,7 @@ impl Action for GrabScanFrame {
 pub struct ReadScanStatus;
 
 impl Action for ReadScanStatus {
-    type Output = serde_json::Value;
+    type Output = bool;
 
     fn name(&self) -> &str {
         "read_scan_status"
@@ -146,7 +137,6 @@ impl Action for ReadScanStatus {
         vec![Capability::Scanning]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
-        let running = ctx.controller.scan_status()?;
-        Ok(serde_json::json!({ "running": running }))
+        ctx.controller.scan_status()
     }
 }
