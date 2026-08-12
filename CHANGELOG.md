@@ -67,9 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `serde_json::Value` are typed: `ReadScanStatus` and `ReadSafeTipStatus`
   return `bool`, `ReadSignalNames` returns `Vec<String>`,
   `ReadDataStreamStatus` returns `TCPLogStatus`, `OsciRead` returns
-  `OsciTrace`, `ReadZControllerStatus` returns `ZControllerState` (the
-  last two are serializable mirrors of nanonis-rs types that derive no
-  `Serialize`).
+  `OsciData`, `ReadZControllerStatus` returns `ZControllerStatus` (the
+  last two got their `Serialize` derives upstream in nanonis-rs 0.5.0,
+  which is now the minimum version).
 - **Breaking (library):** `ShutdownFlag` is backed by a condition variable
   so `request()` wakes sleeping waiters immediately (new `wait_timeout`);
   `from_arc()` and `arc()` are gone since writes to a raw

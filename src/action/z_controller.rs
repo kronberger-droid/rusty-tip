@@ -127,38 +127,12 @@ impl Action for ZHome {
     }
 }
 
-/// Serializable mirror of [`ZControllerStatus`]; nanonis-rs does not
-/// derive `Serialize` on its status enums.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ZControllerState {
-    Off,
-    On,
-    Hold,
-    SwitchingOff,
-    SafeTip,
-    Withdrawing,
-}
-
-impl From<ZControllerStatus> for ZControllerState {
-    fn from(s: ZControllerStatus) -> Self {
-        match s {
-            ZControllerStatus::Off => Self::Off,
-            ZControllerStatus::On => Self::On,
-            ZControllerStatus::Hold => Self::Hold,
-            ZControllerStatus::SwitchingOff => Self::SwitchingOff,
-            ZControllerStatus::SafeTip => Self::SafeTip,
-            ZControllerStatus::Withdrawing => Self::Withdrawing,
-        }
-    }
-}
-
 /// Query the current Z-controller status.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ReadZControllerStatus;
 
 impl Action for ReadZControllerStatus {
-    type Output = ZControllerState;
+    type Output = ZControllerStatus;
 
     fn name(&self) -> &str {
         "read_z_controller_status"
@@ -170,7 +144,7 @@ impl Action for ReadZControllerStatus {
         vec![Capability::ZController]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<Self::Output> {
-        Ok(ctx.controller.z_controller_status()?.into())
+        ctx.controller.z_controller_status()
     }
 }
 
