@@ -5,7 +5,7 @@ use nanonis_rs::{
     NanonisClient, Position,
     motor::{MotorDirection, MotorDisplacement, MotorGroup, MovementMode, Position3D},
     oscilloscope::OsciData,
-    scan::{ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder},
+    scan::{ScanAction, ScanConfig, ScanDirection, ScanFrame, ScanProps, ScanPropsBuilder},
     tip_recovery::TipShaperConfig,
 };
 
@@ -739,6 +739,10 @@ impl SpmController for NanonisController {
         forward: bool,
     ) -> Result<(String, Vec<Vec<f32>>, bool)> {
         Ok(self.client.scan_frame_data_grab(channel_index, forward)?)
+    }
+
+    fn scan_frame_get(&mut self) -> Result<ScanFrame> {
+        Ok(self.client.scan_frame_get()?)
     }
 
     // -- Oscilloscope --

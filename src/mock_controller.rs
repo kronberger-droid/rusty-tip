@@ -58,7 +58,8 @@ use nanonis_rs::Position;
 use nanonis_rs::motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D};
 use nanonis_rs::oscilloscope::OsciData;
 use nanonis_rs::scan::{
-    AutopasteMode, AutosaveMode, ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder,
+    AutopasteMode, AutosaveMode, ScanAction, ScanConfig, ScanDirection, ScanFrame, ScanProps,
+    ScanPropsBuilder,
 };
 use nanonis_rs::tcplog::TCPLogStatus;
 use nanonis_rs::tip_recovery::TipShaperConfig;
@@ -568,6 +569,12 @@ impl SpmController for MockController {
         self.enter("scan_frame_data_grab")?;
         // 2x2 flat frame is enough for routines that only check shape.
         Ok(("mock_channel".into(), vec![vec![0.0; 2]; 2], forward))
+    }
+
+    fn scan_frame_get(&mut self) -> Result<ScanFrame> {
+        self.enter("scan_frame_get")?;
+        // 100 nm frame centered at the origin, unrotated.
+        Ok(ScanFrame::new(Position::new(0.0, 0.0), 1e-7, 1e-7, 0.0))
     }
 
     // -- Oscilloscope --

@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::action::{Action, ActionContext, DataStore};
+use crate::action::{Action, ActionContext};
 use crate::event::{Event, EventBus, EventEmitter};
 use crate::shutdown::ShutdownFlag;
 use crate::spm_controller::{Capability, SpmController, ZControllerStatus};
@@ -20,7 +20,6 @@ pub struct Rt<'a> {
     controller: &'a mut dyn SpmController,
     events: &'a EventBus,
     shutdown: &'a ShutdownFlag,
-    store: DataStore,
     safe_tip_guard: bool,
 }
 
@@ -34,7 +33,6 @@ impl<'a> Rt<'a> {
             controller,
             events,
             shutdown,
-            store: DataStore::new(),
             safe_tip_guard: false,
         }
     }
@@ -290,7 +288,6 @@ impl<'a> Rt<'a> {
         self.events.emit(Event::action_started(&name, params));
         let mut ctx = ActionContext {
             controller: self.controller,
-            store: &mut self.store,
             events: self.events,
         };
         let result = match crate::action::check_capabilities(action, ctx.controller) {

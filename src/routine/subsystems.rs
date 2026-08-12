@@ -10,9 +10,10 @@ use nanonis_rs::scan::{ScanConfig, ScanProps, ScanPropsBuilder};
 
 use crate::action::bias::{BiasPulse, ReadBias, SetBias};
 use crate::action::motor::{MoveMotor3D, Reposition};
-use crate::action::scan::{ScanActionParam, ScanControl, ScanDirectionParam};
+use crate::action::scan::{GrabScanFrame, ScanActionParam, ScanControl, ScanDirectionParam};
 use crate::action::signals::{ReadSignal, ReadStableSignal};
 use crate::action::z_controller::{AutoApproach, CalibratedApproach, SetZSetpoint, Withdraw};
+use crate::frame::Frame;
 use crate::signal_registry::SignalIndex;
 use crate::spm_error::SpmError;
 
@@ -259,6 +260,17 @@ impl Scan<'_, '_> {
     /// Whether a scan is currently running.
     pub fn status(&mut self) -> Result<bool> {
         self.rt.controller().scan_status()
+    }
+
+    /// Grab the current scan frame: pixels plus physical geometry.
+    ///
+    /// This is scientific data, so it goes through the action layer and
+    /// the frame's metadata (not its pixels) lands in the event log.
+    pub fn grab_frame(&mut self, channel_index: u32, forward: bool) -> Result<Frame> {
+        self.rt.exec(&GrabScanFrame {
+            channel_index,
+            forward,
+        })
     }
 
     /// Current scan properties (for save/restore around a sweep).

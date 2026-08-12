@@ -172,7 +172,6 @@ pub fn run_routine(
         }
         Err(e) => log::warn!("Cleanup withdrawal skipped: {}", e),
     }
-    drop(rt);
     controller.teardown();
     log::info!("Cleanup complete");
 

@@ -7,7 +7,8 @@ use ndarray::Array2;
 use rayon::prelude::*;
 use serde_json::json;
 
-use super::{Analyzer, AnalyzerInput, AnalyzerOutput, Result};
+use super::{Analyzer, AnalyzerOutput, Result};
+use crate::frame::Frame;
 
 /// Detects CuOx reconstruction rows (broad stripes) in STM images of Cu(110).
 ///
@@ -57,9 +58,9 @@ impl Analyzer for CuoxRowDetector {
         "Detects CuOx reconstruction rows in STM images of Cu(110)"
     }
 
-    fn analyze(&self, input: &AnalyzerInput) -> Result<AnalyzerOutput> {
-        let rows = input.rows();
-        let cols = input.cols();
+    fn analyze(&self, input: &Frame) -> Result<AnalyzerOutput> {
+        let rows = input.rows;
+        let cols = input.cols;
         if rows == 0 || cols == 0 {
             return Ok(AnalyzerOutput {
                 data: json!({ "error": "empty input", "bands_count": 0, "bands": [] }),
@@ -79,17 +80,15 @@ impl Analyzer for CuoxRowDetector {
             });
         }
 
-        // Convert Vec<Vec<f32>> to Array2<f32>, sanitizing NaN/Inf to 0.
+        // Convert the flat frame to Array2<f32>, sanitizing NaN/Inf to 0.
         let mut nan_count = 0usize;
         let mut img = Array2::<f32>::zeros((rows, cols));
-        for (r, row) in input.data.iter().enumerate() {
-            for (c, &val) in row.iter().enumerate() {
-                if val.is_finite() {
-                    img[[r, c]] = val;
-                } else {
-                    nan_count += 1;
-                    // Leave as 0.0 (neutral value)
-                }
+        for (i, &val) in input.data.iter().enumerate() {
+            if val.is_finite() {
+                img[[i / cols, i % cols]] = val;
+            } else {
+                nan_count += 1;
+                // Leave as 0.0 (neutral value)
             }
         }
         if nan_count > 0 {
@@ -114,7 +113,9 @@ impl Analyzer for CuoxRowDetector {
         let bands = detect_bands(&projection, self.threshold, self.min_band_width);
 
         // Step 4: Build output with image-space coordinates
-        let calibration_nm_per_px = input.calibration_m_per_px.map(|m| m * 1e9);
+        // Calibrated measurements use the x-axis pixel size; scan frames
+        // are square-pixeled in practice, offline frames by construction.
+        let calibration_nm_per_px = input.m_per_px().map(|(x, _)| x * 1e9);
 
         let angle_rad = (angle_deg as f64).to_radians();
         let cos_a = angle_rad.cos();
@@ -601,7 +602,7 @@ fn format_line(seg: &Option<LineSegment>) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analyzer::AnalyzerInput;
+    use crate::frame::Frame;
 
     // ── Helpers ────────────────────────────────────────────────────
 
@@ -1084,11 +1085,7 @@ mod tests {
     #[test]
     fn analyzer_empty_input() {
         let detector = CuoxRowDetector::new();
-        let input = AnalyzerInput {
-            channel_name: "Z".into(),
-            data: vec![],
-            calibration_m_per_px: None,
-        };
+        let input = Frame::from_rows("Z", vec![]).unwrap();
         let output = detector.analyze(&input).unwrap();
         assert_eq!(output.data["bands_count"], 0);
     }
@@ -1096,11 +1093,7 @@ mod tests {
     #[test]
     fn analyzer_horizontal_bands() {
         let detector = CuoxRowDetector::new();
-        let input = AnalyzerInput {
-            channel_name: "Z".into(),
-            data: horizontal_banded_image(200, 200),
-            calibration_m_per_px: None,
-        };
+        let input = Frame::from_rows("Z", horizontal_banded_image(200, 200)).unwrap();
         let output = detector.analyze(&input).unwrap();
         let angle = output.data["angle_deg"].as_f64().unwrap();
         assert!(
@@ -1114,11 +1107,7 @@ mod tests {
     #[test]
     fn analyzer_vertical_bands() {
         let detector = CuoxRowDetector::new();
-        let input = AnalyzerInput {
-            channel_name: "Z".into(),
-            data: vertical_banded_image(200, 200),
-            calibration_m_per_px: None,
-        };
+        let input = Frame::from_rows("Z", vertical_banded_image(200, 200)).unwrap();
         let output = detector.analyze(&input).unwrap();
         let angle = output.data["angle_deg"].as_f64().unwrap();
         assert!(
@@ -1135,11 +1124,7 @@ mod tests {
             fixed_angle: Some(45.0),
             ..Default::default()
         };
-        let input = AnalyzerInput {
-            channel_name: "Z".into(),
-            data: horizontal_banded_image(200, 200),
-            calibration_m_per_px: None,
-        };
+        let input = Frame::from_rows("Z", horizontal_banded_image(200, 200)).unwrap();
         let output = detector.analyze(&input).unwrap();
         let angle = output.data["angle_deg"].as_f64().unwrap();
         assert!(
@@ -1152,11 +1137,9 @@ mod tests {
     #[test]
     fn analyzer_calibration_adds_nm_fields() {
         let detector = CuoxRowDetector::new();
-        let input = AnalyzerInput {
-            channel_name: "Z".into(),
-            data: horizontal_banded_image(200, 200),
-            calibration_m_per_px: Some(0.12e-9), // 0.12 nm/px
-        };
+        let input = Frame::from_rows("Z", horizontal_banded_image(200, 200))
+            .unwrap()
+            .with_uniform_calibration(0.12e-9); // 0.12 nm/px
         let output = detector.analyze(&input).unwrap();
         let bands = output.data["bands"].as_array().unwrap();
         if !bands.is_empty() {
@@ -1184,11 +1167,7 @@ mod tests {
     #[test]
     fn analyzer_no_calibration_omits_nm_fields() {
         let detector = CuoxRowDetector::new();
-        let input = AnalyzerInput {
-            channel_name: "Z".into(),
-            data: horizontal_banded_image(200, 200),
-            calibration_m_per_px: None,
-        };
+        let input = Frame::from_rows("Z", horizontal_banded_image(200, 200)).unwrap();
         let output = detector.analyze(&input).unwrap();
         let bands = output.data["bands"].as_array().unwrap();
         if !bands.is_empty() {
@@ -1207,11 +1186,7 @@ mod tests {
     #[test]
     fn analyzer_output_json_schema() {
         let detector = CuoxRowDetector::new();
-        let input = AnalyzerInput {
-            channel_name: "Z".into(),
-            data: horizontal_banded_image(200, 200),
-            calibration_m_per_px: None,
-        };
+        let input = Frame::from_rows("Z", horizontal_banded_image(200, 200)).unwrap();
         let output = detector.analyze(&input).unwrap();
         // Required top-level keys
         assert!(output.data.get("angle_deg").is_some());
@@ -1231,11 +1206,7 @@ mod tests {
     #[test]
     fn analyzer_dark_bands_detected() {
         let detector = CuoxRowDetector::new();
-        let input = AnalyzerInput {
-            channel_name: "Z".into(),
-            data: dark_banded_image(200, 200),
-            calibration_m_per_px: None,
-        };
+        let input = Frame::from_rows("Z", dark_banded_image(200, 200)).unwrap();
         let output = detector.analyze(&input).unwrap();
         assert!(
             output.data["bands_count"].as_u64().unwrap() >= 1,
@@ -1390,11 +1361,7 @@ mod tests {
     #[test]
     fn bands_have_line_coordinates_in_output() {
         let detector = CuoxRowDetector::new();
-        let input = AnalyzerInput {
-            channel_name: "Z".into(),
-            data: horizontal_banded_image(200, 200),
-            calibration_m_per_px: None,
-        };
+        let input = Frame::from_rows("Z", horizontal_banded_image(200, 200)).unwrap();
         let output = detector.analyze(&input).unwrap();
         let bands = output.data["bands"].as_array().unwrap();
         assert!(!bands.is_empty(), "Should detect at least one band");
@@ -1447,11 +1414,7 @@ mod tests {
             fixed_angle: Some(0.0),
             ..Default::default()
         };
-        let input = AnalyzerInput {
-            channel_name: "Z".into(),
-            data: horizontal_banded_image(200, 200),
-            calibration_m_per_px: None,
-        };
+        let input = Frame::from_rows("Z", horizontal_banded_image(200, 200)).unwrap();
         let output = detector.analyze(&input).unwrap();
         let bands = output.data["bands"].as_array().unwrap();
 
@@ -1497,11 +1460,7 @@ mod tests {
             var_radius: 10,
             ..Default::default()
         };
-        let input = AnalyzerInput {
-            channel_name: "Z".into(),
-            data: horizontal_banded_image(200, 200),
-            calibration_m_per_px: None,
-        };
+        let input = Frame::from_rows("Z", horizontal_banded_image(200, 200)).unwrap();
         let output = detector.analyze(&input).unwrap();
         assert!(output.data["bands_count"].as_u64().unwrap() >= 1);
     }
@@ -1512,11 +1471,7 @@ mod tests {
             min_band_width: 100, // very high -- should reject everything
             ..Default::default()
         };
-        let input = AnalyzerInput {
-            channel_name: "Z".into(),
-            data: horizontal_banded_image(200, 200),
-            calibration_m_per_px: None,
-        };
+        let input = Frame::from_rows("Z", horizontal_banded_image(200, 200)).unwrap();
         let output = detector.analyze(&input).unwrap();
         // With min_band_width=100, the 30px-wide bands should be rejected
         // (depending on how they project, but likely too narrow)
@@ -1533,11 +1488,7 @@ mod tests {
         // The score map for a uniform image is all zeros, and with the
         // early-return on max_val<=0 in detect_bands, no bands should appear.
         let detector = CuoxRowDetector::new();
-        let input = AnalyzerInput {
-            channel_name: "Z".into(),
-            data: uniform_image(100, 100, 0.5),
-            calibration_m_per_px: None,
-        };
+        let input = Frame::from_rows("Z", uniform_image(100, 100, 0.5)).unwrap();
         let output = detector.analyze(&input).unwrap();
         assert_eq!(
             output.data["bands_count"].as_u64().unwrap(),

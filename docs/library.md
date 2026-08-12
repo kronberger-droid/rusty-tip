@@ -148,14 +148,12 @@ declare the hardware capabilities they need, and execution fails with
 use rusty_tip::SignalIndex;
 use rusty_tip::action::bias::{BiasPulse, SetBias};
 use rusty_tip::action::signals::ReadStableSignal;
-use rusty_tip::action::{Action, ActionContext, DataStore};
+use rusty_tip::action::{Action, ActionContext};
 use rusty_tip::event::EventBus;
 
-let mut store = DataStore::new();
 let events = EventBus::new();
 let mut ctx = ActionContext {
     controller: &mut *controller,
-    store: &mut store,
     events: &events,
 };
 

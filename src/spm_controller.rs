@@ -6,7 +6,7 @@ use nanonis_rs::{
     Position,
     motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D},
     oscilloscope::{OsciData, TriggerConfig},
-    scan::{ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder},
+    scan::{ScanAction, ScanConfig, ScanDirection, ScanFrame, ScanProps, ScanPropsBuilder},
     tcplog::TCPLogStatus,
     tip_recovery::TipShaperConfig,
 };
@@ -157,6 +157,9 @@ pub trait SpmController: Send {
         channel_index: u32,
         forward: bool,
     ) -> Result<(String, Vec<Vec<f32>>, bool)>;
+
+    /// The physical placement of the scan frame: center, size, rotation.
+    fn scan_frame_get(&mut self) -> Result<ScanFrame>;
 
     // -- Oscilloscope --
     // Combines channel set + trigger config + run + data get
