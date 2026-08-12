@@ -252,7 +252,11 @@ impl Action for ReadStableSignal {
             }
         }
 
-        unreachable!()
+        // Every loop iteration returns; keep an honest error rather than a
+        // panic path in case the control flow above ever changes.
+        Err(crate::spm_error::SpmError::Routine(
+            "ReadStableSignal: retry loop exited without a result".into(),
+        ))
     }
 }
 

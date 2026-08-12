@@ -950,15 +950,7 @@ impl TipPrepApp {
     fn check_controller_status(&mut self) {
         self.drain_events();
 
-        if self
-            .controller_thread
-            .as_ref()
-            .is_some_and(|h| h.is_finished())
-        {
-            let handle = self
-                .controller_thread
-                .take()
-                .expect("checked is_some above");
+        if let Some(handle) = self.controller_thread.take_if(|h| h.is_finished()) {
             self.shutdown_flag = None;
             self.event_receiver = None;
 

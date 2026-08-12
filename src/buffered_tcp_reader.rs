@@ -143,7 +143,10 @@ impl BufferedTCPReader {
                 }
                 Ok(())
             })
-            .expect("failed to spawn tcp-logger-buffer thread");
+            .map_err(|e| NanonisError::Io {
+                source: e,
+                context: "spawning tcp-logger-buffer thread".to_string(),
+            })?;
 
         Ok(Self {
             buffer,

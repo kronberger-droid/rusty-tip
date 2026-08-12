@@ -4,6 +4,9 @@
 //! or a schema drift in one of them should fail here rather than in front of a
 //! microscope.
 
+// Test code: panicking is the failure-reporting mechanism.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 /// Every config in `configs/` must both parse and pass `validate()`.
 #[test]
 fn shipped_configs_parse_and_validate() {

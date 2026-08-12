@@ -85,5 +85,11 @@ fn main() {
     });
 
     // Print results
-    println!("{}", serde_json::to_string_pretty(&output.data).unwrap());
+    match serde_json::to_string_pretty(&output.data) {
+        Ok(json) => println!("{json}"),
+        Err(e) => {
+            eprintln!("Failed to serialize output: {}", e);
+            std::process::exit(1);
+        }
+    }
 }

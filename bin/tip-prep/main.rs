@@ -273,6 +273,9 @@ fn setup_event_bus(config: &AppConfig) -> Result<EventBus, Box<dyn std::error::E
     Ok(events)
 }
 
+// Startup abort before any hardware is touched: without a Ctrl+C handler
+// there is no graceful stop, which is worse than not starting.
+#[allow(clippy::expect_used)]
 fn setup_shutdown_handler() -> ShutdownFlag {
     let shutdown = ShutdownFlag::new();
     let flag = shutdown.clone();

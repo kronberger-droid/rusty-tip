@@ -61,3 +61,24 @@ gui = ["eframe", "egui_plot", "rfd", "toml"]
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# Routines run with the tip at the surface; a panic mid-routine is the
+# worst failure mode this library has. catch_unwind in run_routine bounds
+# the damage, these lints shrink the probability. Tests are exempt via
+# clippy.toml.
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+panic_in_result_fn = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+exit = "deny"
+string_slice = "deny"
+unchecked_time_subtraction = "deny"
+# -- Wanted, but need larger changes first (hit counts from 2026-08-12) --
+# indexing_slicing = "deny"        # ~150 hits: Frame accessors, cuox_rows SAT math
+# arithmetic_side_effects = "deny" # ~150 hits: mostly cuox_rows index arithmetic
+# as_conversions = "deny"          # ~220 hits: f32/f64 boundary; finer cast_* lints instead
+# pedantic = { level = "warn", priority = -1 }  # triage before enabling: CI denies warnings

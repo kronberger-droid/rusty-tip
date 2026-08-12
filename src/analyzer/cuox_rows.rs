@@ -151,8 +151,9 @@ impl Analyzer for CuoxRowDetector {
                     "edge_low_line": format_line(&low_line),
                     "edge_high_line": format_line(&high_line),
                 });
-                if let Some(nm_per_px) = calibration_nm_per_px {
-                    let obj_map = obj.as_object_mut().unwrap();
+                if let (Some(nm_per_px), Some(obj_map)) =
+                    (calibration_nm_per_px, obj.as_object_mut())
+                {
                     obj_map.insert("center_nm".into(), json!(b.center * nm_per_px));
                     obj_map.insert(
                         "width_nm".into(),
@@ -411,8 +412,7 @@ fn detect_angle(score: &Array2<f32>) -> f32 {
     let best_coarse = coarse_results
         .iter()
         .max_by(|a, b| a.0.total_cmp(&b.0))
-        .unwrap()
-        .1;
+        .map_or(0.0, |r| r.1);
 
     // Fine sweep +/- 2 degrees at 0.1 degree steps, full resolution
     let fine_steps: Vec<i32> = (-20..=20).collect();
@@ -431,8 +431,7 @@ fn detect_angle(score: &Array2<f32>) -> f32 {
     fine_results
         .iter()
         .max_by(|a, b| a.0.total_cmp(&b.0))
-        .unwrap()
-        .1
+        .map_or(best_coarse, |r| r.1)
 }
 
 // ── Step 3: Band detection ─────────────────────────────────────────

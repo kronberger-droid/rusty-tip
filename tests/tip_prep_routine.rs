@@ -5,6 +5,9 @@
 //! [`Outcome`] plus the recorded [`MockObservations`]. No hardware involved —
 //! these are the dress rehearsals before touching the real machine.
 
+// Test code: panicking is the failure-reporting mechanism.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use std::sync::{Arc, Mutex as StdMutex};
 
 use rusty_tip::SignalIndex;

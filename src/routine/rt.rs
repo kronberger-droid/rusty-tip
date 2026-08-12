@@ -416,6 +416,9 @@ impl Cycles {
     ///
     /// Panics if the loop has not ended yet (i.e. `next()` never returned
     /// `None`), since there is no outcome to report at that point.
+    // Documented contract: calling before the loop ends is programmer
+    // error, and inventing an Outcome would silently corrupt a run report.
+    #[allow(clippy::expect_used)]
     pub fn outcome(&self) -> Outcome {
         self.ending
             .expect("Cycles::outcome() called before next() returned None")
@@ -467,7 +470,7 @@ mod tests {
         let shutdown = ShutdownFlag::new();
         let mut cycles = Cycles {
             shutdown,
-            started: Instant::now() - Duration::from_secs(10),
+            started: Instant::now().checked_sub(Duration::from_secs(10)).unwrap(),
             max_cycles: None,
             max_duration: Some(Duration::from_secs(1)),
             completed: 0,

@@ -372,6 +372,9 @@ pub fn load_config_with_fallback(config_path: Option<&Path>) -> Result<AppConfig
 ///
 /// If a config path is provided and loading fails, this function will panic.
 /// If no config path is provided, falls back to defaults.
+// Deliberate startup abort, before any hardware is touched: an explicitly
+// requested config that fails to parse must not silently fall back.
+#[allow(clippy::panic)]
 pub fn load_config_or_default(config_path: Option<&Path>) -> AppConfig {
     match load_config_with_fallback(config_path) {
         Ok(config) => {

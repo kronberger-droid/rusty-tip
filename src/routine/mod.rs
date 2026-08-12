@@ -194,6 +194,9 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 }
 
 #[cfg(test)]
+// Test routines panic and assert inside `run`, which returns Result;
+// that is the point of the panic-safety tests.
+#[allow(clippy::panic_in_result_fn)]
 mod tests {
     use std::sync::{Arc, Mutex as StdMutex};
 
