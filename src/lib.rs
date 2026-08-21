@@ -18,6 +18,7 @@ pub mod signal_registry;
 
 // -- Analysis and display --
 pub mod analyzer;
+pub mod export;
 pub mod plotting;
 pub mod types;
 
@@ -25,6 +26,7 @@ pub mod types;
 mod buffered_tcp_reader;
 pub(crate) mod utils;
 
+pub use analyzer::rolling_ellipsoid::{Border, GridSpacing, RollingEllipsoid};
 pub use controller_types::{
     BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, StabilityConfig,
 };

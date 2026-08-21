@@ -6,3 +6,4 @@ experiments/
 .claude
 .direnv
 result
+const-distance-out/

@@ -20,6 +20,10 @@ name = "cuox-finder"
 path = "bin/cuox-finder/main.rs"
 
 [[bin]]
+name = "const-distance"
+path = "bin/const-distance/main.rs"
+
+[[bin]]
 name = "tip-prep-gui"
 path = "bin/tip-prep-gui/main.rs"
 required-features = ["gui"]
