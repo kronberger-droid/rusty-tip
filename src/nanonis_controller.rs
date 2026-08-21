@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nanonis_rs::{
     NanonisClient, Position,
@@ -129,6 +129,10 @@ impl NanonisController {
 
         // Track the timestamp of the last consumed frame to avoid duplicates.
         let mut cursor = std::time::Instant::now();
+        // Tracked so an empty result can say whether frames were missing
+        // entirely or merely too narrow for the requested channel position.
+        let mut frames_seen = 0usize;
+        let mut frame_width: Option<usize> = None;
 
         while collected.len() < num_samples && start.elapsed() < timeout {
             // Check if the stream reader thread died before waiting the
@@ -148,6 +152,8 @@ impl NanonisController {
             let new_frames = reader.get_data_since(cursor);
             for frame in &new_frames {
                 cursor = frame.timestamp + Duration::from_nanos(1);
+                frames_seen += 1;
+                frame_width = Some(frame.signal_frame.data.len());
                 if let Some(&value) = frame.signal_frame.data.get(data_position) {
                     collected.push(value);
                     if collected.len() >= num_samples {
@@ -161,9 +167,20 @@ impl NanonisController {
         }
 
         if collected.is_empty() {
-            return Err(SpmError::Timeout(
-                "No TCP stream data collected within timeout".into(),
-            ));
+            return Err(SpmError::Timeout(match frame_width {
+                Some(width) => format!(
+                    "TCP stream delivered {frames_seen} frames of {width} channels within \
+                     timeout, none carrying data position {data_position}; the logger is \
+                     streaming a different channel set than was configured"
+                ),
+                None => format!(
+                    "No TCP stream data collected within timeout (reader buffering: {}, \
+                     buffered frames: {}, stream error: {:?})",
+                    reader.is_buffering(),
+                    reader.buffered_frames(),
+                    reader.stream_error()
+                ),
+            }));
         }
 
         if collected.len() < num_samples {
@@ -194,6 +211,15 @@ impl NanonisController {
         registry: &SignalRegistry,
         setup: &StreamSetup,
     ) -> Result<bool> {
+        // Refresh Nanonis' TCP channel list before anything is configured.
+        // This has to happen while the logger is stopped: it works by
+        // toggling a User Output, and Nanonis reacts to a channel-list change
+        // on a live stream by stopping it, which strands the reader on a
+        // socket that never delivers another frame.
+        if let Some(output_index) = self.setup.tcp_refresh_output {
+            self.refresh_tcp_channel_list(output_index)?;
+        }
+
         let tcp_signals = registry.tcp_signals();
         if tcp_signals.is_empty() {
             log::warn!(
@@ -250,7 +276,23 @@ impl NanonisController {
         // channel list.
         self.clear_tcp_buffer();
 
-        log::info!("TCP data stream started");
+        // Report what the stream actually delivers. The rate is
+        // base / oversampling, and an oversampling that is too high starves
+        // sample collection in a way that otherwise only shows up much later
+        // as an opaque read timeout.
+        let measured = self.measure_stream_rate(Duration::from_millis(500));
+        match measured {
+            Some(hz) => log::info!(
+                "TCP data stream started: {:.0} Hz at oversampling {}",
+                hz,
+                setup.oversampling
+            ),
+            None => log::warn!(
+                "TCP data stream started at oversampling {} but delivered no frames in 500 ms; \
+                 sample collection will be slow or time out",
+                setup.oversampling
+            ),
+        }
         Ok(true)
     }
 
@@ -299,6 +341,23 @@ impl NanonisController {
             num_channels
         );
         Ok(())
+    }
+
+    /// Estimate the delivered frame rate by watching the reader's buffer.
+    ///
+    /// Returns `None` when no frames arrive inside the window, which means
+    /// the logger is not streaming or is oversampled into uselessness.
+    fn measure_stream_rate(&self, window: Duration) -> Option<f64> {
+        let reader = self.tcp_reader.as_ref()?;
+        let start = Instant::now();
+        reader.clear_buffer();
+        std::thread::sleep(window);
+        let elapsed = start.elapsed().as_secs_f64();
+        let frames = reader.get_data_since(start).len();
+        if frames == 0 {
+            return None;
+        }
+        Some(frames as f64 / elapsed)
     }
 
     /// Stop the background TCP reader if running.
@@ -434,11 +493,6 @@ impl SpmController for NanonisController {
             "Safe-tip threshold: {:.2e} A",
             self.setup.safe_tip_threshold_a
         );
-
-        // Nanonis workaround: toggle a User Output mode to refresh TCP channel list
-        if let Some(output_index) = self.setup.tcp_refresh_output {
-            self.refresh_tcp_channel_list(output_index)?;
-        }
 
         Ok(())
     }
