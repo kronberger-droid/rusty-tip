@@ -233,15 +233,23 @@ impl NanonisController {
         self.data_stream_configure(&tcp_channels, setup.oversampling)?;
         self.set_channel_mapping(signal_mapping);
 
-        // Stop any lingering stream from a prior session, then start a fresh
-        // one BEFORE attaching the reader — otherwise the reader's first
-        // frames may be stale bytes left in the TCP buffer from the previous
-        // session.
+        // Attach the reader first. Nanonis' TCPLogger sits in Disconnected
+        // until a client connects to the data port, and from there neither
+        // start (which wants Idle) nor stop (which wants Running) is legal,
+        // so bringing the logger up first cannot work.
+        self.start_tcp_reader(&setup.host, setup.data_port, setup.buffer_size)?;
+
+        // Reset a logger a previous session left Running, then start ours.
+        // The stop is expected to fail when the logger is merely Idle.
         let _ = self.data_stream_stop();
         std::thread::sleep(Duration::from_millis(200));
         self.data_stream_start()?;
 
-        self.start_tcp_reader(&setup.host, setup.data_port, setup.buffer_size)?;
+        // Anything buffered before the logger restarted belongs to the old
+        // configuration, so drop it rather than decode it against the new
+        // channel list.
+        self.clear_tcp_buffer();
+
         log::info!("TCP data stream started");
         Ok(true)
     }
