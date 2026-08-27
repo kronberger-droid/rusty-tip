@@ -225,14 +225,6 @@ impl Pass {
         self
     }
 
-    /// Wait `delay` seconds at the beginning of the line, and `end_time`
-    /// seconds after the playback offset has been applied.
-    pub fn settle(mut self, delay: f64, end_time: f64) -> Self {
-        self.delay = delay;
-        self.end_time = end_time;
-        self
-    }
-
     /// Which signal this pass records, if any.
     pub fn recorded(&self) -> Option<SignalIndex> {
         match self.rec_state && self.rec_ch >= 0 {
@@ -344,7 +336,7 @@ impl MultiPassConfig {
                 !self.passes[..i]
                     .iter()
                     .enumerate()
-                    .any(|(j, p)| j % 2 == i % 2 && p.rec_state)
+                    .any(|(j, p)| Self::direction(j) == Self::direction(i) && p.rec_state)
             })
             .collect()
     }
@@ -818,15 +810,9 @@ Switch Lock-In = FALSE"#;
         );
     }
 
-    fn temp(name: &str) -> std::path::PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!("rusty-tip-mpas-{name}-{}.mpas", std::process::id()));
-        p
-    }
-
     #[test]
     fn writes_and_reads_a_file() {
-        let path = temp("round-trip");
+        let path = crate::utils::temp_path("mpas-round-trip", "mpas");
 
         let config: MultiPassConfig = golden().parse().unwrap();
         config.write(&path).unwrap();
@@ -838,7 +824,7 @@ Switch Lock-In = FALSE"#;
 
     #[test]
     fn refuses_to_write_a_configuration_with_no_passes() {
-        let path = temp("empty");
+        let path = crate::utils::temp_path("mpas-empty", "mpas");
         assert!(MultiPassConfig::new(vec![]).write(&path).is_err());
         assert!(!path.exists());
     }

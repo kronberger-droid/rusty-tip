@@ -280,15 +280,6 @@ mod tests {
     use super::*;
     use std::io::Read;
 
-    fn temp(name: &str) -> std::path::PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "rusty-tip-gsf-test-{name}-{}.gsf",
-            std::process::id()
-        ));
-        p
-    }
-
     fn sample_field() -> GsfField {
         let data = Array2::from_shape_fn((5, 7), |(i, j)| (i * 7 + j) as f64 * 1e-11);
         GsfField::from_grid(data, GridSpacing::square(1e-10), "Z tip")
@@ -296,7 +287,7 @@ mod tests {
 
     #[test]
     fn round_trips_through_the_filesystem() {
-        let path = temp("roundtrip");
+        let path = crate::utils::temp_path("gsf-test-roundtrip", "gsf");
         let original = sample_field();
         write_gsf(&path, &original).unwrap();
         let back = read_gsf(&path).unwrap();
@@ -318,7 +309,7 @@ mod tests {
 
     #[test]
     fn layout_matches_the_specification() {
-        let path = temp("layout");
+        let path = crate::utils::temp_path("gsf-test-layout", "gsf");
         write_gsf(&path, &sample_field()).unwrap();
         let mut bytes = Vec::new();
         File::open(&path).unwrap().read_to_end(&mut bytes).unwrap();
@@ -348,7 +339,7 @@ mod tests {
         // order ndarray iterates a row-major array. If that ever inverts, an
         // exported map shows up mirrored in Gwyddion and every conclusion drawn
         // from it is upside down.
-        let path = temp("order");
+        let path = crate::utils::temp_path("gsf-test-order", "gsf");
         let data = Array2::from_shape_vec((2, 2), vec![1.0, 2.0, 3.0, 4.0]).unwrap();
         write_gsf(
             &path,
@@ -369,7 +360,7 @@ mod tests {
 
     #[test]
     fn rejects_a_file_that_is_not_gsf() {
-        let path = temp("bogus");
+        let path = crate::utils::temp_path("gsf-test-bogus", "gsf");
         std::fs::write(&path, b"not a gsf\0\0\0\0").unwrap();
         let err = read_gsf(&path).unwrap_err();
         std::fs::remove_file(&path).ok();

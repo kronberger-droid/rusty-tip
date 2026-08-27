@@ -399,12 +399,19 @@ fn plan(args: PlanArgs) -> Result<(), Box<dyn Error>> {
 
     let z_tip = tip_model.tip_trajectory(z.view(), sp, border);
     let clearance = vertical_clearance(z.view(), z_tip.view());
-    report(clearance.view());
+    let plan = Plan {
+        stats: ClearanceStats::of(clearance.view()),
+        z,
+        z_tip,
+        clearance,
+        sp,
+    };
+    report(plan.stats);
 
     let row = args.profile.unwrap_or(ny / 2).min(ny - 1);
-    plot_profile(z.view(), z_tip.view(), sp, row);
+    plot_profile(plan.z.view(), plan.z_tip.view(), plan.sp, row);
 
-    write_outputs(&args, &z, &z_tip, &clearance, sp, &tip_model, border)?;
+    write_outputs(&args, &plan, &tip_model, border)?;
     Ok(())
 }
 
@@ -495,15 +502,65 @@ fn read_ascii_grid(path: &Path, unit: InputUnit) -> Result<Array2<f64>, Box<dyn 
     )?)
 }
 
+/// A finished plan: the surface it was computed from, the trajectory, and the
+/// clearance between them, all on one grid.
+///
+/// Bundled because they only ever travel together, and because keeping the
+/// stats beside the maps they summarise means the printed report and the
+/// recorded metadata cannot disagree.
+struct Plan {
+    z: Array2<f64>,
+    z_tip: Array2<f64>,
+    clearance: Array2<f64>,
+    stats: ClearanceStats,
+    sp: GridSpacing,
+}
+
+/// Summary of a clearance map, computed once and shared by the terminal
+/// report and the recorded metadata so the two cannot drift apart.
+#[derive(Debug, Clone, Copy)]
+struct ClearanceStats {
+    min: f64,
+    max: f64,
+    mean: f64,
+    /// Fraction of samples the plan lifted by more than 1 pm.
+    lifted: f64,
+}
+
+impl ClearanceStats {
+    fn of(clearance: ArrayView2<f64>) -> Self {
+        let n = clearance.len() as f64;
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
+        let mut sum = 0.0;
+        let mut lifted = 0usize;
+        for v in clearance.iter() {
+            min = min.min(*v);
+            max = max.max(*v);
+            sum += v;
+            // 1 pm is well under anything the Z axis resolves, so treat
+            // anything below it as "the plan did not move the tip here".
+            if *v > 1e-12 {
+                lifted += 1;
+            }
+        }
+        Self {
+            min,
+            max,
+            mean: sum / n,
+            lifted: lifted as f64 / n,
+        }
+    }
+}
+
 /// Print how far the plan lifts the tip off the surface.
-fn report(clearance: ArrayView2<f64>) {
-    let n = clearance.len() as f64;
-    let max = clearance.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let min = clearance.iter().cloned().fold(f64::INFINITY, f64::min);
-    let mean = clearance.iter().sum::<f64>() / n;
-    // 1 pm is well under anything the Z axis resolves, so treat anything below
-    // it as "the plan did not move the tip here".
-    let lifted = clearance.iter().filter(|v| **v > 1e-12).count() as f64 / n;
+fn report(stats: ClearanceStats) {
+    let ClearanceStats {
+        min,
+        max,
+        mean,
+        lifted,
+    } = stats;
 
     println!("\nvertical clearance (planned Z minus surface Z)");
     // Clamped in the planner, so a negative value here means the invariant
@@ -547,13 +604,18 @@ fn plot_profile(z: ArrayView2<f64>, z_tip: ArrayView2<f64>, sp: GridSpacing, row
 /// Write every output file, plus a README explaining what they are.
 fn write_outputs(
     args: &PlanArgs,
-    z: &Array2<f64>,
-    z_tip: &Array2<f64>,
-    clearance: &Array2<f64>,
-    sp: GridSpacing,
+    plan: &Plan,
     tip_model: &RollingEllipsoid,
     border: Border,
 ) -> Result<(), Box<dyn Error>> {
+    let Plan {
+        z,
+        z_tip,
+        clearance,
+        stats,
+        sp,
+    } = plan;
+    let sp = *sp;
     let dir = &args.out_dir;
     fs::create_dir_all(dir)?;
 
@@ -605,9 +667,9 @@ fn write_outputs(
             None => args.input.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
         },
         "clearance_m": {
-            "min": clearance.iter().cloned().fold(f64::INFINITY, f64::min),
-            "max": clearance.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-            "mean": clearance.iter().sum::<f64>() / clearance.len() as f64,
+            "min": stats.min,
+            "max": stats.max,
+            "mean": stats.mean,
         },
     });
     fs::write(dir.join("plan.json"), serde_json::to_string_pretty(&meta)?)?;

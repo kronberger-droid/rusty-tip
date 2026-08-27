@@ -171,15 +171,15 @@ impl BufferedTCPReader {
             .is_some_and(|h| !h.is_finished())
     }
 
-    /// Returns the error message from the TCP stream reader thread, if it
-    /// died unexpectedly (e.g., due to a connection reset or read timeout).
-    ///
-    /// Returns `None` if the stream is still running or shut down cleanly.
     /// Number of frames currently buffered.
     pub fn buffered_frames(&self) -> usize {
         self.buffer.read().len()
     }
 
+    /// Returns the error message from the TCP stream reader thread, if it
+    /// died unexpectedly (e.g., due to a connection reset or read timeout).
+    ///
+    /// Returns `None` if the stream is still running or shut down cleanly.
     pub fn stream_error(&self) -> Option<String> {
         self.stream_error.lock().clone()
     }

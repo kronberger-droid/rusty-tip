@@ -87,6 +87,20 @@ where
     }
 }
 
+/// A unique path in the system temp directory, for tests that need a real file.
+///
+/// The process id keeps concurrent test binaries off each other's files, and
+/// `label` keeps two tests in the same binary apart.
+#[cfg(test)]
+pub(crate) fn temp_path(label: &str, extension: &str) -> std::path::PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "rusty-tip-{label}-{}.{extension}",
+        std::process::id()
+    ));
+    path
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -108,18 +108,9 @@ mod tests {
     use super::*;
     use ndarray::array;
 
-    fn temp(name: &str) -> std::path::PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "rusty-tip-xyz-test-{name}-{}.dat",
-            std::process::id()
-        ));
-        p
-    }
-
     #[test]
     fn xyz_places_samples_at_area_centres() {
-        let path = temp("centres");
+        let path = crate::utils::temp_path("xyz-test-centres", "dat");
         let z = array![[1.0, 2.0], [3.0, 4.0]];
         let sp = GridSpacing { dx: 2.0, dy: 10.0 };
         write_xyz(&path, z.view(), sp).unwrap();
@@ -141,7 +132,7 @@ mod tests {
 
     #[test]
     fn table_keeps_maps_aligned_column_by_column() {
-        let path = temp("table");
+        let path = crate::utils::temp_path("xyz-test-table", "dat");
         let surface = array![[0.0, 1.0]];
         let tip = array![[0.5, 1.5]];
         write_table(
@@ -166,7 +157,7 @@ mod tests {
 
     #[test]
     fn table_rejects_mismatched_maps() {
-        let path = temp("mismatch");
+        let path = crate::utils::temp_path("xyz-test-mismatch", "dat");
         let a = array![[0.0, 1.0]];
         let b = array![[0.0]];
         let err = write_table(
