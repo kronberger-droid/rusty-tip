@@ -10,7 +10,7 @@ use rusty_tip::multi_pass::MultiPassConfig;
 use rusty_tip::routine::Rt;
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::spm_controller::{Capability, SpmController};
-use rusty_tip::{ScanLineEnd, ScanLineMovement, SignalIndex};
+use rusty_tip::{ScanAction, ScanDirection, ScanLineEnd, ScanLineMovement, SignalIndex};
 
 fn temp(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
@@ -154,9 +154,10 @@ fn compensating_drift_re_arms_a_latched_axis_before_measuring() {
     let obs = controller.observations();
     obs.lock().drift_comp.z_saturated = true;
 
-    // The mock's Z is constant, so the drift never responds and the solve
-    // refuses rather than inventing a velocity. That is the assertion: it
-    // fails loudly instead of writing a confident wrong number.
+    // The mock's Z is constant, so the measurement refuses for want of a
+    // resolvable slope. That it fails at all is the point here: no velocity is
+    // invented. What this test pins is the ordering below, which has already
+    // happened by the time the measurement gives up.
     let events = EventBus::new();
     let shutdown = ShutdownFlag::new();
     let mut rt = Rt::new(&mut controller, &events, &shutdown);
@@ -166,8 +167,8 @@ fn compensating_drift_re_arms_a_latched_axis_before_measuring() {
         .compensate(SignalIndex(30), Duration::from_millis(9), 3)
         .unwrap_err();
     assert!(
-        format!("{err}").contains("not responding"),
-        "expected a non-responding-channel error, got: {err}"
+        format!("{err}").contains("no drift rate can be resolved"),
+        "got: {err}"
     );
 
     let obs = obs.lock();
@@ -202,10 +203,7 @@ fn measuring_drift_refuses_an_open_feedback_loop() {
         .expect("the mock supports drift compensation")
         .measure_z(SignalIndex(30), Duration::from_millis(9), 3)
         .unwrap_err();
-    assert!(
-        format!("{err}").contains("Z controller is off"),
-        "got: {err}"
-    );
+    assert!(format!("{err}").contains("not On"), "got: {err}");
 }
 
 #[test]
@@ -249,5 +247,48 @@ fn a_line_wait_reports_direction_and_pass_separately() {
             (ScanLineMovement::Forward, 1),
             (ScanLineMovement::Backward, 1),
         ]
+    );
+}
+
+#[test]
+fn measuring_drift_refuses_while_a_scan_is_running() {
+    // A scan moves Z over topography, which fits as a drift of nanometres per
+    // second. Silently compensating for that would drive Z somewhere on the
+    // strength of a step edge.
+    let mut controller = MockController::builder().build();
+    controller
+        .scan_action(ScanAction::Start, ScanDirection::Up)
+        .unwrap();
+
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+    let err = rt
+        .drift()
+        .expect("the mock supports drift compensation")
+        .measure_z(SignalIndex(30), Duration::from_millis(9), 3)
+        .unwrap_err();
+
+    assert!(format!("{err}").contains("a scan is running"), "got: {err}");
+}
+
+#[test]
+fn measuring_drift_refuses_a_slope_below_the_noise() {
+    // The mock's Z is a constant, so there is no slope at all and no scatter
+    // either. That is the degenerate end of the same check: nothing to
+    // resolve, so no velocity should come out of it.
+    let mut controller = MockController::builder().build();
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+    let err = rt
+        .drift()
+        .expect("the mock supports drift compensation")
+        .measure_z(SignalIndex(30), Duration::from_millis(9), 3)
+        .unwrap_err();
+
+    assert!(
+        format!("{err}").contains("no drift rate can be resolved"),
+        "got: {err}"
     );
 }

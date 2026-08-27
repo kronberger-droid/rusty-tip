@@ -56,9 +56,31 @@ impl MeasureZDrift {
                 "measure_z_drift: need at least 3 samples to fit a line".into(),
             ));
         }
-        if ctx.controller.z_controller_status()? != ZControllerStatus::On {
+        // Anything but `On` means Z is not tracking the surface: held,
+        // withdrawing, or stopped by tip protection. The fit would read
+        // whatever Z happened to be doing instead.
+        let status = ctx.controller.z_controller_status()?;
+        if status != ZControllerStatus::On {
+            return Err(SpmError::Workflow(format!(
+                "measure_z_drift: the Z controller is {status:?}, not On, so Z is not \
+                 following the surface and there is no drift to measure"
+            )));
+        }
+
+        // A scan moves Z over topography, and a line of topography fits as a
+        // drift of nanometres per second. Only checked when the controller
+        // scans at all, so this does not force the capability on one that
+        // does not.
+        if ctx
+            .controller
+            .capabilities()
+            .contains(&Capability::Scanning)
+            && ctx.controller.scan_status()?
+        {
             return Err(SpmError::Workflow(
-                "measure_z_drift: the Z controller is off, so Z cannot follow the drift".into(),
+                "measure_z_drift: a scan is running, so Z is tracking topography rather \
+                 than drift. Stop the scan first."
+                    .into(),
             ));
         }
 
@@ -91,8 +113,24 @@ impl MeasureZDrift {
         // evenly spaced by construction, so the measured elapsed time converts
         // that to per second. Using the real elapsed time rather than the
         // nominal one keeps link latency out of the answer.
-        let (_, _, slope_per_sample) = compute_stability_metrics(&values);
-        Ok(slope_per_sample * (self.samples as f64 - 1.0) / elapsed)
+        let (_, std_dev, slope_per_sample) = compute_stability_metrics(&values);
+
+        // How far the fitted line says Z moved across the whole window. If
+        // that is smaller than the scatter between neighbouring samples, the
+        // slope is reading noise, and a velocity derived from it is worse than
+        // none: it would be applied with confidence and drive Z somewhere.
+        // Coarse on purpose. The residual returned by `CompensateDrift` is the
+        // real check, since it runs after the fact.
+        let change = slope_per_sample * (self.samples as f64 - 1.0);
+        if change.abs() <= std_dev {
+            return Err(SpmError::Workflow(format!(
+                "measure_z_drift: Z moved {change:.3e} m over the window, below the \
+                 {std_dev:.3e} m sample noise, so no drift rate can be resolved. Use a \
+                 longer window, or accept that the drift is negligible here."
+            )));
+        }
+
+        Ok(change / elapsed)
     }
 }
 
