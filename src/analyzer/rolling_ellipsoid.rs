@@ -72,8 +72,7 @@
 //! the cost of only being separable for flat (non-domed) elements, so the dome
 //! would have to be handled as a sum of shifted 1D passes.
 
-use ndarray::{Array2, ArrayView2};
-use rayon::prelude::*;
+use ndarray::{Array2, ArrayView2, Axis, Zip};
 
 /// Sample spacing of a scan grid, in metres.
 ///
@@ -277,13 +276,18 @@ impl RollingEllipsoid {
         // One row of the dilation. Split out so rows can be planned in
         // parallel: every output sample depends only on `z`, never on another
         // output sample, so there is nothing to synchronise.
-        let plan_row = |i: usize| -> Vec<f64> {
-            let mut row = vec![0.0; nx];
+        let plan_row = |i: usize, row: &mut ndarray::ArrayViewMut1<f64>| {
+            // The row indices depend only on `i`, so resolving them once per
+            // row keeps the border policy out of the inner loop entirely.
+            let rows: Vec<Option<usize>> = (0..=2 * ry)
+                .map(|du| offset_index(i, du, ry, ny, border))
+                .collect();
+
             for (j, out) in row.iter_mut().enumerate() {
                 let mut peak = f64::NEG_INFINITY;
 
-                for du in 0..=2 * ry {
-                    let Some(ii) = offset_index(i, du, ry, ny, border) else {
+                for (du, ii) in rows.iter().enumerate() {
+                    let Some(ii) = *ii else {
                         continue;
                     };
                     for dv in 0..=2 * rx {
@@ -310,13 +314,14 @@ impl RollingEllipsoid {
                 // reachable.
                 *out = (peak - self.c).max(z[(i, j)]);
             }
-            row
         };
 
-        let rows: Vec<Vec<f64>> = (0..ny).into_par_iter().map(plan_row).collect();
-        let flat: Vec<f64> = rows.into_iter().flatten().collect();
-        Array2::from_shape_vec((ny, nx), flat)
-            .expect("row planner returns exactly nx values per row")
+        // Written straight into the output, so the map is allocated once. The
+        // previous shape (collect rows, then flatten) copied every sample a
+        // second time, which at scan sizes is megabytes for nothing.
+        let mut out = Array2::zeros((ny, nx));
+        Zip::indexed(out.axis_iter_mut(Axis(0))).par_for_each(|i, mut row| plan_row(i, &mut row));
+        out
     }
 }
 
@@ -357,7 +362,9 @@ pub fn vertical_clearance(z: ArrayView2<f64>, z_tip: ArrayView2<f64>) -> Array2<
         z_tip.dim(),
         "surface and trajectory must have the same shape"
     );
-    Array2::from_shape_fn(z.dim(), |idx| z_tip[idx] - z[idx])
+    // `Zip` walks both maps contiguously; indexing by `(i, j)` would redo the
+    // stride arithmetic and bounds checks for every sample.
+    Zip::from(z).and(z_tip).map_collect(|s, t| t - s)
 }
 
 #[cfg(test)]

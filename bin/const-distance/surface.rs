@@ -67,13 +67,13 @@ pub fn generate(kind: Kind, ny: usize, nx: usize, sp: GridSpacing, amp: f64) -> 
         Kind::Combo => {
             let width = nx as f64 * sp.dx;
             let height = ny as f64 * sp.dy;
+            let sigma = resolved_sigma(width * 0.05, sp);
             Array2::from_shape_fn((ny, nx), |(i, j)| {
                 // Left third: staircase. Right two thirds: a bump and a pit on
                 // the top terrace, so every feature type sits in one frame.
                 let terrace = ((j * 6 / nx).min(2)) as f64 * amp;
                 let x = (j as f64 + 0.5) * sp.dx;
                 let y = (i as f64 + 0.5) * sp.dy;
-                let sigma = resolved_sigma(width * 0.05, sp);
                 let bump = gaussian(x, y, width * 0.6, height * 0.3, sigma, amp * 1.5);
                 let in_pit =
                     (0.75..0.9).contains(&(x / width)) && (0.55..0.85).contains(&(y / height));

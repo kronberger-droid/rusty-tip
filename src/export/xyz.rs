@@ -23,6 +23,7 @@
 //! All values are in metres, in scientific notation, with enough digits to
 //! survive a round trip through `f64`.
 
+use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
@@ -83,15 +84,20 @@ pub fn write_table(
     }
     writeln!(out)?;
 
+    // One formatted line at a time rather than one call per column: at scan
+    // sizes the per-value `write!` runs into the millions, and `y` does not
+    // change across a row.
+    let mut line = String::new();
     for i in 0..ny {
+        let y = (i as f64 + 0.5) * sp.dy;
         for j in 0..nx {
             let x = (j as f64 + 0.5) * sp.dx;
-            let y = (i as f64 + 0.5) * sp.dy;
-            write!(out, "{x:.9e} {y:.9e}")?;
+            line.clear();
+            let _ = write!(line, "{x:.9e} {y:.9e}");
             for (_, m) in maps {
-                write!(out, " {:.9e}", m[(i, j)])?;
+                let _ = write!(line, " {:.9e}", m[(i, j)]);
             }
-            writeln!(out)?;
+            writeln!(out, "{line}")?;
         }
     }
     out.flush()

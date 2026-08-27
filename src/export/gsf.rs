@@ -88,9 +88,40 @@ impl GsfField {
     }
 }
 
+/// Everything a GSF file carries except the samples themselves.
+///
+/// Split out so the writer can take a borrowed view of the data: at scan sizes
+/// the map is several megabytes, and copying it just to hand it over is waste
+/// the caller cannot avoid otherwise.
+struct Header<'a> {
+    x_real: f64,
+    y_real: f64,
+    x_offset: f64,
+    y_offset: f64,
+    xy_units: &'a str,
+    z_units: &'a str,
+    title: Option<&'a str>,
+}
+
 /// Write a field as a `.gsf` file.
 pub fn write_gsf(path: impl AsRef<Path>, field: &GsfField) -> io::Result<()> {
-    let (ny, nx) = field.data.dim();
+    write_view(
+        path,
+        field.data.view(),
+        &Header {
+            x_real: field.x_real,
+            y_real: field.y_real,
+            x_offset: field.x_offset,
+            y_offset: field.y_offset,
+            xy_units: &field.xy_units,
+            z_units: &field.z_units,
+            title: field.title.as_deref(),
+        },
+    )
+}
+
+fn write_view(path: impl AsRef<Path>, data: ArrayView2<f64>, field: &Header) -> io::Result<()> {
+    let (ny, nx) = data.dim();
     if ny == 0 || nx == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -113,7 +144,7 @@ pub fn write_gsf(path: impl AsRef<Path>, field: &GsfField) -> io::Result<()> {
     if !field.z_units.is_empty() {
         header.push_str(&format!("ZUnits = {}\n", field.z_units));
     }
-    if let Some(title) = &field.title {
+    if let Some(title) = field.title {
         header.push_str(&format!("Title = {title}\n"));
     }
 
@@ -122,11 +153,15 @@ pub fn write_gsf(path: impl AsRef<Path>, field: &GsfField) -> io::Result<()> {
     // One to four NULs, never zero: a header already aligned to 4 still gets a
     // full padding block.
     let pad = 4 - (header.len() % 4);
-    out.write_all(&vec![0u8; pad])?;
+    out.write_all(&[0u8; 4][..pad])?;
 
-    for value in field.data.iter() {
-        out.write_all(&(*value as f32).to_le_bytes())?;
+    // One write for the whole payload. Per-sample writes cost a BufWriter call
+    // each, which at scan sizes is a million of them for no benefit.
+    let mut payload = Vec::with_capacity(ny * nx * 4);
+    for value in data.iter() {
+        payload.extend_from_slice(&(*value as f32).to_le_bytes());
     }
+    out.write_all(&payload)?;
     out.flush()
 }
 
@@ -210,13 +245,30 @@ pub fn read_gsf(path: impl AsRef<Path>) -> io::Result<GsfField> {
 }
 
 /// Convenience: write a map in metres straight to a `.gsf` file.
+///
+/// Takes a view and never owns the data: at scan sizes the copy
+/// [`GsfField::from_grid`] would need is several megabytes, for something the
+/// writer only iterates.
 pub fn write_map(
     path: impl AsRef<Path>,
     data: ArrayView2<f64>,
     sp: GridSpacing,
     title: &str,
 ) -> io::Result<()> {
-    write_gsf(path, &GsfField::from_grid(data.to_owned(), sp, title))
+    let (ny, nx) = data.dim();
+    write_view(
+        path,
+        data,
+        &Header {
+            x_real: nx as f64 * sp.dx,
+            y_real: ny as f64 * sp.dy,
+            x_offset: 0.0,
+            y_offset: 0.0,
+            xy_units: "m",
+            z_units: "m",
+            title: Some(title),
+        },
+    )
 }
 
 fn invalid(msg: &str) -> io::Error {

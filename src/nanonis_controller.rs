@@ -355,7 +355,9 @@ impl NanonisController {
         reader.clear_buffer();
         std::thread::sleep(window);
         let elapsed = start.elapsed().as_secs_f64();
-        let frames = reader.get_data_since(start).len();
+        // `buffered_frames` is a length read; `get_data_since` would clone
+        // every frame in the buffer only for us to discard them.
+        let frames = reader.buffered_frames();
         if frames == 0 {
             return None;
         }
