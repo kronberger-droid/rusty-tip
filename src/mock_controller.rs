@@ -152,6 +152,10 @@ pub struct MockObservations {
     pub freq_values: Vec<f64>,
     /// Connection health; flipped to `false` by a [`FaultKind::Disconnect`].
     pub connected: bool,
+    /// Every path passed to `multi_pass_load`, in order.
+    pub multi_pass_loaded: Vec<String>,
+    /// Latest state passed to `multi_pass_activate`, if it was ever called.
+    pub multi_pass_active: Option<bool>,
 }
 
 impl Default for MockObservations {
@@ -172,6 +176,8 @@ impl Default for MockObservations {
             freq_reads: 0,
             freq_values: Vec::new(),
             connected: true,
+            multi_pass_loaded: Vec::new(),
+            multi_pass_active: None,
         }
     }
 }
@@ -565,6 +571,33 @@ impl SpmController for MockController {
         self.enter("scan_frame_data_grab")?;
         // 2x2 flat frame is enough for routines that only check shape.
         Ok(("mock_channel".into(), vec![vec![0.0; 2]; 2], forward))
+    }
+
+    // -- Multi-pass --
+
+    fn multi_pass_load(&mut self, host_path: &str) -> Result<()> {
+        self.enter("multi_pass_load")?;
+        self.obs
+            .lock()
+            .multi_pass_loaded
+            .push(host_path.to_string());
+        Ok(())
+    }
+
+    fn multi_pass_save(&mut self, _host_path: &str) -> Result<()> {
+        self.enter("multi_pass_save")?;
+        Ok(())
+    }
+
+    fn multi_pass_activate(&mut self, on: bool) -> Result<()> {
+        self.enter("multi_pass_activate")?;
+        let mut obs = self.obs.lock();
+        obs.multi_pass_active = Some(on);
+        // Activating multi-pass stops a running scan, as it does on hardware.
+        if on {
+            obs.scan_running = false;
+        }
+        Ok(())
     }
 
     // -- Oscilloscope --
@@ -994,6 +1027,7 @@ fn all_capabilities() -> HashSet<Capability> {
         Capability::Pll,
         Capability::DataStream,
         Capability::SafeTip,
+        Capability::MultiPass,
     ])
 }
 

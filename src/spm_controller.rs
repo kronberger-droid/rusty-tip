@@ -51,6 +51,8 @@ pub enum Capability {
     DataStream,
     /// Tip-crash protection (safe_tip_configure, safe_tip_status)
     SafeTip,
+    /// Multi-pass scanning (multi_pass_load, multi_pass_activate)
+    MultiPass,
 }
 
 /// What data the oscilloscope should return
@@ -157,6 +159,33 @@ pub trait SpmController: Send {
         channel_index: u32,
         forward: bool,
     ) -> Result<(String, Vec<Vec<f32>>, bool)>;
+
+    // -- Multi-pass --
+
+    /// Load a `.mpas` multi-pass configuration on the controller.
+    ///
+    /// `host_path` is resolved by the *controller*, not by us: on a real
+    /// instrument the Nanonis software runs on its own PC, and the file has to
+    /// exist on that machine's filesystem or on a share it can reach. An empty
+    /// path loads the configuration held in the session settings file, if there
+    /// is one.
+    fn multi_pass_load(&mut self, host_path: &str) -> Result<()>;
+
+    /// Save the controller's active multi-pass configuration to `host_path`,
+    /// again resolved on the controller's side. An empty path saves into the
+    /// session settings file rather than a `.mpas`.
+    fn multi_pass_save(&mut self, host_path: &str) -> Result<()>;
+
+    /// Switch multi-pass scanning on or off.
+    ///
+    /// Activating stops a running scan, so call this before starting one. That
+    /// is the Multi-Pass module manual's behaviour, not something the TCP
+    /// protocol reference mentions; it has not been checked on hardware.
+    /// Note that the scan mode (Normal vs Linefeed) is *not* part of what the
+    /// configuration carries and cannot be set over TCP at all; Linefeed, the
+    /// mode that keeps every pass on the same line, has to be ticked by hand
+    /// in the Scan Control module.
+    fn multi_pass_activate(&mut self, on: bool) -> Result<()>;
 
     // -- Oscilloscope --
     // Combines channel set + trigger config + run + data get

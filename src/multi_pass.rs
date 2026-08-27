@@ -80,6 +80,8 @@ use std::path::Path;
 use std::str::FromStr;
 
 use crate::signal_registry::SignalIndex;
+use crate::spm_controller::{Capability, SpmController};
+use crate::spm_error::SpmError;
 
 /// The default `Acq ch` blob: four NUL bytes in LabVIEW's hex escaping.
 const ACQ_CH_DEFAULT: &str = r"\00\00\00\00";
@@ -604,6 +606,31 @@ fn fmt_eng(v: f64) -> String {
     }
 
     format!("{mantissa:.6}E{exponent:+}")
+}
+
+/// Write `config`, load it on `controller`, and switch multi-pass on.
+///
+/// The two paths are the same file seen from two machines: `local_path` is
+/// where we write it, `host_path` is where the controller looks for it. When
+/// the controller runs on this machine they are the same string; under Wine, or
+/// on a real instrument, `host_path` is a mapped drive or a share.
+pub fn apply(
+    controller: &mut dyn SpmController,
+    config: &MultiPassConfig,
+    local_path: &Path,
+    host_path: &str,
+) -> Result<(), SpmError> {
+    if !controller.capabilities().contains(&Capability::MultiPass) {
+        return Err(SpmError::Unsupported(
+            "this controller does not support multi-pass".into(),
+        ));
+    }
+    config.write(local_path).map_err(|e| SpmError::Io {
+        source: e,
+        context: format!("writing multi-pass config to {}", local_path.display()),
+    })?;
+    controller.multi_pass_load(host_path)?;
+    controller.multi_pass_activate(true)
 }
 
 fn invalid(msg: &str) -> io::Error {

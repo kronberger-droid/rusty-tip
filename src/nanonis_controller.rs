@@ -453,6 +453,7 @@ impl SpmController for NanonisController {
             Capability::Pll,
             Capability::DataStream,
             Capability::SafeTip,
+            Capability::MultiPass,
         ])
     }
 
@@ -778,6 +779,20 @@ impl SpmController for NanonisController {
         forward: bool,
     ) -> Result<(String, Vec<Vec<f32>>, bool)> {
         Ok(self.client.scan_frame_data_grab(channel_index, forward)?)
+    }
+
+    // -- Multi-pass --
+
+    fn multi_pass_load(&mut self, host_path: &str) -> Result<()> {
+        Ok(self.client.mpass_load(host_path)?)
+    }
+
+    fn multi_pass_save(&mut self, host_path: &str) -> Result<()> {
+        Ok(self.client.mpass_save(host_path)?)
+    }
+
+    fn multi_pass_activate(&mut self, on: bool) -> Result<()> {
+        Ok(self.client.mpass_activate(on)?)
     }
 
     // -- Oscilloscope --
