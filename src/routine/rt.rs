@@ -229,6 +229,7 @@ impl<'a> Rt<'a> {
             controller: self.controller,
             store: &mut self.store,
             events: self.events,
+            shutdown: self.shutdown,
         };
         let result = match crate::action::check_capabilities(action, ctx.controller) {
             Ok(()) => action.execute(&mut ctx),
