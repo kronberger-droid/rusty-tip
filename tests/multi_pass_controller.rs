@@ -4,10 +4,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use rusty_tip::SignalIndex;
 use rusty_tip::mock_controller::{FaultKind, MockController};
 use rusty_tip::multi_pass::{self, MultiPassConfig};
 use rusty_tip::spm_controller::{Capability, SpmController};
+use rusty_tip::{ScanLineEnd, ScanLineMovement, SignalIndex};
 
 fn temp(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
@@ -178,5 +178,49 @@ fn measuring_drift_refuses_an_open_feedback_loop() {
     assert!(
         format!("{err}").contains("Z controller is off"),
         "got: {err}"
+    );
+}
+
+#[test]
+fn a_line_wait_reports_direction_and_pass_separately() {
+    // The two numbers are not the same scheme: a `[PassN]` section in a .mpas
+    // file is one direction of a pass, while `pass` here counts passes and
+    // `movement` carries the direction. A four-section constant-lift run makes
+    // that concrete.
+    let mut controller = MockController::builder().build();
+    controller.observations().lock().scan_line_ends = [
+        (ScanLineMovement::Forward, 0),
+        (ScanLineMovement::Backward, 0),
+        (ScanLineMovement::Forward, 1),
+        (ScanLineMovement::Backward, 1),
+    ]
+    .into_iter()
+    .map(|(movement, pass)| ScanLineEnd {
+        timed_out: false,
+        line: 0,
+        movement,
+        pass,
+    })
+    .collect();
+
+    let mut seen = Vec::new();
+    loop {
+        let end = controller
+            .scan_wait_end_of_line(Duration::from_millis(10))
+            .unwrap();
+        if end.timed_out {
+            break;
+        }
+        seen.push((end.movement, end.pass));
+    }
+
+    assert_eq!(
+        seen,
+        vec![
+            (ScanLineMovement::Forward, 0),
+            (ScanLineMovement::Backward, 0),
+            (ScanLineMovement::Forward, 1),
+            (ScanLineMovement::Backward, 1),
+        ]
     );
 }

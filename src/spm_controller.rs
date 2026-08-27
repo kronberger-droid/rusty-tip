@@ -6,7 +6,7 @@ use nanonis_rs::{
     Position,
     motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D},
     oscilloscope::{OsciData, TriggerConfig},
-    scan::{ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder},
+    scan::{ScanAction, ScanConfig, ScanDirection, ScanLineEnd, ScanProps, ScanPropsBuilder},
     tcplog::TCPLogStatus,
     tip_recovery::TipShaperConfig,
 };
@@ -237,6 +237,18 @@ pub trait SpmController: Send {
         buffer.channels.extend(missing);
         self.scan_buffer_set(&buffer)
     }
+
+    /// Block until the scan finishes a line, or until `timeout` elapses.
+    ///
+    /// The returned [`ScanLineEnd`] reports the line number, what the head was
+    /// doing, and the multi-pass pass number. Direction and pass are separate
+    /// fields, which is worth noting: a `[PassN]` section in a `.mpas` file is
+    /// one *direction* of a pass, so the two numbering schemes here are not
+    /// the same thing.
+    ///
+    /// Check `timed_out` before trusting the rest. A timeout returns normally
+    /// with stale line and pass numbers rather than an error.
+    fn scan_wait_end_of_line(&mut self, timeout: Duration) -> Result<ScanLineEnd>;
 
     /// Grab pixel data from a completed (or in-progress) scan frame.
     ///

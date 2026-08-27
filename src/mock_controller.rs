@@ -48,7 +48,7 @@
 //! println!("pulses fired: {}", obs.lock().pulses.len());
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -64,6 +64,8 @@ use nanonis_rs::tcplog::TCPLogStatus;
 use nanonis_rs::tip_recovery::TipShaperConfig;
 
 use crate::signal_registry::SignalIndex;
+use nanonis_rs::scan::{ScanLineEnd, ScanLineMovement};
+
 use crate::spm_controller::{
     AcquisitionMode, Capability, DataStreamStatus, DriftComp, Result, ScanBuffer, SpmController,
     TriggerSetup, ZControllerStatus, ZHomeMode,
@@ -158,6 +160,10 @@ pub struct MockObservations {
     pub multi_pass_active: Option<bool>,
     /// The scan buffer, as `scan_buffer_set` last left it.
     pub scan_buffer: ScanBuffer,
+    /// Line ends `scan_wait_end_of_line` will hand out, in order. Once these
+    /// run out it reports a timeout, so a loop that never checks `timed_out`
+    /// spins forever here rather than on the machine.
+    pub scan_line_ends: VecDeque<ScanLineEnd>,
     /// Whether the Z controller reports itself on. Tests that care about the
     /// feedback loop being closed flip this.
     pub z_controller_on: bool,
@@ -199,6 +205,7 @@ impl Default for MockObservations {
                 z_saturated: false,
             },
             drift_comp_writes: Vec::new(),
+            scan_line_ends: VecDeque::new(),
             scan_buffer: ScanBuffer {
                 channels: vec![SignalIndex(0), SignalIndex(30)],
                 pixels: 256,
@@ -601,6 +608,21 @@ impl SpmController for MockController {
         self.enter("scan_buffer_set")?;
         self.obs.lock().scan_buffer = buffer.clone();
         Ok(())
+    }
+
+    fn scan_wait_end_of_line(&mut self, _timeout: Duration) -> Result<ScanLineEnd> {
+        self.enter("scan_wait_end_of_line")?;
+        Ok(self
+            .obs
+            .lock()
+            .scan_line_ends
+            .pop_front()
+            .unwrap_or(ScanLineEnd {
+                timed_out: true,
+                line: -1,
+                movement: ScanLineMovement::Forward,
+                pass: -1,
+            }))
     }
 
     fn scan_frame_data_grab(

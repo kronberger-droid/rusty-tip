@@ -20,6 +20,7 @@ use crate::spm_controller::{
 use crate::spm_error::SpmError;
 use crate::utils::{PollError, poll_until};
 use nanonis_rs::piezo::{DriftCompConfig, PiezoToggle};
+use nanonis_rs::scan::ScanLineEnd;
 
 /// Configuration consumed by `NanonisController::prepare()`.
 ///
@@ -792,6 +793,10 @@ impl SpmController for NanonisController {
         Ok(self
             .client
             .scan_buffer_set(channels, buffer.pixels, buffer.lines)?)
+    }
+
+    fn scan_wait_end_of_line(&mut self, timeout: Duration) -> Result<ScanLineEnd> {
+        Ok(self.client.scan_wait_end_of_line(timeout)?)
     }
 
     fn scan_frame_data_grab(
