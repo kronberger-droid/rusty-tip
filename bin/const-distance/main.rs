@@ -39,14 +39,17 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use ndarray::{Array2, ArrayView2};
 use textplots::{Chart, Plot, Shape};
 
+use rusty_tip::action::multi_pass::ApplyMultiPass;
+use rusty_tip::action::{Action, ActionContext, DataStore};
 use rusty_tip::analyzer::rolling_ellipsoid::{
     Border, GridSpacing, RollingEllipsoid, vertical_clearance,
 };
+use rusty_tip::event::EventBus;
 use rusty_tip::export::{gsf, write_table, write_xyz};
-use rusty_tip::multi_pass::{self, MultiPassConfig};
+use rusty_tip::multi_pass::MultiPassConfig;
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
-use rusty_tip::signal_registry::SignalIndex;
-use rusty_tip::spm_controller::SpmController;
+use rusty_tip::shutdown::ShutdownFlag;
+use rusty_tip::signal_registry::{SignalIndex, SignalRegistry};
 
 /// Nanometres to metres.
 const NM: f64 = 1e-9;
@@ -264,13 +267,15 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
 
     let signal = match (&args.signal_name, controller.as_mut()) {
         (Some(name), Some(c)) => {
-            let names = c.signal_names()?;
-            let found = names
-                .iter()
-                .position(|n| n.eq_ignore_ascii_case(name))
-                .ok_or_else(|| format!("no signal called {name:?} on this controller"))?;
-            println!("resolved {name:?} to RT slot {found}");
-            SignalIndex(found as u32)
+            // Through the registry rather than a name scan of our own, so the
+            // aliases and cleaned names it knows about work here too.
+            let registry = SignalRegistry::from_controller(c)?;
+            let signal = registry
+                .get_by_name(name)
+                .ok_or_else(|| format!("no signal called {name:?} on this controller"))?
+                .signal_index();
+            println!("resolved {name:?} to RT slot {}", signal.0);
+            signal
         }
         (Some(_), None) => return Err("--signal-name needs a connection; drop --dry-run".into()),
         (None, _) => SignalIndex(args.signal),
@@ -305,19 +310,33 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
         return Ok(());
     };
 
-    // Multi-pass records and plays through its own buffers, which says nothing
-    // about what ends up in the saved frames. Without this the run produces a
-    // [P2] pass whose signal was never acquired.
-    controller.scan_buffer_ensure(&[signal])?;
-    let buffer = controller.scan_buffer_get()?;
+    // Straight to the action rather than through `Rt`: the harness withdraws
+    // the tip when a routine ends, which is right for a routine and wrong for
+    // a command that only rewrites a configuration.
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut store = DataStore::new();
+    let mut ctx = ActionContext {
+        controller: &mut controller,
+        store: &mut store,
+        events: &events,
+        shutdown: &shutdown,
+    };
+
+    ApplyMultiPass {
+        config: config.clone(),
+        local_path: args.output.clone(),
+        host_path: host_path.clone(),
+    }
+    .execute(&mut ctx)?;
+
+    let buffer = ctx.controller.scan_buffer_get()?;
     println!(
         "scan buffer records RT slots {:?} at {}x{}",
         buffer.channels.iter().map(|c| c.0).collect::<Vec<_>>(),
         buffer.pixels,
         buffer.lines
     );
-
-    multi_pass::apply(&mut controller, &config, &args.output, &host_path)?;
     println!("wrote {}", args.output.display());
     println!("loaded from {host_path} and activated multi-pass");
     println!(

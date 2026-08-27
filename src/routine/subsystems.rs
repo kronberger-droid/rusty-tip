@@ -6,11 +6,19 @@
 //! straight to the controller. Fetch a handle per statement:
 //! `rt.bias()?.pulse(4.0, 50)?`.
 
-use nanonis_rs::scan::{ScanConfig, ScanProps, ScanPropsBuilder};
+use std::path::PathBuf;
+use std::time::Duration;
+
+use nanonis_rs::scan::{ScanConfig, ScanLineEnd, ScanProps, ScanPropsBuilder};
+
+use crate::multi_pass::MultiPassConfig;
+use crate::spm_controller::{DriftComp, ScanBuffer};
 
 use crate::action::ActionOutput;
 use crate::action::bias::{BiasPulse, ReadBias, SetBias};
+use crate::action::drift::{CompensateDrift, MeasureZDrift};
 use crate::action::motor::{MoveMotor3D, Reposition};
+use crate::action::multi_pass::{ActivateMultiPass, ApplyMultiPass, LoadMultiPass, SaveMultiPass};
 use crate::action::scan::{ScanActionParam, ScanControl, ScanDirectionParam};
 use crate::action::signals::{ReadSignal, ReadStableSignal};
 use crate::action::z_controller::{AutoApproach, CalibratedApproach, SetZSetpoint, Withdraw};
@@ -269,6 +277,33 @@ impl Scan<'_, '_> {
         )
     }
 
+    /// Which signals the scan records, and the frame resolution.
+    pub fn buffer(&mut self) -> Result<ScanBuffer> {
+        self.rt.controller().scan_buffer_get()
+    }
+
+    /// Add `channels` to the scan buffer, keeping whatever is already there.
+    ///
+    /// Returns the buffer as it now stands. A signal that is not in the buffer
+    /// is not acquired, however it is configured elsewhere.
+    pub fn ensure_channels(&mut self, channels: &[SignalIndex]) -> Result<ScanBuffer> {
+        let channels = channels.to_vec();
+        self.rt.logged(
+            "scan_buffer_ensure",
+            serde_json::json!({ "channels": channels.iter().map(|c| c.0).collect::<Vec<_>>() }),
+            |c| c.scan_buffer_ensure(&channels),
+        )
+    }
+
+    /// Block until the scan finishes a line, or until `timeout` elapses.
+    ///
+    /// Check `timed_out` on the result before trusting the rest: a timeout
+    /// returns normally, carrying stale line and pass numbers. Silent, since
+    /// this is polled in a loop.
+    pub fn wait_end_of_line(&mut self, timeout: Duration) -> Result<ScanLineEnd> {
+        self.rt.controller().scan_wait_end_of_line(timeout)
+    }
+
     /// Current scan speed configuration (for save/restore).
     pub fn speed_get(&mut self) -> Result<ScanConfig> {
         self.rt.controller().scan_speed_get()
@@ -285,5 +320,116 @@ impl Scan<'_, '_> {
             }),
             |c| c.scan_speed_set(config),
         )
+    }
+}
+
+/// Piezo drift compensation, from [`Rt::drift`].
+///
+/// The real-time system applies a constant velocity per axis for as long as
+/// compensation is on. This handle is about working out what that velocity
+/// should be, and noticing when it has gone stale.
+pub struct Drift<'r, 'a> {
+    pub(crate) rt: &'r mut Rt<'a>,
+}
+
+impl Drift<'_, '_> {
+    /// Current velocities and saturation state.
+    pub fn get(&mut self) -> Result<DriftComp> {
+        self.rt.controller().drift_comp_get()
+    }
+
+    /// Set the compensation velocities directly.
+    ///
+    /// Prefer [`compensate`](Self::compensate) unless the velocity is already
+    /// known: the sign convention is undocumented, and applying it backwards
+    /// doubles the drift rather than cancelling it.
+    pub fn set(&mut self, comp: &DriftComp) -> Result<()> {
+        let comp = *comp;
+        self.rt.logged(
+            "drift_comp_set",
+            serde_json::json!({
+                "enabled": comp.enabled,
+                "vx_m_s": comp.vx,
+                "vy_m_s": comp.vy,
+                "vz_m_s": comp.vz,
+            }),
+            |c| c.drift_comp_set(&comp),
+        )
+    }
+
+    /// Measure the Z drift rate in metres per second, without changing
+    /// anything. Needs the Z controller on, and a flat, quiet spot.
+    pub fn measure_z(&mut self, z: SignalIndex, window: Duration, samples: usize) -> Result<f64> {
+        let output = self.rt.exec(&MeasureZDrift {
+            z,
+            window_ms: window.as_millis() as u64,
+            samples,
+        })?;
+        expect_value("measure_z_drift", output)
+    }
+
+    /// Measure the Z drift and leave the controller compensating for it,
+    /// returning the residual. Costs three measurement windows.
+    pub fn compensate(&mut self, z: SignalIndex, window: Duration, samples: usize) -> Result<f64> {
+        let output = self.rt.exec(&CompensateDrift {
+            z,
+            window_ms: window.as_millis() as u64,
+            samples,
+        })?;
+        expect_value("compensate_drift", output)
+    }
+}
+
+/// Multi-pass scanning, from [`Rt::multi_pass`].
+///
+/// Multi-pass scans each line several times with per-pass overrides, and can
+/// record a signal in one pass and play it back in a later one. The controller
+/// will not accept a configuration over TCP, only a path to a file it can
+/// reach, which is why [`apply`](Self::apply) takes two paths.
+pub struct MultiPass<'r, 'a> {
+    pub(crate) rt: &'r mut Rt<'a>,
+}
+
+impl MultiPass<'_, '_> {
+    /// Write `config`, load it, and switch multi-pass on.
+    ///
+    /// `local_path` is where we write the file; `host_path` is where the
+    /// controller looks for it. They differ whenever the controller is not on
+    /// this machine.
+    pub fn apply(
+        &mut self,
+        config: &MultiPassConfig,
+        local_path: impl Into<PathBuf>,
+        host_path: impl Into<String>,
+    ) -> Result<()> {
+        self.rt.exec(&ApplyMultiPass {
+            config: config.clone(),
+            local_path: local_path.into(),
+            host_path: host_path.into(),
+        })?;
+        Ok(())
+    }
+
+    /// Load a configuration the controller can already reach. An empty path
+    /// loads the one held in the session settings file.
+    pub fn load(&mut self, host_path: impl Into<String>) -> Result<()> {
+        self.rt.exec(&LoadMultiPass {
+            host_path: host_path.into(),
+        })?;
+        Ok(())
+    }
+
+    /// Save the active configuration to a path the controller can reach.
+    pub fn save(&mut self, host_path: impl Into<String>) -> Result<()> {
+        self.rt.exec(&SaveMultiPass {
+            host_path: host_path.into(),
+        })?;
+        Ok(())
+    }
+
+    /// Switch multi-pass on or off. Switching it on stops a running scan.
+    pub fn activate(&mut self, on: bool) -> Result<()> {
+        self.rt.exec(&ActivateMultiPass { on })?;
+        Ok(())
     }
 }

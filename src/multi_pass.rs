@@ -79,15 +79,15 @@ use std::io;
 use std::path::Path;
 use std::str::FromStr;
 
+use serde::{Deserialize, Serialize};
+
 use crate::signal_registry::SignalIndex;
-use crate::spm_controller::{Capability, SpmController};
-use crate::spm_error::SpmError;
 
 /// The default `Acq ch` blob: four NUL bytes in LabVIEW's hex escaping.
 const ACQ_CH_DEFAULT: &str = r"\00\00\00\00";
 
 /// A whole multi-pass configuration: the callback VI plus the passes.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MultiPassConfig {
     /// The `[Callback VI]` section, shared by every pass.
     pub callback_vi: CallbackVi,
@@ -100,7 +100,7 @@ pub struct MultiPassConfig {
 /// Using one needs LabVIEW running on the host with VI Server enabled, so it is
 /// off in everything written from here; the fields exist so a GUI-authored file
 /// survives a round trip.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CallbackVi {
     /// `0` is None. `1` is presumed to be "User VI"; not yet confirmed.
     pub selector: i32,
@@ -115,7 +115,7 @@ pub struct CallbackVi {
 /// Nanonis keeps the value when the flag goes off, so collapsing the pair into
 /// an `Option` would quietly rewrite files it merely meant to read. Use
 /// [`Pass::recorded`], [`Pass::played`] and friends for the tidier view.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pass {
     /// Opaque four-byte acquisition-channel blob, carried through verbatim.
     pub acq_ch: String,
@@ -263,7 +263,7 @@ impl Pass {
 /// Sections alternate, starting forward: `[Pass1]` is forward, `[Pass2]`
 /// backward, `[Pass3]` forward again. Record buffers are per direction and do
 /// not mix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PassDirection {
     Forward,
     Backward,
@@ -606,31 +606,6 @@ fn fmt_eng(v: f64) -> String {
     }
 
     format!("{mantissa:.6}E{exponent:+}")
-}
-
-/// Write `config`, load it on `controller`, and switch multi-pass on.
-///
-/// The two paths are the same file seen from two machines: `local_path` is
-/// where we write it, `host_path` is where the controller looks for it. When
-/// the controller runs on this machine they are the same string; under Wine, or
-/// on a real instrument, `host_path` is a mapped drive or a share.
-pub fn apply(
-    controller: &mut dyn SpmController,
-    config: &MultiPassConfig,
-    local_path: &Path,
-    host_path: &str,
-) -> Result<(), SpmError> {
-    if !controller.capabilities().contains(&Capability::MultiPass) {
-        return Err(SpmError::Unsupported(
-            "this controller does not support multi-pass".into(),
-        ));
-    }
-    config.write(local_path).map_err(|e| SpmError::Io {
-        source: e,
-        context: format!("writing multi-pass config to {}", local_path.display()),
-    })?;
-    controller.multi_pass_load(host_path)?;
-    controller.multi_pass_activate(true)
 }
 
 fn invalid(msg: &str) -> io::Error {

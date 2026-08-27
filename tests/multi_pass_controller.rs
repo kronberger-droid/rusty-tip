@@ -1,11 +1,14 @@
-//! The controller side of multi-pass: writing a configuration, loading it, and
-//! activating it, driven by the mock so no hardware is involved.
+//! Multi-pass, drift compensation and the scan buffer, exercised through the
+//! routine harness the way a routine would reach them. No hardware involved.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
+use rusty_tip::event::EventBus;
 use rusty_tip::mock_controller::{FaultKind, MockController};
-use rusty_tip::multi_pass::{self, MultiPassConfig};
+use rusty_tip::multi_pass::MultiPassConfig;
+use rusty_tip::routine::Rt;
+use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::spm_controller::{Capability, SpmController};
 use rusty_tip::{ScanLineEnd, ScanLineMovement, SignalIndex};
 
@@ -25,7 +28,12 @@ fn apply_writes_loads_and_activates_in_that_order() {
     let path = temp("apply");
     let config = MultiPassConfig::constant_lift(SignalIndex(30), 210e-12);
 
-    multi_pass::apply(&mut controller, &config, &path, &path.to_string_lossy())
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+    rt.multi_pass()
+        .expect("the mock supports multi-pass")
+        .apply(&config, &path, path.to_string_lossy().into_owned())
         .expect("apply succeeds");
 
     // The file the controller was pointed at is the one we wrote, and it still
@@ -70,7 +78,15 @@ fn a_load_failure_leaves_multi_pass_off() {
     let path = temp("load-fault");
 
     let config = MultiPassConfig::constant_lift(SignalIndex(30), 210e-12);
-    assert!(multi_pass::apply(&mut controller, &config, &path, &path.to_string_lossy()).is_err());
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+    assert!(
+        rt.multi_pass()
+            .expect("the mock supports multi-pass")
+            .apply(&config, &path, path.to_string_lossy().into_owned())
+            .is_err()
+    );
     assert_eq!(
         obs.lock().multi_pass_active,
         None,
@@ -90,14 +106,21 @@ fn ensuring_a_channel_keeps_the_ones_already_recorded() {
     let before = obs.lock().scan_buffer.clone();
     assert!(before.channels.contains(&SignalIndex(30)));
 
-    controller.scan_buffer_ensure(&[SignalIndex(30)]).unwrap();
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+    let mut scan = rt.scan().unwrap();
+    scan.ensure_channels(&[SignalIndex(30)]).unwrap();
     assert!(
         !obs.lock().called("scan_buffer_set"),
         "a channel already recorded should not provoke a write"
     );
 
-    controller.scan_buffer_ensure(&[SignalIndex(14)]).unwrap();
+    let after_ensure = scan.ensure_channels(&[SignalIndex(14)]).unwrap();
     let after = obs.lock().scan_buffer.clone();
+    // The returned buffer is the one now in effect, so a caller that wants to
+    // report it does not pay a second round trip to read it back.
+    assert_eq!(after, after_ensure);
     assert_eq!(
         after.channels,
         [before.channels, vec![SignalIndex(14)]].concat()
@@ -106,26 +129,20 @@ fn ensuring_a_channel_keeps_the_ones_already_recorded() {
 }
 
 #[test]
-fn apply_refuses_a_controller_without_the_capability() {
-    // The capability now gates something, rather than only being declared.
+fn the_harness_refuses_a_controller_without_the_capability() {
+    // The gate is `Rt::multi_pass`, so a routine never reaches an action it
+    // cannot run and nothing is written before the check.
     let mut caps = MockController::builder().build().capabilities();
     caps.remove(&Capability::MultiPass);
     let mut controller = MockController::builder().capabilities(caps).build();
-    let path = temp("no-capability");
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
 
-    let err = multi_pass::apply(
-        &mut controller,
-        &MultiPassConfig::constant_lift(SignalIndex(30), 210e-12),
-        &path,
-        &path.to_string_lossy(),
-    )
-    .unwrap_err();
-
-    assert!(matches!(
-        err,
-        rusty_tip::spm_error::SpmError::Unsupported(_)
-    ));
-    assert!(!path.exists(), "nothing should be written before the check");
+    match rt.multi_pass() {
+        Ok(_) => panic!("a controller without the capability must not hand out the handle"),
+        Err(e) => assert!(matches!(e, rusty_tip::spm_error::SpmError::Unsupported(_))),
+    }
 }
 
 #[test]
@@ -140,8 +157,13 @@ fn compensating_drift_re_arms_a_latched_axis_before_measuring() {
     // The mock's Z is constant, so the drift never responds and the solve
     // refuses rather than inventing a velocity. That is the assertion: it
     // fails loudly instead of writing a confident wrong number.
-    let err = controller
-        .compensate_drift(SignalIndex(30), Duration::from_millis(9), 3)
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+    let err = rt
+        .drift()
+        .expect("the mock supports drift compensation")
+        .compensate(SignalIndex(30), Duration::from_millis(9), 3)
         .unwrap_err();
     assert!(
         format!("{err}").contains("not responding"),
@@ -172,8 +194,13 @@ fn measuring_drift_refuses_an_open_feedback_loop() {
     // have followed is invisible. Fitting that returns a confident zero.
     let mut controller = MockController::builder().build();
     controller.observations().lock().z_controller_on = false;
-    let err = controller
-        .measure_z_drift(SignalIndex(30), Duration::from_millis(9), 3)
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+    let err = rt
+        .drift()
+        .expect("the mock supports drift compensation")
+        .measure_z(SignalIndex(30), Duration::from_millis(9), 3)
         .unwrap_err();
     assert!(
         format!("{err}").contains("Z controller is off"),

@@ -7,7 +7,7 @@ use crate::spm_controller::{Capability, SpmController};
 use crate::spm_error::SpmError;
 
 use super::Outcome;
-use super::subsystems::{Bias, Motor, Scan, Signals, ZCtrl};
+use super::subsystems::{Bias, Drift, Motor, MultiPass, Scan, Signals, ZCtrl};
 
 /// The routine runtime: what a [`super::Routine`] runs against.
 ///
@@ -71,6 +71,18 @@ impl<'a> Rt<'a> {
 
     /// Escape hatch: the bare controller, for operations the subsystem
     /// handles don't cover. Calls made through this bypass event logging.
+    /// Piezo drift compensation. Requires [`Capability::DriftCompensation`].
+    pub fn drift(&mut self) -> Result<Drift<'_, 'a>, SpmError> {
+        self.require(Capability::DriftCompensation)?;
+        Ok(Drift { rt: self })
+    }
+
+    /// Multi-pass scanning. Requires [`Capability::MultiPass`].
+    pub fn multi_pass(&mut self) -> Result<MultiPass<'_, 'a>, SpmError> {
+        self.require(Capability::MultiPass)?;
+        Ok(MultiPass { rt: self })
+    }
+
     pub fn controller(&mut self) -> &mut dyn SpmController {
         self.controller
     }
