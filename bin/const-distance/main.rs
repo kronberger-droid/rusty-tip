@@ -305,6 +305,18 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
         return Ok(());
     };
 
+    // Multi-pass records and plays through its own buffers, which says nothing
+    // about what ends up in the saved frames. Without this the run produces a
+    // [P2] pass whose signal was never acquired.
+    controller.scan_buffer_ensure(&[signal])?;
+    let buffer = controller.scan_buffer_get()?;
+    println!(
+        "scan buffer records RT slots {:?} at {}x{}",
+        buffer.channels.iter().map(|c| c.0).collect::<Vec<_>>(),
+        buffer.pixels,
+        buffer.lines
+    );
+
     multi_pass::apply(&mut controller, &config, &args.output, &host_path)?;
     println!("wrote {}", args.output.display());
     println!("loaded from {host_path} and activated multi-pass");

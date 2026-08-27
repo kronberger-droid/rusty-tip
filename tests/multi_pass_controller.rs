@@ -80,6 +80,31 @@ fn a_load_failure_leaves_multi_pass_off() {
 }
 
 #[test]
+fn ensuring_a_channel_keeps_the_ones_already_recorded() {
+    // A multi-pass run is worthless if the signal it plays back was never
+    // acquired, but clobbering the operator's other channels to fix that would
+    // be worse.
+    let mut controller = MockController::builder().build();
+    let obs = controller.observations();
+    let before = obs.lock().scan_buffer.clone();
+    assert!(before.channels.contains(&SignalIndex(30)));
+
+    controller.scan_buffer_ensure(&[SignalIndex(30)]).unwrap();
+    assert!(
+        !obs.lock().called("scan_buffer_set"),
+        "a channel already recorded should not provoke a write"
+    );
+
+    controller.scan_buffer_ensure(&[SignalIndex(14)]).unwrap();
+    let after = obs.lock().scan_buffer.clone();
+    assert_eq!(
+        after.channels,
+        [before.channels, vec![SignalIndex(14)]].concat()
+    );
+    assert_eq!((after.pixels, after.lines), (before.pixels, before.lines));
+}
+
+#[test]
 fn apply_refuses_a_controller_without_the_capability() {
     // The capability now gates something, rather than only being declared.
     let mut caps = MockController::builder().build().capabilities();

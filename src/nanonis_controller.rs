@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use crate::buffered_tcp_reader::BufferedTCPReader;
 use crate::signal_registry::{SignalIndex, SignalRegistry};
 use crate::spm_controller::{
-    AcquisitionMode, Capability, DataStreamStatus, Result, SpmController, TriggerSetup,
+    AcquisitionMode, Capability, DataStreamStatus, Result, ScanBuffer, SpmController, TriggerSetup,
     ZControllerStatus, ZHomeMode,
 };
 use crate::spm_error::SpmError;
@@ -771,6 +771,25 @@ impl SpmController for NanonisController {
 
     fn scan_speed_set(&mut self, config: ScanConfig) -> Result<()> {
         Ok(self.client.scan_config_set(config)?)
+    }
+
+    fn scan_buffer_get(&mut self) -> Result<ScanBuffer> {
+        let (channels, pixels, lines) = self.client.scan_buffer_get()?;
+        Ok(ScanBuffer {
+            channels: channels
+                .into_iter()
+                .map(|c| SignalIndex(c as u32))
+                .collect(),
+            pixels,
+            lines,
+        })
+    }
+
+    fn scan_buffer_set(&mut self, buffer: &ScanBuffer) -> Result<()> {
+        let channels = buffer.channels.iter().map(|c| c.0 as i32).collect();
+        Ok(self
+            .client
+            .scan_buffer_set(channels, buffer.pixels, buffer.lines)?)
     }
 
     fn scan_frame_data_grab(

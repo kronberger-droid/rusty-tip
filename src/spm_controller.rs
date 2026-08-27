@@ -22,6 +22,19 @@ pub type Result<T> = std::result::Result<T, SpmError>;
 /// Oscilloscope trigger configuration (level, slope, hysteresis)
 pub type TriggerSetup = TriggerConfig;
 
+/// Which signals a scan records, and at what resolution.
+///
+/// The channels are RT signal slots, the same 0..=127 numbering
+/// [`SignalIndex`] carries everywhere else. `pixels` is coerced by the
+/// controller to the nearest multiple of 16, since scan data reaches the host
+/// in packets of 16.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanBuffer {
+    pub channels: Vec<SignalIndex>,
+    pub pixels: i32,
+    pub lines: i32,
+}
+
 /// Hardware capability that a controller may or may not support.
 ///
 /// Actions declare which capabilities they require via `Action::requires()`.
@@ -146,6 +159,33 @@ pub trait SpmController: Send {
     fn scan_props_set(&mut self, props: ScanPropsBuilder) -> Result<()>;
     fn scan_speed_get(&mut self) -> Result<ScanConfig>;
     fn scan_speed_set(&mut self, config: ScanConfig) -> Result<()>;
+
+    /// Which signals the scan records, and the frame resolution.
+    fn scan_buffer_get(&mut self) -> Result<ScanBuffer>;
+
+    /// Set the recorded signals and the frame resolution.
+    fn scan_buffer_set(&mut self, buffer: &ScanBuffer) -> Result<()>;
+
+    /// Add `channels` to the scan buffer, keeping whatever is already there.
+    ///
+    /// A signal that is not in the buffer is not acquired, however it is
+    /// configured elsewhere. Multi-pass in particular records and plays a
+    /// signal through its own buffers, which says nothing about whether the
+    /// resulting `[P1]`/`[P2]` frames are saved, so anything worth looking at
+    /// afterwards has to be in here too.
+    fn scan_buffer_ensure(&mut self, channels: &[SignalIndex]) -> Result<()> {
+        let mut buffer = self.scan_buffer_get()?;
+        let missing: Vec<SignalIndex> = channels
+            .iter()
+            .filter(|c| !buffer.channels.contains(c))
+            .copied()
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        buffer.channels.extend(missing);
+        self.scan_buffer_set(&buffer)
+    }
 
     /// Grab pixel data from a completed (or in-progress) scan frame.
     ///

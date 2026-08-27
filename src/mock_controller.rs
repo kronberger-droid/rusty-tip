@@ -65,7 +65,7 @@ use nanonis_rs::tip_recovery::TipShaperConfig;
 
 use crate::signal_registry::SignalIndex;
 use crate::spm_controller::{
-    AcquisitionMode, Capability, DataStreamStatus, Result, SpmController, TriggerSetup,
+    AcquisitionMode, Capability, DataStreamStatus, Result, ScanBuffer, SpmController, TriggerSetup,
     ZControllerStatus, ZHomeMode,
 };
 use crate::spm_error::SpmError;
@@ -156,6 +156,8 @@ pub struct MockObservations {
     pub multi_pass_loaded: Vec<String>,
     /// Latest state passed to `multi_pass_activate`, if it was ever called.
     pub multi_pass_active: Option<bool>,
+    /// The scan buffer, as `scan_buffer_set` last left it.
+    pub scan_buffer: ScanBuffer,
 }
 
 impl Default for MockObservations {
@@ -178,6 +180,11 @@ impl Default for MockObservations {
             connected: true,
             multi_pass_loaded: Vec::new(),
             multi_pass_active: None,
+            scan_buffer: ScanBuffer {
+                channels: vec![SignalIndex(0), SignalIndex(30)],
+                pixels: 256,
+                lines: 256,
+            },
         }
     }
 }
@@ -560,6 +567,17 @@ impl SpmController for MockController {
     fn scan_speed_set(&mut self, config: ScanConfig) -> Result<()> {
         self.enter("scan_speed_set")?;
         self.scan_config = config;
+        Ok(())
+    }
+
+    fn scan_buffer_get(&mut self) -> Result<ScanBuffer> {
+        self.enter("scan_buffer_get")?;
+        Ok(self.obs.lock().scan_buffer.clone())
+    }
+
+    fn scan_buffer_set(&mut self, buffer: &ScanBuffer) -> Result<()> {
+        self.enter("scan_buffer_set")?;
+        self.obs.lock().scan_buffer = buffer.clone();
         Ok(())
     }
 
