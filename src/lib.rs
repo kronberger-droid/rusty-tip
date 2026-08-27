@@ -13,6 +13,7 @@ pub mod tip_prep;
 pub mod config;
 pub mod controller_types;
 pub mod event;
+pub mod multi_pass;
 pub mod shutdown;
 pub mod signal_registry;
 
@@ -30,6 +31,7 @@ pub use analyzer::rolling_ellipsoid::{Border, GridSpacing, RollingEllipsoid};
 pub use controller_types::{
     BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, StabilityConfig,
 };
+pub use multi_pass::{CallbackVi, MultiPassConfig, Pass};
 pub use plotting::{plot_values, plot_values_with_range};
 pub use routine::{Outcome, Routine, Rt, run_routine};
 pub use shutdown::ShutdownFlag;
