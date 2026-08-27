@@ -14,6 +14,13 @@
 //!    XY moves and Z position sets, feedback off. Not implemented, and gated on
 //!    hardware measurements that have not been made yet.
 //!
+//! Alongside those there is `baseline`, which does not use the planner at all.
+//! It builds the two-pass record-and-play configuration that Nanonis multi-pass
+//! runs natively (`Z_tip = Z + lift`, a plain vertical shift) and hands it to
+//! the controller. That is the published method (Moreno et al., Nano Lett.
+//! 2015) and the thing our trajectory has to beat at step edges, so it is worth
+//! being able to run it from here.
+//!
 //! # Units
 //!
 //! Everything on the command line is in **nanometres**, because that is the
@@ -36,6 +43,10 @@ use rusty_tip::analyzer::rolling_ellipsoid::{
     Border, GridSpacing, RollingEllipsoid, vertical_clearance,
 };
 use rusty_tip::export::{gsf, write_table, write_xyz};
+use rusty_tip::multi_pass::{self, MultiPassConfig};
+use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
+use rusty_tip::signal_registry::SignalIndex;
+use rusty_tip::spm_controller::SpmController;
 
 /// Nanometres to metres.
 const NM: f64 = 1e-9;
@@ -63,6 +74,54 @@ enum Command {
     Acquire,
     /// Drive the tip along a planned trajectory. Not implemented.
     Trace,
+    /// Configure native multi-pass for a constant-lift baseline scan.
+    Baseline(BaselineArgs),
+}
+
+#[derive(Args)]
+struct BaselineArgs {
+    /// Lift for the second pass, in nanometres. Positive is the direction the
+    /// `Play offset` field takes; which way that points on hardware has NOT
+    /// been confirmed yet, so check against the GUI before trusting the sign.
+    #[arg(short, long, default_value_t = 0.2)]
+    lift: f64,
+
+    /// RT signal slot to record in the first pass. 30 is Z (m) on a stock
+    /// signal assignment; `--signal-name` resolves it from the controller
+    /// instead.
+    #[arg(long, default_value_t = 30)]
+    signal: u32,
+
+    /// Resolve the recorded signal by name instead of by slot, e.g. "Z (m)".
+    /// Needs a connection.
+    #[arg(long, conflicts_with = "signal")]
+    signal_name: Option<String>,
+
+    /// Where to write the .mpas file.
+    #[arg(short, long, default_value = "baseline.mpas")]
+    output: PathBuf,
+
+    /// Path the *controller* should load the file from. Defaults to `--output`,
+    /// which is right only when Nanonis runs on this machine; on a real
+    /// instrument the file has to be somewhere that PC can see.
+    #[arg(long)]
+    host_path: Option<String>,
+
+    /// Write the file and stop, without connecting to anything.
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Controller address.
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+
+    /// Controller port.
+    #[arg(long, default_value_t = 6501)]
+    port: u16,
+
+    /// Settle time at the beginning of each line, in seconds.
+    #[arg(long, default_value_t = 0.0)]
+    delay: f64,
 }
 
 #[derive(Args)]
@@ -174,7 +233,92 @@ fn run() -> Result<(), Box<dyn Error>> {
              sequencing, Z step response, FolMe blocking behaviour) that have \
              not been made."
             .into()),
+        Command::Baseline(args) => baseline(args),
     }
+}
+
+/// Build the constant-lift multi-pass configuration and, unless `--dry-run`,
+/// load and activate it on the controller.
+fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
+    let host_path = args
+        .host_path
+        .clone()
+        .unwrap_or_else(|| args.output.to_string_lossy().into_owned());
+
+    // Connect first when the signal has to be resolved by name, so a typo fails
+    // before anything is written.
+    let mut controller = match args.dry_run {
+        true => None,
+        false => {
+            let client = rusty_tip::NanonisClient::builder()
+                .address(&args.host)
+                .port(args.port)
+                .build()?;
+            println!("connected to {}:{}", args.host, args.port);
+            Some(NanonisController::new(
+                client,
+                NanonisSetupConfig::default(),
+            ))
+        }
+    };
+
+    let signal = match (&args.signal_name, controller.as_mut()) {
+        (Some(name), Some(c)) => {
+            let names = c.signal_names()?;
+            let found = names
+                .iter()
+                .position(|n| n.eq_ignore_ascii_case(name))
+                .ok_or_else(|| format!("no signal called {name:?} on this controller"))?;
+            println!("resolved {name:?} to RT slot {found}");
+            SignalIndex(found as u32)
+        }
+        (Some(_), None) => return Err("--signal-name needs a connection; drop --dry-run".into()),
+        (None, _) => SignalIndex(args.signal),
+    };
+
+    let mut config = MultiPassConfig::constant_lift(signal, args.lift * NM);
+    for pass in &mut config.passes {
+        pass.delay = args.delay;
+    }
+
+    // Print the sections the way the Multi Pass window lists them, so this can
+    // be checked against the GUI at a glance.
+    for (i, pass) in config.passes.iter().enumerate() {
+        let what = match (pass.recorded(), pass.played()) {
+            (Some(s), _) => format!("record RT slot {}", s.0),
+            (_, Some((offset, _))) => format!("play back, offset {} nm", offset / NM),
+            _ => "nothing".to_string(),
+        };
+        println!("  {}: {what}", MultiPassConfig::label(i));
+    }
+
+    for i in config.unsourced_playbacks() {
+        println!(
+            "  warning: {} plays back, but nothing is recorded in that direction",
+            MultiPassConfig::label(i)
+        );
+    }
+
+    let Some(mut controller) = controller else {
+        config.write(&args.output)?;
+        println!("wrote {} (dry run, nothing sent)", args.output.display());
+        return Ok(());
+    };
+
+    multi_pass::apply(&mut controller, &config, &args.output, &host_path)?;
+    println!("wrote {}", args.output.display());
+    println!("loaded from {host_path} and activated multi-pass");
+    println!(
+        "note: Linefeed scan mode is not part of the file and cannot be set \
+         over TCP. Tick it by hand in Scan Control, or the passes will not \
+         land on the same line."
+    );
+    println!(
+        "unconfirmed: the offset sign (does positive approach or retract?) and \
+         Speed sel = 0, which displays as ratio 1 but has not been checked \
+         against a GUI-saved default."
+    );
+    Ok(())
 }
 
 fn plan(args: PlanArgs) -> Result<(), Box<dyn Error>> {
