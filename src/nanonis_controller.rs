@@ -14,11 +14,12 @@ use std::collections::HashSet;
 use crate::buffered_tcp_reader::BufferedTCPReader;
 use crate::signal_registry::{SignalIndex, SignalRegistry};
 use crate::spm_controller::{
-    AcquisitionMode, Capability, DataStreamStatus, Result, ScanBuffer, SpmController, TriggerSetup,
-    ZControllerStatus, ZHomeMode,
+    AcquisitionMode, Capability, DataStreamStatus, DriftComp, Result, ScanBuffer, SpmController,
+    TriggerSetup, ZControllerStatus, ZHomeMode,
 };
 use crate::spm_error::SpmError;
 use crate::utils::{PollError, poll_until};
+use nanonis_rs::piezo::{DriftCompConfig, PiezoToggle};
 
 /// Configuration consumed by `NanonisController::prepare()`.
 ///
@@ -454,6 +455,7 @@ impl SpmController for NanonisController {
             Capability::DataStream,
             Capability::SafeTip,
             Capability::MultiPass,
+            Capability::DriftCompensation,
         ])
     }
 
@@ -798,6 +800,35 @@ impl SpmController for NanonisController {
         forward: bool,
     ) -> Result<(String, Vec<Vec<f32>>, bool)> {
         Ok(self.client.scan_frame_data_grab(channel_index, forward)?)
+    }
+
+    // -- Drift compensation --
+
+    fn drift_comp_get(&mut self) -> Result<DriftComp> {
+        let s = self.client.piezo_drift_comp_get()?;
+        Ok(DriftComp {
+            enabled: s.enabled,
+            vx: s.vx_m_s as f64,
+            vy: s.vy_m_s as f64,
+            vz: s.vz_m_s as f64,
+            saturation_limit_percent: s.saturation_limit as f64,
+            x_saturated: s.x_saturated,
+            y_saturated: s.y_saturated,
+            z_saturated: s.z_saturated,
+        })
+    }
+
+    fn drift_comp_set(&mut self, comp: &DriftComp) -> Result<()> {
+        Ok(self.client.piezo_drift_comp_set(&DriftCompConfig {
+            enabled: match comp.enabled {
+                true => PiezoToggle::On,
+                false => PiezoToggle::Off,
+            },
+            vx_m_s: comp.vx as f32,
+            vy_m_s: comp.vy as f32,
+            vz_m_s: comp.vz as f32,
+            saturation_limit: comp.saturation_limit_percent as f32,
+        })?)
     }
 
     // -- Multi-pass --

@@ -2,6 +2,7 @@
 //! activating it, driven by the mock so no hardware is involved.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use rusty_tip::SignalIndex;
 use rusty_tip::mock_controller::{FaultKind, MockController};
@@ -125,4 +126,57 @@ fn apply_refuses_a_controller_without_the_capability() {
         rusty_tip::spm_error::SpmError::Unsupported(_)
     ));
     assert!(!path.exists(), "nothing should be written before the check");
+}
+
+#[test]
+fn compensating_drift_re_arms_a_latched_axis_before_measuring() {
+    // Saturation stops the axis for good, so measuring first would fit a drift
+    // that nothing is correcting. The re-arm is an off/on cycle, which is the
+    // only documented way back.
+    let mut controller = MockController::builder().build();
+    let obs = controller.observations();
+    obs.lock().drift_comp.z_saturated = true;
+
+    // The mock's Z is constant, so the drift never responds and the solve
+    // refuses rather than inventing a velocity. That is the assertion: it
+    // fails loudly instead of writing a confident wrong number.
+    let err = controller
+        .compensate_drift(SignalIndex(30), Duration::from_millis(9), 3)
+        .unwrap_err();
+    assert!(
+        format!("{err}").contains("not responding"),
+        "expected a non-responding-channel error, got: {err}"
+    );
+
+    let obs = obs.lock();
+    let rearm: Vec<bool> = obs
+        .drift_comp_writes
+        .iter()
+        .take(2)
+        .map(|c| c.enabled)
+        .collect();
+    assert_eq!(rearm, vec![false, true], "the re-arm has to be off then on");
+    assert!(
+        obs.first_index("drift_comp_set") < obs.first_index("read_signal"),
+        "the axis has to be re-armed before the first measurement"
+    );
+    assert!(
+        !obs.drift_comp.z_saturated,
+        "the off/on cycle clears the latch"
+    );
+}
+
+#[test]
+fn measuring_drift_refuses_an_open_feedback_loop() {
+    // With the loop open, Z sits where it was parked and the drift it would
+    // have followed is invisible. Fitting that returns a confident zero.
+    let mut controller = MockController::builder().build();
+    controller.observations().lock().z_controller_on = false;
+    let err = controller
+        .measure_z_drift(SignalIndex(30), Duration::from_millis(9), 3)
+        .unwrap_err();
+    assert!(
+        format!("{err}").contains("Z controller is off"),
+        "got: {err}"
+    );
 }
