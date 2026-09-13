@@ -121,6 +121,14 @@ fn default_reposition_steps() -> [i16; 2] {
 fn default_status_interval() -> usize {
     10
 }
+/// 0.2.3 gave the approaches that start from a full withdraw ten minutes.
+fn default_approach_timeout_ms() -> u64 {
+    600_000
+}
+/// A reposition retracts three coarse steps, so its approach is short.
+fn default_reposition_approach_timeout_ms() -> u64 {
+    300_000
+}
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TimingConfig {
@@ -143,6 +151,16 @@ pub struct TimingConfig {
     pub reposition_steps: [i16; 2],
     #[serde(default = "default_status_interval")]
     pub status_interval: usize,
+    /// Budget for an approach that starts from a full withdraw: the first
+    /// approach of the run and the re-approach around each stability sweep.
+    /// An approach that overruns it is stopped and the run ends in an error,
+    /// with the tip withdrawn.
+    #[serde(default = "default_approach_timeout_ms")]
+    pub approach_timeout_ms: u64,
+    /// Budget for the approach inside a reposition, which starts only three
+    /// coarse steps off the surface.
+    #[serde(default = "default_reposition_approach_timeout_ms")]
+    pub reposition_approach_timeout_ms: u64,
 }
 
 impl Default for TimingConfig {
@@ -156,6 +174,8 @@ impl Default for TimingConfig {
             post_pulse_settle_ms: default_post_pulse_settle_ms(),
             reposition_steps: default_reposition_steps(),
             status_interval: default_status_interval(),
+            approach_timeout_ms: default_approach_timeout_ms(),
+            reposition_approach_timeout_ms: default_reposition_approach_timeout_ms(),
         }
     }
 }

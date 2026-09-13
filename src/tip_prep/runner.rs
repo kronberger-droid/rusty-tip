@@ -135,6 +135,7 @@ impl<'a> TipPrep<'a> {
             y_steps: t.reposition_steps[1],
             post_move_settle_ms: t.post_move_settle_ms,
             post_approach_settle_ms: t.post_reposition_settle_ms,
+            approach_timeout_ms: t.reposition_approach_timeout_ms,
             ..Default::default()
         })
     }
@@ -359,10 +360,16 @@ impl<'a> TipPrep<'a> {
             .move_3d(t.reposition_steps[0], t.reposition_steps[1], -3)?;
         rt.settle(200)?;
         rt.bias()?.set(plan.starting_bias)?;
-        rt.z()?.calibrated_approach()?;
+        rt.z()?
+            .calibrated_approach_within(self.approach_timeout())?;
         rt.settle(t.post_approach_settle_ms)?;
 
         Ok(())
+    }
+
+    /// Budget for an approach that starts from a full withdraw.
+    fn approach_timeout(&self) -> Duration {
+        Duration::from_millis(self.config.tip_prep.timing.approach_timeout_ms)
     }
 
     fn execute_stability_sweep(&self, rt: &mut Rt, plan: &SweepPlan) -> Result<(), SpmError> {
@@ -462,7 +469,8 @@ impl<'a> TipPrep<'a> {
         rt.z()?.withdraw()?;
         rt.settle(200)?;
         rt.bias()?.set(self.config.tip_prep.initial_bias_v)?;
-        rt.z()?.calibrated_approach()?;
+        rt.z()?
+            .calibrated_approach_within(self.approach_timeout())?;
         rt.settle(self.config.tip_prep.timing.post_approach_settle_ms)?;
 
         self.read_stable(rt)
@@ -481,7 +489,8 @@ impl Routine for TipPrep<'_> {
         log::info!("Initializing...");
         rt.bias()?.set(cfg.tip_prep.initial_bias_v)?;
         rt.z()?.set_setpoint(cfg.tip_prep.initial_z_setpoint_a)?;
-        rt.z()?.calibrated_approach()?;
+        rt.z()?
+            .calibrated_approach_within(self.approach_timeout())?;
 
         // Clear the stream buffer to discard stale pre-approach data
         rt.signals()?.clear_buffer();
