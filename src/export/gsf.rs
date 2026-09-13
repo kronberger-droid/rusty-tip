@@ -236,8 +236,10 @@ pub fn read_gsf(path: impl AsRef<Path>) -> io::Result<GsfField> {
     }
 
     let values: Vec<f64> = bytes[start..start + need]
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c) as f64)
         .collect();
     field.data = Array2::from_shape_vec((ny, nx), values)
         .map_err(|e| invalid(&format!("bad shape: {e}")))?;
@@ -352,8 +354,10 @@ mod tests {
 
         let tail = &bytes[bytes.len() - 16..];
         let vals: Vec<f32> = tail
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect();
         assert_eq!(vals, vec![1.0, 2.0, 3.0, 4.0]);
     }
