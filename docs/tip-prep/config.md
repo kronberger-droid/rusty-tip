@@ -51,7 +51,15 @@ post_pulse_settle_ms = 1000
 buffer_clear_wait_ms = 500
 reposition_steps = [3, 3]         # coarse motor steps (x, y) per reposition
 status_interval = 10              # log a status line every N cycles
+approach_timeout_ms = 600000      # approaches from a full withdraw (first
+                                  # approach, around each stability sweep)
+reposition_approach_timeout_ms = 300000  # the short approach inside a reposition
 ```
+
+An approach that overruns its budget is stopped, the run ends in an error,
+and the tip is withdrawn. The two budgets differ because a reposition only
+retracts three coarse steps before re-approaching, while the first approach
+of a run starts wherever the tip was left.
 
 ## `[tip_prep.signal_stability]` — when is a reading trusted
 
