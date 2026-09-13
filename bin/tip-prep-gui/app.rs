@@ -19,7 +19,7 @@ use rusty_tip::mock_controller::{MockController, models};
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::SignalRegistry;
-use rusty_tip::spm_controller::SpmController;
+use rusty_tip::spm_controller::{SpmController, ZHomeMode};
 use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
 use rusty_tip::{
@@ -195,6 +195,10 @@ pub struct EditableConfig {
     // Data Acquisition
     pub sample_rate: String,
     pub stable_signal_samples: String,
+    /// TCP logger oversampling. Carried through from the loaded config (no
+    /// widget yet); the delivered stream rate is the controller's base rate
+    /// divided by this.
+    pub oversampling: i32,
 
     // Experiment Logging
     pub logging_enabled: bool,
@@ -261,6 +265,7 @@ impl Default for EditableConfig {
             settings_file: String::new(),
             sample_rate: "2000".to_string(),
             stable_signal_samples: "100".to_string(),
+            oversampling: DataAcquisitionConfig::default().oversampling,
             logging_enabled: true,
             logging_output_path: "./experiments".to_string(),
             verbosity: "info".to_string(),
@@ -408,6 +413,7 @@ impl EditableConfig {
                 .data_acquisition
                 .stable_signal_samples
                 .to_string(),
+            oversampling: app_config.data_acquisition.oversampling,
             logging_enabled: app_config.experiment_logging.enabled,
             logging_output_path: app_config.experiment_logging.output_path.clone(),
             verbosity: app_config.console.verbosity.clone(),
@@ -618,6 +624,7 @@ impl EditableConfig {
             data_acquisition: DataAcquisitionConfig {
                 data_port,
                 sample_rate,
+                oversampling: self.oversampling,
                 stable_signal_samples,
             },
             experiment_logging: ExperimentLoggingConfig {
@@ -1881,6 +1888,10 @@ fn build_nanonis_backend(
         layout_file: config.nanonis.layout_file.clone(),
         settings_file: config.nanonis.settings_file.clone(),
         safe_tip_threshold_a: config.tip_prep.safe_tip_threshold,
+        // Same reasoning as the CLI: the home step must back off from the
+        // surface, not travel to an absolute Z coordinate.
+        z_home_mode: ZHomeMode::Relative,
+        z_home_position_m: 50e-9,
         ..Default::default()
     };
     let mut controller = NanonisController::new(client, setup);
