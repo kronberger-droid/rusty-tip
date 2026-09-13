@@ -310,12 +310,14 @@ impl<'a> TipPrep<'a> {
             ));
             Ok(StabilityOutcome::Stable)
         } else {
-            // The post-sweep withdraw in execute_stability_sweep only logs
-            // errors; re-withdraw here with error propagation so a max-voltage
-            // pulse never fires on an engaged tip if the earlier withdraw
-            // silently failed.
-            rt.z()?.withdraw()?;
-
+            // The tip is engaged here: `measure_final_freq_shift` approached
+            // it to take the reading being compared. That is the point. A
+            // pulse is a field at the apex, and the apex is only in a field
+            // when it is near the surface, so a max pulse fired withdrawn
+            // reshapes nothing and the next cycle inherits the same unstable
+            // apex. 0.2.3 fired engaged; an earlier v2 revision withdrew
+            // first and turned this branch into a no-op.
+            //
             // Fire max pulse and reset to blunt. `fire_max_pulse_voltage` bumps
             // pulse_count and may flip polarity, so capture the effective sign
             // from the returned voltage rather than re-reading base_polarity.

@@ -399,10 +399,37 @@ fn sharp_but_unstable_fires_max_pulse_then_cycle_limit() {
         obs.called("scan_action"),
         "the stability sweep must have run"
     );
+    let max_pulse = obs
+        .pulses
+        .iter()
+        .position(|&v| (v - 6.0).abs() < 1e-9)
+        .unwrap_or_else(|| {
+            panic!(
+                "instability should trigger a max-voltage (6 V) pulse, got {:?}",
+                obs.pulses
+            )
+        });
+
+    // The max pulse only reshapes the apex if the apex is near the surface.
+    // Find that pulse in the call sequence and check nothing withdrew the tip
+    // between the approach that took the final reading and the pulse itself.
+    let pulse_call = obs
+        .calls
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| **name == "bias_pulse")
+        .nth(max_pulse)
+        .map(|(i, _)| i)
+        .expect("the pulse must appear in the call log");
+    let last_approach = obs.calls[..pulse_call]
+        .iter()
+        .rposition(|name| *name == "auto_approach")
+        .expect("an approach must precede the max pulse");
     assert!(
-        obs.pulses.iter().any(|&v| (v - 6.0).abs() < 1e-9),
-        "instability should trigger a max-voltage (6 V) pulse, got {:?}",
-        obs.pulses
+        !obs.calls[last_approach..pulse_call].contains(&"withdraw"),
+        "the max pulse must fire with the tip engaged; calls between the last \
+         approach and the pulse: {:?}",
+        &obs.calls[last_approach..pulse_call]
     );
 }
 

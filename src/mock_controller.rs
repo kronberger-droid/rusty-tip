@@ -167,6 +167,10 @@ pub struct MockObservations {
     /// Whether the Z controller reports itself on. Tests that care about the
     /// feedback loop being closed flip this.
     pub z_controller_on: bool,
+    /// Whether the Z controller reports safe-tip protection as having fired.
+    /// Takes precedence over `z_controller_on`, as it does on the machine:
+    /// a tripped safe-tip has already switched the controller off.
+    pub safe_tip_tripped: bool,
     /// Drift compensation, as `drift_comp_set` last left it.
     pub drift_comp: DriftComp,
     /// Every set of velocities written, in order.
@@ -194,6 +198,7 @@ impl Default for MockObservations {
             multi_pass_loaded: Vec::new(),
             multi_pass_active: None,
             z_controller_on: true,
+            safe_tip_tripped: false,
             drift_comp: DriftComp {
                 enabled: false,
                 vx: 0.0,
@@ -515,9 +520,11 @@ impl SpmController for MockController {
 
     fn z_controller_status(&mut self) -> Result<ZControllerStatus> {
         self.enter("z_controller_status")?;
-        Ok(match self.obs.lock().z_controller_on {
-            true => ZControllerStatus::On,
-            false => ZControllerStatus::Off,
+        let obs = self.obs.lock();
+        Ok(match (obs.safe_tip_tripped, obs.z_controller_on) {
+            (true, _) => ZControllerStatus::SafeTip,
+            (false, true) => ZControllerStatus::On,
+            (false, false) => ZControllerStatus::Off,
         })
     }
 

@@ -63,12 +63,22 @@ Sharp is not enough if the apex rearranges under field stress. With
 3. Stops the scan, withdraws, re-approaches, and measures again.
 4. Compares against the baseline: within `stable_tip_allowed_change`, the
    run is **Completed**. Beyond it, the apex moved: the routine fires a
-   maximum-voltage pulse to deliberately reshape it and starts the loop
-   over.
+   maximum-voltage pulse, with the tip still engaged from the measurement,
+   to deliberately reshape it, then repositions and starts the loop over.
 
 Scan properties, scan speed, and bias are restored no matter how the sweep
 ends, and the tip is withdrawn before any error propagates, so a failure
 mid-sweep never leaves the tip engaged on the surface.
+
+## Approaching
+
+Every approach in the routine is a *calibrated* approach: approach, back off
+50 nm (a relative Z-home), centre the frequency shift there, approach again.
+Safe-tip protection is switched on for the backed-off part, and the Z
+controller's status is checked after each step. If safe-tip has fired, the
+approach aborts and so does the run, rather than approaching again into
+whatever tripped it. The hardware retracts the tip on a trip by itself; the
+check is there so the software never undoes that.
 
 ## Cleanup
 
