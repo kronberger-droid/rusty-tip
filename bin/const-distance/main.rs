@@ -21,6 +21,10 @@
 //! 2015) and the thing our trajectory has to beat at step edges, so it is worth
 //! being able to run it from here.
 //!
+//! `drift` exposes the Z drift measurement and compensation from the action
+//! layer, so they can be exercised on hardware before anything depends on
+//! them: measure between scans, compensate, measure again.
+//!
 //! # Units
 //!
 //! Everything on the command line is in **nanometres**, because that is the
@@ -39,8 +43,9 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use ndarray::{Array2, ArrayView2};
 use textplots::{Chart, Plot, Shape};
 
+use rusty_tip::action::drift::{CompensateDrift, MeasureZDrift};
 use rusty_tip::action::multi_pass::ApplyMultiPass;
-use rusty_tip::action::{Action, ActionContext, DataStore};
+use rusty_tip::action::{Action, ActionContext, ActionOutput, DataStore};
 use rusty_tip::analyzer::rolling_ellipsoid::{
     Border, GridSpacing, RollingEllipsoid, vertical_clearance,
 };
@@ -50,6 +55,7 @@ use rusty_tip::multi_pass::MultiPassConfig;
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::{SignalIndex, SignalRegistry};
+use rusty_tip::spm_controller::DriftComp;
 
 /// Nanometres to metres.
 const NM: f64 = 1e-9;
@@ -79,6 +85,53 @@ enum Command {
     Trace,
     /// Configure native multi-pass for a constant-lift baseline scan.
     Baseline(BaselineArgs),
+    /// Measure the Z drift, or set the piezo compensation that cancels it.
+    Drift(DriftArgs),
+}
+
+#[derive(Args)]
+struct DriftArgs {
+    #[command(subcommand)]
+    op: DriftOp,
+
+    /// RT signal slot carrying the Z position, in metres. 30 on a stock
+    /// signal assignment; `--signal-name` resolves it from the controller.
+    #[arg(long, default_value_t = 30)]
+    signal: u32,
+
+    /// Resolve the Z signal by name instead of by slot, e.g. "Z (m)".
+    #[arg(long, conflicts_with = "signal")]
+    signal_name: Option<String>,
+
+    /// Length of one measurement window, in seconds. `compensate` runs three.
+    #[arg(long, default_value_t = 5.0)]
+    window: f64,
+
+    /// Samples per window. At least 3.
+    #[arg(long, default_value_t = 16)]
+    samples: usize,
+
+    /// Controller address.
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+
+    /// Controller port.
+    #[arg(long, default_value_t = 6501)]
+    port: u16,
+}
+
+#[derive(Subcommand)]
+enum DriftOp {
+    /// Print the compensation velocities and which axes have saturated.
+    Status,
+    /// Fit a Z drift rate and print it. Changes nothing on the controller.
+    Measure,
+    /// Measure, set the Z velocity that cancels the drift, and report the
+    /// residual. Leaves compensation switched on.
+    Compensate,
+    /// Switch compensation off. The velocities are kept, so `status` still
+    /// shows what was last applied.
+    Off,
 }
 
 #[derive(Args)]
@@ -237,6 +290,128 @@ fn run() -> Result<(), Box<dyn Error>> {
              not been made."
             .into()),
         Command::Baseline(args) => baseline(args),
+        Command::Drift(args) => drift(args),
+    }
+}
+
+/// Connect and run one drift operation, printing velocities in pm/s.
+///
+/// Like `baseline`, this talks to the action layer directly rather than
+/// through a routine: a routine withdraws the tip when it ends, and a drift
+/// measurement is something done *between* passes with the tip engaged.
+fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
+    let client = rusty_tip::NanonisClient::builder()
+        .address(&args.host)
+        .port(args.port)
+        .build()?;
+    println!("connected to {}:{}", args.host, args.port);
+    let mut controller = NanonisController::new(client, NanonisSetupConfig::default());
+
+    let z = match &args.signal_name {
+        Some(name) => {
+            let registry = SignalRegistry::from_controller(&mut controller)?;
+            let signal = registry
+                .get_by_name(name)
+                .ok_or_else(|| format!("no signal called {name:?} on this controller"))?
+                .signal_index();
+            println!("resolved {name:?} to RT slot {}", signal.0);
+            signal
+        }
+        None => SignalIndex(args.signal),
+    };
+
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut store = DataStore::new();
+    let mut ctx = ActionContext {
+        controller: &mut controller,
+        store: &mut store,
+        events: &events,
+        shutdown: &shutdown,
+    };
+    let window_ms = (args.window * 1000.0) as u64;
+
+    let print_status = |comp: &DriftComp| {
+        println!(
+            "compensation {}: vx {:.3} pm/s, vy {:.3} pm/s, vz {:.3} pm/s",
+            if comp.enabled { "on" } else { "off" },
+            comp.vx / PM,
+            comp.vy / PM,
+            comp.vz / PM
+        );
+        let saturated: Vec<&str> = [
+            (comp.x_saturated, "x"),
+            (comp.y_saturated, "y"),
+            (comp.z_saturated, "z"),
+        ]
+        .into_iter()
+        .filter_map(|(s, axis)| s.then_some(axis))
+        .collect();
+        match saturated.is_empty() {
+            true => println!(
+                "no axis saturated (limit {}% of range)",
+                comp.saturation_limit_percent
+            ),
+            false => println!(
+                "SATURATED on {}: compensation on that axis has stopped and only \
+                 an off/on cycle restarts it",
+                saturated.join(", ")
+            ),
+        }
+    };
+
+    match args.op {
+        DriftOp::Status => {
+            print_status(&ctx.controller.drift_comp_get()?);
+        }
+        DriftOp::Measure => {
+            print_status(&ctx.controller.drift_comp_get()?);
+            println!(
+                "measuring over {:.1} s with {} samples (Z controller must be on, scan stopped)",
+                args.window, args.samples
+            );
+            let output = MeasureZDrift {
+                z,
+                window_ms,
+                samples: args.samples,
+            }
+            .execute(&mut ctx)?;
+            println!("Z drift: {:.3} pm/s", value_of(output)? / PM);
+        }
+        DriftOp::Compensate => {
+            print_status(&ctx.controller.drift_comp_get()?);
+            println!(
+                "compensating: three windows of {:.1} s, {} samples each",
+                args.window, args.samples
+            );
+            let output = CompensateDrift {
+                z,
+                window_ms,
+                samples: args.samples,
+            }
+            .execute(&mut ctx)?;
+            println!("residual Z drift: {:.3} pm/s", value_of(output)? / PM);
+            print_status(&ctx.controller.drift_comp_get()?);
+        }
+        DriftOp::Off => {
+            let comp = ctx.controller.drift_comp_get()?;
+            ctx.controller.drift_comp_set(&DriftComp {
+                enabled: false,
+                ..comp
+            })?;
+            print_status(&ctx.controller.drift_comp_get()?);
+        }
+    }
+    Ok(())
+}
+
+/// Picometres to metres.
+const PM: f64 = 1e-12;
+
+fn value_of(output: ActionOutput) -> Result<f64, Box<dyn Error>> {
+    match output {
+        ActionOutput::Value(v) => Ok(v),
+        other => Err(format!("expected a value, got {other:?}").into()),
     }
 }
 
