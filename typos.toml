@@ -3,3 +3,9 @@
 # writes, so "fixing" them would corrupt the file for Nanonis.
 [files]
 extend-exclude = ["settings/*.ini"]
+
+# The `.mpas` format spells setpoint "Setp" (`Z Setp override`), and
+# `multi_pass.rs` mirrors the key names into its field names on purpose, so
+# the spelling has to be readable there too.
+[default.extend-words]
+setp = "setp"
