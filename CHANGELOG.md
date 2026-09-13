@@ -7,8 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Z-home mode defaulted to absolute.** `NanonisSetupConfig::default()`
+  set `ZHomeMode::Absolute`, and both `tip-prep` and `tip-prep-gui` took the
+  default. The calibrated approach homes the tip to back 50 nm off the
+  surface before centring the frequency shift; in absolute mode that same
+  call drives Z to the coordinate +50 nm instead, which is toward the
+  surface whenever the surface sits above it. 0.2.3 used relative mode.
+  The default is relative again, both binaries say so explicitly, and a
+  test pins it. Neither 0.3 nor 0.4 met a tip, so this never fired.
+- **The max-voltage pulse after a failed stability check fired withdrawn.**
+  A v2 revision added a withdraw before it, so the pulse reshaped nothing
+  and the next cycle inherited the same unstable apex. It now fires with the
+  tip engaged, as 0.2.3 did, and the routine test checks the call order.
+- **A tripped safe-tip no longer gets approached into.** 0.2.3 checked the
+  Z-controller status after every step of the calibrated approach and
+  aborted the run if safe-tip had fired; the v2 sequence had dropped the
+  check, so the final approach would have re-approached whatever tripped
+  it. The check is back, with a test for the abort and one for an
+  unreadable status not counting as a trip.
+- `tip-prep-gui` did not build: the `oversampling` field added to
+  `DataAcquisitionConfig` was missing from the GUI's config conversion.
+- A `status_interval` of zero is rejected at config load instead of
+  panicking on the first cycle.
+
 ### Added
 
+- `tip_prep.timing.approach_timeout_ms` (default 600 s) for the approaches
+  that start from a full withdraw, and `reposition_approach_timeout_ms`
+  (default 300 s) for the short one inside a reposition. 0.2.3 gave the
+  long approaches ten minutes; v2 had capped everything at five.
+- `const-distance drift status|measure|compensate|off`: the Z drift
+  measurement and compensation from the action layer, runnable between
+  scans from the command line.
+- `examples/folme_probe.rs`: measures what a FolMe constant-height trace
+  depends on (round-trip latency, feedback-off timing and TipLift, Z step
+  response with the loop open, whether FolMe's wait flag blocks). Every
+  open-loop move retracts first, and the retract direction is measured
+  from TipLift rather than assumed.
 - **Multi-pass** (`multi_pass` module): read and write Nanonis `.mpas`
   configuration files, byte-exactly, and load one on a controller with
   `multi_pass::apply`. The format is undocumented by the vendor and was
