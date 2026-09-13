@@ -32,8 +32,16 @@ pub struct NanonisSetupConfig {
     /// Nanonis settings file to load. `None` to skip.
     pub settings_file: Option<String>,
     /// Z-controller home mode.
+    ///
+    /// The calibrated approach "homes" the tip to get a small distance from
+    /// the surface before centring the frequency shift. That only makes sense
+    /// as a move *relative* to wherever the tip is. In `Absolute` mode the
+    /// same call drives Z to a fixed coordinate, which, depending on where the
+    /// surface sits in the Z range, can be straight into it. Leave this at
+    /// `Relative` unless you have a reason and have checked the Z range.
     pub z_home_mode: ZHomeMode,
-    /// Z-controller home position in metres.
+    /// Z-controller home position in metres. With `Relative` mode this is
+    /// how far the tip backs off from the surface when homed.
     pub z_home_position_m: f64,
     /// Safe-tip current threshold in amperes.
     pub safe_tip_threshold_a: f64,
@@ -48,7 +56,10 @@ impl Default for NanonisSetupConfig {
         Self {
             layout_file: None,
             settings_file: None,
-            z_home_mode: ZHomeMode::Absolute,
+            // Relative, as 0.2.3 set it. 0.3 and 0.4 shipped Absolute here,
+            // which turned every calibrated approach's "back off 50 nm" into
+            // "go to Z = +50 nm". Neither version met a tip, so nothing broke.
+            z_home_mode: ZHomeMode::Relative,
             z_home_position_m: 50e-9,
             safe_tip_threshold_a: 1e-9,
             tcp_refresh_output: Some(3),
@@ -996,5 +1007,21 @@ impl SpmController for NanonisController {
 impl Drop for NanonisController {
     fn drop(&mut self) {
         self.teardown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The calibrated approach homes the tip to back off from the surface.
+    /// That is only a back-off in relative mode; absolute mode drives Z to a
+    /// coordinate, surface or not. 0.3 and 0.4 shipped the wrong default.
+    #[test]
+    fn the_default_z_home_mode_backs_off_rather_than_going_to_a_coordinate() {
+        assert_eq!(
+            NanonisSetupConfig::default().z_home_mode,
+            ZHomeMode::Relative
+        );
     }
 }
