@@ -35,6 +35,13 @@ impl AppConfig {
             .validate()
             .map_err(|e| ConfigError::Message(format!("Invalid pulse_method: {}", e)))?;
 
+        // `cycle % status_interval` is evaluated every cycle.
+        if self.tip_prep.timing.status_interval == 0 {
+            return Err(ConfigError::Message(
+                "tip_prep.timing.status_interval must be at least 1".into(),
+            ));
+        }
+
         Ok(())
     }
 }
