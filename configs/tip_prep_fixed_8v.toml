@@ -53,10 +53,6 @@ bias_steps = 200
 
 # Time to wait at each step in milliseconds
 step_period_ms = 100
-
-# Maximum duration for stability check in seconds
-max_duration_secs = 100
-
 # Polarity mode for bias sweep:
 # - "positive": Single sweep from 0 to upper_bound
 # - "negative": Single sweep from 0 to lower_bound
@@ -64,7 +60,7 @@ max_duration_secs = 100
 polarity_mode = "both"
 
 # Scan speed for stability check in m/s
-scan_speed_m_s = 60e-9  # 5 nm/s
+scan_speed_m_s = 60e-9  # 60 nm/s
 
 # Signal-read stability gates (frequency-shift noise/drift). Loosen for noisier
 # tips, tighten for cleaner ones. Tunable at runtime.
@@ -100,4 +96,4 @@ switch_every_n_pulses = 5 # Every 2nd pulse uses opposite polarity
 nanonis_index = 76  # Frequency shift (stays the same usually)
 # 11 to map User Output 4 for testing
 # 19 for LT
-tcp_channel = 11
+tcp_channel = 19

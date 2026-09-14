@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of codecs for tools that never open an image; build `cuox-finder` with
   `--features cuox`. `byteorder` was unused and is gone.
 
+### Removed
+
+- `tip_prep.stability.max_duration_secs`. It was never enforced, and a sweep's
+  length is already fixed by `bias_steps × step_period_ms`; the run-level
+  `tip_prep.max_duration_secs` keeps counting through the check. Configs
+  that still set it load fine, the key is ignored.
+
 ### Fixed
 
 - **A stop during an approach did nothing until the approach finished.**
