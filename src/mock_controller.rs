@@ -146,6 +146,8 @@ pub struct MockObservations {
     pub withdraw_count: usize,
     /// Number of coarse-motor moves (`move_motor` + `move_motor_3d`).
     pub motor_moves: usize,
+    /// Every `move_motor_3d` displacement as `(x, y, z)` steps, in order.
+    pub motor_displacements: Vec<(i16, i16, i16)>,
     /// Number of freq-shift reads served by the tip model.
     pub freq_reads: usize,
     /// Every value the tip model returned, in order. `len()` equals
@@ -167,6 +169,10 @@ pub struct MockObservations {
     /// Whether the Z controller reports itself on. Tests that care about the
     /// feedback loop being closed flip this.
     pub z_controller_on: bool,
+    /// Whether the Z controller reports safe-tip protection as having fired.
+    /// Takes precedence over `z_controller_on`, as it does on the machine:
+    /// a tripped safe-tip has already switched the controller off.
+    pub safe_tip_tripped: bool,
     /// Drift compensation, as `drift_comp_set` last left it.
     pub drift_comp: DriftComp,
     /// Every set of velocities written, in order.
@@ -188,12 +194,14 @@ impl Default for MockObservations {
             approach_count: 0,
             withdraw_count: 0,
             motor_moves: 0,
+            motor_displacements: Vec::new(),
             freq_reads: 0,
             freq_values: Vec::new(),
             connected: true,
             multi_pass_loaded: Vec::new(),
             multi_pass_active: None,
             z_controller_on: true,
+            safe_tip_tripped: false,
             drift_comp: DriftComp {
                 enabled: false,
                 vx: 0.0,
@@ -306,6 +314,10 @@ pub struct MockController {
     capabilities: HashSet<Capability>,
     position: Position,
     scan_config: ScanConfig,
+    /// How many `auto_approach_running` polls each approach stays "running"
+    /// for. Zero means an approach is over as soon as it starts.
+    approach_polls: usize,
+    approach_polls_left: usize,
 }
 
 impl MockController {
@@ -494,6 +506,23 @@ impl SpmController for MockController {
     fn auto_approach(&mut self, _wait: bool, _timeout: Duration) -> Result<()> {
         self.enter("auto_approach")?;
         self.obs.lock().approach_count += 1;
+        self.approach_polls_left = self.approach_polls;
+        Ok(())
+    }
+
+    fn auto_approach_running(&mut self) -> Result<bool> {
+        self.enter("auto_approach_running")?;
+        if self.approach_polls_left > 0 {
+            self.approach_polls_left -= 1;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn auto_approach_stop(&mut self) -> Result<()> {
+        self.enter("auto_approach_stop")?;
+        self.approach_polls_left = 0;
         Ok(())
     }
 
@@ -515,9 +544,11 @@ impl SpmController for MockController {
 
     fn z_controller_status(&mut self) -> Result<ZControllerStatus> {
         self.enter("z_controller_status")?;
-        Ok(match self.obs.lock().z_controller_on {
-            true => ZControllerStatus::On,
-            false => ZControllerStatus::Off,
+        let obs = self.obs.lock();
+        Ok(match (obs.safe_tip_tripped, obs.z_controller_on) {
+            (true, _) => ZControllerStatus::SafeTip,
+            (false, true) => ZControllerStatus::On,
+            (false, false) => ZControllerStatus::Off,
         })
     }
 
@@ -542,9 +573,12 @@ impl SpmController for MockController {
         Ok(())
     }
 
-    fn move_motor_3d(&mut self, _displacement: MotorDisplacement, _wait: bool) -> Result<()> {
+    fn move_motor_3d(&mut self, displacement: MotorDisplacement, _wait: bool) -> Result<()> {
         self.enter("move_motor_3d")?;
-        self.obs.lock().motor_moves += 1;
+        let mut obs = self.obs.lock();
+        obs.motor_moves += 1;
+        obs.motor_displacements
+            .push((displacement.x, displacement.y, displacement.z));
         Ok(())
     }
 
@@ -782,6 +816,7 @@ pub struct MockControllerBuilder {
     faults_always: HashMap<&'static str, FaultKind>,
     capabilities: HashSet<Capability>,
     start_connected: bool,
+    approach_polls: usize,
 }
 
 impl MockControllerBuilder {
@@ -799,6 +834,7 @@ impl MockControllerBuilder {
             faults_always: HashMap::new(),
             capabilities: all_capabilities(),
             start_connected: true,
+            approach_polls: 0,
         }
     }
 
@@ -891,7 +927,16 @@ impl MockControllerBuilder {
             capabilities: self.capabilities,
             position: Position::new(0.0, 0.0),
             scan_config: mock_scan_config(),
+            approach_polls: self.approach_polls,
+            approach_polls_left: 0,
         }
+    }
+
+    /// Keep each approach "running" for `polls` status queries, so a test
+    /// can interrupt one in flight. Default zero: approaches finish at once.
+    pub fn approach_takes_polls(mut self, polls: usize) -> Self {
+        self.approach_polls = polls;
+        self
     }
 }
 

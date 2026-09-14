@@ -60,8 +60,8 @@ impl Bias<'_, '_> {
         Ok(())
     }
 
-    /// Fire a bias pulse (signed voltage, width in ms) with the z-controller
-    /// held, relative to the current bias.
+    /// Fire a bias pulse to an absolute signed voltage for `width_ms`, with
+    /// the z-controller held. The bias returns to its previous value after.
     pub fn pulse(&mut self, voltage: f64, width_ms: u64) -> Result<()> {
         self.rt.exec(&BiasPulse {
             voltage,
@@ -95,9 +95,21 @@ impl ZCtrl<'_, '_> {
     }
 
     /// Approach with the calibrated sequence: approach, small withdraw,
-    /// center the frequency shift, re-approach.
+    /// center the frequency shift, re-approach. Each approach gets the
+    /// action's default budget of five minutes.
     pub fn calibrated_approach(&mut self) -> Result<()> {
         self.rt.exec(&CalibratedApproach::default())?;
+        Ok(())
+    }
+
+    /// [`calibrated_approach`](Self::calibrated_approach) with an explicit
+    /// budget for each of its two approaches. For the approaches that start
+    /// from a full withdraw, which can take longer than the default allows.
+    pub fn calibrated_approach_within(&mut self, timeout: Duration) -> Result<()> {
+        self.rt.exec(&CalibratedApproach {
+            wait: true,
+            timeout_ms: timeout.as_millis() as u64,
+        })?;
         Ok(())
     }
 
@@ -180,6 +192,8 @@ pub struct RepositionSpec {
     pub post_move_settle_ms: u64,
     /// Settle after the re-approach (ms).
     pub post_approach_settle_ms: u64,
+    /// Budget for each of the two approaches in the re-approach (ms).
+    pub approach_timeout_ms: u64,
 }
 
 impl Default for RepositionSpec {
@@ -190,6 +204,7 @@ impl Default for RepositionSpec {
             z_retract: -3,
             post_move_settle_ms: 500,
             post_approach_settle_ms: 500,
+            approach_timeout_ms: 300_000,
         }
     }
 }
@@ -209,6 +224,7 @@ impl Motor<'_, '_> {
             z_retract: spec.z_retract,
             post_move_settle_ms: spec.post_move_settle_ms,
             post_approach_settle_ms: spec.post_approach_settle_ms,
+            approach_timeout_ms: spec.approach_timeout_ms,
         })?;
         Ok(())
     }

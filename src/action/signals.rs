@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use serde::{Deserialize, Serialize};
 
 use crate::action::{Action, ActionContext, ActionOutput};
@@ -200,7 +198,7 @@ impl Action for ReadStableSignal {
                 );
                 if attempt < self.max_retries {
                     let backoff_ms = 100u64 * (1 << attempt);
-                    std::thread::sleep(Duration::from_millis(backoff_ms));
+                    ctx.settle(backoff_ms)?;
                     continue;
                 }
                 // Fall through to compute on partial data as last resort
@@ -249,7 +247,7 @@ impl Action for ReadStableSignal {
                     attempt + 1,
                     backoff_ms
                 );
-                std::thread::sleep(Duration::from_millis(backoff_ms));
+                ctx.settle(backoff_ms)?;
             } else {
                 log::warn!(
                     "ReadStableSignal: signal not stable after {} retries (std_dev={:.4}/{:.4} Hz, drift={:.4}/{:.4} Hz/s, n={}), using mean={:.6}",

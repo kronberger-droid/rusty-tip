@@ -11,7 +11,7 @@ control_ports = [6501, 6502, 6503, 6504]
 
 [data_acquisition]
 data_port = 6590
-sample_rate = 2000
+sample_rate = 1000
 
 [experiment_logging]
 enabled = true
@@ -52,10 +52,6 @@ bias_steps = 1000
 
 # Time to wait at each step in milliseconds
 step_period_ms = 200
-
-# Maximum duration for stability check in seconds
-max_duration_secs = 100
-
 # Polarity mode for bias sweep:
 # - "positive": Single sweep from 0 to upper_bound
 # - "negative": Single sweep from 0 to lower_bound

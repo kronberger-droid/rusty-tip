@@ -9,7 +9,7 @@ use rusty_tip::event::{ConsoleLogger, EventAccumulator, EventBus, FileLogger};
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::SignalRegistry;
-use rusty_tip::spm_controller::SpmController;
+use rusty_tip::spm_controller::{SpmController, ZHomeMode};
 use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
 
@@ -103,6 +103,11 @@ fn run() -> Result<(), RunError> {
         layout_file: config.nanonis.layout_file.clone(),
         settings_file: config.nanonis.settings_file.clone(),
         safe_tip_threshold_a: config.tip_prep.safe_tip_threshold,
+        // Spelled out rather than defaulted: the home step of every
+        // calibrated approach is "back off 50 nm from wherever the tip is".
+        // Absolute mode would make it "go to Z = +50 nm", surface or not.
+        z_home_mode: ZHomeMode::Relative,
+        z_home_position_m: 50e-9,
         ..Default::default()
     };
     let mut controller = NanonisController::new(client, setup);
@@ -182,7 +187,7 @@ fn setup_tcp_stream(
     let stream = StreamSetup::new(
         &config.nanonis.host_ip,
         config.data_acquisition.data_port,
-        config.data_acquisition.oversampling,
+        f64::from(config.data_acquisition.sample_rate),
     );
     controller.start_streaming(registry, &stream)?;
     Ok(())

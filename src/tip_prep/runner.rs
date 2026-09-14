@@ -135,6 +135,7 @@ impl<'a> TipPrep<'a> {
             y_steps: t.reposition_steps[1],
             post_move_settle_ms: t.post_move_settle_ms,
             post_approach_settle_ms: t.post_reposition_settle_ms,
+            approach_timeout_ms: t.reposition_approach_timeout_ms,
             ..Default::default()
         })
     }
@@ -310,12 +311,14 @@ impl<'a> TipPrep<'a> {
             ));
             Ok(StabilityOutcome::Stable)
         } else {
-            // The post-sweep withdraw in execute_stability_sweep only logs
-            // errors; re-withdraw here with error propagation so a max-voltage
-            // pulse never fires on an engaged tip if the earlier withdraw
-            // silently failed.
-            rt.z()?.withdraw()?;
-
+            // The tip is engaged here: `measure_final_freq_shift` approached
+            // it to take the reading being compared. That is the point. A
+            // pulse is a field at the apex, and the apex is only in a field
+            // when it is near the surface, so a max pulse fired withdrawn
+            // reshapes nothing and the next cycle inherits the same unstable
+            // apex. 0.2.3 fired engaged; an earlier v2 revision withdrew
+            // first and turned this branch into a no-op.
+            //
             // Fire max pulse and reset to blunt. `fire_max_pulse_voltage` bumps
             // pulse_count and may flip polarity, so capture the effective sign
             // from the returned voltage rather than re-reading base_polarity.
@@ -338,6 +341,12 @@ impl<'a> TipPrep<'a> {
             );
             rt.bias()?
                 .pulse(signed_max, self.config.tip_prep.timing.pulse_width_ms)?;
+            // Partial snapshot, like the phase markers above: the GUI reads
+            // the fields it finds, and this pulse belongs in its history.
+            rt.emit(Event::custom(
+                "tip_prep_state",
+                serde_json::json!({ "phase": "max_pulse", "pulse_voltage": signed_max }),
+            ));
 
             self.reposition(rt)?;
 
@@ -357,10 +366,16 @@ impl<'a> TipPrep<'a> {
             .move_3d(t.reposition_steps[0], t.reposition_steps[1], -3)?;
         rt.settle(200)?;
         rt.bias()?.set(plan.starting_bias)?;
-        rt.z()?.calibrated_approach()?;
+        rt.z()?
+            .calibrated_approach_within(self.approach_timeout())?;
         rt.settle(t.post_approach_settle_ms)?;
 
         Ok(())
+    }
+
+    /// Budget for an approach that starts from a full withdraw.
+    fn approach_timeout(&self) -> Duration {
+        Duration::from_millis(self.config.tip_prep.timing.approach_timeout_ms)
     }
 
     fn execute_stability_sweep(&self, rt: &mut Rt, plan: &SweepPlan) -> Result<(), SpmError> {
@@ -460,7 +475,8 @@ impl<'a> TipPrep<'a> {
         rt.z()?.withdraw()?;
         rt.settle(200)?;
         rt.bias()?.set(self.config.tip_prep.initial_bias_v)?;
-        rt.z()?.calibrated_approach()?;
+        rt.z()?
+            .calibrated_approach_within(self.approach_timeout())?;
         rt.settle(self.config.tip_prep.timing.post_approach_settle_ms)?;
 
         self.read_stable(rt)
@@ -472,14 +488,39 @@ impl Routine for TipPrep<'_> {
         "tip_prep"
     }
 
+    fn exit_retract_steps(&self) -> u16 {
+        self.config.tip_prep.timing.exit_retract_steps
+    }
+
     fn run(&mut self, rt: &mut Rt) -> Result<Outcome, SpmError> {
         let cfg = self.config;
         let timing = &cfg.tip_prep.timing;
 
+        // The drift gate converts a per-sample slope into Hz/s, so it needs
+        // the rate samples really arrive at. The controller measured that
+        // when the stream started; the config value is only the fallback.
+        match rt.controller().stream_rate_hz() {
+            Some(hz) => {
+                let configured = self.read_spec.sample_rate_hz;
+                if (hz - configured).abs() > 0.1 * configured {
+                    log::warn!(
+                        "data_acquisition.sample_rate says {configured:.0} Hz but the stream \
+                         delivers {hz:.0} Hz; using the measured rate for the drift gate"
+                    );
+                }
+                self.read_spec.sample_rate_hz = hz;
+            }
+            None => log::warn!(
+                "Stream rate unknown; drift gate uses data_acquisition.sample_rate = {:.0} Hz",
+                self.read_spec.sample_rate_hz
+            ),
+        }
+
         log::info!("Initializing...");
         rt.bias()?.set(cfg.tip_prep.initial_bias_v)?;
         rt.z()?.set_setpoint(cfg.tip_prep.initial_z_setpoint_a)?;
-        rt.z()?.calibrated_approach()?;
+        rt.z()?
+            .calibrated_approach_within(self.approach_timeout())?;
 
         // Clear the stream buffer to discard stale pre-approach data
         rt.signals()?.clear_buffer();
@@ -553,7 +594,10 @@ impl Routine for TipPrep<'_> {
                     cycle,
                     elapsed_secs: cycles.elapsed().as_secs_f64(),
                     freq_shift: Some(freq_shift),
-                    pulse_voltage: self.pulse.current_voltage,
+                    // The voltage that was fired, sign included. The pulse
+                    // state's `current_voltage` is a magnitude, and reporting
+                    // it hid every polarity switch from the GUI.
+                    pulse_voltage,
                     is_sharp,
                     phase: "pulsing",
                 })

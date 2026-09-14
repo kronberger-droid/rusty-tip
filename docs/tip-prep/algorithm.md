@@ -63,14 +63,34 @@ Sharp is not enough if the apex rearranges under field stress. With
 3. Stops the scan, withdraws, re-approaches, and measures again.
 4. Compares against the baseline: within `stable_tip_allowed_change`, the
    run is **Completed**. Beyond it, the apex moved: the routine fires a
-   maximum-voltage pulse to deliberately reshape it and starts the loop
-   over.
+   maximum-voltage pulse, with the tip still engaged from the measurement,
+   to deliberately reshape it, then repositions and starts the loop over.
 
 Scan properties, scan speed, and bias are restored no matter how the sweep
 ends, and the tip is withdrawn before any error propagates, so a failure
 mid-sweep never leaves the tip engaged on the surface.
 
+## Approaching
+
+Every approach in the routine is a *calibrated* approach: approach, back off
+50 nm (a relative Z-home), centre the frequency shift there, approach again.
+Safe-tip protection is switched on for the backed-off part, and the Z
+controller's status is checked after each step. If safe-tip has fired, the
+approach aborts and so does the run, rather than approaching again into
+whatever tripped it. The hardware retracts the tip on a trip by itself; the
+check is there so the software never undoes that.
+
+An approach can be stopped while it runs: Ctrl+C or the GUI's stop button
+lands within a poll interval (100 ms), switches the auto-approach off so
+the controller stops stepping, and the run ends as stopped by the user
+with the usual cleanup. An approach that overruns its budget is switched
+off the same way and ends the run in an error.
+
 ## Cleanup
 
 Whatever the outcome — success, limits, Ctrl+C, or a hardware error — the
-routine withdraws the tip and tears the controller down before returning.
+routine withdraws the tip, backs the coarse motor off by
+`exit_retract_steps` (ten by default, as 0.2.3 did), and tears the
+controller down before returning. The withdraw alone only parks the tip at
+the top of the piezo range; the coarse retract is what puts real distance
+behind it.

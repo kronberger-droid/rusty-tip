@@ -195,10 +195,6 @@ pub struct EditableConfig {
     // Data Acquisition
     pub sample_rate: String,
     pub stable_signal_samples: String,
-    /// TCP logger oversampling. Carried through from the loaded config (no
-    /// widget yet); the delivered stream rate is the controller's base rate
-    /// divided by this.
-    pub oversampling: i32,
 
     // Experiment Logging
     pub logging_enabled: bool,
@@ -223,7 +219,6 @@ pub struct EditableConfig {
     pub bias_range_upper: String,
     pub bias_steps: String,
     pub step_period_ms: String,
-    pub stability_max_duration: String,
     pub polarity_mode: BiasSweepPolarity,
     pub scan_speed_nm_s: String,
 
@@ -265,7 +260,6 @@ impl Default for EditableConfig {
             settings_file: String::new(),
             sample_rate: "2000".to_string(),
             stable_signal_samples: "100".to_string(),
-            oversampling: DataAcquisitionConfig::default().oversampling,
             logging_enabled: true,
             logging_output_path: "./experiments".to_string(),
             verbosity: "info".to_string(),
@@ -282,7 +276,6 @@ impl Default for EditableConfig {
             bias_range_upper: "2.0".to_string(),
             bias_steps: "1000".to_string(),
             step_period_ms: "200".to_string(),
-            stability_max_duration: "100".to_string(),
             polarity_mode: BiasSweepPolarity::Both,
             scan_speed_nm_s: "5.0".to_string(),
             pulse_method_type: PulseMethodType::Stepping,
@@ -413,7 +406,6 @@ impl EditableConfig {
                 .data_acquisition
                 .stable_signal_samples
                 .to_string(),
-            oversampling: app_config.data_acquisition.oversampling,
             logging_enabled: app_config.experiment_logging.enabled,
             logging_output_path: app_config.experiment_logging.output_path.clone(),
             verbosity: app_config.console.verbosity.clone(),
@@ -442,7 +434,6 @@ impl EditableConfig {
             bias_range_upper: app_config.tip_prep.stability.bias_range.1.to_string(),
             bias_steps: app_config.tip_prep.stability.bias_steps.to_string(),
             step_period_ms: app_config.tip_prep.stability.step_period_ms.to_string(),
-            stability_max_duration: app_config.tip_prep.stability.max_duration_secs.to_string(),
             polarity_mode: app_config.tip_prep.stability.polarity_mode,
             scan_speed_nm_s: app_config
                 .tip_prep
@@ -624,7 +615,6 @@ impl EditableConfig {
             data_acquisition: DataAcquisitionConfig {
                 data_port,
                 sample_rate,
-                oversampling: self.oversampling,
                 stable_signal_samples,
             },
             experiment_logging: ExperimentLoggingConfig {
@@ -657,10 +647,6 @@ impl EditableConfig {
                         .step_period_ms
                         .parse()
                         .map_err(|_| "Invalid step period")?,
-                    max_duration_secs: self
-                        .stability_max_duration
-                        .parse()
-                        .map_err(|_| "Invalid stability max duration")?,
                     polarity_mode: self.polarity_mode,
                     scan_speed_m_s,
                 },
@@ -1661,13 +1647,6 @@ impl TipPrepApp {
                             );
                             ui.end_row();
 
-                            ui.label("Max Duration (s):");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.config.stability_max_duration)
-                                    .desired_width(80.0),
-                            );
-                            ui.end_row();
-
                             ui.label("Polarity Mode:");
                             ui.horizontal(|ui| {
                                 ui.selectable_value(
@@ -1973,7 +1952,7 @@ fn setup_tcp_stream(
     let stream = StreamSetup::new(
         &config.nanonis.host_ip,
         config.data_acquisition.data_port,
-        config.data_acquisition.oversampling,
+        f64::from(config.data_acquisition.sample_rate),
     );
     controller.start_streaming(registry, &stream)?;
     Ok(())
