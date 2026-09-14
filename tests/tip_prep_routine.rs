@@ -317,7 +317,31 @@ fn shutdown_before_loop_stops_by_user() {
     .expect("routine should not error");
 
     assert!(matches!(outcome, Outcome::StoppedByUser));
-    assert!(obs.lock().torn_down, "cleanup must still run on shutdown");
+    let obs = obs.lock();
+    assert!(obs.torn_down, "cleanup must still run on shutdown");
+
+    // A withdraw alone leaves the tip within piezo reach of the surface.
+    // 0.2.3 backed the coarse motor off ten steps after it; so does this.
+    let last_withdraw = obs
+        .calls
+        .iter()
+        .rposition(|c| *c == "withdraw")
+        .expect("cleanup withdraws");
+    let last_move = obs
+        .calls
+        .iter()
+        .rposition(|c| *c == "move_motor_3d")
+        .expect("cleanup retracts the coarse motor");
+    assert!(
+        last_move > last_withdraw,
+        "the retract must follow the withdraw, calls: {:?}",
+        &obs.calls[last_withdraw..]
+    );
+    assert_eq!(
+        obs.motor_displacements.last(),
+        Some(&(0, 0, -10)),
+        "the retract is ten coarse steps in Z-minus, nothing lateral"
+    );
 }
 
 // ============================================================================

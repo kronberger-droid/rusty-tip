@@ -54,6 +54,7 @@ status_interval = 10              # log a status line every N cycles
 approach_timeout_ms = 600000      # approaches from a full withdraw (first
                                   # approach, around each stability sweep)
 reposition_approach_timeout_ms = 300000  # the short approach inside a reposition
+exit_retract_steps = 10           # coarse Z steps back after the final withdraw
 ```
 
 An approach that overruns its budget is stopped, the run ends in an error,
