@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use rusty_tip::SignalIndex;
 use rusty_tip::config::AppConfig;
-use rusty_tip::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
+use rusty_tip::controller_types::{
+    BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch,
+};
 use rusty_tip::event::{Event, EventBus, Observer};
 use rusty_tip::mock_controller::{FaultKind, MockController, models};
 use rusty_tip::shutdown::ShutdownFlag;
@@ -231,6 +233,65 @@ fn blunt_tip_hits_cycle_limit() {
     let obs = obs.lock();
     assert_eq!(obs.pulses.len(), 3, "one pulse per cycle for 3 cycles");
     assert!(obs.torn_down);
+}
+
+/// The GUI plots the voltage from the `tip_prep_state` snapshot, so it must
+/// be the signed voltage that was fired, not the magnitude the pulse method
+/// tracks. Before this was pinned, every polarity switch showed positive in
+/// the GUI while the log and the instrument both saw the negative pulse.
+#[test]
+fn snapshot_reports_the_signed_pulse_voltage() {
+    let mut cfg = fast_config();
+    cfg.tip_prep.max_cycles = Some(4);
+    cfg.pulse_method = PulseMethod::Fixed {
+        voltage: 3.0,
+        polarity: PolaritySign::Positive,
+        random_polarity_switch: Some(RandomPolaritySwitch {
+            enabled: true,
+            switch_every_n_pulses: 2,
+        }),
+    };
+
+    let mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT_INDEX)
+        .freq_shift(models::always(-40.0))
+        .build();
+    let obs = mock.observations();
+
+    let recorder = RecordingObserver::default();
+    let events = Arc::clone(&recorder.events);
+    let mut bus = EventBus::new();
+    bus.add_observer(Box::new(recorder));
+
+    run_tip_prep(
+        Box::new(mock),
+        TipPrepParams {
+            events: &bus,
+            shutdown: &ShutdownFlag::new(),
+            config: &cfg,
+            freq_shift: FREQ_SHIFT_INDEX,
+        },
+    )
+    .expect("routine should not error");
+
+    let fired = obs.lock().pulses.clone();
+    assert_eq!(fired, vec![3.0, -3.0, 3.0, -3.0]);
+
+    let reported: Vec<f64> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            Event::Custom { kind, data } if kind == "tip_prep_state" => {
+                data.get("pulse_voltage").and_then(|v| v.as_f64())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reported, fired,
+        "the snapshot must carry the pulse as fired, sign included"
+    );
 }
 
 #[test]
