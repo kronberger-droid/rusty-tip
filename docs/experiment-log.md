@@ -81,13 +81,43 @@ pulse voltage as fired with its sign, whether it was sharp),
 The routine harness adds `routine/cleanup_failed` and `routine/panicked`
 to every routine's schema. const-distance declares no custom kinds yet.
 
-## Reading a log
+## Reading a log: `rt-log`
 
-Anything that reads JSONL can read a log directly. For a quick look:
+`rt-log` is the terminal reader. It works on any log with a header,
+whichever tool wrote it, because the columns it exports and the series it
+plots come from the schema in that header.
+
+```nu
+rt-log ls experiments/                  # every run: tool, start, duration, outcome
+rt-log summary <file>                   # outcome, time per action, measurements, events
+rt-log timeline <file>                  # the action tree with durations and params
+rt-log timeline <file> --action calibrated_approach --max-depth 1
+rt-log timeline <file> --failed         # only what failed or was cut off
+rt-log plot <file>                      # list the plottable series
+rt-log plot <file> tip_prep/cycle.freq_shift
+rt-log export <file> --out <dir>        # flat CSV tables
+```
+
+`export` writes `run.json` (the header plus the outcome), `actions.csv`
+(every action at every depth: seq, time, depth, name, duration, status,
+error, params as JSON), one `<label>.csv` per measurement label with the
+value's scalar fields as columns, and one `<tool>_<kind>.csv` per custom
+kind with the columns the declared schema lists. Those tables load into
+anything: pandas, Julia, R, or Typst's `csv()` for a lilaq plot in a
+note.
+
+For a dry run to try it on:
+
+```nu
+cargo run --example tip-prep-mock -- realistic --log /tmp/mock.jsonl
+rt-log summary /tmp/mock.jsonl
+```
+
+Anything that reads JSONL can read a log directly as well:
 
 ```nu
 open experiments/tip_prep_20260914_101500.jsonl | lines | each { from json } | where type == "custom" and kind == "tip_prep/cycle" | select seq data.cycle data.freq_shift data.pulse_voltage
 ```
 
-A log CLI that summarises a run, prints the action tree and exports flat
-tables is planned on top of this format.
+Logs from before the header existed still parse: `seq`, `depth` and the
+header default, and `export` derives columns from the data it finds.
