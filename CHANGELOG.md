@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`rt-log`**, a terminal reader for experiment logs: `ls` a directory of
+  runs, `summary` a run (outcome, time per top-level action, measurement
+  spread, event counts), `timeline` the action tree with durations and
+  params, `plot` any numeric series against time, `export` flat CSV
+  tables plus a `run.json`. The series and columns come from the schema
+  in the log's header, so it needs no code per tool. The reader behind it
+  is `experiment_log::reader`, for anything else that wants a log back as
+  data; it tolerates logs from before the header and lines a crash cut
+  short. `tip-prep-mock --log <path>` writes a log from a dry run to try
+  it on.
+
 ### Changed
 
 - **The experiment log is self-describing** (`docs/experiment-log.md`).
