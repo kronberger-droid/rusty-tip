@@ -69,6 +69,9 @@ fn default_oversampling() -> i32 {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DataAcquisitionConfig {
     pub data_port: u16,
+    /// Expected stream rate in Hz. Only a fallback: the routine judges drift
+    /// at the rate the controller measured when the stream started, and
+    /// warns when this number is more than ten percent off from it.
     pub sample_rate: u32,
     /// Divisor the TCP logger applies to its own base rate, which on the
     /// measured RC5 is `RTFreq / 10`. The delivered frame rate is
