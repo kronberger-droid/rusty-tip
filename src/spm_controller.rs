@@ -163,7 +163,15 @@ pub trait SpmController: Send {
 
     // -- Z-Controller --
     fn withdraw(&mut self, wait: bool, timeout: Duration) -> Result<()>;
+    /// Start the auto-approach. With `wait` this blocks until contact or
+    /// `timeout`, and nothing can interrupt it; callers that need to stop
+    /// on request start it with `wait = false` and poll
+    /// [`auto_approach_running`](Self::auto_approach_running) themselves.
     fn auto_approach(&mut self, wait: bool, timeout: Duration) -> Result<()>;
+    /// Whether an auto-approach is in progress.
+    fn auto_approach_running(&mut self) -> Result<bool>;
+    /// Switch a running auto-approach off. The tip stays where it is.
+    fn auto_approach_stop(&mut self) -> Result<()>;
     fn set_z_setpoint(&mut self, setpoint: f64) -> Result<()>;
     fn set_z_home(&mut self, mode: ZHomeMode, position: f64) -> Result<()>;
     /// Move the tip to the configured z-home position.

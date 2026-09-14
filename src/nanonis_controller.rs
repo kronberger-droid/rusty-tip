@@ -685,6 +685,14 @@ impl SpmController for NanonisController {
         }
     }
 
+    fn auto_approach_running(&mut self) -> Result<bool> {
+        Ok(self.client.auto_approach_on_off_get()?)
+    }
+
+    fn auto_approach_stop(&mut self) -> Result<()> {
+        Ok(self.client.auto_approach_on_off_set(false)?)
+    }
+
     fn set_z_setpoint(&mut self, setpoint: f64) -> Result<()> {
         let s = validate_f32(setpoint, "Z setpoint")?;
         Ok(self.client.z_ctrl_setpoint_set(s)?)

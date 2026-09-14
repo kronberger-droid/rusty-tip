@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +22,41 @@ fn abort_if_safe_tip_tripped(ctx: &mut ActionContext, when: &str) -> super::Resu
         Err(e) => {
             log::warn!("Could not read the Z-controller status {when}: {e}");
             Ok(())
+        }
+    }
+}
+
+/// Start the auto-approach and, with `wait`, poll it to completion through
+/// the interruptible settle, so a stop request lands within a poll interval
+/// rather than after the approach ends by itself.
+///
+/// On a stop request or a timeout the auto-approach is switched off before
+/// the error is returned. Without that the controller keeps stepping toward
+/// the surface while the cleanup that follows tries to withdraw.
+fn approach(ctx: &mut ActionContext, wait: bool, timeout: Duration) -> super::Result<()> {
+    ctx.controller.auto_approach(false, timeout)?;
+    if !wait {
+        return Ok(());
+    }
+
+    let start = Instant::now();
+    loop {
+        if let Err(stop) = ctx.settle(100) {
+            log::info!("Stop requested during auto-approach; switching it off");
+            if let Err(e) = ctx.controller.auto_approach_stop() {
+                log::error!("Could not switch the auto-approach off: {e}");
+            }
+            return Err(stop);
+        }
+        if !ctx.controller.auto_approach_running()? {
+            return Ok(());
+        }
+        if start.elapsed() >= timeout {
+            log::warn!("Auto-approach timed out after {timeout:?}");
+            if let Err(e) = ctx.controller.auto_approach_stop() {
+                log::error!("Could not switch the auto-approach off: {e}");
+            }
+            return Err(SpmError::Timeout("Auto-approach timed out".to_string()));
         }
     }
 }
@@ -96,8 +131,7 @@ impl Action for AutoApproach {
         vec![Capability::ZController]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
-        ctx.controller
-            .auto_approach(self.wait, Duration::from_millis(self.timeout_ms))?;
+        approach(ctx, self.wait, Duration::from_millis(self.timeout_ms))?;
         Ok(ActionOutput::Unit)
     }
 }
@@ -274,7 +308,7 @@ impl Action for CalibratedApproach {
         let timeout = Duration::from_millis(self.timeout_ms);
 
         // 1. Initial approach
-        ctx.controller.auto_approach(self.wait, timeout)?;
+        approach(ctx, self.wait, timeout)?;
 
         // 2. Settle
         Wait { duration_ms: 200 }.execute(ctx)?;
@@ -304,7 +338,7 @@ impl Action for CalibratedApproach {
             abort_if_safe_tip_tripped(ctx, "after centring the frequency shift")?;
 
             // 7. Final approach with centered freq shift
-            ctx.controller.auto_approach(self.wait, timeout)?;
+            approach(ctx, self.wait, timeout)?;
             abort_if_safe_tip_tripped(ctx, "after the final approach")?;
 
             Ok(())
@@ -370,6 +404,88 @@ mod tests {
             !obs.safe_tip_enabled,
             "safe-tip is restored to its previous state even on abort"
         );
+    }
+
+    /// A stop during an approach must land inside the approach, not after
+    /// it, and must switch the approach off so the controller stops stepping
+    /// toward the surface before the cleanup withdraws.
+    #[test]
+    fn a_stop_request_interrupts_the_approach_and_switches_it_off() {
+        let mut controller = MockController::builder()
+            .approach_takes_polls(1_000)
+            .build();
+        let obs = controller.observations();
+        let mut store = DataStore::new();
+        let events = EventBus::new();
+        let shutdown = ShutdownFlag::new();
+
+        let flag = shutdown.clone();
+        let requester = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(250));
+            flag.request();
+        });
+
+        let mut ctx = ActionContext {
+            controller: &mut controller,
+            store: &mut store,
+            events: &events,
+            shutdown: &shutdown,
+        };
+        let started = std::time::Instant::now();
+        let err = AutoApproach {
+            wait: true,
+            timeout_ms: 60_000,
+        }
+        .execute(&mut ctx)
+        .expect_err("the stop must interrupt the approach");
+        requester.join().unwrap();
+
+        assert!(matches!(err, SpmError::ShutdownRequested), "got {err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the stop must not wait for the approach to finish on its own"
+        );
+        let obs = obs.lock();
+        let start = obs
+            .calls
+            .iter()
+            .position(|c| *c == "auto_approach")
+            .expect("the approach was started");
+        let stop = obs
+            .calls
+            .iter()
+            .position(|c| *c == "auto_approach_stop")
+            .expect("the approach must be switched off on a stop request");
+        assert!(stop > start);
+    }
+
+    /// The budget is enforced by the action now, and an overrun switches the
+    /// approach off the same way a stop does.
+    #[test]
+    fn an_overrun_approach_is_switched_off_and_reported_as_a_timeout() {
+        let mut controller = MockController::builder()
+            .approach_takes_polls(1_000)
+            .build();
+        let obs = controller.observations();
+        let mut store = DataStore::new();
+        let events = EventBus::new();
+        let shutdown = ShutdownFlag::new();
+
+        let mut ctx = ActionContext {
+            controller: &mut controller,
+            store: &mut store,
+            events: &events,
+            shutdown: &shutdown,
+        };
+        let err = AutoApproach {
+            wait: true,
+            timeout_ms: 300,
+        }
+        .execute(&mut ctx)
+        .expect_err("an overrun must be an error");
+
+        assert!(matches!(err, SpmError::Timeout(_)), "got {err}");
+        assert!(obs.lock().called("auto_approach_stop"));
     }
 
     /// The status check is a guard, not the safety mechanism: an unreadable
