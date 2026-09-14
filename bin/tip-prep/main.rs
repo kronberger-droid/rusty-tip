@@ -187,7 +187,7 @@ fn setup_tcp_stream(
     let stream = StreamSetup::new(
         &config.nanonis.host_ip,
         config.data_acquisition.data_port,
-        config.data_acquisition.oversampling,
+        f64::from(config.data_acquisition.sample_rate),
     );
     controller.start_streaming(registry, &stream)?;
     Ok(())
