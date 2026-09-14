@@ -146,6 +146,8 @@ pub struct MockObservations {
     pub withdraw_count: usize,
     /// Number of coarse-motor moves (`move_motor` + `move_motor_3d`).
     pub motor_moves: usize,
+    /// Every `move_motor_3d` displacement as `(x, y, z)` steps, in order.
+    pub motor_displacements: Vec<(i16, i16, i16)>,
     /// Number of freq-shift reads served by the tip model.
     pub freq_reads: usize,
     /// Every value the tip model returned, in order. `len()` equals
@@ -192,6 +194,7 @@ impl Default for MockObservations {
             approach_count: 0,
             withdraw_count: 0,
             motor_moves: 0,
+            motor_displacements: Vec::new(),
             freq_reads: 0,
             freq_values: Vec::new(),
             connected: true,
@@ -549,9 +552,12 @@ impl SpmController for MockController {
         Ok(())
     }
 
-    fn move_motor_3d(&mut self, _displacement: MotorDisplacement, _wait: bool) -> Result<()> {
+    fn move_motor_3d(&mut self, displacement: MotorDisplacement, _wait: bool) -> Result<()> {
         self.enter("move_motor_3d")?;
-        self.obs.lock().motor_moves += 1;
+        let mut obs = self.obs.lock();
+        obs.motor_moves += 1;
+        obs.motor_displacements
+            .push((displacement.x, displacement.y, displacement.z));
         Ok(())
     }
 

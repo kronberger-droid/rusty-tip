@@ -136,6 +136,10 @@ fn default_approach_timeout_ms() -> u64 {
 fn default_reposition_approach_timeout_ms() -> u64 {
     300_000
 }
+/// 0.2.3 backed the coarse motor off ten steps after the final withdraw.
+fn default_exit_retract_steps() -> u16 {
+    10
+}
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TimingConfig {
@@ -168,6 +172,12 @@ pub struct TimingConfig {
     /// coarse steps off the surface.
     #[serde(default = "default_reposition_approach_timeout_ms")]
     pub reposition_approach_timeout_ms: u64,
+    /// Coarse Z steps to back off after the final withdraw, however the run
+    /// ends. A withdraw alone parks the tip at the top of the piezo range,
+    /// still within reach of the surface; this puts real distance behind it.
+    /// Zero disables the retract.
+    #[serde(default = "default_exit_retract_steps")]
+    pub exit_retract_steps: u16,
 }
 
 impl Default for TimingConfig {
@@ -183,6 +193,7 @@ impl Default for TimingConfig {
             status_interval: default_status_interval(),
             approach_timeout_ms: default_approach_timeout_ms(),
             reposition_approach_timeout_ms: default_reposition_approach_timeout_ms(),
+            exit_retract_steps: default_exit_retract_steps(),
         }
     }
 }

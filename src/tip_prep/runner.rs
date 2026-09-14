@@ -488,6 +488,10 @@ impl Routine for TipPrep<'_> {
         "tip_prep"
     }
 
+    fn exit_retract_steps(&self) -> u16 {
+        self.config.tip_prep.timing.exit_retract_steps
+    }
+
     fn run(&mut self, rt: &mut Rt) -> Result<Outcome, SpmError> {
         let cfg = self.config;
         let timing = &cfg.tip_prep.timing;

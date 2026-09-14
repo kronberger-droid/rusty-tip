@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A run ended with a withdraw and nothing else.** 0.2.3 backed the coarse
+  motor off ten steps after the final withdraw; the v2 harness only
+  withdrew, leaving the tip parked at the top of the piezo range and still
+  within reach of the surface. The harness now asks the routine how far to
+  retract on exit: tip prep answers with the new
+  `tip_prep.timing.exit_retract_steps` (default 10), other routines keep
+  their spot with zero. Noticed on the LT system during the September
+  campaign.
 - **The GUI showed every pulse as positive.** The `tip_prep_state`
   snapshot carried the pulse method's voltage magnitude rather than the
   signed voltage that was fired, so a polarity switch was visible in the
