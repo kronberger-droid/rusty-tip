@@ -46,6 +46,7 @@ clap = { version = "4.5.53", features = ["derive"] }
 crossbeam-channel = "0.5"
 rayon = "1.10"
 image = { version = "0.25", optional = true }
+schemars = "1"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["consoleapi", "processenv", "wincon", "handleapi", "winbase"] }

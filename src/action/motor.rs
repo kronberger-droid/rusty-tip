@@ -249,30 +249,27 @@ impl Action for Reposition {
     }
 
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
-        Withdraw::default().execute(ctx)?;
+        ctx.run(&Withdraw::default())?;
 
-        let displacement = MotorDisplacement {
+        ctx.run(&MoveMotor3D {
             x: self.x_steps,
             y: self.y_steps,
             z: self.z_retract,
-        };
-        ctx.controller.move_motor_3d(displacement, true)?;
+            wait: true,
+        })?;
 
-        Wait {
+        ctx.run(&Wait {
             duration_ms: self.post_move_settle_ms,
-        }
-        .execute(ctx)?;
+        })?;
 
-        CalibratedApproach {
+        ctx.run(&CalibratedApproach {
             wait: true,
             timeout_ms: self.approach_timeout_ms,
-        }
-        .execute(ctx)?;
+        })?;
 
-        Wait {
+        ctx.run(&Wait {
             duration_ms: self.post_approach_settle_ms,
-        }
-        .execute(ctx)?;
+        })?;
 
         Ok(ActionOutput::Unit)
     }

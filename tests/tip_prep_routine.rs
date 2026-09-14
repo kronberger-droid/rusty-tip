@@ -74,7 +74,7 @@ impl Observer for RecordingObserver {
 /// `true` if any recorded event is a `Custom { kind }` carrying the given phase.
 fn saw_phase(events: &[Event], phase: &str) -> bool {
     events.iter().any(|e| match e {
-        Event::Custom { kind, data } if kind == "tip_prep_state" => {
+        Event::Custom { kind, data, .. } if kind == "tip_prep/phase" => {
             data.get("phase").and_then(|p| p.as_str()) == Some(phase)
         }
         _ => false,
@@ -283,7 +283,7 @@ fn snapshot_reports_the_signed_pulse_voltage() {
         .unwrap()
         .iter()
         .filter_map(|e| match e {
-            Event::Custom { kind, data } if kind == "tip_prep_state" => {
+            Event::Custom { kind, data, .. } if kind == "tip_prep/cycle" => {
                 data.get("pulse_voltage").and_then(|v| v.as_f64())
             }
             _ => None,

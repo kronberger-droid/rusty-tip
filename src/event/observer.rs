@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::Event;
 
@@ -11,14 +12,29 @@ pub trait Observer: Send + Sync {
 }
 
 /// Writes events as JSONL (one JSON object per line) to a file.
+///
+/// Each line is the event with a `seq` field added: a counter that starts at
+/// zero for the file, so a reader can order lines without relying on
+/// timestamp resolution. The format is documented in
+/// [`crate::experiment_log`].
 pub struct FileLogger {
     writer: Mutex<BufWriter<File>>,
+    seq: AtomicU64,
+}
+
+/// One line of a log file: the sequence number, then the event's fields.
+#[derive(serde::Serialize)]
+struct LogLine<'a> {
+    seq: u64,
+    #[serde(flatten)]
+    event: &'a Event,
 }
 
 impl FileLogger {
     pub fn new(file: File) -> Self {
         Self {
             writer: Mutex::new(BufWriter::new(file)),
+            seq: AtomicU64::new(0),
         }
     }
 }
@@ -34,7 +50,9 @@ impl Observer for FileLogger {
                 poison.into_inner()
             }
         };
-        let json = match serde_json::to_string(event) {
+        // Taken under the lock, so seq and line order agree.
+        let seq = self.seq.fetch_add(1, Ordering::Relaxed);
+        let json = match serde_json::to_string(&LogLine { seq, event }) {
             Ok(j) => j,
             Err(e) => {
                 log::warn!("FileLogger: failed to serialize event: {e}");
@@ -150,6 +168,14 @@ pub struct ConsoleLogger;
 impl Observer for ConsoleLogger {
     fn on_event(&self, event: &Event) {
         match event {
+            Event::RunStarted { header, .. } => {
+                eprintln!("[run] started: {} {}", header.tool, header.version);
+            }
+            Event::RunFinished {
+                outcome, duration, ..
+            } => {
+                eprintln!("[run] finished: {outcome} ({:.1}s)", duration.as_secs_f64());
+            }
             Event::ActionStarted { action, .. } => {
                 eprintln!("[action] starting: {action}");
             }
@@ -187,10 +213,7 @@ mod tests {
     use super::*;
 
     fn make_event(kind: &str) -> Event {
-        Event::Custom {
-            kind: kind.into(),
-            data: serde_json::json!({}),
-        }
+        Event::custom(kind, serde_json::json!({}))
     }
 
     // -- EventAccumulator --
