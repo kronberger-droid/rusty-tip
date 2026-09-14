@@ -26,6 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The drift gate trusted the configured sample rate.** The stable read
+  converts a per-sample slope into Hz/s using `data_acquisition.sample_rate`,
+  while the delivered rate is the controller's base rate over
+  `oversampling`. The shipped configs said 2000 Hz for a stream that
+  delivers 1000, so the 0.5 Hz/s gate acted as 0.25. The routine now uses
+  the rate the controller measured when the stream started
+  (`SpmController::stream_rate_hz`); the config value is a fallback, with a
+  warning when it is more than ten percent off.
+- **The stable-read backoff ignored a stop request.** The 100, 200 and
+  400 ms waits between retries were plain sleeps; they go through the
+  interruptible settle now.
 - **A stop during an approach did nothing until the approach finished.**
   The approach was a blocking poll inside the controller, out of reach of
   the shutdown flag, so Ctrl+C or the GUI's stop button during the initial

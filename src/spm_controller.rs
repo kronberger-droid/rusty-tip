@@ -327,6 +327,16 @@ pub trait SpmController: Send {
     /// controllers without internal buffering.
     fn clear_data_buffer(&mut self) {}
 
+    /// The rate the data stream actually delivers samples at, in Hz, as
+    /// measured when the stream was started. `None` when there is no stream
+    /// or the measurement found nothing. Consumers that convert per-sample
+    /// slopes into per-second rates should prefer this over any configured
+    /// number, since the delivered rate depends on the controller's own base
+    /// rate and oversampling, not on what a config file claims.
+    fn stream_rate_hz(&mut self) -> Option<f64> {
+        None
+    }
+
     // -- Signal Reading --
 
     /// Collect raw signal samples for analysis or averaging.

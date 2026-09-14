@@ -100,6 +100,8 @@ pub struct NanonisController {
     /// Number of channels configured in the TCP data stream.
     /// Set by `data_stream_configure`, used by `start_tcp_reader`.
     configured_channel_count: Option<u32>,
+    /// Delivered stream rate measured by `start_streaming`, in Hz.
+    measured_stream_rate_hz: Option<f64>,
     /// Guards against double-teardown (manual call + Drop).
     torn_down: bool,
 }
@@ -112,6 +114,7 @@ impl NanonisController {
             tcp_reader: None,
             signal_to_data_position: HashMap::new(),
             configured_channel_count: None,
+            measured_stream_rate_hz: None,
             torn_down: false,
         }
     }
@@ -294,6 +297,7 @@ impl NanonisController {
         // sample collection in a way that otherwise only shows up much later
         // as an opaque read timeout.
         let measured = self.measure_stream_rate(Duration::from_millis(500));
+        self.measured_stream_rate_hz = measured;
         match measured {
             Some(hz) => log::info!(
                 "TCP data stream started: {:.0} Hz at oversampling {}",
@@ -976,6 +980,10 @@ impl SpmController for NanonisController {
 
     fn clear_data_buffer(&mut self) {
         self.clear_tcp_buffer();
+    }
+
+    fn stream_rate_hz(&mut self) -> Option<f64> {
+        self.measured_stream_rate_hz
     }
 
     // -- Signal Reading (TCP stream override) --
