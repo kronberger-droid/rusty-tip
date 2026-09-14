@@ -6,3 +6,9 @@ experiments/
 .claude
 .direnv
 result
+const-distance-out/
+
+# `const-distance baseline` writes here by default. Scoped deliberately: real
+# GUI-saved .mpas files are the only specification of an undocumented format,
+# so they stay committable.
+/baseline.mpas
