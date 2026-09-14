@@ -20,6 +20,14 @@
 //! cargo run --example tip-prep-mock -- realistic 99
 //! ```
 //!
+//! Add `--log <path>` to write the experiment log of the dry run, which is
+//! the quickest way to get a file for `rt-log` to work on:
+//!
+//! ```text
+//! cargo run --example tip-prep-mock -- realistic --log /tmp/mock.jsonl
+//! cargo run --bin rt-log -- summary /tmp/mock.jsonl
+//! ```
+//!
 //! Crank up the detail with `RUST_LOG`:
 //!
 //! ```text
@@ -35,7 +43,8 @@ use log::info;
 use rusty_tip::SignalIndex;
 use rusty_tip::config::AppConfig;
 use rusty_tip::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
-use rusty_tip::event::{ConsoleLogger, EventBus};
+use rusty_tip::event::{ConsoleLogger, Event, EventBus, EventEmitter, FileLogger};
+use rusty_tip::experiment_log::{ControllerFacts, RunHeader};
 use rusty_tip::mock_controller::models::RealisticParams;
 use rusty_tip::mock_controller::{FaultKind, FreqShiftModel, MockController, models};
 use rusty_tip::shutdown::ShutdownFlag;
@@ -44,6 +53,15 @@ use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
 /// Signal index the mock's tip model answers for (arbitrary, but the mock and
 /// `run_tip_prep` must agree on it).
 const FREQ_SHIFT_INDEX: SignalIndex = SignalIndex(2);
+
+/// `--log <path>` anywhere on the command line: write the experiment log there.
+fn log_path() -> Option<std::path::PathBuf> {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter()
+        .position(|a| a == "--log")
+        .and_then(|i| args.get(i + 1))
+        .map(std::path::PathBuf::from)
+}
 
 fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("info"))
@@ -77,9 +95,25 @@ fn main() {
     let mock = builder.build();
     let obs = mock.observations();
 
-    // Event stream -> console, alongside the routine's own log output.
+    // Event stream -> console, alongside the routine's own log output, and
+    // to a file when asked, so a dry run yields something `rt-log` can read.
     let mut events = EventBus::new();
     events.add_observer(Box::new(ConsoleLogger));
+    if let Some(path) = log_path() {
+        let file = std::fs::File::create(&path).unwrap_or_else(|e| {
+            eprintln!("cannot create {}: {e}", path.display());
+            std::process::exit(2);
+        });
+        events.add_observer(Box::new(FileLogger::new(file)));
+        info!("experiment log: {}", path.display());
+    }
+    let mut mock = mock;
+    let facts = ControllerFacts::gather(&mut mock, None);
+    events.emit(Event::run_started(RunHeader::new(
+        rusty_tip::tip_prep::log_schema(),
+        &plan.config,
+        facts,
+    )));
 
     let shutdown = ShutdownFlag::new();
     if let Some(delay) = plan.request_shutdown_after {
