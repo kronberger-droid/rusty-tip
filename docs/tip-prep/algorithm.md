@@ -80,6 +80,12 @@ approach aborts and so does the run, rather than approaching again into
 whatever tripped it. The hardware retracts the tip on a trip by itself; the
 check is there so the software never undoes that.
 
+An approach can be stopped while it runs: Ctrl+C or the GUI's stop button
+lands within a poll interval (100 ms), switches the auto-approach off so
+the controller stops stepping, and the run ends as stopped by the user
+with the usual cleanup. An approach that overruns its budget is switched
+off the same way and ends the run in an error.
+
 ## Cleanup
 
 Whatever the outcome — success, limits, Ctrl+C, or a hardware error — the
