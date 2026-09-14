@@ -73,20 +73,41 @@ pub struct StreamSetup {
     pub host: String,
     /// TCP logger data port (typically 6590).
     pub data_port: u16,
-    /// Oversampling value passed to the TCP logger.
-    pub oversampling: i32,
+    /// Stream rate to ask for, in Hz. The logger can only deliver its base
+    /// rate divided by an integer, so the nearest such rate is what you get;
+    /// `start_streaming` logs it and [`NanonisController::stream_rate_hz`]
+    /// reports the measured value.
+    pub sample_rate_hz: f64,
     /// Frames kept in the reader's circular buffer.
     pub buffer_size: usize,
 }
 
 impl StreamSetup {
-    pub fn new(host: impl Into<String>, data_port: u16, oversampling: i32) -> Self {
+    pub fn new(host: impl Into<String>, data_port: u16, sample_rate_hz: f64) -> Self {
         Self {
             host: host.into(),
             data_port,
-            oversampling,
+            sample_rate_hz,
             buffer_size: 10_000,
         }
+    }
+}
+
+/// The TCP logger's base rate as a fraction of the RT frequency, measured on
+/// an RC5 (20 kHz RT, 2 kHz logger). Only a first guess: `start_streaming`
+/// checks the delivered rate and corrects the divisor once if this is off.
+const LOGGER_BASE_PER_RT: f64 = 0.1;
+
+/// Base rate to assume when the RT frequency cannot be read.
+const FALLBACK_LOGGER_BASE_HZ: f64 = 2000.0;
+
+/// The logger divisor that brings `base_hz` closest to `wanted_hz`.
+fn divisor_for(base_hz: f64, wanted_hz: f64) -> i32 {
+    let ratio = base_hz / wanted_hz;
+    if ratio.is_finite() && ratio >= 1.0 {
+        ratio.round() as i32
+    } else {
+        1
     }
 }
 
@@ -272,7 +293,21 @@ impl NanonisController {
             signal_mapping.len()
         );
 
-        self.data_stream_configure(&tcp_channels, setup.oversampling)?;
+        // First guess at the divisor, from the RT frequency. The delivered
+        // rate is checked below and the divisor corrected once if the guess
+        // at the logger's base rate was wrong.
+        let base_hz = match self.client.util_rt_freq_get() {
+            Ok(rt) => f64::from(rt) * LOGGER_BASE_PER_RT,
+            Err(e) => {
+                log::warn!(
+                    "Could not read the RT frequency ({e}); assuming a {FALLBACK_LOGGER_BASE_HZ:.0} Hz logger base"
+                );
+                FALLBACK_LOGGER_BASE_HZ
+            }
+        };
+        let mut divisor = divisor_for(base_hz, setup.sample_rate_hz);
+
+        self.data_stream_configure(&tcp_channels, divisor)?;
         self.set_channel_mapping(signal_mapping);
 
         // Attach the reader first. Nanonis' TCPLogger sits in Disconnected
@@ -292,22 +327,48 @@ impl NanonisController {
         // channel list.
         self.clear_tcp_buffer();
 
-        // Report what the stream actually delivers. The rate is
-        // base / oversampling, and an oversampling that is too high starves
-        // sample collection in a way that otherwise only shows up much later
-        // as an opaque read timeout.
-        let measured = self.measure_stream_rate(Duration::from_millis(500));
+        // Measure what the stream actually delivers. If it is well off the
+        // request, the guess at the logger base was wrong: the measurement
+        // gives the true base, so recompute the divisor from it and restart
+        // the logger once. A divisor that is too high starves sample
+        // collection in a way that otherwise only shows up much later as an
+        // opaque read timeout.
+        let mut measured = self.measure_stream_rate(Duration::from_millis(500));
+        if let Some(hz) = measured
+            && (hz - setup.sample_rate_hz).abs() > 0.1 * setup.sample_rate_hz
+        {
+            let true_base = hz * f64::from(divisor);
+            let corrected = divisor_for(true_base, setup.sample_rate_hz);
+            if corrected != divisor {
+                log::info!(
+                    "Stream delivers {hz:.0} Hz with divisor {divisor}, so the logger base is \
+                     {true_base:.0} Hz, not {base_hz:.0}; switching to divisor {corrected}"
+                );
+                divisor = corrected;
+                let _ = self.data_stream_stop();
+                std::thread::sleep(Duration::from_millis(200));
+                self.data_stream_configure(&tcp_channels, divisor)?;
+                self.data_stream_start()?;
+                self.clear_tcp_buffer();
+                measured = self.measure_stream_rate(Duration::from_millis(500));
+            }
+        }
         self.measured_stream_rate_hz = measured;
         match measured {
+            Some(hz) if (hz - setup.sample_rate_hz).abs() > 0.1 * setup.sample_rate_hz => {
+                log::warn!(
+                    "TCP data stream started: {hz:.0} Hz (divisor {divisor}); the requested \
+                     {:.0} Hz is not a divisor of the logger base, so this is the nearest",
+                    setup.sample_rate_hz
+                )
+            }
             Some(hz) => log::info!(
-                "TCP data stream started: {:.0} Hz at oversampling {}",
-                hz,
-                setup.oversampling
+                "TCP data stream started: {hz:.0} Hz (divisor {divisor}, requested {:.0} Hz)",
+                setup.sample_rate_hz
             ),
             None => log::warn!(
-                "TCP data stream started at oversampling {} but delivered no frames in 500 ms; \
-                 sample collection will be slow or time out",
-                setup.oversampling
+                "TCP data stream started with divisor {divisor} but delivered no frames in \
+                 500 ms; sample collection will be slow or time out"
             ),
         }
         Ok(true)
@@ -1033,6 +1094,19 @@ mod tests {
     /// The calibrated approach homes the tip to back off from the surface.
     /// That is only a back-off in relative mode; absolute mode drives Z to a
     /// coordinate, surface or not. 0.3 and 0.4 shipped the wrong default.
+    /// The logger only delivers base / n, so a request lands on the nearest
+    /// such rate; a request above the base, or nonsense, gets the base.
+    #[test]
+    fn the_divisor_picks_the_nearest_reachable_rate() {
+        assert_eq!(divisor_for(2000.0, 1000.0), 2);
+        assert_eq!(divisor_for(2000.0, 2000.0), 1);
+        assert_eq!(divisor_for(2000.0, 1500.0), 1); // 1.33 rounds to 1
+        assert_eq!(divisor_for(2000.0, 800.0), 3); // 2.5 rounds away from zero
+        assert_eq!(divisor_for(2000.0, 5000.0), 1);
+        assert_eq!(divisor_for(2000.0, 0.0), 1);
+        assert_eq!(divisor_for(0.0, 1000.0), 1);
+    }
+
     #[test]
     fn the_default_z_home_mode_backs_off_rather_than_going_to_a_coordinate() {
         assert_eq!(

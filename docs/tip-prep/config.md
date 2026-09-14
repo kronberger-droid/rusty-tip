@@ -23,15 +23,16 @@ against live in `[tip_prep.signal_stability]`, not here.
 ```toml
 [data_acquisition]
 data_port = 6590            # required; Nanonis TCP logger port
-sample_rate = 1000          # required; expected stream rate (Hz), fallback only
-oversampling = 2            # TCP logger divisor; delivered rate is base / this
+sample_rate = 1000          # required; stream rate to ask for (Hz)
 stable_signal_samples = 100 # samples averaged per stable signal read
 ```
 
-The drift gate needs the rate samples really arrive at. The controller
-measures it when the stream starts and the routine uses that; `sample_rate`
-is only used when the measurement finds nothing, and a value more than ten
-percent off from the measured rate gets a warning at startup.
+The TCP logger delivers its base rate divided by an integer, so the nearest
+such rate to `sample_rate` is what arrives: on a 2 kHz base, 1000 or 667 Hz
+but not 800. The controller works out the divisor from the RT frequency,
+measures what the stream delivers, corrects the divisor once if the guess
+was off, and logs the result. The drift gate uses the measured rate, so a
+request that had to be rounded costs nothing but a warning at startup.
 
 ## `[tip_prep]` — the routine
 

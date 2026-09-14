@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `data_acquisition.oversampling`. `sample_rate` is the one value now: the
+  controller reads the RT frequency, derives the logger divisor that comes
+  closest, measures what the stream delivers, and corrects the divisor
+  once if its guess at the logger base was wrong. A config that still sets
+  `oversampling` loads, the key is ignored. The default `sample_rate` is
+  1000 Hz, the rate the old default divisor produced on an RC5.
 - `tip_prep.stability.max_duration_secs`. It was never enforced, and a sweep's
   length is already fixed by `bias_steps × step_period_ms`; the run-level
   `tip_prep.max_duration_secs` keeps counting through the check. Configs
