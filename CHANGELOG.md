@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Fewer crates in the build.** A CLI build resolved 208 crates and the
+  GUI build 367; they are now 89 and 269. `config` no longer pulls its
+  default JSON5, RON, YAML and INI readers, only TOML is used. `image`,
+  which only `cuox-finder` needs, is optional behind the new `cuox`
+  feature, so `cargo build --release` no longer compiles a hundred crates
+  of codecs for tools that never open an image; build `cuox-finder` with
+  `--features cuox`. `byteorder` was unused and is gone.
+
 ### Fixed
 
 - **The Z-home mode defaulted to absolute.** `NanonisSetupConfig::default()`
