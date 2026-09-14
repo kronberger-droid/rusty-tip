@@ -60,8 +60,8 @@ impl Bias<'_, '_> {
         Ok(())
     }
 
-    /// Fire a bias pulse (signed voltage, width in ms) with the z-controller
-    /// held, relative to the current bias.
+    /// Fire a bias pulse to an absolute signed voltage for `width_ms`, with
+    /// the z-controller held. The bias returns to its previous value after.
     pub fn pulse(&mut self, voltage: f64, width_ms: u64) -> Result<()> {
         self.rt.exec(&BiasPulse {
             voltage,
