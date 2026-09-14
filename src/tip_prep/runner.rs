@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-use serde::Serialize;
-
 use crate::action::scan::ScanDirectionParam;
 use crate::config::{AppConfig, TipPrepConfig};
 use crate::controller_types::{BiasSweepPolarity, PolaritySign};
@@ -15,23 +13,13 @@ use crate::spm_error::SpmError;
 use nanonis_rs::scan::ScanPropsBuilder;
 
 use super::PulseState;
+use super::events::{CycleEvent, MaxPulseEvent, PhaseEvent};
 
 pub use crate::routine::Outcome;
 
 // ============================================================================
 // Public types
 // ============================================================================
-
-/// Snapshot of tip-prep state for GUI/observer consumption.
-#[derive(Serialize, Clone, Debug)]
-pub struct TipPrepSnapshot {
-    pub cycle: usize,
-    pub elapsed_secs: f64,
-    pub freq_shift: Option<f64>,
-    pub pulse_voltage: f64,
-    pub is_sharp: bool,
-    pub phase: &'static str,
-}
 
 /// Everything a tip-preparation run needs besides the controller.
 pub struct TipPrepParams<'a> {
@@ -194,10 +182,7 @@ impl<'a> TipPrep<'a> {
     // ------------------------------------------------------------------
 
     fn check_stability(&mut self, rt: &mut Rt) -> Result<StabilityOutcome, SpmError> {
-        rt.emit(Event::custom(
-            "tip_prep_state",
-            serde_json::json!({ "phase": "confirming" }),
-        ));
+        rt.emit(Event::typed(&PhaseEvent::Confirming));
 
         // Step 1: Confirm sharpness with repositioning (3 reads)
         let (confirmed, baseline) = self.confirm_sharp(rt)?;
@@ -257,10 +242,9 @@ impl<'a> TipPrep<'a> {
         // Step 3: Run sweep plans, restoring the scan speed however they end
         let sweep_plans = build_sweep_plans(&self.config.tip_prep);
 
-        rt.emit(Event::custom(
-            "tip_prep_state",
-            serde_json::json!({ "phase": "stability_check", "baseline_freq_shift": baseline }),
-        ));
+        rt.emit(Event::typed(&PhaseEvent::StabilityCheck {
+            baseline_freq_shift: baseline,
+        }));
 
         log::info!(
             "Starting stability check: {:?} polarity, {} sweep(s)",
@@ -305,12 +289,16 @@ impl<'a> TipPrep<'a> {
         );
 
         if is_stable {
-            rt.emit(Event::custom(
-                "tip_prep_state",
-                serde_json::json!({ "phase": "stable", "final_freq_shift": final_fs }),
-            ));
+            rt.emit(Event::typed(&PhaseEvent::Stable {
+                final_freq_shift: final_fs,
+            }));
             Ok(StabilityOutcome::Stable)
         } else {
+            rt.emit(Event::typed(&PhaseEvent::Unstable {
+                final_freq_shift: final_fs,
+                change,
+                threshold,
+            }));
             // The tip is engaged here: `measure_final_freq_shift` approached
             // it to take the reading being compared. That is the point. A
             // pulse is a field at the apex, and the apex is only in a field
@@ -341,12 +329,9 @@ impl<'a> TipPrep<'a> {
             );
             rt.bias()?
                 .pulse(signed_max, self.config.tip_prep.timing.pulse_width_ms)?;
-            // Partial snapshot, like the phase markers above: the GUI reads
-            // the fields it finds, and this pulse belongs in its history.
-            rt.emit(Event::custom(
-                "tip_prep_state",
-                serde_json::json!({ "phase": "max_pulse", "pulse_voltage": signed_max }),
-            ));
+            rt.emit(Event::typed(&MaxPulseEvent {
+                pulse_voltage: signed_max,
+            }));
 
             self.reposition(rt)?;
 
@@ -587,22 +572,16 @@ impl Routine for TipPrep<'_> {
             let freq_shift = self.read_stable(rt)?;
             let is_sharp = self.is_sharp(freq_shift);
 
-            // Emit state snapshot for GUI observers
-            rt.emit(Event::custom(
-                "tip_prep_state",
-                serde_json::to_value(&TipPrepSnapshot {
-                    cycle,
-                    elapsed_secs: cycles.elapsed().as_secs_f64(),
-                    freq_shift: Some(freq_shift),
-                    // The voltage that was fired, sign included. The pulse
-                    // state's `current_voltage` is a magnitude, and reporting
-                    // it hid every polarity switch from the GUI.
-                    pulse_voltage,
-                    is_sharp,
-                    phase: "pulsing",
-                })
-                .unwrap_or_default(),
-            ));
+            rt.emit(Event::typed(&CycleEvent {
+                cycle,
+                elapsed_secs: cycles.elapsed().as_secs_f64(),
+                freq_shift: Some(freq_shift),
+                // The voltage that was fired, sign included. The pulse
+                // state's `current_voltage` is a magnitude, and reporting
+                // it hid every polarity switch from the GUI.
+                pulse_voltage,
+                is_sharp,
+            }));
 
             if is_sharp {
                 log::info!(

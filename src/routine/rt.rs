@@ -1,12 +1,13 @@
 use std::time::{Duration, Instant};
 
-use crate::action::{Action, ActionContext, ActionOutput, DataStore};
+use crate::action::{Action, ActionContext, ActionOutput, DataStore, run_action};
 use crate::event::{Event, EventBus, EventEmitter};
 use crate::shutdown::ShutdownFlag;
 use crate::spm_controller::{Capability, SpmController};
 use crate::spm_error::SpmError;
 
 use super::Outcome;
+use super::events::CleanupFailedEvent;
 use super::subsystems::{Bias, Drift, Motor, MultiPass, Scan, Signals, ZCtrl};
 
 /// The routine runtime: what a [`super::Routine`] runs against.
@@ -168,13 +169,10 @@ impl<'a> Rt<'a> {
             (Err(body_err), Ok(())) => Err(body_err),
             (Err(body_err), Err(cleanup_err)) => {
                 log::error!("Cleanup after a failure also failed: {}", cleanup_err);
-                self.events.emit(Event::custom(
-                    "cleanup_failed",
-                    serde_json::json!({
-                        "cleanup_error": cleanup_err.to_string(),
-                        "body_error": body_err.to_string(),
-                    }),
-                ));
+                self.events.emit(Event::typed(&CleanupFailedEvent {
+                    body_error: body_err.to_string(),
+                    cleanup_error: cleanup_err.to_string(),
+                }));
                 Err(body_err)
             }
         }
@@ -212,53 +210,45 @@ impl<'a> Rt<'a> {
         op: impl FnOnce(&mut dyn SpmController) -> Result<T, SpmError>,
     ) -> Result<T, SpmError> {
         let start = Instant::now();
-        self.events.emit(Event::action_started(name, params));
+        self.events.emit(Event::action_started(name, params, 0));
         match op(&mut *self.controller) {
             Ok(value) => {
                 self.events.emit(Event::action_completed(
                     name,
                     &ActionOutput::Unit,
+                    0,
                     start.elapsed(),
                 ));
                 Ok(value)
             }
             Err(e) => {
-                self.events
-                    .emit(Event::action_failed(name, &e.to_string(), start.elapsed()));
+                self.events.emit(Event::action_failed(
+                    name,
+                    &e.to_string(),
+                    0,
+                    start.elapsed(),
+                ));
                 Err(e)
             }
         }
     }
 
-    /// Execute an action with capability checking and start/complete/fail
-    /// events. All subsystem handle methods funnel through here.
-    pub(crate) fn exec(&mut self, action: &dyn Action) -> Result<ActionOutput, SpmError> {
-        let name = action.name().to_string();
-        let start = Instant::now();
-        self.events
-            .emit(Event::action_started(&name, serde_json::json!({})));
+    /// Execute an action at depth 0 with capability checking and
+    /// start/complete/fail events. All subsystem handle methods funnel
+    /// through here; actions that run other actions go through
+    /// [`ActionContext::run`], which is the same executor one level deeper.
+    pub(crate) fn exec<A: Action + serde::Serialize>(
+        &mut self,
+        action: &A,
+    ) -> Result<ActionOutput, SpmError> {
         let mut ctx = ActionContext {
             controller: self.controller,
             store: &mut self.store,
             events: self.events,
             shutdown: self.shutdown,
+            depth: 0,
         };
-        let result = match crate::action::check_capabilities(action, ctx.controller) {
-            Ok(()) => action.execute(&mut ctx),
-            Err(e) => Err(e),
-        };
-        match result {
-            Ok(output) => {
-                self.events
-                    .emit(Event::action_completed(&name, &output, start.elapsed()));
-                Ok(output)
-            }
-            Err(e) => {
-                self.events
-                    .emit(Event::action_failed(&name, &e.to_string(), start.elapsed()));
-                Err(e)
-            }
-        }
+        run_action(&mut ctx, action)
     }
 }
 
