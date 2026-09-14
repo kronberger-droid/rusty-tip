@@ -7,8 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`rt-log`**, a terminal reader for experiment logs: `ls` a directory of
+  runs, `summary` a run (outcome, time per top-level action, measurement
+  spread, event counts), `timeline` the action tree with durations and
+  params, `plot` any numeric series against time, `export` flat CSV
+  tables plus a `run.json`. The series and columns come from the schema
+  in the log's header, so it needs no code per tool. The reader behind it
+  is `experiment_log::reader`, for anything else that wants a log back as
+  data; it tolerates logs from before the header and lines a crash cut
+  short. `tip-prep-mock --log <path>` writes a log from a dry run to try
+  it on.
+
 ### Changed
 
+- **The experiment log is self-describing** (`docs/experiment-log.md`).
+  Every run starts with a `run_started` line carrying the tool, version,
+  git commit, the config as loaded, the resolved signals and stream rate,
+  and the JSON Schema of every custom event the tool can write; it ends
+  with `run_finished` and the outcome. Every line has a `seq`. Actions log
+  their own fields as `params` (a pulse has its voltage now) and a `depth`,
+  so the steps inside a calibrated approach or a reposition appear as
+  children and the tree can be rebuilt. Custom events are typed structs
+  with a `tool/name` kind, declared once per tool and pinned by a schema
+  snapshot test; tip prep's `tip_prep_state` became `tip_prep/cycle`,
+  `tip_prep/phase` and `tip_prep/max_pulse`, and the harness's events are
+  `routine/cleanup_failed` and `routine/panicked`. const-distance writes a
+  log too (`--log-dir`, default `./experiments`); its actions had been
+  running with no observer attached. `schemars` is a new dependency.
 - **Fewer crates in the build.** A CLI build resolved 208 crates and the
   GUI build 367; they are now 89 and 269. `config` no longer pulls its
   default JSON5, RON, YAML and INI readers, only TOML is used. `image`,
