@@ -92,7 +92,6 @@ stable_tip_allowed_change = 0.2  # max freq-shift drift across the sweep (Hz)
 bias_range = [0.01, 2.0]         # sweep magnitude range (V), strictly positive
 bias_steps = 1000
 step_period_ms = 200
-max_duration_secs = 100
 polarity_mode = "both"           # "positive", "negative", or "both"
 scan_speed_m_s = 5e-9            # scan speed during the check; omit to keep current
 ```
