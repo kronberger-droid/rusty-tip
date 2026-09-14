@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The GUI showed every pulse as positive.** The `tip_prep_state`
+  snapshot carried the pulse method's voltage magnitude rather than the
+  signed voltage that was fired, so a polarity switch was visible in the
+  console log and on the instrument but never in the GUI's status panel or
+  pulse history. The snapshot now reports the pulse as fired, and the
+  max-voltage pulse after a failed stability check emits one too, so it
+  appears in the history instead of vanishing.
 - **The Z-home mode defaulted to absolute.** `NanonisSetupConfig::default()`
   set `ZHomeMode::Absolute`, and both `tip-prep` and `tip-prep-gui` took the
   default. The calibrated approach homes the tip to back 50 nm off the

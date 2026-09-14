@@ -341,6 +341,12 @@ impl<'a> TipPrep<'a> {
             );
             rt.bias()?
                 .pulse(signed_max, self.config.tip_prep.timing.pulse_width_ms)?;
+            // Partial snapshot, like the phase markers above: the GUI reads
+            // the fields it finds, and this pulse belongs in its history.
+            rt.emit(Event::custom(
+                "tip_prep_state",
+                serde_json::json!({ "phase": "max_pulse", "pulse_voltage": signed_max }),
+            ));
 
             self.reposition(rt)?;
 
@@ -564,7 +570,10 @@ impl Routine for TipPrep<'_> {
                     cycle,
                     elapsed_secs: cycles.elapsed().as_secs_f64(),
                     freq_shift: Some(freq_shift),
-                    pulse_voltage: self.pulse.current_voltage,
+                    // The voltage that was fired, sign included. The pulse
+                    // state's `current_voltage` is a magnitude, and reporting
+                    // it hid every polarity switch from the GUI.
+                    pulse_voltage,
                     is_sharp,
                     phase: "pulsing",
                 })
