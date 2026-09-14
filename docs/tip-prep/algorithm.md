@@ -83,4 +83,8 @@ check is there so the software never undoes that.
 ## Cleanup
 
 Whatever the outcome — success, limits, Ctrl+C, or a hardware error — the
-routine withdraws the tip and tears the controller down before returning.
+routine withdraws the tip, backs the coarse motor off by
+`exit_retract_steps` (ten by default, as 0.2.3 did), and tears the
+controller down before returning. The withdraw alone only parks the tip at
+the top of the piezo range; the coarse retract is what puts real distance
+behind it.
