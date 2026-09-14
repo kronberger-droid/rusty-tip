@@ -314,6 +314,10 @@ pub struct MockController {
     capabilities: HashSet<Capability>,
     position: Position,
     scan_config: ScanConfig,
+    /// How many `auto_approach_running` polls each approach stays "running"
+    /// for. Zero means an approach is over as soon as it starts.
+    approach_polls: usize,
+    approach_polls_left: usize,
 }
 
 impl MockController {
@@ -502,6 +506,23 @@ impl SpmController for MockController {
     fn auto_approach(&mut self, _wait: bool, _timeout: Duration) -> Result<()> {
         self.enter("auto_approach")?;
         self.obs.lock().approach_count += 1;
+        self.approach_polls_left = self.approach_polls;
+        Ok(())
+    }
+
+    fn auto_approach_running(&mut self) -> Result<bool> {
+        self.enter("auto_approach_running")?;
+        if self.approach_polls_left > 0 {
+            self.approach_polls_left -= 1;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn auto_approach_stop(&mut self) -> Result<()> {
+        self.enter("auto_approach_stop")?;
+        self.approach_polls_left = 0;
         Ok(())
     }
 
@@ -795,6 +816,7 @@ pub struct MockControllerBuilder {
     faults_always: HashMap<&'static str, FaultKind>,
     capabilities: HashSet<Capability>,
     start_connected: bool,
+    approach_polls: usize,
 }
 
 impl MockControllerBuilder {
@@ -812,6 +834,7 @@ impl MockControllerBuilder {
             faults_always: HashMap::new(),
             capabilities: all_capabilities(),
             start_connected: true,
+            approach_polls: 0,
         }
     }
 
@@ -904,7 +927,16 @@ impl MockControllerBuilder {
             capabilities: self.capabilities,
             position: Position::new(0.0, 0.0),
             scan_config: mock_scan_config(),
+            approach_polls: self.approach_polls,
+            approach_polls_left: 0,
         }
+    }
+
+    /// Keep each approach "running" for `polls` status queries, so a test
+    /// can interrupt one in flight. Default zero: approaches finish at once.
+    pub fn approach_takes_polls(mut self, polls: usize) -> Self {
+        self.approach_polls = polls;
+        self
     }
 }
 

@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A stop during an approach did nothing until the approach finished.**
+  The approach was a blocking poll inside the controller, out of reach of
+  the shutdown flag, so Ctrl+C or the GUI's stop button during the initial
+  approach (a budget of ten minutes) was honoured only afterwards. The
+  approach actions now start the approach and poll it through the
+  interruptible settle; a stop lands within 100 ms and switches the
+  auto-approach off before the cleanup withdraws, so the controller is not
+  still stepping toward the surface while the tip is being pulled away. A
+  budget overrun is handled the same way. `SpmController` gains
+  `auto_approach_running` and `auto_approach_stop` for this.
 - **A run ended with a withdraw and nothing else.** 0.2.3 backed the coarse
   motor off ten steps after the final withdraw; the v2 harness only
   withdrew, leaving the tip parked at the top of the piezo range and still

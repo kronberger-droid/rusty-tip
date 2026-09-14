@@ -6,6 +6,7 @@
 //! these are the dress rehearsals before touching the real machine.
 
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 
 use rusty_tip::SignalIndex;
 use rusty_tip::config::AppConfig;
@@ -292,6 +293,67 @@ fn snapshot_reports_the_signed_pulse_voltage() {
         reported, fired,
         "the snapshot must carry the pulse as fired, sign included"
     );
+}
+
+/// The initial approach can take minutes. A stop pressed during it must end
+/// the run within a poll interval, switch the approach off first, and then
+/// run the normal cleanup. Found on the LT system, where a stop during the
+/// first approach did nothing until the approach finished by itself.
+#[test]
+fn shutdown_during_the_initial_approach_stops_promptly_and_cleans_up() {
+    let shutdown = ShutdownFlag::new();
+    let flag = shutdown.clone();
+    let requester = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        flag.request();
+    });
+
+    let mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT_INDEX)
+        .freq_shift(models::always(-40.0))
+        .approach_takes_polls(10_000) // far longer than the test may run
+        .build();
+    let obs = mock.observations();
+
+    let started = Instant::now();
+    let outcome = run_tip_prep(
+        Box::new(mock),
+        TipPrepParams {
+            events: &EventBus::new(),
+            shutdown: &shutdown,
+            config: &fast_config(),
+            freq_shift: FREQ_SHIFT_INDEX,
+        },
+    )
+    .expect("a stop is an outcome, not an error");
+    requester.join().unwrap();
+
+    assert!(matches!(outcome, Outcome::StoppedByUser));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the run must end within a poll interval of the stop, not after the \
+         approach finishes on its own"
+    );
+
+    let obs = obs.lock();
+    assert_eq!(obs.approach_count, 1, "only the first approach was started");
+    let stop = obs
+        .calls
+        .iter()
+        .position(|c| *c == "auto_approach_stop")
+        .expect("the approach must be switched off");
+    let withdraw = obs
+        .calls
+        .iter()
+        .rposition(|c| *c == "withdraw")
+        .expect("cleanup withdraws");
+    assert!(
+        stop < withdraw,
+        "the approach is switched off before the cleanup withdraws, calls: {:?}",
+        obs.calls
+    );
+    assert_eq!(obs.motor_displacements.last(), Some(&(0, 0, -10)));
+    assert!(obs.torn_down);
 }
 
 #[test]
