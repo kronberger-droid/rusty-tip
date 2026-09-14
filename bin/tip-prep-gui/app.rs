@@ -223,7 +223,6 @@ pub struct EditableConfig {
     pub bias_range_upper: String,
     pub bias_steps: String,
     pub step_period_ms: String,
-    pub stability_max_duration: String,
     pub polarity_mode: BiasSweepPolarity,
     pub scan_speed_nm_s: String,
 
@@ -282,7 +281,6 @@ impl Default for EditableConfig {
             bias_range_upper: "2.0".to_string(),
             bias_steps: "1000".to_string(),
             step_period_ms: "200".to_string(),
-            stability_max_duration: "100".to_string(),
             polarity_mode: BiasSweepPolarity::Both,
             scan_speed_nm_s: "5.0".to_string(),
             pulse_method_type: PulseMethodType::Stepping,
@@ -442,7 +440,6 @@ impl EditableConfig {
             bias_range_upper: app_config.tip_prep.stability.bias_range.1.to_string(),
             bias_steps: app_config.tip_prep.stability.bias_steps.to_string(),
             step_period_ms: app_config.tip_prep.stability.step_period_ms.to_string(),
-            stability_max_duration: app_config.tip_prep.stability.max_duration_secs.to_string(),
             polarity_mode: app_config.tip_prep.stability.polarity_mode,
             scan_speed_nm_s: app_config
                 .tip_prep
@@ -657,10 +654,6 @@ impl EditableConfig {
                         .step_period_ms
                         .parse()
                         .map_err(|_| "Invalid step period")?,
-                    max_duration_secs: self
-                        .stability_max_duration
-                        .parse()
-                        .map_err(|_| "Invalid stability max duration")?,
                     polarity_mode: self.polarity_mode,
                     scan_speed_m_s,
                 },
@@ -1657,13 +1650,6 @@ impl TipPrepApp {
                             ui.label("Step Period (ms):");
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.config.step_period_ms)
-                                    .desired_width(80.0),
-                            );
-                            ui.end_row();
-
-                            ui.label("Max Duration (s):");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.config.stability_max_duration)
                                     .desired_width(80.0),
                             );
                             ui.end_row();
