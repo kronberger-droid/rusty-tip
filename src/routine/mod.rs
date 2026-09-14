@@ -58,14 +58,16 @@
 //! # }
 //! ```
 
+mod events;
 mod rt;
 mod subsystems;
 
+pub use events::{CleanupFailedEvent, PanickedEvent, log_schema};
 pub use rt::{Cycles, Rt};
 pub use subsystems::{Bias, Motor, RepositionSpec, Scan, Signals, StableReadSpec, ZCtrl};
 
 use std::panic::{self, AssertUnwindSafe};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::event::{Event, EventBus, EventEmitter};
 use crate::shutdown::ShutdownFlag;
@@ -143,6 +145,7 @@ pub fn run_routine(
     shutdown: &ShutdownFlag,
     routine: &mut dyn Routine,
 ) -> Result<Outcome, SpmError> {
+    let started = Instant::now();
     controller.prepare()?;
 
     let mut rt = Rt::new(&mut *controller, events, shutdown);
@@ -154,10 +157,10 @@ pub fn run_routine(
     if let Err(payload) = &caught {
         let message = panic_message(&**payload);
         log::error!("Routine '{}' panicked: {}", routine.name(), message);
-        events.emit(Event::custom(
-            "routine_panicked",
-            serde_json::json!({ "routine": routine.name(), "message": message }),
-        ));
+        events.emit(Event::typed(&PanickedEvent {
+            routine: routine.name().to_string(),
+            message,
+        }));
     }
 
     log::info!("Cleanup starting...");
@@ -184,12 +187,28 @@ pub fn run_routine(
     controller.teardown();
     log::info!("Cleanup complete");
 
-    match caught {
+    let result = match caught {
         Ok(Err(SpmError::ShutdownRequested)) => Ok(Outcome::StoppedByUser),
         Ok(other) => other,
-        // Hardware is restored; hand the panic back to the caller untouched.
-        Err(payload) => panic::resume_unwind(payload),
-    }
+        Err(payload) => {
+            events.emit(Event::run_finished(
+                "panicked",
+                Some(panic_message(&*payload)),
+                started.elapsed(),
+            ));
+            // Hardware is restored; hand the panic back to the caller untouched.
+            panic::resume_unwind(payload)
+        }
+    };
+    let (outcome, detail) = match &result {
+        Ok(Outcome::Completed) => ("completed", None),
+        Ok(Outcome::StoppedByUser) => ("stopped_by_user", None),
+        Ok(Outcome::CycleLimit(n)) => ("cycle_limit", Some(n.to_string())),
+        Ok(Outcome::TimedOut(d)) => ("timed_out", Some(format!("{:.0}s", d.as_secs_f64()))),
+        Err(e) => ("error", Some(e.to_string())),
+    };
+    events.emit(Event::run_finished(outcome, detail, started.elapsed()));
+    result
 }
 
 /// Best-effort rendering of a caught panic payload, which is a `&str` for
@@ -231,7 +250,7 @@ mod tests {
 
     fn custom_event(events: &[Event], wanted: &str) -> Option<serde_json::Value> {
         events.iter().find_map(|e| match e {
-            Event::Custom { kind, data } if kind == wanted => Some(data.clone()),
+            Event::Custom { kind, data, .. } if kind == wanted => Some(data.clone()),
             _ => None,
         })
     }
@@ -281,7 +300,7 @@ mod tests {
 
         let events = events.lock().unwrap();
         let data =
-            custom_event(&events, "routine_panicked").expect("the panic must reach the event log");
+            custom_event(&events, "routine/panicked").expect("the panic must reach the event log");
         assert_eq!(data["routine"], "panicker");
         assert_eq!(data["message"], "routine blew up");
     }
@@ -335,7 +354,7 @@ mod tests {
         );
 
         let events = events.lock().unwrap();
-        let data = custom_event(&events, "cleanup_failed")
+        let data = custom_event(&events, "routine/cleanup_failed")
             .expect("a swallowed cleanup failure must still reach the event log");
         assert_eq!(data["body_error"], "body failed");
         assert_eq!(data["cleanup_error"], "cleanup failed");

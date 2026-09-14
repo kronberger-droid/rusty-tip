@@ -38,6 +38,7 @@ mod surface;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use ndarray::{Array2, ArrayView2};
@@ -45,17 +46,18 @@ use textplots::{Chart, Plot, Shape};
 
 use rusty_tip::action::drift::{CompensateDrift, MeasureZDrift};
 use rusty_tip::action::multi_pass::ApplyMultiPass;
-use rusty_tip::action::{Action, ActionContext, ActionOutput, DataStore};
+use rusty_tip::action::{ActionContext, ActionOutput, DataStore, run_action};
 use rusty_tip::analyzer::rolling_ellipsoid::{
     Border, GridSpacing, RollingEllipsoid, vertical_clearance,
 };
-use rusty_tip::event::EventBus;
+use rusty_tip::event::{Event, EventBus, EventEmitter, FileLogger};
+use rusty_tip::experiment_log::{ControllerFacts, RunHeader, ToolSchema};
 use rusty_tip::export::{gsf, write_table, write_xyz};
 use rusty_tip::multi_pass::MultiPassConfig;
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::{SignalIndex, SignalRegistry};
-use rusty_tip::spm_controller::DriftComp;
+use rusty_tip::spm_controller::{DriftComp, SpmController};
 
 /// Nanometres to metres.
 const NM: f64 = 1e-9;
@@ -118,6 +120,10 @@ struct DriftArgs {
     /// Controller port.
     #[arg(long, default_value_t = 6501)]
     port: u16,
+
+    /// Directory the experiment log (JSONL) is written to.
+    #[arg(long, default_value = "./experiments")]
+    log_dir: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -179,6 +185,51 @@ struct BaselineArgs {
     /// Settle time at the beginning of each line, in seconds.
     #[arg(long, default_value_t = 0.0)]
     delay: f64,
+
+    /// Directory the experiment log (JSONL) is written to.
+    #[arg(long, default_value = "./experiments")]
+    log_dir: PathBuf,
+}
+
+/// Every custom event kind const-distance can write. None yet: its logs
+/// are the built-in action and measurement events.
+fn log_schema() -> ToolSchema {
+    ToolSchema::new("const_distance")
+}
+
+/// Open the experiment log for one command and write its header.
+///
+/// `invocation` stands in for a config file: the arguments that shaped the
+/// run, so the log says what was asked for.
+fn open_run_log(
+    dir: &Path,
+    controller: &mut dyn SpmController,
+    invocation: serde_json::Value,
+) -> Result<EventBus, Box<dyn Error>> {
+    fs::create_dir_all(dir)?;
+    let path = dir.join(format!(
+        "const_distance_{}.jsonl",
+        chrono::Utc::now().format("%Y%m%d_%H%M%S")
+    ));
+    let mut events = EventBus::new();
+    events.add_observer(Box::new(FileLogger::new(fs::File::create(&path)?)));
+    println!("log: {}", path.display());
+    let facts = ControllerFacts::gather(controller, None);
+    events.emit(Event::run_started(RunHeader::new(
+        log_schema(),
+        invocation,
+        facts,
+    )));
+    Ok(events)
+}
+
+/// Close the log with the command's outcome.
+fn finish_run_log(events: &EventBus, started: Instant, result: &Result<(), Box<dyn Error>>) {
+    let (outcome, detail) = match result {
+        Ok(()) => ("completed", None),
+        Err(e) => ("error", Some(e.to_string())),
+    };
+    events.emit(Event::run_finished(outcome, detail, started.elapsed()));
 }
 
 #[derive(Args)]
@@ -321,14 +372,45 @@ fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
         None => SignalIndex(args.signal),
     };
 
-    let events = EventBus::new();
+    let started = Instant::now();
+    let events = open_run_log(
+        &args.log_dir,
+        &mut controller,
+        serde_json::json!({
+            "command": "drift",
+            "op": match args.op {
+                DriftOp::Status => "status",
+                DriftOp::Measure => "measure",
+                DriftOp::Compensate => "compensate",
+                DriftOp::Off => "off",
+            },
+            "z_signal": z.0,
+            "window_s": args.window,
+            "samples": args.samples,
+            "host": args.host,
+            "port": args.port,
+        }),
+    )?;
+    let result = drift_op(&args, z, &events, &mut controller);
+    finish_run_log(&events, started, &result);
+    result
+}
+
+/// The drift operation itself, once the log is open.
+fn drift_op(
+    args: &DriftArgs,
+    z: SignalIndex,
+    events: &EventBus,
+    controller: &mut NanonisController,
+) -> Result<(), Box<dyn Error>> {
     let shutdown = ShutdownFlag::new();
     let mut store = DataStore::new();
     let mut ctx = ActionContext {
-        controller: &mut controller,
+        controller,
         store: &mut store,
-        events: &events,
+        events,
         shutdown: &shutdown,
+        depth: 0,
     };
     let window_ms = (args.window * 1000.0) as u64;
 
@@ -371,12 +453,14 @@ fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
                 "measuring over {:.1} s with {} samples (Z controller must be on, scan stopped)",
                 args.window, args.samples
             );
-            let output = MeasureZDrift {
-                z,
-                window_ms,
-                samples: args.samples,
-            }
-            .execute(&mut ctx)?;
+            let output = run_action(
+                &mut ctx,
+                &MeasureZDrift {
+                    z,
+                    window_ms,
+                    samples: args.samples,
+                },
+            )?;
             println!("Z drift: {:.3} pm/s", value_of(output)? / PM);
         }
         DriftOp::Compensate => {
@@ -385,12 +469,14 @@ fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
                 "compensating: three windows of {:.1} s, {} samples each",
                 args.window, args.samples
             );
-            let output = CompensateDrift {
-                z,
-                window_ms,
-                samples: args.samples,
-            }
-            .execute(&mut ctx)?;
+            let output = run_action(
+                &mut ctx,
+                &CompensateDrift {
+                    z,
+                    window_ms,
+                    samples: args.samples,
+                },
+            )?;
             println!("residual Z drift: {:.3} pm/s", value_of(output)? / PM);
             print_status(&ctx.controller.drift_comp_get()?);
         }
@@ -496,25 +582,54 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
         return Ok(());
     };
 
-    // Straight to the action rather than through `Rt`: the harness withdraws
-    // the tip when a routine ends, which is right for a routine and wrong for
-    // a command that only rewrites a configuration.
-    let events = EventBus::new();
+    let started = Instant::now();
+    let events = open_run_log(
+        &args.log_dir,
+        &mut controller,
+        serde_json::json!({
+            "command": "baseline",
+            "output": args.output.display().to_string(),
+            "host_path": host_path,
+            "host": args.host,
+            "port": args.port,
+            "multi_pass": config,
+        }),
+    )?;
+    let result = baseline_apply(&args, &config, &host_path, &events, &mut controller);
+    finish_run_log(&events, started, &result);
+    result
+}
+
+/// Load and activate the baseline configuration, once the log is open.
+///
+/// Straight to the action rather than through `Rt`: the harness withdraws
+/// the tip when a routine ends, which is right for a routine and wrong for
+/// a command that only rewrites a configuration.
+fn baseline_apply(
+    args: &BaselineArgs,
+    config: &MultiPassConfig,
+    host_path: &str,
+    events: &EventBus,
+    controller: &mut NanonisController,
+) -> Result<(), Box<dyn Error>> {
     let shutdown = ShutdownFlag::new();
     let mut store = DataStore::new();
     let mut ctx = ActionContext {
-        controller: &mut controller,
+        controller,
         store: &mut store,
-        events: &events,
+        events,
         shutdown: &shutdown,
+        depth: 0,
     };
 
-    ApplyMultiPass {
-        config: config.clone(),
-        local_path: args.output.clone(),
-        host_path: host_path.clone(),
-    }
-    .execute(&mut ctx)?;
+    run_action(
+        &mut ctx,
+        &ApplyMultiPass {
+            config: config.clone(),
+            local_path: args.output.clone(),
+            host_path: host_path.to_string(),
+        },
+    )?;
 
     let buffer = ctx.controller.scan_buffer_get()?;
     println!(

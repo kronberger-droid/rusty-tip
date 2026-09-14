@@ -5,7 +5,10 @@ use log::{LevelFilter, error, info};
 use std::{fs, io, path::PathBuf, process::ExitCode};
 
 use rusty_tip::config::{AppConfig, load_config};
-use rusty_tip::event::{ConsoleLogger, EventAccumulator, EventBus, FileLogger};
+use rusty_tip::event::{
+    ConsoleLogger, Event, EventAccumulator, EventBus, EventEmitter, FileLogger,
+};
+use rusty_tip::experiment_log::{ControllerFacts, RunHeader};
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::SignalRegistry;
@@ -133,6 +136,14 @@ fn run() -> Result<(), RunError> {
 
     // Setup event bus
     let events = setup_event_bus(&config)?;
+
+    // First line of the log: what this run is and how to read it.
+    let facts = ControllerFacts::gather(&mut controller, Some(&registry));
+    events.emit(Event::run_started(RunHeader::new(
+        rusty_tip::tip_prep::log_schema(),
+        &config,
+        facts,
+    )));
 
     // Setup shutdown handler
     let shutdown = setup_shutdown_handler();

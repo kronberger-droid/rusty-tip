@@ -13,8 +13,9 @@ use rusty_tip::config::{
     load_config_with_fallback,
 };
 use rusty_tip::event::{
-    ChannelForwarder, ConsoleLogger, Event, EventAccumulator, EventBus, FileLogger,
+    ChannelForwarder, ConsoleLogger, Event, EventAccumulator, EventBus, EventEmitter, FileLogger,
 };
+use rusty_tip::experiment_log::{ControllerFacts, RunHeader};
 use rusty_tip::mock_controller::{MockController, models};
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
 use rusty_tip::shutdown::ShutdownFlag;
@@ -876,8 +877,9 @@ impl TipPrepApp {
         if let Some(rx) = &self.event_receiver {
             while let Ok(event) = rx.try_recv() {
                 match &event {
-                    Event::Custom { kind, data } if kind == "tip_prep_state" => {
-                        // Parse TipPrepSnapshot from JSON
+                    // The kinds and fields are declared in `rusty_tip::tip_prep::events`;
+                    // the strings here match those declarations.
+                    Event::Custom { kind, data, .. } if kind == "tip_prep/cycle" => {
                         if let Some(cycle) = data.get("cycle").and_then(|v| v.as_u64()) {
                             self.tip_state.cycle = cycle as usize;
                         }
@@ -900,6 +902,18 @@ impl TipPrepApp {
                         if let Some(sharp) = data.get("is_sharp").and_then(|v| v.as_bool()) {
                             self.tip_state.is_sharp = sharp;
                         }
+                        self.tip_state.phase = "pulsing".to_string();
+                    }
+                    Event::Custom { kind, data, .. } if kind == "tip_prep/max_pulse" => {
+                        if let Some(pv) = data.get("pulse_voltage").and_then(|v| v.as_f64()) {
+                            self.tip_state.pulse_voltage = pv;
+                            self.voltage_history.push(DataPoint {
+                                time_s: elapsed_now,
+                                value: pv,
+                            });
+                        }
+                    }
+                    Event::Custom { kind, data, .. } if kind == "tip_prep/phase" => {
                         if let Some(phase) = data.get("phase").and_then(|v| v.as_str()) {
                             self.tip_state.phase = phase.to_string();
                         }
@@ -1795,7 +1809,7 @@ fn run_controller(
     event_tx: Sender<Event>,
     simulate: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (controller, freq_shift_index) = if simulate {
+    let (controller, freq_shift_index, facts) = if simulate {
         build_mock_backend(&config)?
     } else {
         build_nanonis_backend(&config)?
@@ -1818,6 +1832,12 @@ fn run_controller(
     }
 
     events.add_observer(Box::new(EventAccumulator::new(500)));
+
+    events.emit(Event::run_started(RunHeader::new(
+        rusty_tip::tip_prep::log_schema(),
+        &config,
+        facts,
+    )));
 
     // Run tip preparation
     let result = run_tip_prep(
@@ -1846,7 +1866,7 @@ fn run_controller(
 }
 
 /// Boxed controller plus the resolved freq-shift signal index.
-type Backend = (Box<dyn SpmController>, SignalIndex);
+type Backend = (Box<dyn SpmController>, SignalIndex, ControllerFacts);
 
 /// Index of `"freq shift"` in [`MockController`]'s fixed channel layout. Checked
 /// against the registry in [`build_mock_backend`] so a change to the mock's
@@ -1884,7 +1904,8 @@ fn build_nanonis_backend(
 
     setup_tcp_stream(&mut controller, &registry, config)?;
 
-    Ok((Box::new(controller), freq_shift_index))
+    let facts = ControllerFacts::gather(&mut controller, Some(&registry));
+    Ok((Box::new(controller), freq_shift_index, facts))
 }
 
 /// Drive the routine against the in-memory mock — no hardware, no TCP stream.
@@ -1921,7 +1942,7 @@ fn build_mock_backend(
         .into());
     }
 
-    Ok((Box::new(mock), resolved))
+    Ok((Box::new(mock), resolved, ControllerFacts::default()))
 }
 
 fn build_signal_registry(
