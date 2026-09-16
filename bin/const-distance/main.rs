@@ -83,10 +83,11 @@ enum Command {
 
 #[derive(Args)]
 struct BaselineArgs {
-    /// Lift for the second pass, in nanometres. Positive is the direction the
-    /// `Play offset` field takes; which way that points on hardware has NOT
-    /// been confirmed yet, so check against the GUI before trusting the sign.
-    #[arg(short, long, default_value_t = 0.2)]
+    /// Lift for the second pass, in metres (0.5e-9 for half a nanometre).
+    /// Positive is the direction the `Play offset` field takes; which way
+    /// that points on hardware has NOT been confirmed yet, so check against
+    /// the GUI before trusting the sign.
+    #[arg(short, long, default_value_t = 2e-10)]
     lift: f64,
 
     /// RT signal slot to record in the first pass. 30 is Z (m) on a stock
@@ -141,11 +142,11 @@ struct PlanArgs {
     #[arg(long, value_enum, default_value_t = InputUnit::M)]
     input_unit: InputUnit,
 
-    /// Sample spacing along the fast axis, nm. Read from the file for .gsf.
-    #[arg(long, default_value_t = 0.1)]
+    /// Sample spacing along the fast axis, metres. Read from the file for .gsf.
+    #[arg(long, default_value_t = 1e-10)]
     dx: f64,
 
-    /// Sample spacing along the slow axis, nm. Defaults to --dx.
+    /// Sample spacing along the slow axis, metres. Defaults to --dx.
     #[arg(long)]
     dy: Option<f64>,
 
@@ -157,20 +158,20 @@ struct PlanArgs {
     #[arg(long, default_value_t = 256)]
     ny: usize,
 
-    /// Characteristic feature height, nm, synthetic surfaces only.
-    #[arg(long, default_value_t = 0.3)]
+    /// Characteristic feature height, metres, synthetic surfaces only.
+    #[arg(long, default_value_t = 3e-10)]
     amplitude: f64,
 
-    /// Lateral semi-axis of the tip ellipsoid, nm.
-    #[arg(short = 'a', long, default_value_t = 1.0)]
+    /// Lateral semi-axis of the tip ellipsoid, metres.
+    #[arg(short = 'a', long, default_value_t = 1e-9)]
     lateral: f64,
 
-    /// Lateral semi-axis along the slow axis, nm. Defaults to --lateral.
+    /// Lateral semi-axis along the slow axis, metres. Defaults to --lateral.
     #[arg(long)]
     lateral_y: Option<f64>,
 
-    /// Vertical semi-axis of the tip ellipsoid, nm. Smaller means blunter.
-    #[arg(short = 'c', long, default_value_t = 0.5)]
+    /// Vertical semi-axis of the tip ellipsoid, metres. Smaller means blunter.
+    #[arg(short = 'c', long, default_value_t = 5e-10)]
     vertical: f64,
 
     /// How to treat the footprint where it overhangs the frame edge.
@@ -281,7 +282,17 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
         (None, _) => SignalIndex(args.signal),
     };
 
-    let mut config = MultiPassConfig::constant_lift(signal, args.lift * NM);
+    // A lift beyond the piezo range is a unit slip, not a plan: `--lift 0.5`
+    // is half a metre.
+    if args.lift.abs() > 100e-9 {
+        return Err(format!(
+            "--lift {} m is more than 100 nm; it takes metres, so half a nanometre is 0.5e-9",
+            args.lift
+        )
+        .into());
+    }
+
+    let mut config = MultiPassConfig::constant_lift(signal, args.lift);
     for pass in &mut config.passes {
         pass.delay = args.delay;
     }
@@ -357,9 +368,9 @@ fn plan(args: PlanArgs) -> Result<(), Box<dyn Error>> {
     let (ny, nx) = z.dim();
 
     let tip_model = RollingEllipsoid::new(
-        args.lateral * NM,
-        args.lateral_y.unwrap_or(args.lateral) * NM,
-        args.vertical * NM,
+        args.lateral,
+        args.lateral_y.unwrap_or(args.lateral),
+        args.vertical,
     );
     let border: Border = args.border.into();
 
@@ -422,12 +433,12 @@ fn plan(args: PlanArgs) -> Result<(), Box<dyn Error>> {
 /// has to be told.
 fn load_input(args: &PlanArgs) -> Result<(Array2<f64>, GridSpacing), Box<dyn Error>> {
     let cli_spacing = GridSpacing {
-        dx: args.dx * NM,
-        dy: args.dy.unwrap_or(args.dx) * NM,
+        dx: args.dx,
+        dy: args.dy.unwrap_or(args.dx),
     };
 
     if let Some(kind) = args.synthetic {
-        let z = surface::generate(kind, args.ny, args.nx, cli_spacing, args.amplitude * NM);
+        let z = surface::generate(kind, args.ny, args.nx, cli_spacing, args.amplitude);
         return Ok((z, cli_spacing));
     }
 

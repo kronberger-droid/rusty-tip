@@ -159,9 +159,9 @@ Useful flags:
 | `--synthetic <KIND>` | generate a test surface: `flat`, `step`, `terraces`, `pit`, `bumps`, `combo` |
 | `--input <FILE>` | read a `.gsf` file, or a whitespace-separated ASCII grid |
 | `--input-unit <m\|nm>` | unit of the values in an ASCII input file |
-| `--dx`, `--dy` | sample spacing, nm; taken from the file for `.gsf` |
-| `-a`, `--lateral` | lateral semi-axis, nm (`--lateral-y` to differ on the slow axis) |
-| `-c`, `--vertical` | vertical semi-axis, nm; smaller is blunter |
+| `--dx`, `--dy` | sample spacing, metres; taken from the file for `.gsf` |
+| `-a`, `--lateral` | lateral semi-axis, metres (`--lateral-y` to differ on the slow axis) |
+| `-c`, `--vertical` | vertical semi-axis, metres; smaller is blunter |
 | `--border` | `truncate` or `replicate` |
 | `--profile <ROW>` | which scan line to draw as a terminal cross-section |
 | `--no-xyz` | skip the point clouds, which are large and slow to write |
