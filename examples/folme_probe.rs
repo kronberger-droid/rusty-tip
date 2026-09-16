@@ -12,8 +12,8 @@
 //! ```text
 //! cargo run --example folme_probe -- --host 192.168.1.10 latency
 //! cargo run --example folme_probe -- feedback-off
-//! cargo run --example folme_probe -- --lift-nm 5 z-steps
-//! cargo run --example folme_probe -- --folme-speed-nm-s 20 folme
+//! cargo run --example folme_probe -- --lift 5e-9 z-steps
+//! cargo run --example folme_probe -- --folme-speed 20e-9 folme
 //! cargo run --example folme_probe -- all
 //! ```
 //!
@@ -58,10 +58,10 @@ struct Cli {
     #[arg(long, default_value_t = 6501)]
     port: u16,
 
-    /// How far to retract, in nanometres, before any open-loop Z step. At 5 nm
-    /// the tip is out of range of every short-range interaction.
-    #[arg(long, default_value_t = 5.0)]
-    lift_nm: f64,
+    /// How far to retract, in metres, before any open-loop Z step. At 5 nm
+    /// (5e-9) the tip is out of range of every short-range interaction.
+    #[arg(long, default_value_t = 5e-9)]
+    lift: f64,
 
     /// Which way "away from the surface" points in Z: +1 if increasing Z
     /// retracts, -1 if decreasing Z does. Measured from TipLift when omitted.
@@ -72,13 +72,13 @@ struct Cli {
     #[arg(long)]
     df_signal: Option<u8>,
 
-    /// FolMe speed for the waypoint replay, in nm/s.
-    #[arg(long, default_value_t = 20.0)]
-    folme_speed_nm_s: f64,
+    /// FolMe speed for the waypoint replay, in m/s (20e-9 is 20 nm/s).
+    #[arg(long, default_value_t = 20e-9)]
+    folme_speed: f64,
 
-    /// Length of the FolMe replay line, in nanometres.
-    #[arg(long, default_value_t = 5.0)]
-    line_nm: f64,
+    /// Length of the FolMe replay line, in metres.
+    #[arg(long, default_value_t = 5e-9)]
+    line: f64,
 
     /// Waypoints along the FolMe replay line, one way.
     #[arg(long, default_value_t = 64)]
@@ -100,7 +100,7 @@ enum Probe {
     /// Open the loop, time how long the controller takes to report it off,
     /// and measure the TipLift jump. Closes the loop again afterwards.
     FeedbackOff,
-    /// Open the loop, retract by --lift-nm, step Z by 10 pm, 100 pm and 1 nm
+    /// Open the loop, retract by --lift, step Z by 10 pm, 100 pm and 1 nm
     /// (each further away), watching the frequency shift. Restores Z and
     /// closes the loop.
     ZSteps,
@@ -120,6 +120,15 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    // Anything beyond the piezo range is a unit slip: `--lift 5` is five
+    // metres.
+    if cli.lift.abs() > 100.0 * NM {
+        return Err(format!(
+            "--lift {} m is more than 100 nm; it takes metres, so 5 nm is 5e-9",
+            cli.lift
+        )
+        .into());
+    }
     let probes: Vec<Probe> = if cli.probes.contains(&Probe::All) {
         vec![
             Probe::Latency,
@@ -146,7 +155,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nprobes: {probes:?}");
     println!(
         "lift {} nm, z-sign {}",
-        cli.lift_nm,
+        cli.lift / NM,
         match cli.z_sign {
             Some(s) => format!("{s:+} (given)"),
             None => "measured from TipLift".to_string(),
@@ -170,14 +179,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             Probe::ZSteps => {
                 let sign = cli.z_sign.map(|s| s as f64).or(measured_sign);
-                z_steps(&mut c, df, cli.lift_nm * NM, sign)?;
+                z_steps(&mut c, df, cli.lift, sign)?;
             }
-            Probe::Folme => folme(
-                &mut c,
-                cli.folme_speed_nm_s * NM,
-                cli.line_nm * NM,
-                cli.waypoints,
-            )?,
+            Probe::Folme => folme(&mut c, cli.folme_speed, cli.line, cli.waypoints)?,
             Probe::All => unreachable!("expanded above"),
         }
     }
