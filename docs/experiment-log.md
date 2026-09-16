@@ -31,7 +31,7 @@ before the harness could write it.
 | `version`, `git_commit` | what built the binary; `git_commit` is null outside a checkout |
 | `envelope_version` | version of this line format, currently 1 |
 | `config` | the tool's configuration as loaded, after defaults; for a command-line tool, its arguments |
-| `controller` | what was learned at startup: the resolved signals with their indices and TCP channels, and the measured stream rate |
+| `controller` | what was learned at startup: the resolved signals with their indices and TCP channels, and the stream rate |
 | `schema` | the tool's declared custom events, see below |
 
 **`run_finished`**: `outcome` is `completed`, `stopped_by_user`,
