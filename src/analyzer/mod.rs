@@ -1,8 +1,10 @@
 mod adapter;
 pub mod cuox_rows;
+pub mod rolling_ellipsoid;
 
 pub use adapter::RunAnalyzer;
 pub use cuox_rows::CuoxRowDetector;
+pub use rolling_ellipsoid::{Border, GridSpacing, RollingEllipsoid, vertical_clearance};
 
 use crate::spm_error::SpmError;
 
