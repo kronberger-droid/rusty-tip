@@ -67,6 +67,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the rate the controller measured when the stream started
   (`SpmController::stream_rate_hz`); the config value is a fallback, with a
   warning when it is more than ten percent off.
+- **The stream rate read low.** It was counted over a window that opened
+  before the logger sent its first frame, so a 500 Hz stream measured
+  458. The measurement now spans first to last frame received, and the
+  rate recorded in the log header and used by the drift gate is the
+  nominal base over divisor once the measurement has confirmed it, with
+  the measured value kept in the startup line as evidence.
 - **The stable-read backoff ignored a stop request.** The 100, 200 and
   400 ms waits between retries were plain sleeps; they go through the
   interruptible settle now.

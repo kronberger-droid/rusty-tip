@@ -31,8 +31,11 @@ The TCP logger delivers its base rate divided by an integer, so the nearest
 such rate to `sample_rate` is what arrives: on a 2 kHz base, 1000 or 667 Hz
 but not 800. The controller works out the divisor from the RT frequency,
 measures what the stream delivers, corrects the divisor once if the guess
-was off, and logs the result. The drift gate uses the measured rate, so a
-request that had to be rounded costs nothing but a warning at startup.
+was off, and logs the result. The rate it records, and the drift gate
+uses, is the nominal base over divisor once the measurement has confirmed
+it, since that is exact where the measurement carries packet-timing
+jitter. A request that had to be rounded costs nothing but a warning at
+startup.
 
 ## `[tip_prep]` — the routine
 
