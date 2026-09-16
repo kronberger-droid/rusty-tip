@@ -355,11 +355,7 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
          over TCP. Tick it by hand in Scan Control, or the passes will not \
          land on the same line."
     );
-    println!(
-        "unconfirmed: the offset sign (does positive approach or retract?) and \
-         Speed sel = 0, which displays as ratio 1 but has not been checked \
-         against a GUI-saved default."
-    );
+    println!("unconfirmed: the offset sign (does positive approach or retract?).");
     Ok(())
 }
 

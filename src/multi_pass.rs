@@ -25,7 +25,7 @@
 //! Rec state = TRUE\r\n
 //! Rec ch = 30\r\n
 //! ...
-//! Switch Lock-In = FALSE          <- end of file, no CRLF
+//! Apply Offset after Callback VI = FALSE   <- end of file, no CRLF
 //! ```
 //!
 //! One `[PassN]` section per scan *direction*, numbered from 1, and this is the
@@ -57,6 +57,16 @@
 //! - **Acquisition channels.** `Acq ch` is a four-byte blob whose encoding is
 //!   still unknown; it stayed `"\00\00\00\00"` across every configuration
 //!   saved so far. It is carried through verbatim rather than interpreted.
+//!
+//! # Versions
+//!
+//! The key set differs between Nanonis versions. A version with a per-pass
+//! lock-in option ends every section with a `Switch Lock-In` line; the LT
+//! system's version has no such option and no such key. So
+//! [`Pass::switch_lock_in`] is an `Option`: `None` means the key was absent,
+//! and it is then left out when writing, which keeps a file from either
+//! version byte-exact through a round trip. Whether a controller without the
+//! option accepts a file that carries the key has not been tested.
 //!
 //! # Units and precision
 //!
@@ -139,13 +149,14 @@ pub struct Pass {
     /// Wait after applying the playback offset, in seconds. Only meaningful
     /// when playing a signal back.
     pub end_time: f64,
-    /// Enum behind the speed control. `2` is what the GUI wrote for a custom
-    /// speed; the other values are not yet known, `0` included.
+    /// Enum behind the speed control. `2` is what the GUI writes both for a
+    /// fresh pass ("Speed Ratio 1") and for a custom ratio, so `2` selects a
+    /// multiple of the scan speed. The other values are not yet known; `0`
+    /// displayed as "Speed Ratio 1" when loaded, but the GUI never writes it.
     pub speed_sel: i32,
-    /// Speed value for this pass. The GUI labels it "Speed Ratio", so it most
-    /// likely multiplies the regular scan speed, but that is not confirmed and
-    /// it is not known how `speed_sel` changes the reading. See the warning on
-    /// [`Pass::default`].
+    /// Speed value for this pass. With `speed_sel` 2 the GUI labels it "Speed
+    /// Ratio", a multiple of the regular scan speed. How the other selector
+    /// values change its meaning is not known.
     pub speed_value: f64,
     /// Override the bias for this pass.
     pub bias_override: bool,
@@ -166,21 +177,21 @@ pub struct Pass {
     /// Wait `delay` only after the callback VI or script has finished, rather
     /// than at the very start of the line.
     pub apply_offset_after_callback_vi: bool,
-    /// Switch the lock-in on for this pass.
-    pub switch_lock_in: bool,
+    /// Switch the lock-in on for this pass. `None` when the file has no such
+    /// key, which is what a Nanonis version without the per-pass lock-in
+    /// option writes; the key is then left out again on write. See the
+    /// module docs on versions.
+    pub switch_lock_in: Option<bool>,
 }
 
 impl Default for Pass {
     /// A pass that does nothing beyond scanning the line.
     ///
-    /// These are our defaults, not Nanonis's: the GUI's own idea of a fresh
-    /// pass has never been saved to a file, so the only values here taken from
-    /// an observed file are `acq_ch` and the 10 s callback timeout.
-    ///
-    /// `speed_sel: 0` with `speed_value: 1.0` displays as "Speed Ratio 1" and
-    /// is the reason to be careful: if `0` ever selects an *absolute* speed
-    /// rather than a ratio, 1 m/s is a catastrophic scan speed. Save a fresh
-    /// default pass from the GUI and check before running this on hardware.
+    /// `speed_sel: 2` with `speed_value: 1.0` is what the GUI writes for a
+    /// fresh pass, "Speed Ratio 1", as saved on the LT system. `acq_ch` and
+    /// the 10 s callback timeout are from saved files as well; the rest are
+    /// the off or zero values. `switch_lock_in` is `None`, matching a
+    /// controller without the per-pass lock-in option.
     fn default() -> Self {
         Self {
             acq_ch: ACQ_CH_DEFAULT.to_string(),
@@ -191,7 +202,7 @@ impl Default for Pass {
             play_slew_rate: 0.0,
             delay: 0.0,
             end_time: 0.0,
-            speed_sel: 0,
+            speed_sel: 2,
             speed_value: 1.0,
             bias_override: false,
             bias_override_value: 0.0,
@@ -202,7 +213,7 @@ impl Default for Pass {
             run_script: false,
             script_name: String::new(),
             apply_offset_after_callback_vi: false,
-            switch_lock_in: false,
+            switch_lock_in: None,
         }
     }
 }
@@ -372,7 +383,7 @@ impl fmt::Display for MultiPassConfig {
             lines.push(format!("[Pass{}]", n + 1));
             // Key order is not something a parser cares about, but matching the
             // GUI's makes our files diffable against GUI-saved ones.
-            for (key, value) in [
+            let mut fields = vec![
                 ("Acq ch", format!("\"{}\"", p.acq_ch)),
                 ("Rec state", fmt_bool(p.rec_state)),
                 ("Rec ch", p.rec_ch.to_string()),
@@ -396,8 +407,12 @@ impl fmt::Display for MultiPassConfig {
                     "Apply Offset after Callback VI",
                     fmt_bool(p.apply_offset_after_callback_vi),
                 ),
-                ("Switch Lock-In", fmt_bool(p.switch_lock_in)),
-            ] {
+            ];
+            // Only a version with the per-pass lock-in option has this key.
+            if let Some(on) = p.switch_lock_in {
+                fields.push(("Switch Lock-In", fmt_bool(on)));
+            }
+            for (key, value) in fields {
                 lines.push(format!("{key} = {value}"));
             }
         }
@@ -493,10 +508,11 @@ fn parse_ini(text: &str) -> io::Result<BTreeMap<String, Section>> {
 }
 
 fn parse_pass(s: &Section, name: &str) -> io::Result<Pass> {
-    // Every key is required. The file is machine-written and always complete,
-    // so a missing key means a version difference worth knowing about rather
-    // than something to paper over with a default: defaulting `Play offset` to
-    // zero would silently plan a pass that replays Z with no lift at all.
+    // Every key is required, bar the one known version difference. The file
+    // is machine-written and always complete, so a missing key means a
+    // version difference worth knowing about rather than something to paper
+    // over with a default: defaulting `Play offset` to zero would silently
+    // plan a pass that replays Z with no lift at all.
     Ok(Pass {
         acq_ch: string(s, "Acq ch"),
         rec_state: boolean(s, name, "Rec state")?,
@@ -517,7 +533,10 @@ fn parse_pass(s: &Section, name: &str) -> io::Result<Pass> {
         run_script: boolean(s, name, "Run Script")?,
         script_name: string(s, "Script name"),
         apply_offset_after_callback_vi: boolean(s, name, "Apply Offset after Callback VI")?,
-        switch_lock_in: boolean(s, name, "Switch Lock-In")?,
+        switch_lock_in: match s.get("Switch Lock-In") {
+            Some(_) => Some(boolean(s, name, "Switch Lock-In")?),
+            None => None,
+        },
     })
 }
 
@@ -663,11 +682,39 @@ Switch Lock-In = FALSE"#;
         LF.replace('\n', "\r\n")
     }
 
+    /// The same configuration as saved by a Nanonis version without the
+    /// per-pass lock-in option: no `Switch Lock-In` key in any section, which
+    /// is what the LT system writes.
+    fn golden_without_lock_in() -> String {
+        golden().replace("\r\nSwitch Lock-In = FALSE", "")
+    }
+
     #[test]
     fn round_trip_is_byte_exact() {
         let text = golden();
         let config: MultiPassConfig = text.parse().expect("golden file parses");
+        assert!(
+            config
+                .passes
+                .iter()
+                .all(|p| p.switch_lock_in == Some(false))
+        );
         assert_eq!(config.to_string(), text);
+    }
+
+    #[test]
+    fn a_file_without_the_lock_in_key_round_trips_without_it() {
+        let text = golden_without_lock_in();
+        let config: MultiPassConfig = text.parse().expect("parses without the key");
+        assert!(config.passes.iter().all(|p| p.switch_lock_in.is_none()));
+        assert_eq!(config.to_string(), text);
+    }
+
+    #[test]
+    fn a_default_pass_writes_what_the_gui_writes_for_a_fresh_one() {
+        let text = MultiPassConfig::new(vec![Pass::default()]).to_string();
+        assert!(text.contains("Speed sel = 2\r\nSpeed value = 1.000000E+0"));
+        assert!(!text.contains("Switch Lock-In"));
     }
 
     #[test]
