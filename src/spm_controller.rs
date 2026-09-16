@@ -163,7 +163,15 @@ pub trait SpmController: Send {
 
     // -- Z-Controller --
     fn withdraw(&mut self, wait: bool, timeout: Duration) -> Result<()>;
+    /// Start the auto-approach. With `wait` this blocks until contact or
+    /// `timeout`, and nothing can interrupt it; callers that need to stop
+    /// on request start it with `wait = false` and poll
+    /// [`auto_approach_running`](Self::auto_approach_running) themselves.
     fn auto_approach(&mut self, wait: bool, timeout: Duration) -> Result<()>;
+    /// Whether an auto-approach is in progress.
+    fn auto_approach_running(&mut self) -> Result<bool>;
+    /// Switch a running auto-approach off. The tip stays where it is.
+    fn auto_approach_stop(&mut self) -> Result<()>;
     fn set_z_setpoint(&mut self, setpoint: f64) -> Result<()>;
     fn set_z_home(&mut self, mode: ZHomeMode, position: f64) -> Result<()>;
     /// Move the tip to the configured z-home position.
@@ -318,6 +326,16 @@ pub trait SpmController: Send {
     /// returns only fresh post-operation data.  Default is a no-op for
     /// controllers without internal buffering.
     fn clear_data_buffer(&mut self) {}
+
+    /// The rate the data stream actually delivers samples at, in Hz, as
+    /// measured when the stream was started. `None` when there is no stream
+    /// or the measurement found nothing. Consumers that convert per-sample
+    /// slopes into per-second rates should prefer this over any configured
+    /// number, since the delivered rate depends on the controller's own base
+    /// rate and oversampling, not on what a config file claims.
+    fn stream_rate_hz(&mut self) -> Option<f64> {
+        None
+    }
 
     // -- Signal Reading --
 

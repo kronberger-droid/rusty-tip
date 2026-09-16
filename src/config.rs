@@ -35,6 +35,13 @@ impl AppConfig {
             .validate()
             .map_err(|e| ConfigError::Message(format!("Invalid pulse_method: {}", e)))?;
 
+        // `cycle % status_interval` is evaluated every cycle.
+        if self.tip_prep.timing.status_interval == 0 {
+            return Err(ConfigError::Message(
+                "tip_prep.timing.status_interval must be at least 1".into(),
+            ));
+        }
+
         Ok(())
     }
 }
@@ -51,27 +58,17 @@ fn default_stable_signal_samples() -> usize {
     100
 }
 
-/// 2 gives roughly 1 kHz on a 20 kHz RC5, so the default 100-sample stable
-/// read completes in about a tenth of a second.
-fn default_oversampling() -> i32 {
-    2
-}
-
 /// How the signal stream is acquired. The thresholds a reading is *judged*
 /// against live in [`SignalStabilityConfig`], not here.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DataAcquisitionConfig {
     pub data_port: u16,
+    /// Stream rate to ask the TCP logger for, in Hz. The logger delivers its
+    /// base rate divided by an integer, so the nearest such rate is what
+    /// arrives; the controller measures it at startup, logs it, and the
+    /// routine judges drift at the measured rate. 1000 Hz makes the default
+    /// 100-sample stable read take a tenth of a second.
     pub sample_rate: u32,
-    /// Divisor the TCP logger applies to its own base rate, which on the
-    /// measured RC5 is `RTFreq / 10`. The delivered frame rate is
-    /// `base / oversampling`, so this is what decides whether
-    /// `stable_signal_samples` can be gathered inside the read timeout.
-    ///
-    /// It is deliberately explicit rather than derived from `sample_rate`:
-    /// the base rate is a property of the controller, not of this config.
-    #[serde(default = "default_oversampling")]
-    pub oversampling: i32,
     /// Number of TCP stream samples to average for a stable signal read.
     #[serde(default = "default_stable_signal_samples")]
     pub stable_signal_samples: usize,
@@ -121,6 +118,18 @@ fn default_reposition_steps() -> [i16; 2] {
 fn default_status_interval() -> usize {
     10
 }
+/// 0.2.3 gave the approaches that start from a full withdraw ten minutes.
+fn default_approach_timeout_ms() -> u64 {
+    600_000
+}
+/// A reposition retracts three coarse steps, so its approach is short.
+fn default_reposition_approach_timeout_ms() -> u64 {
+    300_000
+}
+/// 0.2.3 backed the coarse motor off ten steps after the final withdraw.
+fn default_exit_retract_steps() -> u16 {
+    10
+}
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TimingConfig {
@@ -143,6 +152,22 @@ pub struct TimingConfig {
     pub reposition_steps: [i16; 2],
     #[serde(default = "default_status_interval")]
     pub status_interval: usize,
+    /// Budget for an approach that starts from a full withdraw: the first
+    /// approach of the run and the re-approach around each stability sweep.
+    /// An approach that overruns it is stopped and the run ends in an error,
+    /// with the tip withdrawn.
+    #[serde(default = "default_approach_timeout_ms")]
+    pub approach_timeout_ms: u64,
+    /// Budget for the approach inside a reposition, which starts only three
+    /// coarse steps off the surface.
+    #[serde(default = "default_reposition_approach_timeout_ms")]
+    pub reposition_approach_timeout_ms: u64,
+    /// Coarse Z steps to back off after the final withdraw, however the run
+    /// ends. A withdraw alone parks the tip at the top of the piezo range,
+    /// still within reach of the surface; this puts real distance behind it.
+    /// Zero disables the retract.
+    #[serde(default = "default_exit_retract_steps")]
+    pub exit_retract_steps: u16,
 }
 
 impl Default for TimingConfig {
@@ -156,6 +181,9 @@ impl Default for TimingConfig {
             post_pulse_settle_ms: default_post_pulse_settle_ms(),
             reposition_steps: default_reposition_steps(),
             status_interval: default_status_interval(),
+            approach_timeout_ms: default_approach_timeout_ms(),
+            reposition_approach_timeout_ms: default_reposition_approach_timeout_ms(),
+            exit_retract_steps: default_exit_retract_steps(),
         }
     }
 }
@@ -257,8 +285,7 @@ impl Default for DataAcquisitionConfig {
     fn default() -> Self {
         Self {
             data_port: 6590,
-            sample_rate: 2000,
-            oversampling: default_oversampling(),
+            sample_rate: 1000,
             stable_signal_samples: default_stable_signal_samples(),
         }
     }

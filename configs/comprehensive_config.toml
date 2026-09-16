@@ -186,13 +186,6 @@ bias_steps = 1000
 step_period_ms = 200
 # step_period_ms = 100  # Alternative: Faster sweep
 # step_period_ms = 500  # Alternative: More settling time
-
-# Maximum duration for stability check in seconds
-# Prevents hanging if sweep takes too long
-max_duration_secs = 100
-# max_duration_secs = 60   # Alternative: Shorter timeout
-# max_duration_secs = 300  # Alternative: Longer timeout
-
 # Polarity mode for bias sweep
 # Options:
 #   "positive" - Single sweep from bias_range[0] to bias_range[1]

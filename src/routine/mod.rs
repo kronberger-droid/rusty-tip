@@ -102,15 +102,26 @@ pub trait Routine {
     /// (it is what `rt.settle` and `rt.check_shutdown` produce); the harness
     /// converts it to `Ok(Outcome::StoppedByUser)`.
     fn run(&mut self, rt: &mut Rt) -> Result<Outcome, SpmError>;
+
+    /// Coarse Z steps the harness backs off after the final withdraw.
+    ///
+    /// A withdraw only parks the tip at the top of the piezo range. Routines
+    /// that leave the tip behind for good (tip prep) want real distance
+    /// behind it; routines that expect to come back to the same spot (a
+    /// scan) keep the default of zero.
+    fn exit_retract_steps(&self) -> u16 {
+        0
+    }
 }
 
 /// Run a routine, owning the controller life cycle around it.
 ///
 /// Calls `prepare()` first. Afterwards, regardless of how the routine ended,
-/// withdraws the tip (best effort, logged on failure) and calls `teardown()`,
-/// so an error mid-routine never leaves the tip engaged on the surface. A
-/// shutdown request surfaces as `Ok(Outcome::StoppedByUser)`, never as an
-/// error.
+/// withdraws the tip, backs the coarse motor off by
+/// [`Routine::exit_retract_steps`] (both best effort, logged on failure) and
+/// calls `teardown()`, so an error mid-routine never leaves the tip engaged
+/// on the surface. A shutdown request surfaces as
+/// `Ok(Outcome::StoppedByUser)`, never as an error.
 ///
 /// "Regardless" includes panics: the routine runs inside
 /// [`catch_unwind`](panic::catch_unwind), so a panicking routine is withdrawn
@@ -157,6 +168,17 @@ pub fn run_routine(
             }
         }
         Err(e) => log::warn!("Cleanup withdrawal skipped: {}", e),
+    }
+    let retract = routine.exit_retract_steps();
+    if retract > 0 {
+        match rt.motor() {
+            Ok(mut motor) => {
+                if let Err(e) = motor.move_3d(0, 0, -(retract as i16)) {
+                    log::warn!("Cleanup retract of {retract} coarse steps failed: {e}");
+                }
+            }
+            Err(e) => log::warn!("Cleanup retract skipped: {}", e),
+        }
     }
     drop(rt);
     controller.teardown();
