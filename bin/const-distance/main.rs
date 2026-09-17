@@ -184,7 +184,7 @@ struct BaselineArgs {
     /// Positive is the direction the `Play offset` field takes; which way
     /// that points on hardware has NOT been confirmed yet, so check against
     /// the GUI before trusting the sign.
-    #[arg(short, long, default_value_t = 2e-10)]
+    #[arg(short, long, default_value = "0.2e-9")]
     lift: f64,
 
     /// RT signal slot to record in the first pass. 30 is Z (m) on a stock
@@ -308,7 +308,7 @@ struct PlanArgs {
     input_unit: InputUnit,
 
     /// Sample spacing along the fast axis, metres. Read from the file for .gsf.
-    #[arg(long, default_value_t = 1e-10)]
+    #[arg(long, default_value = "0.1e-9")]
     dx: f64,
 
     /// Sample spacing along the slow axis, metres. Defaults to --dx.
@@ -324,11 +324,11 @@ struct PlanArgs {
     ny: usize,
 
     /// Characteristic feature height, metres, synthetic surfaces only.
-    #[arg(long, default_value_t = 3e-10)]
+    #[arg(long, default_value = "0.3e-9")]
     amplitude: f64,
 
     /// Lateral semi-axis of the tip ellipsoid, metres.
-    #[arg(short = 'a', long, default_value_t = 1e-9)]
+    #[arg(short = 'a', long, default_value = "1e-9")]
     lateral: f64,
 
     /// Lateral semi-axis along the slow axis, metres. Defaults to --lateral.
@@ -336,7 +336,7 @@ struct PlanArgs {
     lateral_y: Option<f64>,
 
     /// Vertical semi-axis of the tip ellipsoid, metres. Smaller means blunter.
-    #[arg(short = 'c', long, default_value_t = 5e-10)]
+    #[arg(short = 'c', long, default_value = "0.5e-9")]
     vertical: f64,
 
     /// How to treat the footprint where it overhangs the frame edge.
@@ -745,7 +745,7 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
     for (i, pass) in config.passes.iter().enumerate() {
         let what = match (pass.recorded(), pass.played()) {
             (Some(s), _) => format!("record RT slot {}", s.0),
-            (_, Some((offset, _))) => format!("play back, offset {} nm", offset / NM),
+            (_, Some((offset, _))) => format!("play back, offset {:.4} nm", offset / NM),
             _ => "nothing".to_string(),
         };
         println!("  {}: {what}", MultiPassConfig::label(i));
