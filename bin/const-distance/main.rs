@@ -110,13 +110,10 @@ struct DriftArgs {
     #[arg(long, default_value_t = 5.0)]
     window: f64,
 
-    /// Bursts `compensate` may spend, the baseline and the trial included.
+    /// Bursts `compensate` spends, the baseline and the trial included. Each
+    /// one after those averages another estimate into the velocity.
     #[arg(long, default_value_t = 5)]
     bursts: usize,
-
-    /// Fraction of the measured residual each correction removes, in (0, 1].
-    #[arg(long, default_value_t = 0.7)]
-    gain: f64,
 
     /// Velocity step `compensate` uses to learn which way the controller's
     /// `vz` runs, in m/s. Large on purpose: with the loop closed it only
@@ -454,7 +451,6 @@ fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
             "z_signal": z.0,
             "window_s": args.window,
             "bursts": args.bursts,
-            "gain": args.gain,
             "trial_vz_m_s": args.trial,
             "response": args.response,
             "sample_rate_hz": args.sample_rate,
@@ -623,7 +619,7 @@ fn drift_op(
         DriftOp::Compensate => {
             print_status(&ctx.controller.drift_comp_get()?);
             println!(
-                "compensating: up to {} bursts of {:.1} s (Z controller must be on, scan stopped)",
+                "compensating: {} bursts of {:.1} s (Z controller must be on, scan stopped)",
                 args.bursts, args.window
             );
             let output = run_action(
@@ -631,8 +627,7 @@ fn drift_op(
                 &CompensateDrift {
                     window_ms,
                     samples: args.samples,
-                    max_bursts: args.bursts,
-                    gain: args.gain,
+                    bursts: args.bursts,
                     trial_vz: args.trial,
                     response: args.response,
                     ..CompensateDrift::new(z)
@@ -646,7 +641,10 @@ fn drift_op(
                 result.bursts,
                 match result.converged {
                     true => "inside its error bar",
-                    false => "NOT converged: burst budget spent, raise --bursts or --window",
+                    false => {
+                        "outside its error bar. One burst does that from noise now and then; \
+                         if it repeats, raise --window"
+                    }
                 }
             );
             match (result.response, args.response) {
