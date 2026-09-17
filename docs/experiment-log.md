@@ -79,7 +79,9 @@ pulse voltage as fired with its sign, whether it was sharp),
 `tip_prep/phase` (`confirming`, `stability_check` with the baseline,
 `stable` or `unstable` with the final read), and `tip_prep/max_pulse`.
 The routine harness adds `routine/cleanup_failed` and `routine/panicked`
-to every routine's schema. const-distance declares no custom kinds yet.
+to every routine's schema. The drift actions declare `drift/burst` (one per
+measurement burst of a compensation: its role, the velocity in effect, the
+drift measured and its standard error), which const-distance includes.
 
 ## Reading a log: `rt-log`
 

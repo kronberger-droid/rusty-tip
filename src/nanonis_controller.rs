@@ -1080,6 +1080,10 @@ impl SpmController for NanonisController {
         self.stream_rate_hz
     }
 
+    fn streams_signal(&mut self, index: SignalIndex) -> bool {
+        self.tcp_reader.is_some() && self.signal_to_data_position.contains_key(&index)
+    }
+
     // -- Signal Reading (TCP stream override) --
 
     fn read_signal_samples(&mut self, index: SignalIndex, num_samples: usize) -> Result<Vec<f64>> {

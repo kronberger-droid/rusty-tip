@@ -132,7 +132,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   long approaches ten minutes; v2 had capped everything at five.
 - `const-distance drift status|measure|compensate|off`: the Z drift
   measurement and compensation from the action layer, runnable between
-  scans from the command line.
+  scans from the command line. It streams Z through the TCP logger,
+  finding Z's channel in the controller's signal slots and checking the
+  stream against a plain read of Z before trusting it.
 - `examples/folme_probe.rs`: measures what a FolMe constant-height trace
   depends on (round-trip latency, feedback-off timing and TipLift, Z step
   response with the loop open, whether FolMe's wait flag blocks). Every
@@ -146,13 +148,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sections, and `MultiPassConfig::constant_lift` builds that. `MPass.Load`
   resolves its path on the controller, thus `apply` takes both a local path
   and a host path rather than assuming a shared filesystem.
-- **Drift compensation** (`SpmController::compensate_drift`): measures how
-  fast Z is drifting and leaves the controller cancelling it. The sign
-  convention for the compensation velocity is undocumented, so this solves
-  for it from a trial velocity rather than guessing, and reports a
-  compensation channel that does not respond instead of writing a number
-  derived from noise. Needs the feedback loop closed, thus it is a
-  between-passes operation.
+- **Drift compensation** (`MeasureZDrift`, `CompensateDrift`): measures how
+  fast Z is drifting and leaves the controller cancelling it. A measurement
+  is a burst, every sample the data stream delivers for the window, fitted
+  through block means so the rate comes with a standard error that slow
+  noise does not flatter. Compensation is a loop: measure, correct by a
+  damped step, measure what is left, until the residual is inside its
+  error bar or the burst budget is spent; each burst is a `drift/burst`
+  log event. The sign convention for the compensation velocity is
+  undocumented, so it is learned from one deliberately large trial step
+  unless the caller says it is known, and a channel that does not respond
+  is refused with the previous velocity put back. Needs the feedback loop
+  closed, thus it is a between-passes operation.
 - **Scan buffer** (`SpmController::scan_buffer_get`/`_set`/`_ensure`): which
   signals a scan records, and at what resolution. `_ensure` adds channels
   without dropping the ones already there.
