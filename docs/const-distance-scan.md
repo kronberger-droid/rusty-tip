@@ -249,15 +249,43 @@ $ const-distance drift --host 192.168.1.10 --signal-name "Z (m)" compensate
 $ const-distance drift --host 192.168.1.10 off
 ```
 
-`measure` fits a line to Z over one window (5 s and 16 samples by default) and
-prints the rate in pm/s; it needs the feedback closed, the scan stopped, and a
-flat spot under the tip. `compensate` runs three windows: one to measure, one
-with a trial velocity applied to learn which way the controller's velocity
-sign runs, and one to report what is left. It refuses a compensation channel
-that does not respond rather than writing a number derived from noise. An
+`measure` takes one burst: every sample the TCP logger streams for Z over the
+window, 5 s at 1 kHz by default. The burst is averaged into ten blocks and a
+line fitted through the block means, so the rate is printed with a standard
+error that the slow noise on Z under feedback does not flatter. It needs the
+feedback closed, the scan stopped, and a flat spot under the tip. A longer
+`--window` buys more than a higher `--sample-rate`: the error falls with the
+window to the power 1.5, while rate only averages the white part of the noise.
+
+`compensate` is a loop of such bursts, at most `--bursts` of them:
+
+1. A baseline burst. If the drift is already inside its error bar, nothing is
+   changed.
+2. A trial burst with `vz` stepped by `--trial` (20 pm/s), to learn which way
+   the controller's velocity sign runs. The step is large on purpose: with the
+   loop closed the feedback holds the gap, so the cost is a Z output that ramps
+   by 100 pm for one burst, and the response comes out many times its noise.
+   The learned response is printed; pass it back as `--response 1` or
+   `--response -1` and this burst is skipped.
+3. Correction bursts: the velocity moves by `--gain` (0.7) times what the last
+   burst says is missing, and the next burst measures what is left. The loop
+   ends on a measurement, so the residual printed always belongs to the
+   velocity left on the controller, and it says whether that residual is inside
+   its error bar or the budget ran out first.
+
+A channel that does not respond to the trial is refused and the previous
+velocity put back, rather than a number derived from noise being written. An
 axis that has hit the saturation limit is reported as such, since the
 controller stops compensating it silently and only an off/on cycle restarts
-it.
+it. Every burst lands in the log as a `drift/burst` event, so
+`rt-log plot <file> drift/burst.drift_m_s` shows the convergence.
+
+Z reaches the TCP logger as a channel, and a channel is a position in the
+controller's 24 signal slots, which differs between instruments. The tool looks
+Z up in the slot list, and whatever it finds, or `--tcp-channel` says, it
+compares the stream against a plain read of Z before fitting anything.
+`--no-stream` falls back to `--samples` timed reads per window, which is far
+noisier.
 
 ## Still open
 

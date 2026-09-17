@@ -16,7 +16,7 @@ use crate::spm_controller::{DriftComp, ScanBuffer};
 
 use crate::action::ActionOutput;
 use crate::action::bias::{BiasPulse, ReadBias, SetBias};
-use crate::action::drift::{CompensateDrift, MeasureZDrift};
+use crate::action::drift::{CompensateDrift, DriftCompensation, DriftEstimate, MeasureZDrift};
 use crate::action::motor::{MoveMotor3D, Reposition};
 use crate::action::multi_pass::{ActivateMultiPass, ApplyMultiPass, LoadMultiPass, SaveMultiPass};
 use crate::action::scan::{ScanActionParam, ScanControl, ScanDirectionParam};
@@ -28,6 +28,17 @@ use crate::spm_error::SpmError;
 use super::Rt;
 
 type Result<T> = std::result::Result<T, SpmError>;
+
+/// The result struct an action returned as [`ActionOutput::Data`].
+fn expect_data<T: serde::de::DeserializeOwned>(name: &str, output: ActionOutput) -> Result<T> {
+    match output {
+        ActionOutput::Data(value) => serde_json::from_value(value)
+            .map_err(|e| SpmError::Workflow(format!("{name}: unexpected result shape: {e}"))),
+        other => Err(SpmError::Workflow(format!(
+            "{name}: expected structured data, got {other:?}"
+        ))),
+    }
+}
 
 fn expect_value(name: &str, output: ActionOutput) -> Result<f64> {
     match output {
@@ -373,26 +384,26 @@ impl Drift<'_, '_> {
         )
     }
 
-    /// Measure the Z drift rate in metres per second, without changing
-    /// anything. Needs the Z controller on, and a flat, quiet spot.
-    pub fn measure_z(&mut self, z: SignalIndex, window: Duration, samples: usize) -> Result<f64> {
+    /// Measure the Z drift rate with one burst of `window`, without changing
+    /// anything. Needs the Z controller on, and a flat, quiet spot. The
+    /// estimate carries its own standard error; a rate inside it is a
+    /// finding, not a failure.
+    pub fn measure_z(&mut self, z: SignalIndex, window: Duration) -> Result<DriftEstimate> {
         let output = self.rt.exec(&MeasureZDrift {
             z,
             window_ms: window.as_millis() as u64,
-            samples,
+            samples: 16,
         })?;
-        expect_value("measure_z_drift", output)
+        expect_data("measure_z_drift", output)
     }
 
-    /// Measure the Z drift and leave the controller compensating for it,
-    /// returning the residual. Costs three measurement windows.
-    pub fn compensate(&mut self, z: SignalIndex, window: Duration, samples: usize) -> Result<f64> {
-        let output = self.rt.exec(&CompensateDrift {
-            z,
-            window_ms: window.as_millis() as u64,
-            samples,
-        })?;
-        expect_value("compensate_drift", output)
+    /// Measure the Z drift in bursts, correcting after each, and leave the
+    /// controller compensating for it. Start from [`CompensateDrift::new`]
+    /// and override what differs. The result says what is left, under which
+    /// velocity, and whether the loop converged or ran out of bursts.
+    pub fn compensate(&mut self, action: &CompensateDrift) -> Result<DriftCompensation> {
+        let output = self.rt.exec(action)?;
+        expect_data("compensate_drift", output)
     }
 }
 

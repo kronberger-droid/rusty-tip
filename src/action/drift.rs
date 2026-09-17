@@ -4,16 +4,40 @@
 //! to each axis for as long as compensation is on. What it cannot do is work
 //! out what that velocity should be, or notice when it has gone stale. That is
 //! what these actions are for.
+//!
+//! # How a drift rate is measured
+//!
+//! One measurement is a *burst*: every sample the data stream delivers for
+//! `window_ms`, thousands of them, fitted with a line. A controller that does
+//! not stream the Z signal falls back to `samples` timed reads over the same
+//! window, which is far noisier.
+//!
+//! The fit is not done on the raw samples. Z under feedback carries slow
+//! noise, so neighbouring samples are correlated and a textbook standard error
+//! computed from them would be optimistic by an order of magnitude. The burst
+//! is averaged into [`BLOCKS`] blocks first and the line is fitted through the
+//! block means; the scatter of those means about the line is an honest
+//! measure of what the slope is worth, and it is what decides when
+//! [`CompensateDrift`] stops.
 
 use std::time::{Duration, Instant};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::action::signals::compute_stability_metrics;
 use crate::action::{Action, ActionContext, ActionOutput};
+use crate::event::Event;
+use crate::experiment_log::{LogEvent, ToolSchema};
 use crate::signal_registry::SignalIndex;
 use crate::spm_controller::{Capability, DriftComp, ZControllerStatus};
 use crate::spm_error::SpmError;
+
+/// Blocks a burst is averaged into before the line fit.
+const BLOCKS: usize = 10;
+
+/// Longest the stream is read in one call, so a stop request is heard inside
+/// a burst rather than after it.
+const CHUNK: Duration = Duration::from_millis(500);
 
 fn default_samples() -> usize {
     16
@@ -23,9 +47,96 @@ fn default_window_ms() -> u64 {
     5_000
 }
 
-/// Measure how fast Z is drifting, in metres per second.
+fn default_max_bursts() -> usize {
+    5
+}
+
+fn default_gain() -> f64 {
+    0.7
+}
+
+fn default_trial_vz() -> f64 {
+    20e-12
+}
+
+fn default_tolerance() -> f64 {
+    0.05e-12
+}
+
+fn default_max_vz() -> f64 {
+    2e-9
+}
+
+/// A drift rate and what it is worth.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DriftEstimate {
+    /// Fitted drift rate, metres per second.
+    pub rate_m_s: f64,
+    /// Standard error of that rate, from the scatter of the block means
+    /// about the fitted line.
+    pub std_err_m_s: f64,
+    /// Samples the fit was made from.
+    pub samples: usize,
+    /// Time the samples span, in seconds.
+    pub window_s: f64,
+}
+
+impl DriftEstimate {
+    /// Whether the rate is indistinguishable from zero: inside two standard
+    /// errors, or below `tolerance_m_s` outright.
+    pub fn is_negligible(&self, tolerance_m_s: f64) -> bool {
+        self.rate_m_s.abs() <= (2.0 * self.std_err_m_s).max(tolerance_m_s)
+    }
+}
+
+/// Both actions return their result struct as [`ActionOutput::Data`], so a
+/// caller gets it back with `serde_json::from_value`.
+fn as_data<T: Serialize>(action: &str, result: &T) -> Result<ActionOutput, SpmError> {
+    serde_json::to_value(result)
+        .map(ActionOutput::Data)
+        .map_err(|e| SpmError::Workflow(format!("{action}: result does not serialize: {e}")))
+}
+
+/// What a burst inside [`CompensateDrift`] was for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BurstRole {
+    /// The drift as found, before anything was changed.
+    Baseline,
+    /// Measured with the trial velocity applied, to learn the response.
+    Trial,
+    /// Measured after a correction, to see what is left.
+    Correction,
+}
+
+/// One burst of [`CompensateDrift`]: the velocity in effect and the drift
+/// measured under it.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct DriftBurstEvent {
+    /// 1-based position in the run.
+    pub burst: usize,
+    pub role: BurstRole,
+    /// Compensation velocity in effect during the burst, m/s.
+    pub vz_m_s: f64,
+    pub drift_m_s: f64,
+    pub std_err_m_s: f64,
+}
+
+impl LogEvent for DriftBurstEvent {
+    const KIND: &'static str = "drift/burst";
+}
+
+/// The kinds these actions write. A tool that runs them includes this in its
+/// own schema with [`ToolSchema::including`].
+pub fn log_schema() -> ToolSchema {
+    ToolSchema::new("drift").with::<DriftBurstEvent>()
+}
+
+/// Measure how fast Z is drifting.
 ///
-/// Takes `samples` readings of `z` spread over `window_ms` and fits a line.
+/// Reads a burst of `z` over `window_ms` and fits a line; see the module docs.
+/// Returns the rate together with its standard error, and leaves the judgment
+/// to the caller: a rate inside its own error bar is a finding, not a failure.
 ///
 /// The Z controller has to be **on**. With the feedback open, Z is whatever it
 /// was parked at and the drift being measured is invisible, so the fit would
@@ -34,28 +145,27 @@ fn default_window_ms() -> u64 {
 ///
 /// Nothing here decides where the tip is. A drift estimate only means
 /// something on flat, quiet ground, so position the tip first: measured over a
-/// step edge or a molecule this returns a confident, wrong number.
+/// step edge or a molecule this returns a confident, wrong number. Lateral
+/// drift over a tilted surface reads as Z drift too, which is what a scan at
+/// that spot would see, and is why the number changes with position.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeasureZDrift {
     /// Signal to watch. The Z position, in metres.
     pub z: SignalIndex,
     #[serde(default = "default_window_ms")]
     pub window_ms: u64,
+    /// Timed reads to take when the controller does not stream `z`. Ignored
+    /// for a burst, which takes whatever the stream delivers.
     #[serde(default = "default_samples")]
     pub samples: usize,
 }
 
 impl MeasureZDrift {
-    /// Run the measurement, returning metres per second.
+    /// Run the measurement.
     ///
-    /// Separate from `execute` so [`CompensateDrift`] can use the number
+    /// Separate from `execute` so [`CompensateDrift`] can use the estimate
     /// rather than unwrapping it back out of an [`ActionOutput`].
-    pub(crate) fn measure(&self, ctx: &mut ActionContext) -> Result<f64, SpmError> {
-        if self.samples < 3 {
-            return Err(SpmError::Workflow(
-                "measure_z_drift: need at least 3 samples to fit a line".into(),
-            ));
-        }
+    pub(crate) fn measure(&self, ctx: &mut ActionContext) -> Result<DriftEstimate, SpmError> {
         // Anything but `On` means Z is not tracking the surface: held,
         // withdrawing, or stopped by tip protection. The fit would read
         // whatever Z happened to be doing instead.
@@ -84,53 +194,67 @@ impl MeasureZDrift {
             ));
         }
 
+        let (times, values) = match ctx.controller.stream_rate_hz() {
+            Some(hz) if hz > 0.0 && ctx.controller.streams_signal(self.z) => self.burst(ctx, hz)?,
+            _ => self.poll(ctx)?,
+        };
+
+        fit_drift(&times, &values).ok_or_else(|| {
+            SpmError::Workflow(format!(
+                "measure_z_drift: {} samples over {} ms are too few to fit a drift rate",
+                values.len(),
+                self.window_ms
+            ))
+        })
+    }
+
+    /// Everything the stream delivers for the window, in chunks short enough
+    /// that a stop request lands inside the burst.
+    ///
+    /// The time base is the sample index over the stream rate. The few frames
+    /// that pass between two chunk reads are lost, which shortens the real
+    /// spacing by well under a percent; against the noise on the slope that
+    /// is nothing, and it keeps link latency out of the time axis entirely.
+    fn burst(&self, ctx: &mut ActionContext, hz: f64) -> Result<(Vec<f64>, Vec<f64>), SpmError> {
+        let wanted = (hz * self.window_ms as f64 / 1000.0).round() as usize;
+        let chunk = ((hz * CHUNK.as_secs_f64()).ceil() as usize).max(1);
+        let mut values = Vec::with_capacity(wanted);
+        while values.len() < wanted {
+            ctx.check_shutdown()?;
+            let n = chunk.min(wanted - values.len());
+            values.extend(ctx.controller.read_signal_samples(self.z, n)?);
+        }
+        let times = (0..values.len()).map(|k| k as f64 / hz).collect();
+        Ok((times, values))
+    }
+
+    /// `samples` reads spread over the window, each stamped with the time it
+    /// came back, for a controller without a stream.
+    fn poll(&self, ctx: &mut ActionContext) -> Result<(Vec<f64>, Vec<f64>), SpmError> {
+        if self.samples < 3 {
+            return Err(SpmError::Workflow(
+                "measure_z_drift: need at least 3 samples to fit a line".into(),
+            ));
+        }
         let window = Duration::from_millis(self.window_ms);
         let interval = window / (self.samples as u32 - 1);
         let start = Instant::now();
+        let mut times = Vec::with_capacity(self.samples);
         let mut values = Vec::with_capacity(self.samples);
 
         for i in 0..self.samples {
             values.push(ctx.controller.read_signal(self.z, true)?);
+            times.push(start.elapsed().as_secs_f64());
             if i + 1 < self.samples {
                 // Wait until the next sample is due rather than for a fixed
                 // interval, so the round trip is absorbed by the window
-                // instead of stretching it. Each read blocks for the newest
-                // sample, which on a slow link is milliseconds per point.
+                // instead of stretching it.
                 let due = start + interval * (i as u32 + 1);
                 let remaining = due.saturating_duration_since(Instant::now());
                 ctx.settle(remaining.as_millis() as u64)?;
             }
         }
-
-        let elapsed = start.elapsed().as_secs_f64();
-        if elapsed <= 0.0 {
-            return Err(SpmError::Workflow(
-                "measure_z_drift: no time passed between the first and last sample".into(),
-            ));
-        }
-
-        // `compute_stability_metrics` fits per sample, and the samples are
-        // evenly spaced by construction, so the measured elapsed time converts
-        // that to per second. Using the real elapsed time rather than the
-        // nominal one keeps link latency out of the answer.
-        let (_, std_dev, slope_per_sample) = compute_stability_metrics(&values);
-
-        // How far the fitted line says Z moved across the whole window. If
-        // that is smaller than the scatter between neighbouring samples, the
-        // slope is reading noise, and a velocity derived from it is worse than
-        // none: it would be applied with confidence and drive Z somewhere.
-        // Coarse on purpose. The residual returned by `CompensateDrift` is the
-        // real check, since it runs after the fact.
-        let change = slope_per_sample * (self.samples as f64 - 1.0);
-        if change.abs() <= std_dev {
-            return Err(SpmError::Workflow(format!(
-                "measure_z_drift: Z moved {change:.3e} m over the window, below the \
-                 {std_dev:.3e} m sample noise, so no drift rate can be resolved. Use a \
-                 longer window, or accept that the drift is negligible here."
-            )));
-        }
-
-        Ok(change / elapsed)
+        Ok((times, values))
     }
 }
 
@@ -139,58 +263,169 @@ impl Action for MeasureZDrift {
         "measure_z_drift"
     }
     fn description(&self) -> &str {
-        "Measure the Z drift rate in metres per second"
+        "Measure the Z drift rate and its standard error, in metres per second"
     }
     fn requires(&self) -> Vec<Capability> {
         vec![Capability::Signals, Capability::ZController]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
-        Ok(ActionOutput::Value(self.measure(ctx)?))
+        as_data(self.name(), &self.measure(ctx)?)
     }
+}
+
+/// Fit a drift rate through block means of `(times, values)`.
+///
+/// `None` with fewer than three samples, or when the samples span no time.
+fn fit_drift(times: &[f64], values: &[f64]) -> Option<DriftEstimate> {
+    let n = values.len().min(times.len());
+    if n < 3 {
+        return None;
+    }
+    let blocks = BLOCKS.min(n);
+    let mean = |xs: &[f64]| xs.iter().sum::<f64>() / xs.len() as f64;
+    let (bt, bz): (Vec<f64>, Vec<f64>) = (0..blocks)
+        .map(|b| {
+            let (lo, hi) = (b * n / blocks, (b + 1) * n / blocks);
+            (mean(&times[lo..hi]), mean(&values[lo..hi]))
+        })
+        .unzip();
+
+    let (t_mean, z_mean) = (mean(&bt), mean(&bz));
+    let sxx: f64 = bt.iter().map(|t| (t - t_mean).powi(2)).sum();
+    if sxx <= 0.0 {
+        return None;
+    }
+    let sxz: f64 = bt
+        .iter()
+        .zip(&bz)
+        .map(|(t, z)| (t - t_mean) * (z - z_mean))
+        .sum();
+    let rate = sxz / sxx;
+
+    let residual: f64 = bt
+        .iter()
+        .zip(&bz)
+        .map(|(t, z)| (z - z_mean - rate * (t - t_mean)).powi(2))
+        .sum();
+    let std_err = (residual / (blocks as f64 - 2.0) / sxx).sqrt();
+
+    Some(DriftEstimate {
+        rate_m_s: rate,
+        std_err_m_s: std_err,
+        samples: n,
+        window_s: times[n - 1] - times[0],
+    })
+}
+
+/// Where [`CompensateDrift`] left things.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DriftCompensation {
+    /// Drift measured under the velocity left on the controller.
+    pub residual: DriftEstimate,
+    /// Compensation velocity left on the controller, m/s.
+    pub vz_m_s: f64,
+    /// How the measured drift answers to the velocity, in m/s per m/s: close
+    /// to +1 or -1, and the sign is the controller's convention. `None` when
+    /// the drift was negligible from the start, so nothing had to be learned.
+    pub response: Option<f64>,
+    /// Bursts taken, the baseline and any trial included.
+    pub bursts: usize,
+    /// Whether the residual ended inside its error bar, as opposed to the
+    /// burst budget running out first.
+    pub converged: bool,
 }
 
 /// Measure the Z drift and leave the controller compensating for it.
 ///
-/// Returns the residual drift, i.e. what is left afterwards, so a caller can
-/// tell a good correction from a useless one without knowing how any of this
-/// works. Costs three measurement windows.
+/// A burst measures the drift, the velocity is corrected, and the next burst
+/// measures what is left, until the residual is indistinguishable from zero
+/// or `max_bursts` are spent. The reported residual always belongs to the
+/// velocity left on the controller, since the loop ends on a measurement,
+/// never on a correction.
 ///
-/// Three things this handles that a bare `drift_comp_set` does not:
+/// Things this handles that a bare `drift_comp_set` does not:
 ///
 /// - **A latched axis is re-armed first.** Compensation stops for good at the
 ///   saturation limit, so measuring against a stopped axis would fit a drift
 ///   nothing is correcting and then write into a channel that ignores it.
-/// - **The sign is measured, not assumed.** Which way a positive `vz` moves
-///   the piezo is not documented anywhere we can check, and guessing wrong
-///   does not leave the drift uncorrected, it doubles it. So this applies a
-///   trial velocity, watches how the drift responds, and solves for the
-///   velocity that cancels it. A channel that does not respond at all is an
-///   error rather than a coin flip.
+/// - **The sign is measured, not assumed,** unless `response` says it is
+///   known. Which way a positive `vz` moves the piezo is not documented, and
+///   guessing wrong does not leave the drift uncorrected, it doubles it. The
+///   trial is deliberately large, `trial_vz`, many times the measurement
+///   noise: with the loop closed the feedback holds the gap, so the only cost
+///   is a Z output that ramps by `trial_vz * window` for one burst, and the
+///   response comes out clean. A trial the size of the drift itself, as this
+///   used to do, divides noise by noise.
+/// - **Corrections are damped.** Each one moves the velocity by `gain` times
+///   what the burst says is missing, so noise in one burst is not chased at
+///   full strength, and drift that is still decaying after an approach is
+///   followed across bursts instead of being fixed at its first value.
 /// - **Positioning is the caller's problem**, as with [`MeasureZDrift`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompensateDrift {
     pub z: SignalIndex,
     #[serde(default = "default_window_ms")]
     pub window_ms: u64,
+    /// Polling fallback only; see [`MeasureZDrift::samples`].
     #[serde(default = "default_samples")]
     pub samples: usize,
+    /// Bursts to spend at most, the baseline and the trial included.
+    #[serde(default = "default_max_bursts")]
+    pub max_bursts: usize,
+    /// Fraction of the measured residual each correction removes.
+    #[serde(default = "default_gain")]
+    pub gain: f64,
+    /// Velocity step used to learn the response, m/s.
+    #[serde(default = "default_trial_vz")]
+    pub trial_vz: f64,
+    /// The response, when it is already known for this controller: +1 if a
+    /// positive `vz` adds to the measured drift, -1 if it subtracts. Skips
+    /// the trial burst.
+    #[serde(default)]
+    pub response: Option<f64>,
+    /// A residual below this counts as zero even if the burst could resolve
+    /// it, m/s.
+    #[serde(default = "default_tolerance")]
+    pub tolerance_m_s: f64,
+    /// Refuse to set a velocity beyond this, m/s. Real drift is orders of
+    /// magnitude below it, so getting here means the measurement is broken.
+    #[serde(default = "default_max_vz")]
+    pub max_vz: f64,
 }
 
-impl Action for CompensateDrift {
-    fn name(&self) -> &str {
-        "compensate_drift"
+impl CompensateDrift {
+    /// The defaults, for `z`.
+    pub fn new(z: SignalIndex) -> Self {
+        Self {
+            z,
+            window_ms: default_window_ms(),
+            samples: default_samples(),
+            max_bursts: default_max_bursts(),
+            gain: default_gain(),
+            trial_vz: default_trial_vz(),
+            response: None,
+            tolerance_m_s: default_tolerance(),
+            max_vz: default_max_vz(),
+        }
     }
-    fn description(&self) -> &str {
-        "Measure the Z drift and set the compensation velocity that cancels it"
-    }
-    fn requires(&self) -> Vec<Capability> {
-        vec![
-            Capability::DriftCompensation,
-            Capability::Signals,
-            Capability::ZController,
-        ]
-    }
-    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+
+    /// Run the loop. Separate from `execute` for the same reason as
+    /// [`MeasureZDrift::measure`].
+    pub(crate) fn compensate(
+        &self,
+        ctx: &mut ActionContext,
+    ) -> Result<DriftCompensation, SpmError> {
+        if self.max_bursts < 2 {
+            return Err(SpmError::Workflow(
+                "compensate_drift: needs at least 2 bursts, one to measure and one to check".into(),
+            ));
+        }
+        if !(self.gain > 0.0 && self.gain <= 1.0) {
+            return Err(SpmError::Workflow(format!(
+                "compensate_drift: gain {} is outside (0, 1]",
+                self.gain
+            )));
+        }
         let measure = MeasureZDrift {
             z: self.z,
             window_ms: self.window_ms,
@@ -211,122 +446,170 @@ impl Action for CompensateDrift {
         }
 
         // A velocity that is configured but switched off is not in effect, so
-        // the baseline the first measurement sees is zero, not `comp.vz`.
-        // Reading it as `comp.vz` would fit the response against a velocity
-        // the machine never applied.
-        let v0 = match comp.enabled {
+        // the baseline sees zero, not `comp.vz`.
+        let mut vz = match comp.enabled {
             true => comp.vz,
             false => 0.0,
         };
-        let s0 = measure.measure(ctx)?;
+        let set = |ctx: &mut ActionContext, vz: f64| -> Result<(), SpmError> {
+            if vz.abs() > self.max_vz {
+                return Err(SpmError::Workflow(format!(
+                    "compensate_drift: a compensation of {vz:.3e} m/s is beyond the \
+                     {:.3e} m/s limit, so the measurement behind it cannot be trusted. \
+                     Check the Z signal and the spot under the tip.",
+                    self.max_vz
+                )));
+            }
+            ctx.controller.drift_comp_set(&DriftComp {
+                enabled: true,
+                vz,
+                ..comp
+            })
+        };
+        let mut bursts = 0;
+        let mut burst = |ctx: &mut ActionContext, role: BurstRole, vz: f64| {
+            let estimate = measure.measure(ctx)?;
+            bursts += 1;
+            ctx.events.emit(Event::typed(&DriftBurstEvent {
+                burst: bursts,
+                role,
+                vz_m_s: vz,
+                drift_m_s: estimate.rate_m_s,
+                std_err_m_s: estimate.std_err_m_s,
+            }));
+            Ok::<_, SpmError>((estimate, bursts))
+        };
 
-        // The trial velocity doubles as the first guess: if the sign
-        // convention runs the way we would guess, this already cancels the
-        // drift and the solve below simply confirms it.
-        let v1 = v0 - s0;
-        ctx.controller.drift_comp_set(&DriftComp {
-            enabled: true,
-            vz: v1,
-            ..comp
-        })?;
-        let s1 = measure.measure(ctx)?;
+        let (mut estimate, mut taken) = burst(ctx, BurstRole::Baseline, vz)?;
+        let mut response = self.response;
+        // A correction straight after the trial goes in at full strength: the
+        // trial burst measured a drift many times its error bar, so there is
+        // no noise to damp yet.
+        let mut gain = self.gain;
 
-        let vz = solve_compensation(v0, s0, v1, s1).ok_or_else(|| {
-            SpmError::Workflow(format!(
-                "compensate_drift: changing vz from {v0} to {v1} m/s did not change the \
-                 measured drift ({s0} then {s1} m/s), so the Z compensation is not \
-                 responding. Check that it is enabled and not saturated."
-            ))
-        })?;
+        if response.is_none() && !estimate.is_negligible(self.tolerance_m_s) {
+            let trial = vz + self.trial_vz;
+            set(ctx, trial)?;
+            let (at_trial, n) = burst(ctx, BurstRole::Trial, trial)?;
+            taken = n;
+            let measured = (at_trial.rate_m_s - estimate.rate_m_s) / self.trial_vz;
+            // The velocity is in the same units as the drift, so a working
+            // channel answers close to plus or minus one.
+            if !measured.is_finite() || !(0.5..=2.0).contains(&measured.abs()) {
+                set(ctx, vz)?;
+                return Err(SpmError::Workflow(format!(
+                    "compensate_drift: stepping vz by {:.3e} m/s changed the measured drift \
+                     by {:.3e} m/s, a response of {measured:.2} where a working channel gives \
+                     about +1 or -1. The previous velocity is back in place. Check that the \
+                     compensation is enabled and not saturated.",
+                    self.trial_vz,
+                    at_trial.rate_m_s - estimate.rate_m_s
+                )));
+            }
+            response = Some(measured);
+            vz = trial;
+            estimate = at_trial;
+            gain = 1.0;
+        }
 
-        ctx.controller.drift_comp_set(&DriftComp {
-            enabled: true,
-            vz,
-            ..comp
-        })?;
-        Ok(ActionOutput::Value(measure.measure(ctx)?))
+        while let Some(r) = response
+            && !estimate.is_negligible(self.tolerance_m_s)
+            && taken < self.max_bursts
+        {
+            vz -= gain * estimate.rate_m_s / r;
+            gain = self.gain;
+            set(ctx, vz)?;
+            (estimate, taken) = burst(ctx, BurstRole::Correction, vz)?;
+        }
+
+        Ok(DriftCompensation {
+            converged: estimate.is_negligible(self.tolerance_m_s),
+            residual: estimate,
+            vz_m_s: vz,
+            response,
+            bursts: taken,
+        })
     }
 }
 
-/// Solve for the compensation velocity that cancels the drift.
-///
-/// Given the drift `s0` measured at compensation velocity `v0`, and `s1`
-/// measured at `v1`, the drift responds to the velocity as
-/// `s(v) = s0 + response * (v - v0)`, and this returns the `v` where that
-/// reaches zero. Deliberately not assuming what `response` is: its sign is the
-/// undocumented convention we are trying to avoid guessing at, and its
-/// magnitude covers a channel that is scaled rather than one-to-one.
-///
-/// `None` when the drift did not respond, which means the compensation is off,
-/// saturated, or otherwise not connected to anything.
-fn solve_compensation(v0: f64, s0: f64, v1: f64, s1: f64) -> Option<f64> {
-    let response = (s1 - s0) / (v1 - v0);
-    // A response far below 1 cannot be a working compensation channel: the
-    // velocity is in the same units as the drift, so any sane channel is close
-    // to plus or minus one.
-    if !response.is_finite() || response.abs() < 0.1 {
-        return None;
+impl Action for CompensateDrift {
+    fn name(&self) -> &str {
+        "compensate_drift"
     }
-    Some(v0 - s0 / response)
+    fn description(&self) -> &str {
+        "Measure the Z drift in bursts and converge on the velocity that cancels it"
+    }
+    fn requires(&self) -> Vec<Capability> {
+        vec![
+            Capability::DriftCompensation,
+            Capability::Signals,
+            Capability::ZController,
+        ]
+    }
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+        as_data(self.name(), &self.compensate(ctx)?)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::solve_compensation;
+    use super::*;
 
-    /// 5 pm/s of drift, measured with no compensation applied yet.
-    const DRIFT: f64 = 5e-12;
-
-    /// The measured drift after applying `v`, for a channel where a positive
-    /// velocity adds to the drift (`sign` = 1) or subtracts from it (-1).
-    fn measured(v: f64, sign: f64) -> f64 {
-        DRIFT + sign * v
+    /// A line of `rate` m/s sampled at `hz`, with a deterministic wobble of
+    /// amplitude `noise` standing in for measurement scatter.
+    fn line(rate: f64, hz: f64, n: usize, noise: f64) -> (Vec<f64>, Vec<f64>) {
+        let times: Vec<f64> = (0..n).map(|k| k as f64 / hz).collect();
+        let values = times
+            .iter()
+            .enumerate()
+            .map(|(k, t)| 1e-7 + rate * t + noise * ((k * 7919 % 13) as f64 / 6.0 - 1.0))
+            .collect();
+        (times, values)
     }
 
     #[test]
-    fn solves_for_either_sign_convention() {
-        // The whole point: neither branch knows which convention it is in, and
-        // both land on the velocity that zeroes the drift.
-        for sign in [1.0, -1.0] {
-            let (v0, s0) = (0.0, measured(0.0, sign));
-            let v1 = v0 - s0;
-            let vz = solve_compensation(v0, s0, v1, measured(v1, sign)).unwrap();
-            assert!(
-                measured(vz, sign).abs() < 1e-24,
-                "sign {sign}: vz {vz} leaves {} m/s",
-                measured(vz, sign)
-            );
-        }
+    fn a_clean_line_fits_exactly_with_no_error_bar() {
+        let (t, z) = line(3e-12, 1000.0, 5000, 0.0);
+        let fit = fit_drift(&t, &z).unwrap();
+        assert!((fit.rate_m_s - 3e-12).abs() < 1e-18, "{fit:?}");
+        assert!(fit.std_err_m_s < 1e-18, "{fit:?}");
+        assert_eq!(fit.samples, 5000);
     }
 
     #[test]
-    fn solves_when_compensation_is_already_partly_applied() {
-        // Re-running against a machine that is already compensating must not
-        // throw away the velocity that is already in effect.
-        let sign = -1.0;
-        let v0 = 3e-12;
-        let s0 = measured(v0, sign);
-        let v1 = v0 - s0;
-        let vz = solve_compensation(v0, s0, v1, measured(v1, sign)).unwrap();
-        assert!((vz - DRIFT).abs() < 1e-24, "expected {DRIFT}, got {vz}");
+    fn scatter_shows_up_in_the_error_bar_and_the_rate_stays_inside_it() {
+        let (t, z) = line(1e-12, 1000.0, 5000, 5e-12);
+        let fit = fit_drift(&t, &z).unwrap();
+        assert!(fit.std_err_m_s > 0.0);
+        assert!(
+            (fit.rate_m_s - 1e-12).abs() < 3.0 * fit.std_err_m_s,
+            "{fit:?}"
+        );
     }
 
     #[test]
-    fn solves_a_channel_that_is_scaled_rather_than_one_to_one() {
-        let scaled = |v: f64| DRIFT - 0.5 * v;
-        let (v0, s0) = (0.0, scaled(0.0));
-        let v1 = v0 - s0;
-        let vz = solve_compensation(v0, s0, v1, scaled(v1)).unwrap();
-        assert!(scaled(vz).abs() < 1e-24);
+    fn a_handful_of_polled_samples_still_fits() {
+        let (t, z) = line(2e-12, 3.0, 16, 0.0);
+        let fit = fit_drift(&t, &z).unwrap();
+        assert!((fit.rate_m_s - 2e-12).abs() < 1e-18, "{fit:?}");
     }
 
     #[test]
-    fn refuses_a_channel_that_does_not_respond() {
-        // Saturated, disabled, or otherwise not wired to the piezo: the drift
-        // is unchanged by the trial velocity. Dividing by that response would
-        // produce a huge confident number.
-        assert_eq!(solve_compensation(0.0, DRIFT, -DRIFT, DRIFT), None);
-        // And the degenerate case where no trial was actually applied.
-        assert_eq!(solve_compensation(0.0, DRIFT, 0.0, DRIFT), None);
+    fn too_few_samples_or_no_time_span_is_no_fit() {
+        assert!(fit_drift(&[0.0, 1.0], &[0.0, 1.0]).is_none());
+        assert!(fit_drift(&[1.0; 8], &[0.0; 8]).is_none());
+    }
+
+    #[test]
+    fn negligible_means_inside_two_sigma_or_under_the_floor() {
+        let e = |rate: f64, err: f64| DriftEstimate {
+            rate_m_s: rate,
+            std_err_m_s: err,
+            samples: 100,
+            window_s: 5.0,
+        };
+        assert!(e(1e-12, 1e-12).is_negligible(0.0));
+        assert!(!e(3e-12, 1e-12).is_negligible(0.0));
+        assert!(e(0.04e-12, 0.0).is_negligible(0.05e-12));
     }
 }
