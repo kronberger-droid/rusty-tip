@@ -334,12 +334,19 @@ fn compensation_converges_whichever_way_the_velocity_sign_runs() {
             "response {response}: {left} m/s left"
         );
         assert!(obs.lock().drift_comp.enabled);
-        // Baseline, a trial to learn the sign, one correction to check.
+        // Baseline, a trial to learn the sign, and the rest of the budget in
+        // corrections, spent in full even though the first one lands.
         assert_eq!(
             *roles.0.lock().unwrap(),
-            ["baseline", "trial", "correction"]
+            [
+                "baseline",
+                "trial",
+                "correction",
+                "correction",
+                "correction"
+            ]
         );
-        assert_eq!(result.bursts, 3);
+        assert_eq!(result.bursts, 5);
     }
 }
 
@@ -387,7 +394,7 @@ fn a_known_response_skips_the_trial() {
 
     assert!(result.converged, "{result:?}");
     assert!(!roles.0.lock().unwrap().contains(&"trial".to_string()));
-    // Damped corrections only, so the trial velocity never reached the piezo.
+    // Corrections only, so the trial velocity never reached the piezo.
     let trial = CompensateDrift::new(Z).trial_vz;
     assert!(
         obs.lock()
@@ -442,9 +449,11 @@ fn a_channel_that_does_not_respond_is_refused_and_the_velocity_put_back() {
 }
 
 #[test]
-fn the_burst_budget_running_out_is_reported_not_hidden() {
-    // A gain this low cannot close a 4 pm/s drift in the bursts allowed.
+fn a_residual_outside_its_error_bar_is_reported_not_hidden() {
+    // A response claimed twice as strong as it is halves every correction,
+    // which cannot close a 4 pm/s drift in the bursts allowed.
     let mut controller = MockController::builder().z_drift(Z, 4e-12, -1.0).build();
+    let obs = controller.observations();
     let events = EventBus::new();
     let shutdown = ShutdownFlag::new();
     let mut rt = Rt::new(&mut controller, &events, &shutdown);
@@ -452,15 +461,41 @@ fn the_burst_budget_running_out_is_reported_not_hidden() {
         .drift()
         .expect("the mock supports drift compensation")
         .compensate(&CompensateDrift {
-            response: Some(-1.0),
-            gain: 0.2,
-            max_bursts: 3,
+            response: Some(-2.0),
+            bursts: 3,
             ..CompensateDrift::new(Z)
         })
-        .expect("running out of bursts is a result, not an error");
+        .expect("a residual left over is a result, not an error");
 
     assert!(!result.converged);
     assert_eq!(result.bursts, 3);
+    // The k-th correction takes a k-th of its reading: 4 / 2, then 2 / (2 * 2).
+    let written: Vec<f64> = obs.lock().drift_comp_writes.iter().map(|c| c.vz).collect();
+    assert_eq!(written.len(), 2);
+    assert!((written[0] - 2e-12).abs() < 1e-15, "{written:?}");
+    assert!((written[1] - 2.5e-12).abs() < 1e-15, "{written:?}");
     // The residual reported belongs to the velocity left on the machine.
     assert!((result.residual.rate_m_s - (4e-12 - result.vz_m_s)).abs() < 1e-15);
+}
+
+#[test]
+fn too_few_bursts_to_get_past_the_trial_are_refused() {
+    // Two bursts with the response unknown would be baseline and trial, and
+    // the run would end with the trial velocity on the controller.
+    let mut controller = MockController::builder().z_drift(Z, 4e-12, -1.0).build();
+    let obs = controller.observations();
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+    let err = rt
+        .drift()
+        .expect("the mock supports drift compensation")
+        .compensate(&CompensateDrift {
+            bursts: 2,
+            ..CompensateDrift::new(Z)
+        })
+        .expect_err("two bursts cannot learn a response and check the result");
+
+    assert!(format!("{err}").contains("too few"), "got: {err}");
+    assert!(obs.lock().drift_comp_writes.is_empty());
 }

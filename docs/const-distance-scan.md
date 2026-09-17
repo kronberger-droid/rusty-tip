@@ -257,7 +257,7 @@ feedback closed, the scan stopped, and a flat spot under the tip. A longer
 `--window` buys more than a higher `--sample-rate`: the error falls with the
 window to the power 1.5, while rate only averages the white part of the noise.
 
-`compensate` is a loop of such bursts, at most `--bursts` of them:
+`compensate` is a loop of such bursts, `--bursts` of them:
 
 1. A baseline burst. If the drift is already inside its error bar, nothing is
    changed.
@@ -267,11 +267,19 @@ window to the power 1.5, while rate only averages the white part of the noise.
    by 100 pm for one burst, and the response comes out many times its noise.
    The learned response is printed; pass it back as `--response 1` or
    `--response -1` and this burst is skipped.
-3. Correction bursts: the velocity moves by `--gain` (0.7) times what the last
-   burst says is missing, and the next burst measures what is left. The loop
-   ends on a measurement, so the residual printed always belongs to the
-   velocity left on the controller, and it says whether that residual is inside
-   its error bar or the budget ran out first.
+3. Correction bursts, for the rest of the budget: the k-th one moves the
+   velocity by a k-th of what the last burst says is missing, and the next
+   burst measures what is left. That leaves the velocity at the mean of every
+   estimate so far, so its error falls with the root of the bursts spent.
+   Every burst corrects, and the budget is spent in full: correcting only the
+   readings that clear their error bar picks out the bursts whose noise ran
+   the same way as the residual, and those overshoot. The loop ends on a
+   measurement, so the residual printed always belongs to the velocity left
+   on the controller, and it says whether that residual is inside its error
+   bar.
+
+Time is better spent on `--window` than on `--bursts`, for the reason given
+above: three bursts of 10 s beat five of 5 s.
 
 A channel that does not respond to the trial is refused and the previous
 velocity put back, rather than a number derived from noise being written. An

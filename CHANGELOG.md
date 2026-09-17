@@ -152,10 +152,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fast Z is drifting and leaves the controller cancelling it. A measurement
   is a burst, every sample the data stream delivers for the window, fitted
   through block means so the rate comes with a standard error that slow
-  noise does not flatter. Compensation is a loop: measure, correct by a
-  damped step, measure what is left, until the residual is inside its
-  error bar or the burst budget is spent; each burst is a `drift/burst`
-  log event. The sign convention for the compensation velocity is
+  noise does not flatter. Compensation is a loop of a fixed number of
+  bursts: measure, correct, measure what is left. The k-th correction
+  takes a k-th of its reading, which leaves the velocity at the mean of
+  every estimate so far, and every burst corrects whether or not its
+  reading clears the error bar, since correcting only the ones that do
+  overshoots. Each burst is a `drift/burst` log event. The sign convention for the compensation velocity is
   undocumented, so it is learned from one deliberately large trial step
   unless the caller says it is known, and a channel that does not respond
   is refused with the previous velocity put back. Needs the feedback loop
