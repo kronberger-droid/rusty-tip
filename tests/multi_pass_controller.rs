@@ -2,9 +2,11 @@
 //! routine harness the way a routine would reach them. No hardware involved.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rusty_tip::event::EventBus;
+use rusty_tip::action::drift::CompensateDrift;
+use rusty_tip::event::{Event, EventBus, Observer};
 use rusty_tip::mock_controller::{FaultKind, MockController};
 use rusty_tip::multi_pass::MultiPassConfig;
 use rusty_tip::routine::Rt;
@@ -150,26 +152,17 @@ fn compensating_drift_re_arms_a_latched_axis_before_measuring() {
     // Saturation stops the axis for good, so measuring first would fit a drift
     // that nothing is correcting. The re-arm is an off/on cycle, which is the
     // only documented way back.
-    let mut controller = MockController::builder().build();
+    let mut controller = MockController::builder().z_drift(Z, 2e-12, -1.0).build();
     let obs = controller.observations();
     obs.lock().drift_comp.z_saturated = true;
 
-    // The mock's Z is constant, so the measurement refuses for want of a
-    // resolvable slope. That it fails at all is the point here: no velocity is
-    // invented. What this test pins is the ordering below, which has already
-    // happened by the time the measurement gives up.
     let events = EventBus::new();
     let shutdown = ShutdownFlag::new();
     let mut rt = Rt::new(&mut controller, &events, &shutdown);
-    let err = rt
-        .drift()
+    rt.drift()
         .expect("the mock supports drift compensation")
-        .compensate(SignalIndex(30), Duration::from_millis(9), 3)
-        .unwrap_err();
-    assert!(
-        format!("{err}").contains("no drift rate can be resolved"),
-        "got: {err}"
-    );
+        .compensate(&CompensateDrift::new(Z))
+        .expect("a drifting, responsive Z compensates");
 
     let obs = obs.lock();
     let rearm: Vec<bool> = obs
@@ -180,7 +173,7 @@ fn compensating_drift_re_arms_a_latched_axis_before_measuring() {
         .collect();
     assert_eq!(rearm, vec![false, true], "the re-arm has to be off then on");
     assert!(
-        obs.first_index("drift_comp_set") < obs.first_index("read_signal"),
+        obs.first_index("drift_comp_set") < obs.first_index("read_signal_samples"),
         "the axis has to be re-armed before the first measurement"
     );
     assert!(
@@ -201,7 +194,7 @@ fn measuring_drift_refuses_an_open_feedback_loop() {
     let err = rt
         .drift()
         .expect("the mock supports drift compensation")
-        .measure_z(SignalIndex(30), Duration::from_millis(9), 3)
+        .measure_z(Z, Duration::from_millis(9))
         .unwrap_err();
     assert!(format!("{err}").contains("not On"), "got: {err}");
 }
@@ -266,29 +259,243 @@ fn measuring_drift_refuses_while_a_scan_is_running() {
     let err = rt
         .drift()
         .expect("the mock supports drift compensation")
-        .measure_z(SignalIndex(30), Duration::from_millis(9), 3)
+        .measure_z(Z, Duration::from_millis(9))
         .unwrap_err();
 
     assert!(format!("{err}").contains("a scan is running"), "got: {err}");
 }
 
+/// The Z position's RT slot, as the drift tests use it.
+const Z: SignalIndex = SignalIndex(30);
+
+/// Collects the role of every `drift/burst` event, in order.
+#[derive(Default, Clone)]
+struct BurstRoles(Arc<Mutex<Vec<String>>>);
+
+impl Observer for BurstRoles {
+    fn on_event(&self, event: &Event) {
+        if let Event::Custom { kind, data, .. } = event
+            && kind == "drift/burst"
+        {
+            let role = data["role"].as_str().unwrap_or("?").to_string();
+            self.0.lock().unwrap().push(role);
+        }
+    }
+}
+
 #[test]
-fn measuring_drift_refuses_a_slope_below_the_noise() {
-    // The mock's Z is a constant, so there is no slope at all and no scatter
-    // either. That is the degenerate end of the same check: nothing to
-    // resolve, so no velocity should come out of it.
-    let mut controller = MockController::builder().build();
+fn a_burst_measures_the_drift_and_says_what_it_is_worth() {
+    // A constant Z used to be an error, "no drift rate can be resolved". It is
+    // a measurement like any other: zero, with an error bar, and the caller
+    // decides what to make of it.
+    for (drift, negligible) in [(3e-12, false), (0.0, true)] {
+        let mut controller = MockController::builder().z_drift(Z, drift, -1.0).build();
+        let events = EventBus::new();
+        let shutdown = ShutdownFlag::new();
+        let mut rt = Rt::new(&mut controller, &events, &shutdown);
+        let estimate = rt
+            .drift()
+            .expect("the mock supports drift compensation")
+            .measure_z(Z, Duration::from_secs(5))
+            .expect("a streamed Z measures");
+
+        assert!((estimate.rate_m_s - drift).abs() < 1e-15, "{estimate:?}");
+        assert_eq!(estimate.samples, 5000, "five seconds of a 1 kHz stream");
+        assert_eq!(estimate.is_negligible(0.05e-12), negligible);
+    }
+}
+
+#[test]
+fn compensation_converges_whichever_way_the_velocity_sign_runs() {
+    for response in [1.0, -1.0] {
+        let drift = 4e-12;
+        let mut controller = MockController::builder()
+            .z_drift(Z, drift, response)
+            .build();
+        let obs = controller.observations();
+        let roles = BurstRoles::default();
+        let mut events = EventBus::new();
+        events.add_observer(Box::new(roles.clone()));
+        let shutdown = ShutdownFlag::new();
+        let mut rt = Rt::new(&mut controller, &events, &shutdown);
+        let result = rt
+            .drift()
+            .expect("the mock supports drift compensation")
+            .compensate(&CompensateDrift::new(Z))
+            .expect("compensates");
+
+        assert!(result.converged, "response {response}: {result:?}");
+        let learned = result.response.expect("the trial learned a response");
+        assert!((learned - response).abs() < 1e-6, "learned {learned}");
+        // What is left on the machine cancels the drift, in its convention.
+        let left = drift + response * obs.lock().drift_comp.vz;
+        assert!(
+            left.abs() < 0.05e-12,
+            "response {response}: {left} m/s left"
+        );
+        assert!(obs.lock().drift_comp.enabled);
+        // Baseline, a trial to learn the sign, and the rest of the budget in
+        // corrections, spent in full even though the first one lands.
+        assert_eq!(
+            *roles.0.lock().unwrap(),
+            [
+                "baseline",
+                "trial",
+                "correction",
+                "correction",
+                "correction"
+            ]
+        );
+        assert_eq!(result.bursts, 5);
+    }
+}
+
+#[test]
+fn compensation_converges_through_measurement_noise() {
+    // 20 pm of scatter per sample, five times the drift over a whole burst.
+    let (drift, response) = (1e-12, -1.0);
+    let mut controller = MockController::builder()
+        .z_drift(Z, drift, response)
+        .z_drift_noise(20e-12)
+        .build();
+    let obs = controller.observations();
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+    let result = rt
+        .drift()
+        .expect("the mock supports drift compensation")
+        .compensate(&CompensateDrift::new(Z))
+        .expect("compensates");
+
+    assert!(result.converged, "{result:?}");
+    assert!(result.bursts <= 5);
+    let left = drift + response * obs.lock().drift_comp.vz;
+    assert!(left.abs() < 0.2e-12, "{left} m/s left, {result:?}");
+}
+
+#[test]
+fn a_known_response_skips_the_trial() {
+    let mut controller = MockController::builder().z_drift(Z, 4e-12, -1.0).build();
+    let obs = controller.observations();
+    let roles = BurstRoles::default();
+    let mut events = EventBus::new();
+    events.add_observer(Box::new(roles.clone()));
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+    let result = rt
+        .drift()
+        .expect("the mock supports drift compensation")
+        .compensate(&CompensateDrift {
+            response: Some(-1.0),
+            ..CompensateDrift::new(Z)
+        })
+        .expect("compensates");
+
+    assert!(result.converged, "{result:?}");
+    assert!(!roles.0.lock().unwrap().contains(&"trial".to_string()));
+    // Corrections only, so the trial velocity never reached the piezo.
+    let trial = CompensateDrift::new(Z).trial_vz;
+    assert!(
+        obs.lock()
+            .drift_comp_writes
+            .iter()
+            .all(|c| c.vz.abs() < trial / 2.0)
+    );
+}
+
+#[test]
+fn a_negligible_drift_changes_nothing() {
+    let mut controller = MockController::builder().z_drift(Z, 0.0, -1.0).build();
+    let obs = controller.observations();
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+    let result = rt
+        .drift()
+        .expect("the mock supports drift compensation")
+        .compensate(&CompensateDrift::new(Z))
+        .expect("nothing to do is not an error");
+
+    assert!(result.converged);
+    assert_eq!(result.response, None, "no trial, so nothing was learned");
+    assert_eq!(result.bursts, 1);
+    assert!(obs.lock().drift_comp_writes.is_empty());
+}
+
+#[test]
+fn a_channel_that_does_not_respond_is_refused_and_the_velocity_put_back() {
+    // Saturated, disabled, or not wired to the piezo: the drift ignores the
+    // trial. Solving against that response would produce a huge, confident
+    // velocity.
+    let mut controller = MockController::builder().z_drift(Z, 4e-12, 0.0).build();
+    let obs = controller.observations();
     let events = EventBus::new();
     let shutdown = ShutdownFlag::new();
     let mut rt = Rt::new(&mut controller, &events, &shutdown);
     let err = rt
         .drift()
         .expect("the mock supports drift compensation")
-        .measure_z(SignalIndex(30), Duration::from_millis(9), 3)
+        .compensate(&CompensateDrift::new(Z))
         .unwrap_err();
 
-    assert!(
-        format!("{err}").contains("no drift rate can be resolved"),
-        "got: {err}"
-    );
+    assert!(format!("{err}").contains("a response of"), "got: {err}");
+    let last = *obs
+        .lock()
+        .drift_comp_writes
+        .last()
+        .expect("the trial wrote");
+    assert_eq!(last.vz, 0.0, "the velocity from before the trial is back");
+}
+
+#[test]
+fn a_residual_outside_its_error_bar_is_reported_not_hidden() {
+    // A response claimed twice as strong as it is halves every correction,
+    // which cannot close a 4 pm/s drift in the bursts allowed.
+    let mut controller = MockController::builder().z_drift(Z, 4e-12, -1.0).build();
+    let obs = controller.observations();
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+    let result = rt
+        .drift()
+        .expect("the mock supports drift compensation")
+        .compensate(&CompensateDrift {
+            response: Some(-2.0),
+            bursts: 3,
+            ..CompensateDrift::new(Z)
+        })
+        .expect("a residual left over is a result, not an error");
+
+    assert!(!result.converged);
+    assert_eq!(result.bursts, 3);
+    // The k-th correction takes a k-th of its reading: 4 / 2, then 2 / (2 * 2).
+    let written: Vec<f64> = obs.lock().drift_comp_writes.iter().map(|c| c.vz).collect();
+    assert_eq!(written.len(), 2);
+    assert!((written[0] - 2e-12).abs() < 1e-15, "{written:?}");
+    assert!((written[1] - 2.5e-12).abs() < 1e-15, "{written:?}");
+    // The residual reported belongs to the velocity left on the machine.
+    assert!((result.residual.rate_m_s - (4e-12 - result.vz_m_s)).abs() < 1e-15);
+}
+
+#[test]
+fn too_few_bursts_to_get_past_the_trial_are_refused() {
+    // Two bursts with the response unknown would be baseline and trial, and
+    // the run would end with the trial velocity on the controller.
+    let mut controller = MockController::builder().z_drift(Z, 4e-12, -1.0).build();
+    let obs = controller.observations();
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+    let err = rt
+        .drift()
+        .expect("the mock supports drift compensation")
+        .compensate(&CompensateDrift {
+            bursts: 2,
+            ..CompensateDrift::new(Z)
+        })
+        .expect_err("two bursts cannot learn a response and check the result");
+
+    assert!(format!("{err}").contains("too few"), "got: {err}");
+    assert!(obs.lock().drift_comp_writes.is_empty());
 }

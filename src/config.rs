@@ -126,9 +126,10 @@ fn default_approach_timeout_ms() -> u64 {
 fn default_reposition_approach_timeout_ms() -> u64 {
     300_000
 }
-/// 0.2.3 backed the coarse motor off ten steps after the final withdraw.
+/// 0.2.3 backed the coarse motor off ten steps after the final withdraw; the
+/// default here is a shorter two.
 fn default_exit_retract_steps() -> u16 {
-    10
+    2
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

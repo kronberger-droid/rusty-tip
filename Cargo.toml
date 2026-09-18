@@ -25,6 +25,10 @@ name = "const-distance"
 path = "bin/const-distance/main.rs"
 
 [[bin]]
+name = "rt-log"
+path = "bin/rt-log/main.rs"
+
+[[bin]]
 name = "tip-prep-gui"
 path = "bin/tip-prep-gui/main.rs"
 required-features = ["gui"]
@@ -46,6 +50,7 @@ clap = { version = "4.5.53", features = ["derive"] }
 crossbeam-channel = "0.5"
 rayon = "1.10"
 image = { version = "0.25", optional = true }
+schemars = "1"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["consoleapi", "processenv", "wincon", "handleapi", "winbase"] }

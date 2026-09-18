@@ -337,6 +337,14 @@ pub trait SpmController: Send {
         None
     }
 
+    /// Whether `read_signal_samples` serves `index` from the data stream, at
+    /// [`stream_rate_hz`](Self::stream_rate_hz), rather than by polling.
+    /// Consumers that need an evenly spaced burst check this first, since
+    /// polled samples have no time base of their own.
+    fn streams_signal(&mut self, _index: SignalIndex) -> bool {
+        false
+    }
+
     // -- Signal Reading --
 
     /// Collect raw signal samples for analysis or averaging.

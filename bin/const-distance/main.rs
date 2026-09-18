@@ -27,35 +27,38 @@
 //!
 //! # Units
 //!
-//! Everything on the command line is in **nanometres**, because that is the
-//! scale the numbers actually live at. Everything inside the program, and
-//! everything written to a file, is in **metres**, because that is what the
-//! controller and Gwyddion expect. The conversion happens once, at argument
-//! parsing.
+//! Everything is in SI: metres and metres per second on the command line,
+//! inside the program and in every file written, because that is what the
+//! config, the controller and Gwyddion use. Half a nanometre is `0.5e-9`.
+//! Only what is printed for reading is scaled to nanometres or picometres.
 
 mod surface;
 
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use ndarray::{Array2, ArrayView2};
 use textplots::{Chart, Plot, Shape};
 
-use rusty_tip::action::drift::{CompensateDrift, MeasureZDrift};
+use rusty_tip::action::drift::{
+    CompensateDrift, DriftBurstEvent, DriftCompensation, DriftEstimate, MeasureZDrift,
+};
 use rusty_tip::action::multi_pass::ApplyMultiPass;
-use rusty_tip::action::{Action, ActionContext, ActionOutput, DataStore};
+use rusty_tip::action::{ActionContext, ActionOutput, DataStore, run_action};
 use rusty_tip::analyzer::rolling_ellipsoid::{
     Border, GridSpacing, RollingEllipsoid, vertical_clearance,
 };
-use rusty_tip::event::EventBus;
+use rusty_tip::event::{Event, EventBus, EventEmitter, FileLogger, Observer};
+use rusty_tip::experiment_log::{ControllerFacts, LogEvent, RunHeader, ToolSchema};
 use rusty_tip::export::{gsf, write_table, write_xyz};
 use rusty_tip::multi_pass::MultiPassConfig;
-use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
+use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::{SignalIndex, SignalRegistry};
-use rusty_tip::spm_controller::DriftComp;
+use rusty_tip::spm_controller::{DriftComp, SpmController};
 
 /// Nanometres to metres.
 const NM: f64 = 1e-9;
@@ -103,11 +106,45 @@ struct DriftArgs {
     #[arg(long, conflicts_with = "signal")]
     signal_name: Option<String>,
 
-    /// Length of one measurement window, in seconds. `compensate` runs three.
+    /// Length of one measurement burst, in seconds.
     #[arg(long, default_value_t = 5.0)]
     window: f64,
 
-    /// Samples per window. At least 3.
+    /// Bursts `compensate` spends, the baseline and the trial included. Each
+    /// one after those averages another estimate into the velocity.
+    #[arg(long, default_value_t = 5)]
+    bursts: usize,
+
+    /// Velocity step `compensate` uses to learn which way the controller's
+    /// `vz` runs, in m/s. Large on purpose: with the loop closed it only
+    /// ramps the Z output for one burst.
+    #[arg(long, default_value = "20e-12")]
+    trial: f64,
+
+    /// The response, once known for this controller: 1 if a positive `vz`
+    /// adds to the measured drift, -1 if it subtracts. Skips the trial burst.
+    #[arg(long, allow_hyphen_values = true)]
+    response: Option<f64>,
+
+    /// Stream rate to ask the TCP logger for, in Hz.
+    #[arg(long, default_value_t = 1000.0)]
+    sample_rate: f64,
+
+    /// TCP logger data port.
+    #[arg(long, default_value_t = 6590)]
+    data_port: u16,
+
+    /// TCP logger channel that carries Z. Looked up in the controller's
+    /// signal slots when omitted.
+    #[arg(long)]
+    tcp_channel: Option<u8>,
+
+    /// Poll Z instead of streaming it: `--samples` timed reads per window.
+    /// Far noisier; for when the TCP logger is not available.
+    #[arg(long)]
+    no_stream: bool,
+
+    /// Reads per window with `--no-stream`. At least 3.
     #[arg(long, default_value_t = 16)]
     samples: usize,
 
@@ -118,6 +155,10 @@ struct DriftArgs {
     /// Controller port.
     #[arg(long, default_value_t = 6501)]
     port: u16,
+
+    /// Directory the experiment log (JSONL) is written to.
+    #[arg(long, default_value = "./experiments")]
+    log_dir: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -126,8 +167,8 @@ enum DriftOp {
     Status,
     /// Fit a Z drift rate and print it. Changes nothing on the controller.
     Measure,
-    /// Measure, set the Z velocity that cancels the drift, and report the
-    /// residual. Leaves compensation switched on.
+    /// Measure in bursts, correcting the Z velocity after each, until the
+    /// residual is inside its error bar. Leaves compensation switched on.
     Compensate,
     /// Switch compensation off. The velocities are kept, so `status` still
     /// shows what was last applied.
@@ -140,7 +181,7 @@ struct BaselineArgs {
     /// Positive is the direction the `Play offset` field takes; which way
     /// that points on hardware has NOT been confirmed yet, so check against
     /// the GUI before trusting the sign.
-    #[arg(short, long, default_value_t = 2e-10)]
+    #[arg(short, long, default_value = "0.2e-9")]
     lift: f64,
 
     /// RT signal slot to record in the first pass. 30 is Z (m) on a stock
@@ -179,6 +220,74 @@ struct BaselineArgs {
     /// Settle time at the beginning of each line, in seconds.
     #[arg(long, default_value_t = 0.0)]
     delay: f64,
+
+    /// Directory the experiment log (JSONL) is written to.
+    #[arg(long, default_value = "./experiments")]
+    log_dir: PathBuf,
+}
+
+/// Every custom event kind const-distance can write: none of its own, plus
+/// the bursts the drift actions report.
+fn log_schema() -> ToolSchema {
+    ToolSchema::new("const_distance").including(rusty_tip::action::drift::log_schema())
+}
+
+/// Prints each drift burst as it lands, so a `compensate` that takes half a
+/// minute shows its progress rather than a blank terminal.
+struct BurstPrinter;
+
+impl Observer for BurstPrinter {
+    fn on_event(&self, event: &Event) {
+        if let Event::Custom { kind, data, .. } = event
+            && kind == DriftBurstEvent::KIND
+        {
+            let pm = |key: &str| data[key].as_f64().unwrap_or(f64::NAN) / PM;
+            println!(
+                "  burst {} ({}): vz {:+.3} pm/s, drift {:+.3} ± {:.3} pm/s",
+                data["burst"],
+                data["role"].as_str().unwrap_or("?"),
+                pm("vz_m_s"),
+                pm("drift_m_s"),
+                pm("std_err_m_s"),
+            );
+        }
+    }
+}
+
+/// Open the experiment log for one command and write its header.
+///
+/// `invocation` stands in for a config file: the arguments that shaped the
+/// run, so the log says what was asked for.
+fn open_run_log(
+    dir: &Path,
+    controller: &mut dyn SpmController,
+    invocation: serde_json::Value,
+) -> Result<EventBus, Box<dyn Error>> {
+    fs::create_dir_all(dir)?;
+    let path = dir.join(format!(
+        "const_distance_{}.jsonl",
+        chrono::Utc::now().format("%Y%m%d_%H%M%S")
+    ));
+    let mut events = EventBus::new();
+    events.add_observer(Box::new(FileLogger::new(fs::File::create(&path)?)));
+    events.add_observer(Box::new(BurstPrinter));
+    println!("log: {}", path.display());
+    let facts = ControllerFacts::gather(controller, None);
+    events.emit(Event::run_started(RunHeader::new(
+        log_schema(),
+        invocation,
+        facts,
+    )));
+    Ok(events)
+}
+
+/// Close the log with the command's outcome.
+fn finish_run_log(events: &EventBus, started: Instant, result: &Result<(), Box<dyn Error>>) {
+    let (outcome, detail) = match result {
+        Ok(()) => ("completed", None),
+        Err(e) => ("error", Some(e.to_string())),
+    };
+    events.emit(Event::run_finished(outcome, detail, started.elapsed()));
 }
 
 #[derive(Args)]
@@ -196,7 +305,7 @@ struct PlanArgs {
     input_unit: InputUnit,
 
     /// Sample spacing along the fast axis, metres. Read from the file for .gsf.
-    #[arg(long, default_value_t = 1e-10)]
+    #[arg(long, default_value = "0.1e-9")]
     dx: f64,
 
     /// Sample spacing along the slow axis, metres. Defaults to --dx.
@@ -212,11 +321,11 @@ struct PlanArgs {
     ny: usize,
 
     /// Characteristic feature height, metres, synthetic surfaces only.
-    #[arg(long, default_value_t = 3e-10)]
+    #[arg(long, default_value = "0.3e-9")]
     amplitude: f64,
 
     /// Lateral semi-axis of the tip ellipsoid, metres.
-    #[arg(short = 'a', long, default_value_t = 1e-9)]
+    #[arg(short = 'a', long, default_value = "1e-9")]
     lateral: f64,
 
     /// Lateral semi-axis along the slow axis, metres. Defaults to --lateral.
@@ -224,7 +333,7 @@ struct PlanArgs {
     lateral_y: Option<f64>,
 
     /// Vertical semi-axis of the tip ellipsoid, metres. Smaller means blunter.
-    #[arg(short = 'c', long, default_value_t = 5e-10)]
+    #[arg(short = 'c', long, default_value = "0.5e-9")]
     vertical: f64,
 
     /// How to treat the footprint where it overhangs the frame edge.
@@ -321,14 +430,129 @@ fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
         None => SignalIndex(args.signal),
     };
 
-    let events = EventBus::new();
+    // Before the log opens, so its header records the stream rate.
+    let measures = matches!(args.op, DriftOp::Measure | DriftOp::Compensate);
+    if measures && !args.no_stream {
+        start_z_stream(&args, z, &mut controller)?;
+    }
+
+    let started = Instant::now();
+    let events = open_run_log(
+        &args.log_dir,
+        &mut controller,
+        serde_json::json!({
+            "command": "drift",
+            "op": match args.op {
+                DriftOp::Status => "status",
+                DriftOp::Measure => "measure",
+                DriftOp::Compensate => "compensate",
+                DriftOp::Off => "off",
+            },
+            "z_signal": z.0,
+            "window_s": args.window,
+            "bursts": args.bursts,
+            "trial_vz_m_s": args.trial,
+            "response": args.response,
+            "sample_rate_hz": args.sample_rate,
+            "streamed": measures && !args.no_stream,
+            "samples": args.samples,
+            "host": args.host,
+            "port": args.port,
+        }),
+    )?;
+    let result = drift_op(&args, z, &events, &mut controller);
+    finish_run_log(&events, started, &result);
+    result
+}
+
+/// Bring the TCP logger up with Z in it, and check that what it streams is Z.
+///
+/// A TCP logger channel is a position in the controller's 24 signal slots,
+/// so the channel for `z` is wherever the slot list holds its RT index. That
+/// assignment differs between instruments, which is why it is looked up
+/// rather than taken from a table. Whatever the lookup or `--tcp-channel`
+/// says, the stream is then compared against a plain read of Z: a drift
+/// fitted to the wrong channel would be applied to the piezo with confidence.
+fn start_z_stream(
+    args: &DriftArgs,
+    z: SignalIndex,
+    controller: &mut NanonisController,
+) -> Result<(), Box<dyn Error>> {
+    let z_slot = u8::try_from(z.0).map_err(|_| format!("RT signal {} is out of range", z.0))?;
+    let channel =
+        match args.tcp_channel {
+            Some(channel) => channel,
+            None => {
+                // Asked for with the full response layout, names then indexes;
+                // nanonis-rs 0.5's own `signals_in_slots_get` leaves the names
+                // out of its layout.
+                let reply = controller.client_mut().quick_send(
+                    "Signals.InSlotsGet",
+                    vec![],
+                    vec![],
+                    vec!["+*c", "i", "*i"],
+                )?;
+                let slots = reply
+                    .get(2)
+                    .and_then(|v| v.as_i32_array().ok())
+                    .filter(|s| {
+                        !s.is_empty() && s.len() <= 24 && s.iter().all(|i| (0..=255).contains(i))
+                    })
+                    .ok_or(
+                        "could not read the controller's signal slots; pass the TCP logger \
+                     channel that carries Z with --tcp-channel, or poll with --no-stream",
+                    )?;
+                let position = slots.iter().position(|&rt| rt == i32::from(z_slot)).ok_or_else(|| {
+                format!(
+                    "RT signal {} is in none of the controller's {} signal slots, so the TCP \
+                     logger cannot stream it. Assign it to a slot in the Signals Manager, or \
+                     poll it with --no-stream.",
+                    z.0,
+                    slots.len()
+                )
+            })?;
+                position as u8
+            }
+        };
+    println!("streaming Z from TCP logger channel {channel}");
+
+    let registry = SignalRegistry::builder()
+        .add_tcp_mapping(z_slot, channel)
+        .add_signal("Z (m)".to_string(), z_slot)
+        .build();
+    let setup = StreamSetup::new(args.host.as_str(), args.data_port, args.sample_rate);
+    if !controller.start_streaming(&registry, &setup)? {
+        return Err("the TCP data stream did not start".into());
+    }
+
+    let streamed = controller.read_signal_samples(z, 200)?;
+    let mean = streamed.iter().sum::<f64>() / streamed.len() as f64;
+    let polled = controller.read_signal(z, true)?;
+    if (mean - polled).abs() > 1e-9 {
+        return Err(format!(
+            "TCP logger channel {channel} streams {mean:.4e} while Z reads {polled:.4e} m, so \
+             it is not carrying Z. Pass the right channel with --tcp-channel."
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// The drift operation itself, once the log is open.
+fn drift_op(
+    args: &DriftArgs,
+    z: SignalIndex,
+    events: &EventBus,
+    controller: &mut NanonisController,
+) -> Result<(), Box<dyn Error>> {
     let shutdown = ShutdownFlag::new();
     let mut store = DataStore::new();
     let mut ctx = ActionContext {
-        controller: &mut controller,
+        controller,
         store: &mut store,
-        events: &events,
+        events,
         shutdown: &shutdown,
+        depth: 0,
     };
     let window_ms = (args.window * 1000.0) as u64;
 
@@ -368,30 +592,71 @@ fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
         DriftOp::Measure => {
             print_status(&ctx.controller.drift_comp_get()?);
             println!(
-                "measuring over {:.1} s with {} samples (Z controller must be on, scan stopped)",
-                args.window, args.samples
+                "measuring one burst of {:.1} s (Z controller must be on, scan stopped)",
+                args.window
             );
-            let output = MeasureZDrift {
-                z,
-                window_ms,
-                samples: args.samples,
-            }
-            .execute(&mut ctx)?;
-            println!("Z drift: {:.3} pm/s", value_of(output)? / PM);
+            let output = run_action(
+                &mut ctx,
+                &MeasureZDrift {
+                    z,
+                    window_ms,
+                    samples: args.samples,
+                },
+            )?;
+            let estimate: DriftEstimate = data_of(output)?;
+            println!(
+                "Z drift: {:+.3} ± {:.3} pm/s ({} samples over {:.1} s){}",
+                estimate.rate_m_s / PM,
+                estimate.std_err_m_s / PM,
+                estimate.samples,
+                estimate.window_s,
+                match estimate.is_negligible(0.0) {
+                    true => ", consistent with zero",
+                    false => "",
+                }
+            );
         }
         DriftOp::Compensate => {
             print_status(&ctx.controller.drift_comp_get()?);
             println!(
-                "compensating: three windows of {:.1} s, {} samples each",
-                args.window, args.samples
+                "compensating: {} bursts of {:.1} s (Z controller must be on, scan stopped)",
+                args.bursts, args.window
             );
-            let output = CompensateDrift {
-                z,
-                window_ms,
-                samples: args.samples,
+            let output = run_action(
+                &mut ctx,
+                &CompensateDrift {
+                    window_ms,
+                    samples: args.samples,
+                    bursts: args.bursts,
+                    trial_vz: args.trial,
+                    response: args.response,
+                    ..CompensateDrift::new(z)
+                },
+            )?;
+            let result: DriftCompensation = data_of(output)?;
+            println!(
+                "residual Z drift: {:+.3} ± {:.3} pm/s after {} bursts, {}",
+                result.residual.rate_m_s / PM,
+                result.residual.std_err_m_s / PM,
+                result.bursts,
+                match result.converged {
+                    true => "inside its error bar",
+                    false => {
+                        "outside its error bar. One burst does that from noise now and then; \
+                         if it repeats, raise --window"
+                    }
+                }
+            );
+            match (result.response, args.response) {
+                (Some(r), None) => println!(
+                    "response {r:+.2}: a positive vz {} the measured drift. Pass --response {} \
+                     next time to skip the trial burst.",
+                    if r > 0.0 { "adds to" } else { "subtracts from" },
+                    if r > 0.0 { "1" } else { "-1" },
+                ),
+                (None, _) => println!("drift was negligible from the start; nothing was changed"),
+                _ => {}
             }
-            .execute(&mut ctx)?;
-            println!("residual Z drift: {:.3} pm/s", value_of(output)? / PM);
             print_status(&ctx.controller.drift_comp_get()?);
         }
         DriftOp::Off => {
@@ -409,10 +674,11 @@ fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
 /// Picometres to metres.
 const PM: f64 = 1e-12;
 
-fn value_of(output: ActionOutput) -> Result<f64, Box<dyn Error>> {
+/// The result struct an action returned as [`ActionOutput::Data`].
+fn data_of<T: serde::de::DeserializeOwned>(output: ActionOutput) -> Result<T, Box<dyn Error>> {
     match output {
-        ActionOutput::Value(v) => Ok(v),
-        other => Err(format!("expected a value, got {other:?}").into()),
+        ActionOutput::Data(v) => Ok(serde_json::from_value(v)?),
+        other => Err(format!("expected structured data, got {other:?}").into()),
     }
 }
 
@@ -477,7 +743,7 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
     for (i, pass) in config.passes.iter().enumerate() {
         let what = match (pass.recorded(), pass.played()) {
             (Some(s), _) => format!("record RT slot {}", s.0),
-            (_, Some((offset, _))) => format!("play back, offset {} nm", offset / NM),
+            (_, Some((offset, _))) => format!("play back, offset {:.4} nm", offset / NM),
             _ => "nothing".to_string(),
         };
         println!("  {}: {what}", MultiPassConfig::label(i));
@@ -496,25 +762,54 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
         return Ok(());
     };
 
-    // Straight to the action rather than through `Rt`: the harness withdraws
-    // the tip when a routine ends, which is right for a routine and wrong for
-    // a command that only rewrites a configuration.
-    let events = EventBus::new();
+    let started = Instant::now();
+    let events = open_run_log(
+        &args.log_dir,
+        &mut controller,
+        serde_json::json!({
+            "command": "baseline",
+            "output": args.output.display().to_string(),
+            "host_path": host_path,
+            "host": args.host,
+            "port": args.port,
+            "multi_pass": config,
+        }),
+    )?;
+    let result = baseline_apply(&args, &config, &host_path, &events, &mut controller);
+    finish_run_log(&events, started, &result);
+    result
+}
+
+/// Load and activate the baseline configuration, once the log is open.
+///
+/// Straight to the action rather than through `Rt`: the harness withdraws
+/// the tip when a routine ends, which is right for a routine and wrong for
+/// a command that only rewrites a configuration.
+fn baseline_apply(
+    args: &BaselineArgs,
+    config: &MultiPassConfig,
+    host_path: &str,
+    events: &EventBus,
+    controller: &mut NanonisController,
+) -> Result<(), Box<dyn Error>> {
     let shutdown = ShutdownFlag::new();
     let mut store = DataStore::new();
     let mut ctx = ActionContext {
-        controller: &mut controller,
+        controller,
         store: &mut store,
-        events: &events,
+        events,
         shutdown: &shutdown,
+        depth: 0,
     };
 
-    ApplyMultiPass {
-        config: config.clone(),
-        local_path: args.output.clone(),
-        host_path: host_path.clone(),
-    }
-    .execute(&mut ctx)?;
+    run_action(
+        &mut ctx,
+        &ApplyMultiPass {
+            config: config.clone(),
+            local_path: args.output.clone(),
+            host_path: host_path.to_string(),
+        },
+    )?;
 
     let buffer = ctx.controller.scan_buffer_get()?;
     println!(

@@ -12,3 +12,4 @@ const-distance-out/
 # GUI-saved .mpas files are the only specification of an undocumented format,
 # so they stay committable.
 /baseline.mpas
+mpas/

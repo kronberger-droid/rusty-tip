@@ -230,4 +230,6 @@ module docs of `rusty_tip::mock_controller`.
 Everything observable flows through the `EventBus`: action started/completed/
 failed, measurements with their batch statistics, and routine state
 snapshots. Attach observers (`ConsoleLogger`, `FileLogger` for JSONL,
-`ChannelForwarder` for GUIs) to consume them.
+`ChannelForwarder` for GUIs) to consume them. The JSONL form, including the
+self-describing header every run starts with and how a tool declares its
+own event kinds, is documented in [experiment-log.md](experiment-log.md).
