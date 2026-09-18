@@ -91,7 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   withdrew, leaving the tip parked at the top of the piezo range and still
   within reach of the surface. The harness now asks the routine how far to
   retract on exit: tip prep answers with the new
-  `tip_prep.timing.exit_retract_steps` (default 10), other routines keep
+  `tip_prep.timing.exit_retract_steps` (default 2), other routines keep
   their spot with zero. Noticed on the LT system during the September
   campaign.
 - **The GUI showed every pulse as positive.** The `tip_prep_state`

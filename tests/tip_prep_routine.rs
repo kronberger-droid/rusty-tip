@@ -352,7 +352,7 @@ fn shutdown_during_the_initial_approach_stops_promptly_and_cleans_up() {
         "the approach is switched off before the cleanup withdraws, calls: {:?}",
         obs.calls
     );
-    assert_eq!(obs.motor_displacements.last(), Some(&(0, 0, -10)));
+    assert_eq!(obs.motor_displacements.last(), Some(&(0, 0, -2)));
     assert!(obs.torn_down);
 }
 
@@ -383,7 +383,8 @@ fn shutdown_before_loop_stops_by_user() {
     assert!(obs.torn_down, "cleanup must still run on shutdown");
 
     // A withdraw alone leaves the tip within piezo reach of the surface.
-    // 0.2.3 backed the coarse motor off ten steps after it; so does this.
+    // 0.2.3 backed the coarse motor off after it; so does this, by the
+    // default two steps.
     let last_withdraw = obs
         .calls
         .iter()
@@ -401,8 +402,8 @@ fn shutdown_before_loop_stops_by_user() {
     );
     assert_eq!(
         obs.motor_displacements.last(),
-        Some(&(0, 0, -10)),
-        "the retract is ten coarse steps in Z-minus, nothing lateral"
+        Some(&(0, 0, -2)),
+        "the retract is two coarse steps in Z-minus, nothing lateral"
     );
 }
 
