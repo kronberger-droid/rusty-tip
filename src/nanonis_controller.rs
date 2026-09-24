@@ -661,32 +661,25 @@ impl SpmController for NanonisController {
         if let Err(e) = self.stop_tcp_reader() {
             log::warn!("TCP reader stop: {}", e);
         }
-        match self.safe_tip_before.take() {
-            Some(before) => {
-                if let Err(e) = self.safe_tip_configure(
-                    before.auto_recovery,
-                    before.auto_pause_scan,
-                    before.threshold_a,
-                ) {
-                    log::warn!("Failed to restore safe-tip config: {}", e);
-                }
-                if let Err(e) = self.safe_tip_set_enabled(before.enabled) {
-                    log::warn!("Failed to restore safe-tip on/off: {}", e);
-                } else {
-                    log::info!(
-                        "Safe-tip restored: {}",
-                        if before.enabled { "on" } else { "off" }
-                    );
-                }
+        // No snapshot means `prepare` never touched safe tip, since it reads
+        // before it writes, so there is nothing to put back. Resetting here
+        // clobbered the operator's settings for every tool that skips
+        // `prepare`, const-distance among them.
+        if let Some(before) = self.safe_tip_before.take() {
+            if let Err(e) = self.safe_tip_configure(
+                before.auto_recovery,
+                before.auto_pause_scan,
+                before.threshold_a,
+            ) {
+                log::warn!("Failed to restore safe-tip config: {}", e);
             }
-            // prepare never got as far as reading it: fall back to clearing
-            // the overrides, keeping the configured threshold.
-            None => {
-                if let Err(e) =
-                    self.safe_tip_configure(false, false, self.setup.safe_tip_threshold_a)
-                {
-                    log::warn!("Failed to reset safe-tip config: {}", e);
-                }
+            if let Err(e) = self.safe_tip_set_enabled(before.enabled) {
+                log::warn!("Failed to restore safe-tip on/off: {}", e);
+            } else {
+                log::info!(
+                    "Safe-tip restored: {}",
+                    if before.enabled { "on" } else { "off" }
+                );
             }
         }
     }
