@@ -1891,6 +1891,8 @@ fn build_nanonis_backend(
         // surface, not travel to an absolute Z coordinate.
         z_home_mode: ZHomeMode::Relative,
         z_home_position_m: 50e-9,
+        // Off for the run, restored on exit by teardown.
+        disable_safe_tip: true,
         ..Default::default()
     };
     let mut controller = NanonisController::new(client, setup);

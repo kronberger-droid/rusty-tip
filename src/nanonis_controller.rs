@@ -45,6 +45,10 @@ pub struct NanonisSetupConfig {
     pub z_home_position_m: f64,
     /// Safe-tip current threshold in amperes.
     pub safe_tip_threshold_a: f64,
+    /// Switch safe-tip off for the run. `prepare` records whether it was on
+    /// and `teardown` puts it back, so the operator's setting survives
+    /// however the run ends.
+    pub disable_safe_tip: bool,
     /// Which User Output index to toggle for the TCP channel list refresh
     /// workaround.  `None` skips the workaround entirely.  Default is
     /// `Some(3)`.  Pick an output that is not driving anything critical.
@@ -62,6 +66,7 @@ impl Default for NanonisSetupConfig {
             z_home_mode: ZHomeMode::Relative,
             z_home_position_m: 50e-9,
             safe_tip_threshold_a: 1e-9,
+            disable_safe_tip: false,
             tcp_refresh_output: Some(3),
         }
     }
@@ -133,6 +138,17 @@ pub struct NanonisController {
     stream_rate_hz: Option<f64>,
     /// Guards against double-teardown (manual call + Drop).
     torn_down: bool,
+    /// Safe-tip state as `prepare` found it, restored by `teardown`.
+    safe_tip_before: Option<SafeTipSnapshot>,
+}
+
+/// Safe-tip settings captured before `prepare` changes them.
+#[derive(Debug, Clone, Copy)]
+struct SafeTipSnapshot {
+    enabled: bool,
+    auto_recovery: bool,
+    auto_pause_scan: bool,
+    threshold_a: f64,
 }
 
 impl NanonisController {
@@ -145,6 +161,7 @@ impl NanonisController {
             configured_channel_count: None,
             stream_rate_hz: None,
             torn_down: false,
+            safe_tip_before: None,
         }
     }
 
@@ -602,12 +619,31 @@ impl SpmController for NanonisController {
             self.setup.z_home_position_m * 1e9
         );
 
+        // Record safe-tip before touching it, so teardown can put it back.
+        let (auto_recovery, auto_pause_scan, threshold_a) = self.safe_tip_status()?;
+        let snapshot = SafeTipSnapshot {
+            enabled: self.safe_tip_enabled()?,
+            auto_recovery,
+            auto_pause_scan,
+            threshold_a,
+        };
+        log::info!(
+            "Safe-tip before run: {}, threshold {:.2e} A",
+            if snapshot.enabled { "on" } else { "off" },
+            snapshot.threshold_a
+        );
+        self.safe_tip_before = Some(snapshot);
+
         // Safe-tip protection (auto_recovery off, auto_pause_scan on)
         self.safe_tip_configure(false, true, self.setup.safe_tip_threshold_a)?;
         log::info!(
             "Safe-tip threshold: {:.2e} A",
             self.setup.safe_tip_threshold_a
         );
+        if self.setup.disable_safe_tip {
+            self.safe_tip_set_enabled(false)?;
+            log::info!("Safe-tip switched off for the run");
+        }
 
         Ok(())
     }
@@ -624,11 +660,33 @@ impl SpmController for NanonisController {
         if let Err(e) = self.stop_tcp_reader() {
             log::warn!("TCP reader stop: {}", e);
         }
-        // Disable safe-tip overrides entirely: auto_recovery=false,
-        // auto_pause_scan=false.  Keep the threshold from config so if
-        // the user re-enables safe-tip manually, it starts at a known level.
-        if let Err(e) = self.safe_tip_configure(false, false, self.setup.safe_tip_threshold_a) {
-            log::warn!("Failed to reset safe-tip config: {}", e);
+        match self.safe_tip_before.take() {
+            Some(before) => {
+                if let Err(e) = self.safe_tip_configure(
+                    before.auto_recovery,
+                    before.auto_pause_scan,
+                    before.threshold_a,
+                ) {
+                    log::warn!("Failed to restore safe-tip config: {}", e);
+                }
+                if let Err(e) = self.safe_tip_set_enabled(before.enabled) {
+                    log::warn!("Failed to restore safe-tip on/off: {}", e);
+                } else {
+                    log::info!(
+                        "Safe-tip restored: {}",
+                        if before.enabled { "on" } else { "off" }
+                    );
+                }
+            }
+            // prepare never got as far as reading it: fall back to clearing
+            // the overrides, keeping the configured threshold.
+            None => {
+                if let Err(e) =
+                    self.safe_tip_configure(false, false, self.setup.safe_tip_threshold_a)
+                {
+                    log::warn!("Failed to reset safe-tip config: {}", e);
+                }
+            }
         }
     }
 

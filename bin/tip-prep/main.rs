@@ -111,6 +111,8 @@ fn run() -> Result<(), RunError> {
         // Absolute mode would make it "go to Z = +50 nm", surface or not.
         z_home_mode: ZHomeMode::Relative,
         z_home_position_m: 50e-9,
+        // Off for the run, restored on exit by teardown.
+        disable_safe_tip: true,
         ..Default::default()
     };
     let mut controller = NanonisController::new(client, setup);
