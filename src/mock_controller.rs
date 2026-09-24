@@ -48,7 +48,7 @@
 //! println!("pulses fired: {}", obs.lock().pulses.len());
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -64,9 +64,11 @@ use nanonis_rs::tcplog::TCPLogStatus;
 use nanonis_rs::tip_recovery::TipShaperConfig;
 
 use crate::signal_registry::SignalIndex;
+use nanonis_rs::scan::{ScanLineEnd, ScanLineMovement};
+
 use crate::spm_controller::{
-    AcquisitionMode, Capability, DataStreamStatus, Result, SpmController, TriggerSetup,
-    ZControllerStatus, ZHomeMode,
+    AcquisitionMode, Capability, DataStreamStatus, DriftComp, Result, ScanBuffer, SpmController,
+    TriggerSetup, ZControllerStatus, ZHomeMode,
 };
 use crate::spm_error::SpmError;
 
@@ -152,6 +154,23 @@ pub struct MockObservations {
     pub freq_values: Vec<f64>,
     /// Connection health; flipped to `false` by a [`FaultKind::Disconnect`].
     pub connected: bool,
+    /// Every path passed to `multi_pass_load`, in order.
+    pub multi_pass_loaded: Vec<String>,
+    /// Latest state passed to `multi_pass_activate`, if it was ever called.
+    pub multi_pass_active: Option<bool>,
+    /// The scan buffer, as `scan_buffer_set` last left it.
+    pub scan_buffer: ScanBuffer,
+    /// Line ends `scan_wait_end_of_line` will hand out, in order. Once these
+    /// run out it reports a timeout, so a loop that never checks `timed_out`
+    /// spins forever here rather than on the machine.
+    pub scan_line_ends: VecDeque<ScanLineEnd>,
+    /// Whether the Z controller reports itself on. Tests that care about the
+    /// feedback loop being closed flip this.
+    pub z_controller_on: bool,
+    /// Drift compensation, as `drift_comp_set` last left it.
+    pub drift_comp: DriftComp,
+    /// Every set of velocities written, in order.
+    pub drift_comp_writes: Vec<DriftComp>,
 }
 
 impl Default for MockObservations {
@@ -172,6 +191,26 @@ impl Default for MockObservations {
             freq_reads: 0,
             freq_values: Vec::new(),
             connected: true,
+            multi_pass_loaded: Vec::new(),
+            multi_pass_active: None,
+            z_controller_on: true,
+            drift_comp: DriftComp {
+                enabled: false,
+                vx: 0.0,
+                vy: 0.0,
+                vz: 0.0,
+                saturation_limit_percent: 10.0,
+                x_saturated: false,
+                y_saturated: false,
+                z_saturated: false,
+            },
+            drift_comp_writes: Vec::new(),
+            scan_line_ends: VecDeque::new(),
+            scan_buffer: ScanBuffer {
+                channels: vec![SignalIndex(0), SignalIndex(30)],
+                pixels: 256,
+                lines: 256,
+            },
         }
     }
 }
@@ -476,7 +515,10 @@ impl SpmController for MockController {
 
     fn z_controller_status(&mut self) -> Result<ZControllerStatus> {
         self.enter("z_controller_status")?;
-        Ok(ZControllerStatus::On)
+        Ok(match self.obs.lock().z_controller_on {
+            true => ZControllerStatus::On,
+            false => ZControllerStatus::Off,
+        })
     }
 
     // -- Piezo Positioning --
@@ -557,6 +599,32 @@ impl SpmController for MockController {
         Ok(())
     }
 
+    fn scan_buffer_get(&mut self) -> Result<ScanBuffer> {
+        self.enter("scan_buffer_get")?;
+        Ok(self.obs.lock().scan_buffer.clone())
+    }
+
+    fn scan_buffer_set(&mut self, buffer: &ScanBuffer) -> Result<()> {
+        self.enter("scan_buffer_set")?;
+        self.obs.lock().scan_buffer = buffer.clone();
+        Ok(())
+    }
+
+    fn scan_wait_end_of_line(&mut self, _timeout: Duration) -> Result<ScanLineEnd> {
+        self.enter("scan_wait_end_of_line")?;
+        Ok(self
+            .obs
+            .lock()
+            .scan_line_ends
+            .pop_front()
+            .unwrap_or(ScanLineEnd {
+                timed_out: true,
+                line: -1,
+                movement: ScanLineMovement::Forward,
+                pass: -1,
+            }))
+    }
+
     fn scan_frame_data_grab(
         &mut self,
         _channel_index: u32,
@@ -565,6 +633,56 @@ impl SpmController for MockController {
         self.enter("scan_frame_data_grab")?;
         // 2x2 flat frame is enough for routines that only check shape.
         Ok(("mock_channel".into(), vec![vec![0.0; 2]; 2], forward))
+    }
+
+    // -- Drift compensation --
+
+    fn drift_comp_get(&mut self) -> Result<DriftComp> {
+        self.enter("drift_comp_get")?;
+        Ok(self.obs.lock().drift_comp)
+    }
+
+    fn drift_comp_set(&mut self, comp: &DriftComp) -> Result<()> {
+        self.enter("drift_comp_set")?;
+        let mut obs = self.obs.lock();
+        obs.drift_comp_writes.push(*comp);
+        // Saturation is status, not a setting, so a write cannot clear it.
+        // Switching compensation off does, which is the documented re-arm.
+        let cleared = !comp.enabled;
+        obs.drift_comp = DriftComp {
+            x_saturated: obs.drift_comp.x_saturated && !cleared,
+            y_saturated: obs.drift_comp.y_saturated && !cleared,
+            z_saturated: obs.drift_comp.z_saturated && !cleared,
+            ..*comp
+        };
+        Ok(())
+    }
+
+    // -- Multi-pass --
+
+    fn multi_pass_load(&mut self, host_path: &str) -> Result<()> {
+        self.enter("multi_pass_load")?;
+        self.obs
+            .lock()
+            .multi_pass_loaded
+            .push(host_path.to_string());
+        Ok(())
+    }
+
+    fn multi_pass_save(&mut self, _host_path: &str) -> Result<()> {
+        self.enter("multi_pass_save")?;
+        Ok(())
+    }
+
+    fn multi_pass_activate(&mut self, on: bool) -> Result<()> {
+        self.enter("multi_pass_activate")?;
+        let mut obs = self.obs.lock();
+        obs.multi_pass_active = Some(on);
+        // Activating multi-pass stops a running scan, as it does on hardware.
+        if on {
+            obs.scan_running = false;
+        }
+        Ok(())
     }
 
     // -- Oscilloscope --
@@ -994,6 +1112,8 @@ fn all_capabilities() -> HashSet<Capability> {
         Capability::Pll,
         Capability::DataStream,
         Capability::SafeTip,
+        Capability::MultiPass,
+        Capability::DriftCompensation,
     ])
 }
 
