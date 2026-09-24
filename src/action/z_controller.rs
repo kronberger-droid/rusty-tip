@@ -107,15 +107,18 @@ pub struct AutoApproach {
     pub timeout_ms: u64,
 }
 
+/// Budget for one auto-approach when the caller names none: five minutes.
+pub const DEFAULT_APPROACH_TIMEOUT_MS: u64 = 300_000;
+
 fn default_approach_timeout_ms() -> u64 {
-    300_000 // 5 minutes
+    DEFAULT_APPROACH_TIMEOUT_MS
 }
 
 impl Default for AutoApproach {
     fn default() -> Self {
         Self {
             wait: true,
-            timeout_ms: 300_000,
+            timeout_ms: DEFAULT_APPROACH_TIMEOUT_MS,
         }
     }
 }
@@ -288,7 +291,7 @@ impl Default for CalibratedApproach {
     fn default() -> Self {
         Self {
             wait: true,
-            timeout_ms: 300_000,
+            timeout_ms: DEFAULT_APPROACH_TIMEOUT_MS,
         }
     }
 }
@@ -305,18 +308,19 @@ impl Action for CalibratedApproach {
     }
 
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
-        let timeout = Duration::from_millis(self.timeout_ms);
-
         // 1. Initial approach
-        approach(ctx, self.wait, timeout)?;
+        ctx.run(&AutoApproach {
+            wait: self.wait,
+            timeout_ms: self.timeout_ms,
+        })?;
 
         // 2. Settle
-        Wait { duration_ms: 200 }.execute(ctx)?;
+        ctx.run(&Wait { duration_ms: 200 })?;
 
         // 3. Enable safe-tip
         let was_enabled = ctx.controller.safe_tip_enabled().unwrap_or(false);
         if !was_enabled {
-            ctx.controller.safe_tip_set_enabled(true)?;
+            ctx.run(&SafeTipSet { enabled: true })?;
         }
 
         // Steps 4-7 wrapped so safe-tip is always restored on exit
@@ -324,28 +328,31 @@ impl Action for CalibratedApproach {
             abort_if_safe_tip_tripped(ctx, "after enabling safe-tip")?;
 
             // 4. Small withdraw to z-home (~50nm above surface)
-            ctx.controller.go_z_home()?;
+            ctx.run(&ZHome)?;
             abort_if_safe_tip_tripped(ctx, "after z-home")?;
 
             // 5. Settle
-            Wait { duration_ms: 500 }.execute(ctx)?;
+            ctx.run(&Wait { duration_ms: 500 })?;
             abort_if_safe_tip_tripped(ctx, "after the post-home settle")?;
 
             // 6. Center freq shift (non-fatal if it fails)
-            if let Err(e) = CenterFreqShift.execute(ctx) {
+            if let Err(e) = ctx.run(&CenterFreqShift) {
                 log::warn!("Failed to center frequency shift: {} (continuing)", e);
             }
             abort_if_safe_tip_tripped(ctx, "after centring the frequency shift")?;
 
             // 7. Final approach with centered freq shift
-            approach(ctx, self.wait, timeout)?;
+            ctx.run(&AutoApproach {
+                wait: self.wait,
+                timeout_ms: self.timeout_ms,
+            })?;
             abort_if_safe_tip_tripped(ctx, "after the final approach")?;
 
             Ok(())
         })();
 
         // 8. Always restore safe-tip state before propagating errors
-        if !was_enabled && let Err(e) = ctx.controller.safe_tip_set_enabled(false) {
+        if !was_enabled && let Err(e) = ctx.run(&SafeTipSet { enabled: false }) {
             log::error!("Failed to restore safe-tip state: {}", e);
         }
 
@@ -382,6 +389,7 @@ mod tests {
             store: &mut store,
             events: &events,
             shutdown: &shutdown,
+            depth: 0,
         };
         let err = CalibratedApproach::default()
             .execute(&mut ctx)
@@ -430,6 +438,7 @@ mod tests {
             store: &mut store,
             events: &events,
             shutdown: &shutdown,
+            depth: 0,
         };
         let started = std::time::Instant::now();
         let err = AutoApproach {
@@ -476,6 +485,7 @@ mod tests {
             store: &mut store,
             events: &events,
             shutdown: &shutdown,
+            depth: 0,
         };
         let err = AutoApproach {
             wait: true,
@@ -505,6 +515,7 @@ mod tests {
             store: &mut store,
             events: &events,
             shutdown: &shutdown,
+            depth: 0,
         };
         CalibratedApproach::default()
             .execute(&mut ctx)

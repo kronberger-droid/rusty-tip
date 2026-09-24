@@ -7,18 +7,41 @@ use std::time::{Duration, SystemTime};
 use serde::Serialize;
 
 use crate::action::ActionOutput;
+use crate::experiment_log::{LogEvent, RunHeader};
 
 /// Structured event emitted during execution.
 ///
 /// All variants are `Clone + Serialize` so they can be broadcast to multiple
 /// observers, written to JSONL logs, and accumulated for LLM context windows.
+/// The JSONL form is documented in [`crate::experiment_log`].
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    /// First event of a run: what produced the log and how to read it.
+    RunStarted {
+        header: RunHeader,
+        #[serde(with = "system_time_serde")]
+        timestamp: SystemTime,
+    },
+    /// Last event of a run.
+    RunFinished {
+        /// How the run ended, e.g. `completed`, `stopped_by_user`, `error`.
+        outcome: String,
+        /// Detail for `error` outcomes, or the limit for budget outcomes.
+        detail: Option<String>,
+        #[serde(with = "duration_ms_serde")]
+        duration: Duration,
+        #[serde(with = "system_time_serde")]
+        timestamp: SystemTime,
+    },
     /// Emitted by the executor before running an action.
     ActionStarted {
         action: String,
+        /// The action's own fields, so the log says what was done with what.
         params: serde_json::Value,
+        /// Nesting: 0 for an action a routine ran directly, 1 for one run by
+        /// that action, and so on.
+        depth: usize,
         #[serde(with = "system_time_serde")]
         timestamp: SystemTime,
     },
@@ -26,6 +49,7 @@ pub enum Event {
     ActionCompleted {
         action: String,
         output: serde_json::Value,
+        depth: usize,
         #[serde(with = "duration_ms_serde")]
         duration: Duration,
         #[serde(with = "system_time_serde")]
@@ -35,6 +59,7 @@ pub enum Event {
     ActionFailed {
         action: String,
         error: String,
+        depth: usize,
         #[serde(with = "duration_ms_serde")]
         duration: Duration,
         #[serde(with = "system_time_serde")]
@@ -47,23 +72,59 @@ pub enum Event {
         #[serde(with = "system_time_serde")]
         timestamp: SystemTime,
     },
-    /// Escape hatch for domain-specific events from user-defined actions.
+    /// A tool's own event. `kind` is `tool/name` and `data` matches the
+    /// schema the tool declared for it in the run header; see
+    /// [`Event::typed`] and [`LogEvent`].
     Custom {
         kind: String,
         data: serde_json::Value,
+        #[serde(with = "system_time_serde")]
+        timestamp: SystemTime,
     },
 }
 
 impl Event {
-    pub fn action_started(action: &str, params: serde_json::Value) -> Self {
-        Event::ActionStarted {
-            action: action.into(),
-            params,
+    pub fn run_started(header: RunHeader) -> Self {
+        Event::RunStarted {
+            header,
             timestamp: SystemTime::now(),
         }
     }
 
-    pub fn action_completed(action: &str, output: &ActionOutput, duration: Duration) -> Self {
+    pub fn run_finished(outcome: &str, detail: Option<String>, duration: Duration) -> Self {
+        Event::RunFinished {
+            outcome: outcome.into(),
+            detail,
+            duration,
+            timestamp: SystemTime::now(),
+        }
+    }
+
+    pub fn action_started(action: &str, params: serde_json::Value, depth: usize) -> Self {
+        Event::ActionStarted {
+            action: action.into(),
+            params,
+            depth,
+            timestamp: SystemTime::now(),
+        }
+    }
+
+    /// A declared custom event. The kind and the data's shape come from the
+    /// type, so what is written is what the schema says.
+    pub fn typed<E: LogEvent>(event: &E) -> Self {
+        Event::Custom {
+            kind: E::KIND.into(),
+            data: serde_json::to_value(event).unwrap_or(serde_json::Value::Null),
+            timestamp: SystemTime::now(),
+        }
+    }
+
+    pub fn action_completed(
+        action: &str,
+        output: &ActionOutput,
+        depth: usize,
+        duration: Duration,
+    ) -> Self {
         let output_json = match output {
             ActionOutput::Value(v) => serde_json::json!(v),
             ActionOutput::Values(vs) => serde_json::json!(vs),
@@ -73,15 +134,17 @@ impl Event {
         Event::ActionCompleted {
             action: action.into(),
             output: output_json,
+            depth,
             duration,
             timestamp: SystemTime::now(),
         }
     }
 
-    pub fn action_failed(action: &str, error: &str, duration: Duration) -> Self {
+    pub fn action_failed(action: &str, error: &str, depth: usize, duration: Duration) -> Self {
         Event::ActionFailed {
             action: action.into(),
             error: error.into(),
+            depth,
             duration,
             timestamp: SystemTime::now(),
         }
@@ -95,10 +158,13 @@ impl Event {
         }
     }
 
+    /// An undeclared custom event. Prefer [`Event::typed`]: a reader can only
+    /// interpret what the run header declares, and this declares nothing.
     pub fn custom(kind: &str, data: serde_json::Value) -> Self {
         Event::Custom {
             kind: kind.into(),
             data,
+            timestamp: SystemTime::now(),
         }
     }
 }
@@ -181,7 +247,7 @@ mod tests {
 
     #[test]
     fn event_action_started_has_timestamp() {
-        let event = Event::action_started("read_bias", serde_json::json!({}));
+        let event = Event::action_started("read_bias", serde_json::json!({}), 0);
         match event {
             Event::ActionStarted {
                 action, timestamp, ..
@@ -196,7 +262,7 @@ mod tests {
     #[test]
     fn event_action_completed_converts_output() {
         let output = ActionOutput::Value(f64::consts::PI);
-        let event = Event::action_completed("read_bias", &output, Duration::from_millis(50));
+        let event = Event::action_completed("read_bias", &output, 0, Duration::from_millis(50));
         match event {
             Event::ActionCompleted {
                 output, duration, ..
@@ -210,7 +276,7 @@ mod tests {
 
     #[test]
     fn event_action_completed_unit_is_null() {
-        let event = Event::action_completed("wait", &ActionOutput::Unit, Duration::ZERO);
+        let event = Event::action_completed("wait", &ActionOutput::Unit, 0, Duration::ZERO);
         match event {
             Event::ActionCompleted { output, .. } => {
                 assert!(output.is_null());
@@ -221,7 +287,7 @@ mod tests {
 
     #[test]
     fn event_action_failed() {
-        let event = Event::action_failed("set_bias", "timeout", Duration::from_millis(100));
+        let event = Event::action_failed("set_bias", "timeout", 0, Duration::from_millis(100));
         match event {
             Event::ActionFailed { action, error, .. } => {
                 assert_eq!(action, "set_bias");
@@ -247,7 +313,7 @@ mod tests {
     fn event_custom() {
         let event = Event::custom("tip_prep_state", serde_json::json!({"name": "prep"}));
         match event {
-            Event::Custom { kind, data } => {
+            Event::Custom { kind, data, .. } => {
                 assert_eq!(kind, "tip_prep_state");
                 assert_eq!(data["name"], "prep");
             }
@@ -259,7 +325,7 @@ mod tests {
 
     #[test]
     fn event_serializes_to_json() {
-        let event = Event::action_started("read_bias", serde_json::json!({}));
+        let event = Event::action_started("read_bias", serde_json::json!({}), 0);
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"type\":\"action_started\""));
         assert!(json.contains("\"action\":\"read_bias\""));
@@ -269,7 +335,7 @@ mod tests {
     #[test]
     fn duration_serializes_as_milliseconds() {
         let event =
-            Event::action_completed("test", &ActionOutput::Unit, Duration::from_millis(1234));
+            Event::action_completed("test", &ActionOutput::Unit, 0, Duration::from_millis(1234));
         let json = serde_json::to_value(&event).unwrap();
         let dur_ms = json["duration"].as_f64().unwrap();
         assert!((dur_ms - 1234.0).abs() < 1.0);
@@ -277,7 +343,7 @@ mod tests {
 
     #[test]
     fn timestamp_serializes_as_unix_epoch() {
-        let event = Event::action_started("test", serde_json::json!({}));
+        let event = Event::action_started("test", serde_json::json!({}), 0);
         let json = serde_json::to_value(&event).unwrap();
         let ts = json["timestamp"].as_f64().unwrap();
         // Should be a reasonable Unix timestamp (after year 2020)

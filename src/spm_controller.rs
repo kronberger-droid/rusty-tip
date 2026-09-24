@@ -13,6 +13,9 @@ use nanonis_rs::{
 
 use std::collections::HashSet;
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 use crate::signal_registry::SignalIndex;
 use crate::spm_error::SpmError;
 
@@ -106,6 +109,39 @@ pub enum AcquisitionMode {
     NextTrigger,
     /// Wait for two trigger events, then return
     WaitTwoTriggers,
+}
+
+/// The data stream's buffer as it stood at one moment, one column per signal.
+///
+/// Taken on the way out of a run so the log keeps the last seconds of signal
+/// before the end, which is where a safe-tip trip or a crash shows.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default, PartialEq)]
+pub struct StreamSnapshot {
+    /// Signal index of each column, in column order. The run header maps
+    /// indices to names.
+    pub signals: Vec<u32>,
+    /// Time of each sample in seconds relative to the snapshot, so all
+    /// values are zero or negative and the last one is the newest sample.
+    pub t_s: Vec<f64>,
+    /// One column per entry of `signals`, each as long as `t_s`.
+    #[serde(serialize_with = "shortest_f32_columns")]
+    pub columns: Vec<Vec<f32>>,
+}
+
+/// Write each sample as the shortest decimal that reads back as the same
+/// `f32`. Events reach the log through `serde_json::Value`, which holds
+/// numbers as `f64`, and a plain widening there spells `1e-10` out as
+/// `1.000000013351432e-10`, about 40 % more text across a dump.
+fn shortest_f32_columns<S: serde::Serializer>(
+    columns: &[Vec<f32>],
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    let widen = |v: f32| v.to_string().parse::<f64>().unwrap_or(f64::from(v));
+    serializer.collect_seq(
+        columns
+            .iter()
+            .map(|c| c.iter().map(|&v| widen(v)).collect::<Vec<f64>>()),
+    )
 }
 
 pub trait SpmController: Send {
@@ -327,6 +363,12 @@ pub trait SpmController: Send {
     /// controllers without internal buffering.
     fn clear_data_buffer(&mut self) {}
 
+    /// Everything the data stream currently holds, or `None` without a
+    /// stream or with an empty buffer. Default is `None`.
+    fn stream_snapshot(&mut self) -> Option<StreamSnapshot> {
+        None
+    }
+
     /// The rate the data stream actually delivers samples at, in Hz, as
     /// measured when the stream was started. `None` when there is no stream
     /// or the measurement found nothing. Consumers that convert per-sample
@@ -335,6 +377,14 @@ pub trait SpmController: Send {
     /// rate and oversampling, not on what a config file claims.
     fn stream_rate_hz(&mut self) -> Option<f64> {
         None
+    }
+
+    /// Whether `read_signal_samples` serves `index` from the data stream, at
+    /// [`stream_rate_hz`](Self::stream_rate_hz), rather than by polling.
+    /// Consumers that need an evenly spaced burst check this first, since
+    /// polled samples have no time base of their own.
+    fn streams_signal(&mut self, _index: SignalIndex) -> bool {
+        false
     }
 
     // -- Signal Reading --
