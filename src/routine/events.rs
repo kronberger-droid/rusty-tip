@@ -31,8 +31,9 @@ impl LogEvent for PanickedEvent {
 }
 
 /// The data stream's buffer at the end of the run, written after the final
-/// withdraw and before teardown stops the stream. With the default buffer
-/// that is the last 20 s at 500 Hz, which covers whatever ended the run.
+/// withdraw and before teardown stops the stream. The default buffer holds
+/// 10 000 frames: the last 20 s at 500 Hz, 10 s at 1 kHz, either way enough
+/// to cover whatever ended the run.
 #[derive(Serialize, serde::Deserialize, JsonSchema, Clone, Debug)]
 pub struct StreamDumpEvent {
     pub stream: StreamSnapshot,

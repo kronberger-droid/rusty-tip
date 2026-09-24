@@ -100,7 +100,7 @@ single `Routine` until that changes.
 The pieces, in the order you meet them:
 
 - **Subsystem handles** — `rt.bias()?`, `rt.z()?`, `rt.signals()?`,
-  `rt.motor()?`, `rt.scan()?`. Each accessor checks the controller's
+  `rt.motor()?`, `rt.scan()?`, `rt.drift()?`, `rt.multi_pass()?`. Each accessor checks the controller's
   capabilities (a controller without a motor makes `rt.motor()` fail with
   `Unsupported` at the call site), and events are emitted for you.
   The rule for what gets logged: every operation that *changes* the
@@ -187,6 +187,8 @@ through the subsystem handles rather than constructing actions directly:
 | **Position** | `ReadPosition`, `SetPosition` |
 | **Motor** | `MoveMotor`, `MoveMotor3D`, `MoveMotorClosedLoop`, `StopMotor`, `Reposition` |
 | **Scanning** | `ScanControl`, `ReadScanStatus`, `GrabScanFrame` |
+| **Multi-pass** | `LoadMultiPass`, `SaveMultiPass`, `ActivateMultiPass`, `ApplyMultiPass` |
+| **Drift** | `MeasureZDrift`, `CompensateDrift` |
 | **Oscilloscope** | `OsciRead` |
 | **Tip Shaper** | `TipShape` |
 | **PLL** | `CenterFreqShift` |

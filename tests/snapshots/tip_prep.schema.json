@@ -240,7 +240,7 @@
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "The data stream's buffer at the end of the run, written after the final\nwithdraw and before teardown stops the stream. With the default buffer\nthat is the last 20 s at 500 Hz, which covers whatever ended the run.",
+        "description": "The data stream's buffer at the end of the run, written after the final\nwithdraw and before teardown stops the stream. The default buffer holds\n10 000 frames: the last 20 s at 500 Hz, 10 s at 1 kHz, either way enough\nto cover whatever ended the run.",
         "properties": {
           "stream": {
             "$ref": "#/$defs/StreamSnapshot"

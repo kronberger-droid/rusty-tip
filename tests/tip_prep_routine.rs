@@ -236,7 +236,7 @@ fn blunt_tip_hits_cycle_limit() {
     assert!(obs.torn_down);
 }
 
-/// The GUI plots the voltage from the `tip_prep_state` snapshot, so it must
+/// The GUI plots the voltage from the `tip_prep/cycle` event, so it must
 /// be the signed voltage that was fired, not the magnitude the pulse method
 /// tracks. Before this was pinned, every polarity switch showed positive in
 /// the GUI while the log and the instrument both saw the negative pulse.
