@@ -184,12 +184,11 @@ impl Tool for TipPrepTool {
             }
         });
         if let Some((msg, is_error)) = &self.message {
-            let color = if *is_error {
-                egui::Color32::RED
+            if *is_error {
+                ui.colored_label(egui::Color32::RED, msg);
             } else {
-                egui::Color32::GREEN
-            };
-            ui.colored_label(color, msg);
+                ui.label(msg);
+            }
         }
         ui.add_space(4.0);
         ui.label(
@@ -219,14 +218,14 @@ impl Tool for TipPrepTool {
         let cycle = view.latest(CYCLE).unwrap_or(0.0) as usize;
         let phase = view.phase().unwrap_or("");
         let is_sharp = view.latest(CYCLE_SHARP) == Some(1.0);
-        let (shape, shape_color) = if phase == "stable" {
-            ("Stable", egui::Color32::GREEN)
+        let shape = if phase == "stable" {
+            "Stable"
         } else if is_sharp {
-            ("Sharp", egui::Color32::YELLOW)
+            "Sharp"
         } else if cycle > 0 {
-            ("Blunt", egui::Color32::RED)
+            "Blunt"
         } else {
-            ("-", egui::Color32::GRAY)
+            "-"
         };
         let pulse_voltage = latest_pulse(view);
 
@@ -236,7 +235,7 @@ impl Tool for TipPrepTool {
                 .spacing([20.0, 4.0])
                 .show(ui, |ui| {
                     ui.label("Tip shape:");
-                    ui.colored_label(shape_color, shape);
+                    ui.label(shape);
                     ui.label("Phase:");
                     ui.label(if phase.is_empty() { "-" } else { phase });
                     ui.end_row();

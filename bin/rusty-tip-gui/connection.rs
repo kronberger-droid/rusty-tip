@@ -193,14 +193,24 @@ impl ConnectionPane {
         matches!(self.state, ConnState::Connected | ConnState::Running)
     }
 
-    /// The state as a colour and a word.
-    pub fn state_badge(&self) -> (egui::Color32, &'static str) {
+    /// The state as a word.
+    pub fn state_word(&self) -> &'static str {
         match self.state {
-            ConnState::Disconnected => (egui::Color32::GRAY, "disconnected"),
-            ConnState::Connecting => (egui::Color32::YELLOW, "connecting"),
-            ConnState::Connected => (egui::Color32::GREEN, "connected"),
-            ConnState::Running => (egui::Color32::LIGHT_BLUE, "running"),
-            ConnState::Poisoned => (egui::Color32::RED, "connection lost"),
+            ConnState::Disconnected => "disconnected",
+            ConnState::Connecting => "connecting",
+            ConnState::Connected => "connected",
+            ConnState::Running => "running",
+            ConnState::Poisoned => "connection lost",
+        }
+    }
+
+    /// The colour of the status dot: green while a connection is up, red
+    /// when it broke, grey otherwise.
+    pub fn state_color(&self) -> egui::Color32 {
+        match self.state {
+            ConnState::Connected | ConnState::Running => egui::Color32::from_rgb(52, 168, 83),
+            ConnState::Poisoned => egui::Color32::from_rgb(217, 48, 37),
+            ConnState::Disconnected | ConnState::Connecting => egui::Color32::from_gray(140),
         }
     }
 
@@ -208,8 +218,8 @@ impl ConnectionPane {
     pub fn render_bar(&mut self, ui: &mut egui::Ui, running: bool) -> Option<PaneAction> {
         let mut action = None;
         ui.horizontal(|ui| {
-            let (color, word) = self.state_badge();
-            ui.colored_label(color, "●");
+            status_dot(ui, self.state_color());
+            let word = self.state_word();
             match self.state {
                 ConnState::Disconnected => {
                     ui.label(format!("{word} · {}", self.form.target()));
@@ -460,8 +470,10 @@ impl ConnectionPane {
             .spacing([16.0, 4.0])
             .show(ui, |ui| {
                 ui.label("State");
-                let (color, word) = self.state_badge();
-                ui.colored_label(color, word);
+                ui.horizontal(|ui| {
+                    status_dot(ui, self.state_color());
+                    ui.label(self.state_word());
+                });
                 ui.end_row();
                 if let Some(facts) = &self.facts {
                     ui.label("Stream");
@@ -532,6 +544,15 @@ impl ConnectionPane {
             });
         }
     }
+}
+
+/// A filled circle the height of a line of text, the one place the
+/// workbench uses colour for state.
+pub fn status_dot(ui: &mut egui::Ui, color: egui::Color32) {
+    let size = ui.text_style_height(&egui::TextStyle::Body);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    ui.painter()
+        .circle_filled(rect.center(), size * 0.32, color);
 }
 
 fn describe_load(load: Option<&PresetLoad>) -> String {

@@ -21,7 +21,7 @@ use rusty_tip::routine::Outcome;
 use rusty_tip::session::{self, ConnState, Job, JobCx, SessionCmd, SessionHandle, SessionUpdate};
 use rusty_tip::shutdown::ShutdownFlag;
 
-use crate::connection::{ConnectionForm, ConnectionPane, PaneAction};
+use crate::connection::{ConnectionForm, ConnectionPane, PaneAction, status_dot};
 use crate::run_view::RunView;
 use crate::tools::{self, Tool};
 
@@ -317,14 +317,15 @@ impl WorkbenchApp {
 
     fn render_sidebar(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
-        let (color, _) = self.pane.state_badge();
-        let connection = egui::RichText::new("● Connection").color(color);
-        if ui
-            .selectable_label(self.page == Page::Connection, connection)
-            .clicked()
-        {
-            self.page = Page::Connection;
-        }
+        ui.horizontal(|ui| {
+            status_dot(ui, self.pane.state_color());
+            if ui
+                .selectable_label(self.page == Page::Connection, "Connection")
+                .clicked()
+            {
+                self.page = Page::Connection;
+            }
+        });
         ui.add_space(8.0);
         ui.label(egui::RichText::new("Tools").strong());
         let running_id = self.run.as_ref().map(|r| r.tool_id);
@@ -428,31 +429,25 @@ impl WorkbenchApp {
                 self.stop();
             }
             ui.separator();
-            let (color, text) = match &self.status {
-                RunStatus::Idle => (egui::Color32::GRAY, "ready".to_string()),
-                RunStatus::Running => (egui::Color32::YELLOW, "running".to_string()),
-                RunStatus::Finished(o) => (
-                    if *o == Outcome::Completed {
-                        egui::Color32::GREEN
-                    } else {
-                        egui::Color32::GRAY
-                    },
-                    outcome_text(*o),
-                ),
-                RunStatus::Error(_) => (egui::Color32::RED, "error".to_string()),
-                RunStatus::Replay(p) => (
-                    egui::Color32::LIGHT_BLUE,
-                    format!(
-                        "replay of {}",
-                        p.file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default()
-                    ),
+            let text = match &self.status {
+                RunStatus::Idle => "ready".to_string(),
+                RunStatus::Running => "running".to_string(),
+                RunStatus::Finished(o) => outcome_text(*o),
+                RunStatus::Error(_) => "error".to_string(),
+                RunStatus::Replay(p) => format!(
+                    "replay of {}",
+                    p.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
                 ),
             };
-            let label = ui.colored_label(color, text);
-            if let RunStatus::Error(e) = &self.status {
-                label.on_hover_text(e);
+            match &self.status {
+                RunStatus::Error(e) => {
+                    ui.colored_label(egui::Color32::RED, text).on_hover_text(e);
+                }
+                _ => {
+                    ui.label(text);
+                }
             }
             if let Some((action, depth)) = &self.view.current_action {
                 ui.separator();
@@ -465,12 +460,11 @@ impl WorkbenchApp {
             }
         });
         if let Some((msg, is_error)) = &self.message {
-            let color = if *is_error {
-                egui::Color32::RED
+            if *is_error {
+                ui.colored_label(egui::Color32::RED, msg);
             } else {
-                egui::Color32::GREEN
-            };
-            ui.colored_label(color, msg);
+                ui.label(msg);
+            }
         }
         ui.add_space(6.0);
 
