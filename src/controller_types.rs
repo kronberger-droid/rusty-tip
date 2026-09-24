@@ -43,8 +43,6 @@ pub struct StabilityConfig {
     pub bias_steps: u16,
     /// Time to wait at each step in ms
     pub step_period_ms: u64,
-    /// Maximum duration for stability check in seconds
-    pub max_duration_secs: u64,
     /// Polarity mode for bias sweep
     #[serde(default)]
     pub polarity_mode: BiasSweepPolarity,
@@ -60,7 +58,6 @@ impl Default for StabilityConfig {
             bias_range: (0.01, 2.0), // Strictly positive range
             bias_steps: 1000,
             step_period_ms: 200,
-            max_duration_secs: 100,
             polarity_mode: BiasSweepPolarity::Both,
             scan_speed_m_s: Some(5e-9), // 5 nm/s default
         }

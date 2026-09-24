@@ -49,7 +49,8 @@ Pre-built binaries from [GitHub Releases](https://github.com/kronberger-droid/ru
 From source:
 
 ```bash
-cargo build --release                 # CLI tools
+cargo build --release                 # tip-prep, const-distance
+cargo build --release --features cuox # + cuox-finder
 cargo build --release --features gui  # + tip-prep-gui
 ```
 

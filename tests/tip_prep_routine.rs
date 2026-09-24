@@ -6,10 +6,13 @@
 //! these are the dress rehearsals before touching the real machine.
 
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 
 use rusty_tip::SignalIndex;
 use rusty_tip::config::AppConfig;
-use rusty_tip::controller_types::{BiasSweepPolarity, PolaritySign, PulseMethod};
+use rusty_tip::controller_types::{
+    BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch,
+};
 use rusty_tip::event::{Event, EventBus, Observer};
 use rusty_tip::mock_controller::{FaultKind, MockController, models};
 use rusty_tip::shutdown::ShutdownFlag;
@@ -233,6 +236,126 @@ fn blunt_tip_hits_cycle_limit() {
     assert!(obs.torn_down);
 }
 
+/// The GUI plots the voltage from the `tip_prep_state` snapshot, so it must
+/// be the signed voltage that was fired, not the magnitude the pulse method
+/// tracks. Before this was pinned, every polarity switch showed positive in
+/// the GUI while the log and the instrument both saw the negative pulse.
+#[test]
+fn snapshot_reports_the_signed_pulse_voltage() {
+    let mut cfg = fast_config();
+    cfg.tip_prep.max_cycles = Some(4);
+    cfg.pulse_method = PulseMethod::Fixed {
+        voltage: 3.0,
+        polarity: PolaritySign::Positive,
+        random_polarity_switch: Some(RandomPolaritySwitch {
+            enabled: true,
+            switch_every_n_pulses: 2,
+        }),
+    };
+
+    let mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT_INDEX)
+        .freq_shift(models::always(-40.0))
+        .build();
+    let obs = mock.observations();
+
+    let recorder = RecordingObserver::default();
+    let events = Arc::clone(&recorder.events);
+    let mut bus = EventBus::new();
+    bus.add_observer(Box::new(recorder));
+
+    run_tip_prep(
+        Box::new(mock),
+        TipPrepParams {
+            events: &bus,
+            shutdown: &ShutdownFlag::new(),
+            config: &cfg,
+            freq_shift: FREQ_SHIFT_INDEX,
+        },
+    )
+    .expect("routine should not error");
+
+    let fired = obs.lock().pulses.clone();
+    assert_eq!(fired, vec![3.0, -3.0, 3.0, -3.0]);
+
+    let reported: Vec<f64> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            Event::Custom { kind, data } if kind == "tip_prep_state" => {
+                data.get("pulse_voltage").and_then(|v| v.as_f64())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reported, fired,
+        "the snapshot must carry the pulse as fired, sign included"
+    );
+}
+
+/// The initial approach can take minutes. A stop pressed during it must end
+/// the run within a poll interval, switch the approach off first, and then
+/// run the normal cleanup. Found on the LT system, where a stop during the
+/// first approach did nothing until the approach finished by itself.
+#[test]
+fn shutdown_during_the_initial_approach_stops_promptly_and_cleans_up() {
+    let shutdown = ShutdownFlag::new();
+    let flag = shutdown.clone();
+    let requester = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        flag.request();
+    });
+
+    let mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT_INDEX)
+        .freq_shift(models::always(-40.0))
+        .approach_takes_polls(10_000) // far longer than the test may run
+        .build();
+    let obs = mock.observations();
+
+    let started = Instant::now();
+    let outcome = run_tip_prep(
+        Box::new(mock),
+        TipPrepParams {
+            events: &EventBus::new(),
+            shutdown: &shutdown,
+            config: &fast_config(),
+            freq_shift: FREQ_SHIFT_INDEX,
+        },
+    )
+    .expect("a stop is an outcome, not an error");
+    requester.join().unwrap();
+
+    assert!(matches!(outcome, Outcome::StoppedByUser));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the run must end within a poll interval of the stop, not after the \
+         approach finishes on its own"
+    );
+
+    let obs = obs.lock();
+    assert_eq!(obs.approach_count, 1, "only the first approach was started");
+    let stop = obs
+        .calls
+        .iter()
+        .position(|c| *c == "auto_approach_stop")
+        .expect("the approach must be switched off");
+    let withdraw = obs
+        .calls
+        .iter()
+        .rposition(|c| *c == "withdraw")
+        .expect("cleanup withdraws");
+    assert!(
+        stop < withdraw,
+        "the approach is switched off before the cleanup withdraws, calls: {:?}",
+        obs.calls
+    );
+    assert_eq!(obs.motor_displacements.last(), Some(&(0, 0, -10)));
+    assert!(obs.torn_down);
+}
+
 #[test]
 fn shutdown_before_loop_stops_by_user() {
     let shutdown = ShutdownFlag::new();
@@ -256,7 +379,31 @@ fn shutdown_before_loop_stops_by_user() {
     .expect("routine should not error");
 
     assert!(matches!(outcome, Outcome::StoppedByUser));
-    assert!(obs.lock().torn_down, "cleanup must still run on shutdown");
+    let obs = obs.lock();
+    assert!(obs.torn_down, "cleanup must still run on shutdown");
+
+    // A withdraw alone leaves the tip within piezo reach of the surface.
+    // 0.2.3 backed the coarse motor off ten steps after it; so does this.
+    let last_withdraw = obs
+        .calls
+        .iter()
+        .rposition(|c| *c == "withdraw")
+        .expect("cleanup withdraws");
+    let last_move = obs
+        .calls
+        .iter()
+        .rposition(|c| *c == "move_motor_3d")
+        .expect("cleanup retracts the coarse motor");
+    assert!(
+        last_move > last_withdraw,
+        "the retract must follow the withdraw, calls: {:?}",
+        &obs.calls[last_withdraw..]
+    );
+    assert_eq!(
+        obs.motor_displacements.last(),
+        Some(&(0, 0, -10)),
+        "the retract is ten coarse steps in Z-minus, nothing lateral"
+    );
 }
 
 // ============================================================================
@@ -399,10 +546,37 @@ fn sharp_but_unstable_fires_max_pulse_then_cycle_limit() {
         obs.called("scan_action"),
         "the stability sweep must have run"
     );
+    let max_pulse = obs
+        .pulses
+        .iter()
+        .position(|&v| (v - 6.0).abs() < 1e-9)
+        .unwrap_or_else(|| {
+            panic!(
+                "instability should trigger a max-voltage (6 V) pulse, got {:?}",
+                obs.pulses
+            )
+        });
+
+    // The max pulse only reshapes the apex if the apex is near the surface.
+    // Find that pulse in the call sequence and check nothing withdrew the tip
+    // between the approach that took the final reading and the pulse itself.
+    let pulse_call = obs
+        .calls
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| **name == "bias_pulse")
+        .nth(max_pulse)
+        .map(|(i, _)| i)
+        .expect("the pulse must appear in the call log");
+    let last_approach = obs.calls[..pulse_call]
+        .iter()
+        .rposition(|name| *name == "auto_approach")
+        .expect("an approach must precede the max pulse");
     assert!(
-        obs.pulses.iter().any(|&v| (v - 6.0).abs() < 1e-9),
-        "instability should trigger a max-voltage (6 V) pulse, got {:?}",
-        obs.pulses
+        !obs.calls[last_approach..pulse_call].contains(&"withdraw"),
+        "the max pulse must fire with the tip engaged; calls between the last \
+         approach and the pulse: {:?}",
+        &obs.calls[last_approach..pulse_call]
     );
 }
 

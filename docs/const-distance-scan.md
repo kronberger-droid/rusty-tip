@@ -237,13 +237,38 @@ x, y, z_surface, z_tip, clearance = np.loadtxt("out/compare.dat", unpack=True)
 | `bin/const-distance/surface.rs` | synthetic test surfaces |
 | `tests/const_distance_plan.rs` | end-to-end planning and export |
 
+## Drift between scans
+
+`const-distance drift` exposes the Z drift tools on the command line, so they
+can be exercised on hardware before a routine depends on them:
+
+```console
+$ const-distance drift --host 192.168.1.10 status
+$ const-distance drift --host 192.168.1.10 --signal-name "Z (m)" measure
+$ const-distance drift --host 192.168.1.10 --signal-name "Z (m)" compensate
+$ const-distance drift --host 192.168.1.10 off
+```
+
+`measure` fits a line to Z over one window (5 s and 16 samples by default) and
+prints the rate in pm/s; it needs the feedback closed, the scan stopped, and a
+flat spot under the tip. `compensate` runs three windows: one to measure, one
+with a trial velocity applied to learn which way the controller's velocity
+sign runs, and one to report what is left. It refuses a compensation channel
+that does not respond rather than writing a number derived from noise. An
+axis that has hit the saturation limit is reported as such, since the
+controller stops compensating it silently and only an off/on cycle restarts
+it.
+
 ## Still open
 
 - **Piece 2**, mapping the nanonis-rs TCP sample stream into scan lines, has not
   been designed. `const-distance acquire` is a stub that says so.
 - **Piece 3** is gated on hardware measurements that have not been made: TCP
   latency, feedback-off sequencing, TipLift, Z step response, whether FolMe
-  blocks, and staircase visibility.
+  blocks, and staircase visibility. `examples/folme_probe.rs` measures all
+  but the last against the bare client, retracting before every open-loop
+  move and measuring the retract direction from TipLift rather than assuming
+  it.
 - Whether the tip model should come from something measured rather than typed in
   by hand. A tip characteriser on a known sharp feature would give `a` and `c`
   from data instead of from a guess.

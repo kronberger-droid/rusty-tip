@@ -23,9 +23,16 @@ against live in `[tip_prep.signal_stability]`, not here.
 ```toml
 [data_acquisition]
 data_port = 6590            # required; Nanonis TCP logger port
-sample_rate = 2000          # required; oversampling passed to the TCP logger
+sample_rate = 1000          # required; stream rate to ask for (Hz)
 stable_signal_samples = 100 # samples averaged per stable signal read
 ```
+
+The TCP logger delivers its base rate divided by an integer, so the nearest
+such rate to `sample_rate` is what arrives: on a 2 kHz base, 1000 or 667 Hz
+but not 800. The controller works out the divisor from the RT frequency,
+measures what the stream delivers, corrects the divisor once if the guess
+was off, and logs the result. The drift gate uses the measured rate, so a
+request that had to be rounded costs nothing but a warning at startup.
 
 ## `[tip_prep]` — the routine
 
@@ -51,7 +58,16 @@ post_pulse_settle_ms = 1000
 buffer_clear_wait_ms = 500
 reposition_steps = [3, 3]         # coarse motor steps (x, y) per reposition
 status_interval = 10              # log a status line every N cycles
+approach_timeout_ms = 600000      # approaches from a full withdraw (first
+                                  # approach, around each stability sweep)
+reposition_approach_timeout_ms = 300000  # the short approach inside a reposition
+exit_retract_steps = 10           # coarse Z steps back after the final withdraw
 ```
+
+An approach that overruns its budget is stopped, the run ends in an error,
+and the tip is withdrawn. The two budgets differ because a reposition only
+retracts three coarse steps before re-approaching, while the first approach
+of a run starts wherever the tip was left.
 
 ## `[tip_prep.signal_stability]` — when is a reading trusted
 
@@ -83,7 +99,6 @@ stable_tip_allowed_change = 0.2  # max freq-shift drift across the sweep (Hz)
 bias_range = [0.01, 2.0]         # sweep magnitude range (V), strictly positive
 bias_steps = 1000
 step_period_ms = 200
-max_duration_secs = 100
 polarity_mode = "both"           # "positive", "negative", or "both"
 scan_speed_m_s = 5e-9            # scan speed during the check; omit to keep current
 ```

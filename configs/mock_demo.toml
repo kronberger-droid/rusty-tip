@@ -65,7 +65,6 @@ bias_range = [0.01, 2.0]
 bias_steps = 20
 step_period_ms = 20
 
-max_duration_secs = 100
 polarity_mode = "both"
 scan_speed_m_s = 5e-9
 

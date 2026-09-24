@@ -32,7 +32,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --features gui -- -D warnings
+      - run: cargo clippy --all-targets --features gui,cuox -- -D warnings
 
   test:
     runs-on: ubuntu-latest

@@ -7,8 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Fewer crates in the build.** A CLI build resolved 208 crates and the
+  GUI build 367; they are now 89 and 269. `config` no longer pulls its
+  default JSON5, RON, YAML and INI readers, only TOML is used. `image`,
+  which only `cuox-finder` needs, is optional behind the new `cuox`
+  feature, so `cargo build --release` no longer compiles a hundred crates
+  of codecs for tools that never open an image; build `cuox-finder` with
+  `--features cuox`. `byteorder` was unused and is gone.
+
+### Removed
+
+- `data_acquisition.oversampling`. `sample_rate` is the one value now: the
+  controller reads the RT frequency, derives the logger divisor that comes
+  closest, measures what the stream delivers, and corrects the divisor
+  once if its guess at the logger base was wrong. A config that still sets
+  `oversampling` loads, the key is ignored. The default `sample_rate` is
+  1000 Hz, the rate the old default divisor produced on an RC5.
+- `tip_prep.stability.max_duration_secs`. It was never enforced, and a sweep's
+  length is already fixed by `bias_steps × step_period_ms`; the run-level
+  `tip_prep.max_duration_secs` keeps counting through the check. Configs
+  that still set it load fine, the key is ignored.
+
+### Fixed
+
+- **The drift gate trusted the configured sample rate.** The stable read
+  converts a per-sample slope into Hz/s using `data_acquisition.sample_rate`,
+  while the delivered rate is the controller's base rate over
+  `oversampling`. The shipped configs said 2000 Hz for a stream that
+  delivers 1000, so the 0.5 Hz/s gate acted as 0.25. The routine now uses
+  the rate the controller measured when the stream started
+  (`SpmController::stream_rate_hz`); the config value is a fallback, with a
+  warning when it is more than ten percent off.
+- **The stable-read backoff ignored a stop request.** The 100, 200 and
+  400 ms waits between retries were plain sleeps; they go through the
+  interruptible settle now.
+- **A stop during an approach did nothing until the approach finished.**
+  The approach was a blocking poll inside the controller, out of reach of
+  the shutdown flag, so Ctrl+C or the GUI's stop button during the initial
+  approach (a budget of ten minutes) was honoured only afterwards. The
+  approach actions now start the approach and poll it through the
+  interruptible settle; a stop lands within 100 ms and switches the
+  auto-approach off before the cleanup withdraws, so the controller is not
+  still stepping toward the surface while the tip is being pulled away. A
+  budget overrun is handled the same way. `SpmController` gains
+  `auto_approach_running` and `auto_approach_stop` for this.
+- **A run ended with a withdraw and nothing else.** 0.2.3 backed the coarse
+  motor off ten steps after the final withdraw; the v2 harness only
+  withdrew, leaving the tip parked at the top of the piezo range and still
+  within reach of the surface. The harness now asks the routine how far to
+  retract on exit: tip prep answers with the new
+  `tip_prep.timing.exit_retract_steps` (default 10), other routines keep
+  their spot with zero. Noticed on the LT system during the September
+  campaign.
+- **The GUI showed every pulse as positive.** The `tip_prep_state`
+  snapshot carried the pulse method's voltage magnitude rather than the
+  signed voltage that was fired, so a polarity switch was visible in the
+  console log and on the instrument but never in the GUI's status panel or
+  pulse history. The snapshot now reports the pulse as fired, and the
+  max-voltage pulse after a failed stability check emits one too, so it
+  appears in the history instead of vanishing.
+- **The Z-home mode defaulted to absolute.** `NanonisSetupConfig::default()`
+  set `ZHomeMode::Absolute`, and both `tip-prep` and `tip-prep-gui` took the
+  default. The calibrated approach homes the tip to back 50 nm off the
+  surface before centring the frequency shift; in absolute mode that same
+  call drives Z to the coordinate +50 nm instead, which is toward the
+  surface whenever the surface sits above it. 0.2.3 used relative mode.
+  The default is relative again, both binaries say so explicitly, and a
+  test pins it. Neither 0.3 nor 0.4 met a tip, so this never fired.
+- **The max-voltage pulse after a failed stability check fired withdrawn.**
+  A v2 revision added a withdraw before it, so the pulse reshaped nothing
+  and the next cycle inherited the same unstable apex. It now fires with the
+  tip engaged, as 0.2.3 did, and the routine test checks the call order.
+- **A tripped safe-tip no longer gets approached into.** 0.2.3 checked the
+  Z-controller status after every step of the calibrated approach and
+  aborted the run if safe-tip had fired; the v2 sequence had dropped the
+  check, so the final approach would have re-approached whatever tripped
+  it. The check is back, with a test for the abort and one for an
+  unreadable status not counting as a trip.
+- `tip-prep-gui` did not build: the `oversampling` field added to
+  `DataAcquisitionConfig` was missing from the GUI's config conversion.
+- A `status_interval` of zero is rejected at config load instead of
+  panicking on the first cycle.
+
 ### Added
 
+- `tip_prep.timing.approach_timeout_ms` (default 600 s) for the approaches
+  that start from a full withdraw, and `reposition_approach_timeout_ms`
+  (default 300 s) for the short one inside a reposition. 0.2.3 gave the
+  long approaches ten minutes; v2 had capped everything at five.
+- `const-distance drift status|measure|compensate|off`: the Z drift
+  measurement and compensation from the action layer, runnable between
+  scans from the command line.
+- `examples/folme_probe.rs`: measures what a FolMe constant-height trace
+  depends on (round-trip latency, feedback-off timing and TipLift, Z step
+  response with the loop open, whether FolMe's wait flag blocks). Every
+  open-loop move retracts first, and the retract direction is measured
+  from TipLift rather than assumed.
 - **Multi-pass** (`multi_pass` module): read and write Nanonis `.mpas`
   configuration files, byte-exactly, and load one on a controller with
   `multi_pass::apply`. The format is undocumented by the vendor and was
