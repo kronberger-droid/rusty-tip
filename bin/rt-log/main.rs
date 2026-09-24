@@ -305,14 +305,14 @@ fn summary(log: &Log, path: &Path) -> Result<(), Box<dyn Error>> {
     if !kinds.is_empty() {
         outln!();
         outln!("events");
-        for (kind, datas) in kinds {
-            let mut line = format!("  {:<26} {:>5}", kind, datas.len());
+        for (kind, payloads) in kinds {
+            let mut line = format!("  {:<26} {:>5}", kind, payloads.len());
             // A kind whose data has a "phase" tag reads best as a sequence.
-            let phases: Vec<&str> = datas
+            let phases: Vec<&str> = payloads
                 .iter()
                 .filter_map(|d| d.get("phase").and_then(Value::as_str))
                 .collect();
-            if !phases.is_empty() && phases.len() == datas.len() {
+            if !phases.is_empty() && phases.len() == payloads.len() {
                 let _ = write!(line, "   {}", phases.join(" > "));
             }
             outln!("{line}");
