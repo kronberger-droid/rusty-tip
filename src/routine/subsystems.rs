@@ -6,13 +6,16 @@
 //! straight to the controller. Fetch a handle per statement:
 //! `rt.bias()?.pulse(4.0, 50)?`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use nanonis_rs::scan::{ScanConfig, ScanLineEnd, ScanProps, ScanPropsBuilder};
 
+use crate::event::Event;
 use crate::multi_pass::MultiPassConfig;
 use crate::spm_controller::{DriftComp, ScanBuffer};
+
+use super::events::{LayoutLoadedEvent, SettingsLoadedEvent};
 
 use crate::action::ActionOutput;
 use crate::action::bias::{BiasPulse, ReadBias, SetBias};
@@ -446,6 +449,44 @@ impl MultiPass<'_, '_> {
     /// Switch multi-pass on or off. Switching it on stops a running scan.
     pub fn activate(&mut self, on: bool) -> Result<()> {
         self.rt.exec(&ActivateMultiPass { on })?;
+        Ok(())
+    }
+}
+
+/// Settings and layout files, from [`Rt::presets`].
+///
+/// Loading a file is sometimes the only way to set a module over TCP, so a
+/// routine that depends on particular controller settings loads them itself
+/// as part of its run. A load persists for the rest of the session and
+/// cannot be undone; each one goes to the log as an action and as a typed
+/// `settings_loaded` / `layout_loaded` event, so the run records that the
+/// controller's state moved and whoever runs next can see it.
+pub struct Presets<'r, 'a> {
+    pub(crate) rt: &'r mut Rt<'a>,
+}
+
+impl Presets<'_, '_> {
+    /// Load a settings file. The path is resolved on this machine.
+    pub fn load_settings(&mut self, path: &Path) -> Result<()> {
+        let shown = path.display().to_string();
+        self.rt
+            .logged("load_settings", serde_json::json!({ "path": shown }), |c| {
+                c.load_settings(path)
+            })?;
+        self.rt
+            .emit(Event::typed(&SettingsLoadedEvent { path: shown }));
+        Ok(())
+    }
+
+    /// Load a layout file. The path is resolved on this machine.
+    pub fn load_layout(&mut self, path: &Path) -> Result<()> {
+        let shown = path.display().to_string();
+        self.rt
+            .logged("load_layout", serde_json::json!({ "path": shown }), |c| {
+                c.load_layout(path)
+            })?;
+        self.rt
+            .emit(Event::typed(&LayoutLoadedEvent { path: shown }));
         Ok(())
     }
 }

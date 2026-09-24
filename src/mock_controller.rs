@@ -49,6 +49,7 @@
 //! ```
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -134,12 +135,21 @@ pub struct MockObservations {
     pub z_setpoint: f64,
     /// Current safe-tip enable state.
     pub safe_tip_enabled: bool,
+    /// Safe-tip settings as `safe_tip_configure` last left them:
+    /// `(auto_recovery, auto_pause_scan, threshold_a)`.
+    pub safe_tip_config: (bool, bool, f64),
     /// Whether a scan is currently running.
     pub scan_running: bool,
     /// `prepare()` has been called.
     pub prepared: bool,
     /// `teardown()` has been called.
     pub torn_down: bool,
+    /// `disconnect()` has been called.
+    pub disconnected: bool,
+    /// Every path passed to `load_settings`, in order.
+    pub settings_loaded: Vec<String>,
+    /// Every path passed to `load_layout`, in order.
+    pub layouts_loaded: Vec<String>,
     /// Number of `auto_approach` calls.
     pub approach_count: usize,
     /// Number of `withdraw` calls.
@@ -188,9 +198,13 @@ impl Default for MockObservations {
             pulses: Vec::new(),
             z_setpoint: 0.0,
             safe_tip_enabled: false,
+            safe_tip_config: (false, true, 1e-9),
             scan_running: false,
             prepared: false,
             torn_down: false,
+            disconnected: false,
+            settings_loaded: Vec::new(),
+            layouts_loaded: Vec::new(),
             approach_count: 0,
             withdraw_count: 0,
             motor_moves: 0,
@@ -430,6 +444,11 @@ impl SpmController for MockController {
         self.obs.lock().torn_down = true;
     }
 
+    fn disconnect(&mut self) {
+        let _ = self.enter("disconnect");
+        self.obs.lock().disconnected = true;
+    }
+
     fn is_connected(&self) -> bool {
         self.obs.lock().connected
     }
@@ -437,6 +456,26 @@ impl SpmController for MockController {
     fn reconnect(&mut self) -> Result<()> {
         self.enter("reconnect")?;
         self.obs.lock().connected = true;
+        Ok(())
+    }
+
+    // -- Presets --
+
+    fn load_settings(&mut self, path: &Path) -> Result<()> {
+        self.enter("load_settings")?;
+        self.obs
+            .lock()
+            .settings_loaded
+            .push(path.display().to_string());
+        Ok(())
+    }
+
+    fn load_layout(&mut self, path: &Path) -> Result<()> {
+        self.enter("load_layout")?;
+        self.obs
+            .lock()
+            .layouts_loaded
+            .push(path.display().to_string());
         Ok(())
     }
 
@@ -804,17 +843,18 @@ impl SpmController for MockController {
 
     fn safe_tip_configure(
         &mut self,
-        _auto_recovery: bool,
-        _auto_pause_scan: bool,
-        _threshold: f64,
+        auto_recovery: bool,
+        auto_pause_scan: bool,
+        threshold: f64,
     ) -> Result<()> {
         self.enter("safe_tip_configure")?;
+        self.obs.lock().safe_tip_config = (auto_recovery, auto_pause_scan, threshold);
         Ok(())
     }
 
     fn safe_tip_status(&mut self) -> Result<(bool, bool, f64)> {
         self.enter("safe_tip_status")?;
-        Ok((false, true, 1e-9))
+        Ok(self.obs.lock().safe_tip_config)
     }
 
     fn safe_tip_set_enabled(&mut self, enabled: bool) -> Result<()> {
@@ -1239,6 +1279,7 @@ fn all_capabilities() -> HashSet<Capability> {
         Capability::SafeTip,
         Capability::MultiPass,
         Capability::DriftCompensation,
+        Capability::Presets,
     ])
 }
 

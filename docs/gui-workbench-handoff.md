@@ -349,6 +349,39 @@ required checks in the main ruleset; don't rename them.
 
 ### Step 1: library lifecycle
 
+**Done 2026-09-24** on this branch. What landed, where it differs from the
+sketch below, and what the next step inherits:
+
+- Names: `SpmController::disconnect` is the session-level stop; there is
+  no `connect_setup`. Connect-time work is done by the owner through
+  `load_layout`/`load_settings` (the `Presets` capability) and
+  `NanonisController::start_streaming`, so `NanonisSetupConfig` is down to
+  `tcp_refresh_output`.
+- Z home and safe-tip are `Routine::run_setup() -> RunSetup`, applied and
+  restored by `run_routine` through the trait, so the harness owns the
+  policy and `NanonisController::prepare`/`teardown` are gone (the trait
+  defaults are no-ops; the mock still records both). `run_routine` logs
+  each step as an action (`set_z_home`, `safe_tip_configure`,
+  `safe_tip_set_enabled`, `safe_tip_restore`). The default `RunSetup` is
+  the relative 50 nm home every run used to get, safe-tip untouched
+  (Martin, 2026-09-24); `RunSetup::NONE` touches nothing. The CLI and the
+  old GUI share `tip_prep::load_presets` for the connect-time file loads.
+- `src/session.rs`: `Session` (sync, testable), `Job`/`JobCx`,
+  `Backend::{Nanonis, Mock}`, `PresetFiles`, `PresetLoad` (path, by, at),
+  `spawn`/`spawn_with` → `SessionHandle`, `SessionCmd::{Connect,
+  Disconnect, Reconnect, ReloadPresets, Run, Quit}`,
+  `SessionUpdate::{State, Facts, Capabilities, Readouts, PresetsLoaded,
+  JobFinished, Error}`. The session writes `run_finished` only when the
+  job did not (an observer watches for it), so routine jobs get exactly
+  one. Idle readouts poll `read_signals` for bias, Z, current and freq
+  shift by registry name.
+- Tests: `tests/session.rs` covers the list below; harness tests for
+  `RunSetup`/`ExitPolicy` are in `src/routine/mod.rs`. The tip-prep schema
+  snapshot gained the two preset kinds.
+- Not done: the CLIs still build their own controller rather than using
+  `Session`; `const-distance` still has `open_run_log`/`finish_run_log`
+  (step 5).
+
 - Split the controller lifecycle: add `connect_setup` / `disconnect` (names
   open) for files, stream and TCP reader; keep `prepare` / `teardown` for the
   run-level parts. `teardown` must be callable once per run; move the

@@ -4,10 +4,13 @@ use crate::action::scan::ScanDirectionParam;
 use crate::config::{AppConfig, TipPrepConfig};
 use crate::controller_types::{BiasSweepPolarity, PolaritySign};
 use crate::event::{Event, EventBus};
-use crate::routine::{RepositionSpec, Routine, Rt, StableReadSpec, run_routine};
+use crate::routine::{
+    ExitPolicy, RepositionSpec, Routine, Rt, RunSetup, SafeTipSetup, StableReadSpec, ZHome,
+    run_routine,
+};
 use crate::shutdown::ShutdownFlag;
 use crate::signal_registry::SignalIndex;
-use crate::spm_controller::SpmController;
+use crate::spm_controller::{SpmController, ZHomeMode};
 use crate::spm_error::SpmError;
 
 use nanonis_rs::scan::ScanPropsBuilder;
@@ -32,15 +35,19 @@ pub struct TipPrepParams<'a> {
     pub freq_shift: SignalIndex,
 }
 
-/// Run the full tip preparation algorithm.
+/// Run the full tip preparation algorithm on a controller of its own.
 ///
 /// Convenience wrapper that builds a [`TipPrep`] routine and hands it to
-/// [`run_routine`], which owns the controller life cycle (prepare, withdraw
-/// on exit, teardown). A shutdown request (Ctrl+C, GUI stop) is an expected
-/// way for a run to end, so it surfaces as `Ok(Outcome::StoppedByUser)`,
-/// never as an error.
+/// [`run_routine`], which owns the run (prepare, Z home and safe-tip,
+/// withdraw and retract on exit, teardown). The controller is consumed:
+/// dropping it at the end is what stops the data stream. To run tip prep as
+/// one of several routines on a persistent connection, build the
+/// [`TipPrep`] yourself and call [`run_routine`] with a borrowed controller.
+///
+/// A shutdown request (Ctrl+C, GUI stop) is an expected way for a run to
+/// end, so it surfaces as `Ok(Outcome::StoppedByUser)`, never as an error.
 pub fn run_tip_prep(
-    controller: Box<dyn SpmController>,
+    mut controller: Box<dyn SpmController>,
     params: TipPrepParams<'_>,
 ) -> Result<Outcome, SpmError> {
     let TipPrepParams {
@@ -50,7 +57,7 @@ pub fn run_tip_prep(
         freq_shift,
     } = params;
     let mut routine = TipPrep::new(config, freq_shift);
-    run_routine(controller, events, shutdown, &mut routine)
+    run_routine(&mut *controller, events, shutdown, &mut routine)
 }
 
 // ============================================================================
@@ -473,8 +480,29 @@ impl Routine for TipPrep<'_> {
         "tip_prep"
     }
 
-    fn exit_retract_steps(&self) -> u16 {
-        self.config.tip_prep.timing.exit_retract_steps
+    fn run_setup(&self) -> RunSetup {
+        RunSetup {
+            // Spelled out rather than defaulted: the home step of every
+            // calibrated approach is "back off 50 nm from wherever the tip
+            // is". Absolute mode would make it "go to Z = +50 nm", surface
+            // or not.
+            z_home: Some(ZHome {
+                mode: ZHomeMode::Relative,
+                position_m: 50e-9,
+            }),
+            // Off for the run, restored on exit. A pulse is a current spike
+            // by design, and safe-tip would retract on every one.
+            safe_tip: Some(SafeTipSetup {
+                threshold_a: self.config.tip_prep.safe_tip_threshold,
+                disable: true,
+            }),
+        }
+    }
+
+    fn exit_policy(&self) -> ExitPolicy {
+        ExitPolicy::Withdraw {
+            retract_steps: self.config.tip_prep.timing.exit_retract_steps,
+        }
     }
 
     fn run(&mut self, rt: &mut Rt) -> Result<Outcome, SpmError> {
