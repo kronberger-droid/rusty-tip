@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use super::{Action, ActionOutput, DataStore, run_action};
 use crate::event::EventEmitter;
 use crate::shutdown::ShutdownFlag;
@@ -52,17 +50,11 @@ impl ActionContext<'_> {
     /// wait ends. That matters most for the long waits, which are exactly the
     /// ones a user is most likely to want to abort.
     pub fn settle(&self, ms: u64) -> Result<(), SpmError> {
-        match self.shutdown.wait_timeout(Duration::from_millis(ms)) {
-            true => Err(SpmError::ShutdownRequested),
-            false => Ok(()),
-        }
+        self.shutdown.settle(ms)
     }
 
     /// Bail out with `ShutdownRequested` if a stop was requested.
     pub fn check_shutdown(&self) -> Result<(), SpmError> {
-        match self.shutdown.is_requested() {
-            true => Err(SpmError::ShutdownRequested),
-            false => Ok(()),
-        }
+        self.shutdown.check()
     }
 }

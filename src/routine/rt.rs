@@ -70,8 +70,6 @@ impl<'a> Rt<'a> {
         Ok(Scan { rt: self })
     }
 
-    /// Escape hatch: the bare controller, for operations the subsystem
-    /// handles don't cover. Calls made through this bypass event logging.
     /// Piezo drift compensation. Requires [`Capability::DriftCompensation`].
     pub fn drift(&mut self) -> Result<Drift<'_, 'a>, SpmError> {
         self.require(Capability::DriftCompensation)?;
@@ -84,6 +82,8 @@ impl<'a> Rt<'a> {
         Ok(MultiPass { rt: self })
     }
 
+    /// Escape hatch: the bare controller, for operations the subsystem
+    /// handles don't cover. Calls made through this bypass event logging.
     pub fn controller(&mut self) -> &mut dyn SpmController {
         self.controller
     }
@@ -93,20 +93,12 @@ impl<'a> Rt<'a> {
     /// Wait for `ms` milliseconds, waking early on a shutdown request
     /// (which surfaces as `Err(SpmError::ShutdownRequested)`).
     pub fn settle(&self, ms: u64) -> Result<(), SpmError> {
-        if self.shutdown.wait_timeout(Duration::from_millis(ms)) {
-            Err(SpmError::ShutdownRequested)
-        } else {
-            Ok(())
-        }
+        self.shutdown.settle(ms)
     }
 
     /// Bail out with `Err(SpmError::ShutdownRequested)` if a stop was requested.
     pub fn check_shutdown(&self) -> Result<(), SpmError> {
-        if self.shutdown.is_requested() {
-            Err(SpmError::ShutdownRequested)
-        } else {
-            Ok(())
-        }
+        self.shutdown.check()
     }
 
     /// The shutdown flag itself, e.g. for handing to a spawned thread.

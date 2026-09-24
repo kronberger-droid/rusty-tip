@@ -3,6 +3,8 @@ use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
 
+use crate::spm_error::SpmError;
+
 /// Thread-safe flag for graceful cancellation of a running routine.
 ///
 /// Clone the flag into the signal handler (or GUI stop button) and call
@@ -43,6 +45,23 @@ impl ShutdownFlag {
     /// Check if shutdown has been requested.
     pub fn is_requested(&self) -> bool {
         *self.inner.requested.lock()
+    }
+
+    /// Wait for `ms` milliseconds, waking early on a shutdown request, which
+    /// surfaces as `Err(SpmError::ShutdownRequested)`.
+    pub fn settle(&self, ms: u64) -> Result<(), SpmError> {
+        match self.wait_timeout(Duration::from_millis(ms)) {
+            true => Err(SpmError::ShutdownRequested),
+            false => Ok(()),
+        }
+    }
+
+    /// `Err(SpmError::ShutdownRequested)` if a stop was requested.
+    pub fn check(&self) -> Result<(), SpmError> {
+        match self.is_requested() {
+            true => Err(SpmError::ShutdownRequested),
+            false => Ok(()),
+        }
     }
 
     /// Reset the flag (e.g. for reuse across multiple runs).
