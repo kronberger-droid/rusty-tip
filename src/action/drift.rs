@@ -85,14 +85,6 @@ impl DriftEstimate {
     }
 }
 
-/// Both actions return their result struct as [`ActionOutput::Data`], so a
-/// caller gets it back with `serde_json::from_value`.
-fn as_data<T: Serialize>(action: &str, result: &T) -> Result<ActionOutput, SpmError> {
-    serde_json::to_value(result)
-        .map(ActionOutput::Data)
-        .map_err(|e| SpmError::Workflow(format!("{action}: result does not serialize: {e}")))
-}
-
 /// What a burst inside [`CompensateDrift`] was for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -265,7 +257,7 @@ impl Action for MeasureZDrift {
         vec![Capability::Signals, Capability::ZController]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
-        as_data(self.name(), &self.measure(ctx)?)
+        ActionOutput::data(self.name(), &self.measure(ctx)?)
     }
 }
 
@@ -558,7 +550,7 @@ impl Action for CompensateDrift {
         ]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
-        as_data(self.name(), &self.compensate(ctx)?)
+        ActionOutput::data(self.name(), &self.compensate(ctx)?)
     }
 }
 

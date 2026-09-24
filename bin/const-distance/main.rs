@@ -47,7 +47,7 @@ use rusty_tip::action::drift::{
     CompensateDrift, DriftBurstEvent, DriftCompensation, DriftEstimate, MeasureZDrift,
 };
 use rusty_tip::action::multi_pass::ApplyMultiPass;
-use rusty_tip::action::{ActionContext, ActionOutput, DataStore, run_action};
+use rusty_tip::action::{ActionContext, DataStore, run_action};
 use rusty_tip::analyzer::rolling_ellipsoid::{
     Border, GridSpacing, RollingEllipsoid, vertical_clearance,
 };
@@ -603,7 +603,7 @@ fn drift_op(
                     samples: args.samples,
                 },
             )?;
-            let estimate: DriftEstimate = data_of(output)?;
+            let estimate: DriftEstimate = output.into_data("measure_z_drift")?;
             println!(
                 "Z drift: {:+.3} ± {:.3} pm/s ({} samples over {:.1} s){}",
                 estimate.rate_m_s / PM,
@@ -633,7 +633,7 @@ fn drift_op(
                     ..CompensateDrift::new(z)
                 },
             )?;
-            let result: DriftCompensation = data_of(output)?;
+            let result: DriftCompensation = output.into_data("compensate_drift")?;
             println!(
                 "residual Z drift: {:+.3} ± {:.3} pm/s after {} bursts, {}",
                 result.residual.rate_m_s / PM,
@@ -673,14 +673,6 @@ fn drift_op(
 
 /// Picometres to metres.
 const PM: f64 = 1e-12;
-
-/// The result struct an action returned as [`ActionOutput::Data`].
-fn data_of<T: serde::de::DeserializeOwned>(output: ActionOutput) -> Result<T, Box<dyn Error>> {
-    match output {
-        ActionOutput::Data(v) => Ok(serde_json::from_value(v)?),
-        other => Err(format!("expected structured data, got {other:?}").into()),
-    }
-}
 
 /// Build the constant-lift multi-pass configuration and, unless `--dry-run`,
 /// load and activate it on the controller.

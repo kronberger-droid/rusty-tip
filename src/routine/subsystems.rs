@@ -29,17 +29,6 @@ use super::Rt;
 
 type Result<T> = std::result::Result<T, SpmError>;
 
-/// The result struct an action returned as [`ActionOutput::Data`].
-fn expect_data<T: serde::de::DeserializeOwned>(name: &str, output: ActionOutput) -> Result<T> {
-    match output {
-        ActionOutput::Data(value) => serde_json::from_value(value)
-            .map_err(|e| SpmError::Workflow(format!("{name}: unexpected result shape: {e}"))),
-        other => Err(SpmError::Workflow(format!(
-            "{name}: expected structured data, got {other:?}"
-        ))),
-    }
-}
-
 fn expect_value(name: &str, output: ActionOutput) -> Result<f64> {
     match output {
         ActionOutput::Value(v) => Ok(v),
@@ -394,7 +383,7 @@ impl Drift<'_, '_> {
             window_ms: window.as_millis() as u64,
             samples: 16,
         })?;
-        expect_data("measure_z_drift", output)
+        output.into_data("measure_z_drift")
     }
 
     /// Measure the Z drift in bursts, correcting after each, and leave the
@@ -403,7 +392,7 @@ impl Drift<'_, '_> {
     /// velocity, and whether the loop converged or ran out of bursts.
     pub fn compensate(&mut self, action: &CompensateDrift) -> Result<DriftCompensation> {
         let output = self.rt.exec(action)?;
-        expect_data("compensate_drift", output)
+        output.into_data("compensate_drift")
     }
 }
 
