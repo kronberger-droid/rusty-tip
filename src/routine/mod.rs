@@ -190,28 +190,21 @@ pub fn run_routine(
     controller.teardown();
     log::info!("Cleanup complete");
 
-    let result = match caught {
-        Ok(Err(SpmError::ShutdownRequested)) => Ok(Outcome::StoppedByUser),
-        Ok(other) => other,
-        Err(payload) => {
-            events.emit(Event::run_finished(
-                "panicked",
-                Some(panic_message(&*payload)),
-                started.elapsed(),
-            ));
-            // Hardware is restored; hand the panic back to the caller untouched.
-            panic::resume_unwind(payload)
-        }
-    };
-    let (outcome, detail) = match &result {
-        Ok(Outcome::Completed) => ("completed", None),
-        Ok(Outcome::StoppedByUser) => ("stopped_by_user", None),
-        Ok(Outcome::CycleLimit(n)) => ("cycle_limit", Some(n.to_string())),
-        Ok(Outcome::TimedOut(d)) => ("timed_out", Some(format!("{:.0}s", d.as_secs_f64()))),
-        Err(e) => ("error", Some(e.to_string())),
+    let caught = caught.map(|r| match r {
+        Err(SpmError::ShutdownRequested) => Ok(Outcome::StoppedByUser),
+        other => other,
+    });
+    let (outcome, detail) = match &caught {
+        Ok(Ok(Outcome::Completed)) => ("completed", None),
+        Ok(Ok(Outcome::StoppedByUser)) => ("stopped_by_user", None),
+        Ok(Ok(Outcome::CycleLimit(n))) => ("cycle_limit", Some(n.to_string())),
+        Ok(Ok(Outcome::TimedOut(d))) => ("timed_out", Some(format!("{:.0}s", d.as_secs_f64()))),
+        Ok(Err(e)) => ("error", Some(e.to_string())),
+        Err(payload) => ("panicked", Some(panic_message(&**payload))),
     };
     events.emit(Event::run_finished(outcome, detail, started.elapsed()));
-    result
+    // Hardware is restored; a panic goes back to the caller untouched.
+    caught.unwrap_or_else(|payload| panic::resume_unwind(payload))
 }
 
 /// Best-effort rendering of a caught panic payload, which is a `&str` for
@@ -306,6 +299,15 @@ mod tests {
             custom_event(&events, "routine/panicked").expect("the panic must reach the event log");
         assert_eq!(data["routine"], "panicker");
         assert_eq!(data["message"], "routine blew up");
+        match events.last() {
+            Some(Event::RunFinished {
+                outcome, detail, ..
+            }) => {
+                assert_eq!(outcome, "panicked");
+                assert_eq!(detail.as_deref(), Some("routine blew up"));
+            }
+            other => panic!("the log must close on run_finished, got {other:?}"),
+        }
     }
 
     #[test]
