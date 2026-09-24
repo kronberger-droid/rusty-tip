@@ -73,7 +73,10 @@ impl BufferedTCPReader {
     /// - Implements circular buffer behavior (drops oldest when full)
     pub fn new(host: &str, port: u16, buffer_size: usize) -> Result<Self, NanonisError> {
         let tcp_stream = TCPLoggerStream::new(host, port)?;
-        let (tcp_receiver, stream_handle) = tcp_stream.spawn_background_reader();
+        // Fallible since nanonis-rs 0.5: attaching the reader can fail, and a
+        // failure here means no frames will ever arrive, so it surfaces now
+        // rather than as a silent timeout on the first query.
+        let (tcp_receiver, stream_handle) = tcp_stream.spawn_background_reader()?;
 
         let buffer = Arc::new(RwLock::new(VecDeque::with_capacity(buffer_size)));
         let buffer_clone = buffer.clone();
@@ -166,6 +169,11 @@ impl BufferedTCPReader {
         self.buffering_thread
             .as_ref()
             .is_some_and(|h| !h.is_finished())
+    }
+
+    /// Number of frames currently buffered.
+    pub fn buffered_frames(&self) -> usize {
+        self.buffer.read().len()
     }
 
     /// Returns the error message from the TCP stream reader thread, if it

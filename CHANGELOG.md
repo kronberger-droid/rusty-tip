@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Multi-pass** (`multi_pass` module): read and write Nanonis `.mpas`
+  configuration files, byte-exactly, and load one on a controller with
+  `multi_pass::apply`. The format is undocumented by the vendor and was
+  worked out by diffing GUI-saved files; the module doc is the write-up.
+  A `[PassN]` section is one scan *direction*, so two passes need four
+  sections, and `MultiPassConfig::constant_lift` builds that. `MPass.Load`
+  resolves its path on the controller, thus `apply` takes both a local path
+  and a host path rather than assuming a shared filesystem.
+- **Drift compensation** (`SpmController::compensate_drift`): measures how
+  fast Z is drifting and leaves the controller cancelling it. The sign
+  convention for the compensation velocity is undocumented, so this solves
+  for it from a trial velocity rather than guessing, and reports a
+  compensation channel that does not respond instead of writing a number
+  derived from noise. Needs the feedback loop closed, thus it is a
+  between-passes operation.
+- **Scan buffer** (`SpmController::scan_buffer_get`/`_set`/`_ensure`): which
+  signals a scan records, and at what resolution. `_ensure` adds channels
+  without dropping the ones already there.
+- **End-of-line waiting** (`SpmController::scan_wait_end_of_line`):
+  line-level progress, reporting line number, direction and multi-pass pass
+  number separately.
+- `const-distance baseline`: configures the two-pass constant-lift scan that
+  native multi-pass runs, as the published baseline (Moreno et al., Nano
+  Lett. 2015) the rolling-ellipsoid trajectory has to beat at step edges.
 - **Routine harness** (`routine` module): automations are structs
   implementing `Routine`, run against an `Rt` that hands out
   capability-checked subsystem handles (`rt.bias()?.set(v)?`), an
@@ -32,6 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a thin wrapper over `run_routine`.
 
 ### Changed
+
+- `nanonis-rs` 0.4 to 0.5, for `Scan.WaitEndOfLine`.
 
 - **Breaking (library):** `ShutdownFlag` is backed by a condition variable
   so `request()` wakes sleeping waiters immediately (new `wait_timeout`);

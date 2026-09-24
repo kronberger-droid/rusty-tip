@@ -1,7 +1,9 @@
 pub mod bias;
 mod context;
 pub mod data_stream;
+pub mod drift;
 pub mod motor;
+pub mod multi_pass;
 pub mod oscilloscope;
 mod output;
 pub mod pll;

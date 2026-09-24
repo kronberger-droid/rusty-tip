@@ -51,12 +51,27 @@ fn default_stable_signal_samples() -> usize {
     100
 }
 
+/// 2 gives roughly 1 kHz on a 20 kHz RC5, so the default 100-sample stable
+/// read completes in about a tenth of a second.
+fn default_oversampling() -> i32 {
+    2
+}
+
 /// How the signal stream is acquired. The thresholds a reading is *judged*
 /// against live in [`SignalStabilityConfig`], not here.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DataAcquisitionConfig {
     pub data_port: u16,
     pub sample_rate: u32,
+    /// Divisor the TCP logger applies to its own base rate, which on the
+    /// measured RC5 is `RTFreq / 10`. The delivered frame rate is
+    /// `base / oversampling`, so this is what decides whether
+    /// `stable_signal_samples` can be gathered inside the read timeout.
+    ///
+    /// It is deliberately explicit rather than derived from `sample_rate`:
+    /// the base rate is a property of the controller, not of this config.
+    #[serde(default = "default_oversampling")]
+    pub oversampling: i32,
     /// Number of TCP stream samples to average for a stable signal read.
     #[serde(default = "default_stable_signal_samples")]
     pub stable_signal_samples: usize,
@@ -243,6 +258,7 @@ impl Default for DataAcquisitionConfig {
         Self {
             data_port: 6590,
             sample_rate: 2000,
+            oversampling: default_oversampling(),
             stable_signal_samples: default_stable_signal_samples(),
         }
     }

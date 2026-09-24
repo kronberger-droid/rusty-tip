@@ -151,6 +151,7 @@ let mut ctx = ActionContext {
     controller: &mut *controller,
     store: &mut store,
     events: &events,
+    shutdown: &shutdown,
 };
 
 SetBias { voltage: -0.5 }.execute(&mut ctx)?;

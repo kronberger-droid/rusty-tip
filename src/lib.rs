@@ -13,11 +13,13 @@ pub mod tip_prep;
 pub mod config;
 pub mod controller_types;
 pub mod event;
+pub mod multi_pass;
 pub mod shutdown;
 pub mod signal_registry;
 
 // -- Analysis and display --
 pub mod analyzer;
+pub mod export;
 pub mod plotting;
 pub mod types;
 
@@ -25,9 +27,11 @@ pub mod types;
 mod buffered_tcp_reader;
 pub(crate) mod utils;
 
+pub use analyzer::rolling_ellipsoid::{Border, GridSpacing, RollingEllipsoid};
 pub use controller_types::{
     BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, StabilityConfig,
 };
+pub use multi_pass::{CallbackVi, MultiPassConfig, Pass};
 pub use plotting::{plot_values, plot_values_with_range};
 pub use routine::{Outcome, Routine, Rt, run_routine};
 pub use shutdown::ShutdownFlag;
@@ -47,7 +51,10 @@ pub use nanonis_rs::motor::{
 };
 
 // Re-export nanonis-rs scan types
-pub use nanonis_rs::scan::{ScanAction, ScanConfig, ScanDirection, ScanFrame, ScanPropsBuilder};
+pub use nanonis_rs::scan::{
+    ScanAction, ScanConfig, ScanDirection, ScanFrame, ScanLineEnd, ScanLineMovement,
+    ScanPropsBuilder,
+};
 
 // Re-export nanonis-rs oscilloscope types
 pub use nanonis_rs::oscilloscope::{

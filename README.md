@@ -98,6 +98,9 @@ without hardware.
   channel mapping
 - **[How tip preparation works](docs/tip-prep/algorithm.md)** — the routine,
   cycle by cycle
+- **[Constant-distance scanning](docs/const-distance-scan.md)** — planning a tip
+  trajectory from a topograph with the rolling-ellipsoid construction, and
+  exporting maps for Gwyddion
 - **[CHANGELOG](CHANGELOG.md)** — release notes
 
 ## Requirements (Nanonis backend)

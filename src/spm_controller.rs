@@ -6,7 +6,7 @@ use nanonis_rs::{
     Position,
     motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D},
     oscilloscope::{OsciData, TriggerConfig},
-    scan::{ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder},
+    scan::{ScanAction, ScanConfig, ScanDirection, ScanLineEnd, ScanProps, ScanPropsBuilder},
     tcplog::TCPLogStatus,
     tip_recovery::TipShaperConfig,
 };
@@ -21,6 +21,46 @@ pub type Result<T> = std::result::Result<T, SpmError>;
 
 /// Oscilloscope trigger configuration (level, slope, hysteresis)
 pub type TriggerSetup = TriggerConfig;
+
+/// Piezo drift compensation: constant velocities the real-time system adds to
+/// each axis, plus whether any axis has run out of range.
+///
+/// The velocities are metres per second. `saturation_limit_percent` is a
+/// **percentage of full piezo range**, not a fraction, so 10.0 means 10%.
+///
+/// Saturation latches. When an axis reaches the limit the controller stops
+/// compensating that axis and leaves it stopped; nothing recovers it except
+/// switching compensation off and on again. So a `*_saturated` flag does not
+/// mean "about to stop", it means "already stopped, for an unknown length of
+/// time".
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DriftComp {
+    pub enabled: bool,
+    /// Compensation velocity along X, in m/s.
+    pub vx: f64,
+    /// Compensation velocity along Y, in m/s.
+    pub vy: f64,
+    /// Compensation velocity along Z, in m/s.
+    pub vz: f64,
+    /// Saturation limit, as a percentage of full piezo range.
+    pub saturation_limit_percent: f64,
+    pub x_saturated: bool,
+    pub y_saturated: bool,
+    pub z_saturated: bool,
+}
+
+/// Which signals a scan records, and at what resolution.
+///
+/// The channels are RT signal slots, the same 0..=127 numbering
+/// [`SignalIndex`] carries everywhere else. `pixels` is coerced by the
+/// controller to the nearest multiple of 16, since scan data reaches the host
+/// in packets of 16.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanBuffer {
+    pub channels: Vec<SignalIndex>,
+    pub pixels: i32,
+    pub lines: i32,
+}
 
 /// Hardware capability that a controller may or may not support.
 ///
@@ -51,6 +91,10 @@ pub enum Capability {
     DataStream,
     /// Tip-crash protection (safe_tip_configure, safe_tip_status)
     SafeTip,
+    /// Multi-pass scanning (multi_pass_load, multi_pass_activate)
+    MultiPass,
+    /// Piezo drift compensation (drift_comp_get, drift_comp_set)
+    DriftCompensation,
 }
 
 /// What data the oscilloscope should return
@@ -145,6 +189,46 @@ pub trait SpmController: Send {
     fn scan_speed_get(&mut self) -> Result<ScanConfig>;
     fn scan_speed_set(&mut self, config: ScanConfig) -> Result<()>;
 
+    /// Which signals the scan records, and the frame resolution.
+    fn scan_buffer_get(&mut self) -> Result<ScanBuffer>;
+
+    /// Set the recorded signals and the frame resolution.
+    fn scan_buffer_set(&mut self, buffer: &ScanBuffer) -> Result<()>;
+
+    /// Add `channels` to the scan buffer, keeping whatever is already there.
+    ///
+    /// A signal that is not in the buffer is not acquired, however it is
+    /// configured elsewhere. Multi-pass in particular records and plays a
+    /// signal through its own buffers, which says nothing about whether the
+    /// resulting `[P1]`/`[P2]` frames are saved, so anything worth looking at
+    /// afterwards has to be in here too.
+    fn scan_buffer_ensure(&mut self, channels: &[SignalIndex]) -> Result<ScanBuffer> {
+        let mut buffer = self.scan_buffer_get()?;
+        let missing: Vec<SignalIndex> = channels
+            .iter()
+            .filter(|c| !buffer.channels.contains(c))
+            .copied()
+            .collect();
+        if missing.is_empty() {
+            return Ok(buffer);
+        }
+        buffer.channels.extend(missing);
+        self.scan_buffer_set(&buffer)?;
+        Ok(buffer)
+    }
+
+    /// Block until the scan finishes a line, or until `timeout` elapses.
+    ///
+    /// The returned [`ScanLineEnd`] reports the line number, what the head was
+    /// doing, and the multi-pass pass number. Direction and pass are separate
+    /// fields, which is worth noting: a `[PassN]` section in a `.mpas` file is
+    /// one *direction* of a pass, so the two numbering schemes here are not
+    /// the same thing.
+    ///
+    /// Check `timed_out` before trusting the rest. A timeout returns normally
+    /// with stale line and pass numbers rather than an error.
+    fn scan_wait_end_of_line(&mut self, timeout: Duration) -> Result<ScanLineEnd>;
+
     /// Grab pixel data from a completed (or in-progress) scan frame.
     ///
     /// Returns `(channel_name, data_2d, scan_direction_up)` where `data_2d`
@@ -157,6 +241,42 @@ pub trait SpmController: Send {
         channel_index: u32,
         forward: bool,
     ) -> Result<(String, Vec<Vec<f32>>, bool)>;
+
+    // -- Drift compensation --
+
+    /// Current drift compensation velocities and saturation state.
+    fn drift_comp_get(&mut self) -> Result<DriftComp>;
+
+    /// Set the drift compensation velocities. The `*_saturated` fields are
+    /// read-only status and are ignored here.
+    fn drift_comp_set(&mut self, comp: &DriftComp) -> Result<()>;
+
+    // -- Multi-pass --
+
+    /// Load a `.mpas` multi-pass configuration on the controller.
+    ///
+    /// `host_path` is resolved by the *controller*, not by us: on a real
+    /// instrument the Nanonis software runs on its own PC, and the file has to
+    /// exist on that machine's filesystem or on a share it can reach. An empty
+    /// path loads the configuration held in the session settings file, if there
+    /// is one.
+    fn multi_pass_load(&mut self, host_path: &str) -> Result<()>;
+
+    /// Save the controller's active multi-pass configuration to `host_path`,
+    /// again resolved on the controller's side. An empty path saves into the
+    /// session settings file rather than a `.mpas`.
+    fn multi_pass_save(&mut self, host_path: &str) -> Result<()>;
+
+    /// Switch multi-pass scanning on or off.
+    ///
+    /// Activating stops a running scan, so call this before starting one. That
+    /// is the Multi-Pass module manual's behaviour, not something the TCP
+    /// protocol reference mentions; it has not been checked on hardware.
+    /// Note that the scan mode (Normal vs Linefeed) is *not* part of what the
+    /// configuration carries and cannot be set over TCP at all; Linefeed, the
+    /// mode that keeps every pass on the same line, has to be ticked by hand
+    /// in the Scan Control module.
+    fn multi_pass_activate(&mut self, on: bool) -> Result<()>;
 
     // -- Oscilloscope --
     // Combines channel set + trigger config + run + data get

@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use serde::{Deserialize, Serialize};
 
 use crate::action::{Action, ActionContext, ActionOutput};
@@ -22,8 +20,51 @@ impl Action for Wait {
     fn description(&self) -> &str {
         "Wait for a specified duration in milliseconds"
     }
-    fn execute(&self, _ctx: &mut ActionContext) -> super::Result<ActionOutput> {
-        std::thread::sleep(Duration::from_millis(self.duration_ms));
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+        ctx.settle(self.duration_ms)?;
         Ok(ActionOutput::Unit)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::action::DataStore;
+    use crate::event::EventBus;
+    use crate::mock_controller::MockController;
+    use crate::shutdown::ShutdownFlag;
+    use crate::spm_error::SpmError;
+
+    /// A long wait must not outlive a stop request. Before `ActionContext`
+    /// carried the flag this slept the full duration, so a Ctrl+C during a
+    /// settle was ignored until the settle ended.
+    #[test]
+    fn a_stop_request_cuts_a_wait_short() {
+        let mut controller = MockController::builder().build();
+        let mut store = DataStore::new();
+        let events = EventBus::new();
+        let shutdown = ShutdownFlag::new();
+        shutdown.request();
+
+        let mut ctx = ActionContext {
+            controller: &mut controller,
+            store: &mut store,
+            events: &events,
+            shutdown: &shutdown,
+        };
+
+        let start = Instant::now();
+        let result = Wait {
+            duration_ms: 60_000,
+        }
+        .execute(&mut ctx);
+
+        assert!(matches!(result, Err(SpmError::ShutdownRequested)));
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "the wait should end on the stop request, not run its full minute"
+        );
     }
 }
