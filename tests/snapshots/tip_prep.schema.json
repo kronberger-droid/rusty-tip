@@ -196,6 +196,64 @@
         "title": "PanickedEvent",
         "type": "object"
       }
+    },
+    {
+      "kind": "routine/stream_dump",
+      "schema": {
+        "$defs": {
+          "StreamSnapshot": {
+            "description": "The data stream's buffer as it stood at one moment, one column per signal.\n\nTaken on the way out of a run so the log keeps the last seconds of signal\nbefore the end, which is where a safe-tip trip or a crash shows.",
+            "properties": {
+              "columns": {
+                "description": "One column per entry of `signals`, each as long as `t_s`.",
+                "items": {
+                  "items": {
+                    "format": "float",
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "signals": {
+                "description": "Signal index of each column, in column order. The run header maps\nindices to names.",
+                "items": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "t_s": {
+                "description": "Time of each sample in seconds relative to the snapshot, so all\nvalues are zero or negative and the last one is the newest sample.",
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "signals",
+              "t_s",
+              "columns"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The data stream's buffer at the end of the run, written after the final\nwithdraw and before teardown stops the stream. With the default buffer\nthat is the last 20 s at 500 Hz, which covers whatever ended the run.",
+        "properties": {
+          "stream": {
+            "$ref": "#/$defs/StreamSnapshot"
+          }
+        },
+        "required": [
+          "stream"
+        ],
+        "title": "StreamDumpEvent",
+        "type": "object"
+      }
     }
   ]
 }

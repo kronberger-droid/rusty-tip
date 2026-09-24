@@ -13,6 +13,9 @@ use nanonis_rs::{
 
 use std::collections::HashSet;
 
+use schemars::JsonSchema;
+use serde::Serialize;
+
 use crate::signal_registry::SignalIndex;
 use crate::spm_error::SpmError;
 
@@ -106,6 +109,22 @@ pub enum AcquisitionMode {
     NextTrigger,
     /// Wait for two trigger events, then return
     WaitTwoTriggers,
+}
+
+/// The data stream's buffer as it stood at one moment, one column per signal.
+///
+/// Taken on the way out of a run so the log keeps the last seconds of signal
+/// before the end, which is where a safe-tip trip or a crash shows.
+#[derive(Serialize, JsonSchema, Clone, Debug, Default, PartialEq)]
+pub struct StreamSnapshot {
+    /// Signal index of each column, in column order. The run header maps
+    /// indices to names.
+    pub signals: Vec<u32>,
+    /// Time of each sample in seconds relative to the snapshot, so all
+    /// values are zero or negative and the last one is the newest sample.
+    pub t_s: Vec<f64>,
+    /// One column per entry of `signals`, each as long as `t_s`.
+    pub columns: Vec<Vec<f32>>,
 }
 
 pub trait SpmController: Send {
@@ -326,6 +345,12 @@ pub trait SpmController: Send {
     /// returns only fresh post-operation data.  Default is a no-op for
     /// controllers without internal buffering.
     fn clear_data_buffer(&mut self) {}
+
+    /// Everything the data stream currently holds, or `None` without a
+    /// stream or with an empty buffer. Default is `None`.
+    fn stream_snapshot(&mut self) -> Option<StreamSnapshot> {
+        None
+    }
 
     /// The rate the data stream actually delivers samples at, in Hz, as
     /// measured when the stream was started. `None` when there is no stream

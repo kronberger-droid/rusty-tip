@@ -204,6 +204,11 @@ impl BufferedTCPReader {
             .collect()
     }
 
+    /// A copy of every frame currently buffered, oldest first.
+    pub fn snapshot(&self) -> Vec<TimestampedSignalFrame> {
+        self.buffer.read().iter().cloned().collect()
+    }
+
     /// Clear all buffered data
     ///
     /// This removes all frames from the buffer, effectively resetting it to an empty state.

@@ -62,7 +62,7 @@ mod events;
 mod rt;
 mod subsystems;
 
-pub use events::{CleanupFailedEvent, PanickedEvent, log_schema};
+pub use events::{CleanupFailedEvent, PanickedEvent, StreamDumpEvent, log_schema};
 pub use rt::{Cycles, Rt};
 pub use subsystems::{Bias, Motor, RepositionSpec, Scan, Signals, StableReadSpec, ZCtrl};
 
@@ -184,6 +184,9 @@ pub fn run_routine(
         }
     }
     drop(rt);
+    if let Some(stream) = controller.stream_snapshot() {
+        events.emit(Event::typed(&StreamDumpEvent { stream }));
+    }
     controller.teardown();
     log::info!("Cleanup complete");
 

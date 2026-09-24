@@ -15,9 +15,10 @@ use crate::buffered_tcp_reader::BufferedTCPReader;
 use crate::signal_registry::{SignalIndex, SignalRegistry};
 use crate::spm_controller::{
     AcquisitionMode, Capability, DataStreamStatus, DriftComp, Result, ScanBuffer, SpmController,
-    TriggerSetup, ZControllerStatus, ZHomeMode,
+    StreamSnapshot, TriggerSetup, ZControllerStatus, ZHomeMode,
 };
 use crate::spm_error::SpmError;
+use crate::types::TimestampedSignalFrame;
 use crate::utils::{PollError, poll_until};
 use nanonis_rs::piezo::{DriftCompConfig, PiezoToggle};
 use nanonis_rs::scan::ScanLineEnd;
@@ -1144,6 +1145,11 @@ impl SpmController for NanonisController {
 
     // -- Signal Reading (TCP stream override) --
 
+    fn stream_snapshot(&mut self) -> Option<StreamSnapshot> {
+        let frames = self.tcp_reader.as_ref()?.snapshot();
+        stream_snapshot_from(&frames, &self.signal_to_data_position, Instant::now())
+    }
+
     fn read_signal_samples(&mut self, index: SignalIndex, num_samples: usize) -> Result<Vec<f64>> {
         if num_samples == 0 {
             return Err(SpmError::Protocol(
@@ -1176,6 +1182,38 @@ impl SpmController for NanonisController {
     }
 }
 
+/// Turn buffered frames into columns keyed by signal index, timed relative
+/// to `now`. Signals are ordered by their position in the frame.
+fn stream_snapshot_from(
+    frames: &[TimestampedSignalFrame],
+    positions: &HashMap<SignalIndex, usize>,
+    now: Instant,
+) -> Option<StreamSnapshot> {
+    if frames.is_empty() || positions.is_empty() {
+        return None;
+    }
+    let mut order: Vec<(usize, u32)> = positions.iter().map(|(i, &p)| (p, i.0)).collect();
+    order.sort_unstable();
+    let t_s = frames
+        .iter()
+        .map(|f| -(now.saturating_duration_since(f.timestamp).as_secs_f64()))
+        .collect();
+    let columns = order
+        .iter()
+        .map(|&(pos, _)| {
+            frames
+                .iter()
+                .map(|f| f.signal_frame.data.get(pos).copied().unwrap_or(f32::NAN))
+                .collect()
+        })
+        .collect();
+    Some(StreamSnapshot {
+        signals: order.into_iter().map(|(_, i)| i).collect(),
+        t_s,
+        columns,
+    })
+}
+
 impl Drop for NanonisController {
     fn drop(&mut self) {
         self.teardown();
@@ -1185,6 +1223,34 @@ impl Drop for NanonisController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Columns follow frame position, not signal index, and times count
+    /// back from the snapshot so the newest sample sits at zero.
+    #[test]
+    fn a_stream_snapshot_orders_columns_by_frame_position() {
+        let start = Instant::now();
+        let frame = |ms: u64, data: Vec<f32>| TimestampedSignalFrame {
+            signal_frame: crate::types::SignalFrame { counter: 0, data },
+            timestamp: start + Duration::from_millis(ms),
+            relative_time: Duration::from_millis(ms),
+        };
+        let frames = [frame(0, vec![1.0, 10.0]), frame(500, vec![2.0, 20.0])];
+        // Current (index 0) streams second, Z (index 30) first.
+        let positions = HashMap::from([(SignalIndex(0), 1), (SignalIndex(30), 0)]);
+
+        let snap =
+            stream_snapshot_from(&frames, &positions, start + Duration::from_millis(500)).unwrap();
+
+        assert_eq!(snap.signals, vec![30, 0]);
+        assert_eq!(snap.columns, vec![vec![1.0, 2.0], vec![10.0, 20.0]]);
+        assert_eq!(snap.t_s, vec![-0.5, 0.0]);
+    }
+
+    #[test]
+    fn an_empty_buffer_gives_no_snapshot() {
+        let positions = HashMap::from([(SignalIndex(0), 0)]);
+        assert!(stream_snapshot_from(&[], &positions, Instant::now()).is_none());
+    }
 
     /// The calibrated approach homes the tip to back off from the surface.
     /// That is only a back-off in relative mode; absolute mode drives Z to a
