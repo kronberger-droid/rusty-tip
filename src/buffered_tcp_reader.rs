@@ -196,12 +196,15 @@ impl BufferedTCPReader {
     /// This method acquires a lock on the buffer briefly to copy matching frames.
     /// Lock is held for minimal time to avoid blocking the buffering thread.
     pub fn get_data_since(&self, since: Instant) -> Vec<TimestampedSignalFrame> {
+        // Frames arrive in time order, so the matches are a suffix: walk in
+        // from the newest end instead of past the whole buffer, which is what
+        // a 10 ms poll would otherwise do under the lock each time.
         let buffer = self.buffer.read();
-        buffer
+        let first = buffer
             .iter()
-            .filter(|frame| frame.timestamp >= since)
-            .cloned()
-            .collect()
+            .rposition(|frame| frame.timestamp < since)
+            .map_or(0, |i| i + 1);
+        buffer.range(first..).cloned().collect()
     }
 
     /// A copy of every frame currently buffered, oldest first.
