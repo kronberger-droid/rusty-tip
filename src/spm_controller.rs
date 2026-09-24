@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 pub use nanonis_rs::z_ctrl::{ZControllerStatus, ZHomeMode};
@@ -98,6 +99,9 @@ pub enum Capability {
     MultiPass,
     /// Piezo drift compensation (drift_comp_get, drift_comp_set)
     DriftCompensation,
+    /// Loading settings and layout files the controller keeps on its own
+    /// machine (load_settings, load_layout)
+    Presets,
 }
 
 /// What data the oscilloscope should return
@@ -149,19 +153,35 @@ pub trait SpmController: Send {
     fn capabilities(&self) -> HashSet<Capability>;
 
     // -- Lifecycle --
+    //
+    // Two lifetimes meet here. A *session* is one connection: it starts
+    // when the controller is built and ends with [`disconnect`]. A *run* is
+    // one routine or job on that connection; a session hosts many of them,
+    // and [`prepare`]/[`teardown`] bracket each one. Policy for a run (Z
+    // home, safe-tip) is not in here: the routine harness applies it
+    // through the ordinary subsystem methods, so it reads the same for every
+    // controller and lands in the run log.
+    //
+    // [`disconnect`]: Self::disconnect
+    // [`prepare`]: Self::prepare
+    // [`teardown`]: Self::teardown
 
-    /// One-time hardware setup: load configuration, set safe operating
-    /// defaults, apply vendor-specific workarounds.  Called once before
-    /// the main experiment loop.  Default is a no-op.
+    /// Vendor-specific setup the harness runs before every routine. Default
+    /// is a no-op. Called once per run, not once per connection.
     fn prepare(&mut self) -> Result<()> {
         Ok(())
     }
 
-    /// Best-effort resource cleanup: stop data streams, disable safety
-    /// overrides, release hardware locks.  Implementations should log
-    /// errors internally rather than propagating, since teardown must
-    /// not short-circuit.  Default is a no-op.
+    /// Best-effort cleanup after every routine. Implementations log errors
+    /// rather than propagating them, since cleanup must not short-circuit.
+    /// Called once per run, so it must be safe to call repeatedly over one
+    /// connection. Default is a no-op.
     fn teardown(&mut self) {}
+
+    /// End the session: stop the data stream and whatever reads it. Default
+    /// is a no-op. Must be idempotent, since it is also what a controller's
+    /// `Drop` runs.
+    fn disconnect(&mut self) {}
 
     /// Returns `true` if the connection is healthy and commands can be sent.
     ///
@@ -179,6 +199,30 @@ pub trait SpmController: Send {
     /// controllers in tests.
     fn reconnect(&mut self) -> Result<()> {
         Ok(())
+    }
+
+    // -- Presets --
+
+    /// Load a settings file into the controller. Requires
+    /// [`Capability::Presets`]; the default reports it unsupported.
+    ///
+    /// The path is resolved on *this* machine and handed to the controller
+    /// as an absolute path, so it has to be somewhere the controller's PC
+    /// can read too. A load persists for the rest of the session and cannot
+    /// be undone from here, which is what makes it a first-class operation:
+    /// some module settings can only be set over TCP this way.
+    fn load_settings(&mut self, _path: &Path) -> Result<()> {
+        Err(SpmError::Unsupported(
+            "this controller cannot load settings files".into(),
+        ))
+    }
+
+    /// Load a layout file into the controller. Same rules as
+    /// [`load_settings`](Self::load_settings).
+    fn load_layout(&mut self, _path: &Path) -> Result<()> {
+        Err(SpmError::Unsupported(
+            "this controller cannot load layout files".into(),
+        ))
     }
 
     // -- Signals --

@@ -252,6 +252,42 @@
         "title": "StreamDumpEvent",
         "type": "object"
       }
+    },
+    {
+      "kind": "routine/settings_loaded",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A settings file was loaded into the controller during the run. The load\noutlives the run: whatever it set stays set for the rest of the session.",
+        "properties": {
+          "path": {
+            "description": "The path as the routine gave it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "SettingsLoadedEvent",
+        "type": "object"
+      }
+    },
+    {
+      "kind": "routine/layout_loaded",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A layout file was loaded into the controller during the run.",
+        "properties": {
+          "path": {
+            "description": "The path as the routine gave it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "LayoutLoadedEvent",
+        "type": "object"
+      }
     }
   ]
 }

@@ -38,9 +38,13 @@ let outcome = run_tip_prep(
 )?;
 ```
 
-`run_tip_prep` owns the controller life cycle (prepare/teardown, withdraw on
-exit) and returns an `Outcome` — `Completed`, `StoppedByUser`, `CycleLimit`,
-or `TimedOut`. A shutdown request is an expected ending, never an error.
+`run_tip_prep` owns the run (prepare/teardown, Z home and safe-tip, withdraw
+and coarse retract on exit) and returns an `Outcome` — `Completed`,
+`StoppedByUser`, `CycleLimit`, or `TimedOut`. A shutdown request is an
+expected ending, never an error. It consumes the controller, and dropping
+it is what stops the data stream; to run tip prep as one of several
+routines on one connection, build a `TipPrep` and call `run_routine` with a
+borrowed controller, or use a `Session` (below).
 
 For a complete, runnable example against the mock controller, see
 `examples/tip-prep-mock.rs` (`cargo run --example tip-prep-mock`).
@@ -85,17 +89,36 @@ impl Routine for PulseUntilSharp {
 }
 ```
 
-Run it with `run_routine(controller, &events, &shutdown, &mut routine)`,
-which owns the controller life cycle: `prepare()` before, tip withdrawal and
-`teardown()` after, whatever the outcome. A stop request (Ctrl+C, GUI
-button) surfaces as `Outcome::StoppedByUser`, never as an error. "Whatever
-the outcome" covers panics too: a panicking routine is withdrawn and torn
-down first, then the panic is re-raised unchanged.
+Run it with `run_routine(&mut controller, &events, &shutdown, &mut routine)`,
+which owns the run: `prepare()` before, the routine's `RunSetup` applied,
+the tip left as its `ExitPolicy` says and `teardown()` after, whatever the
+outcome. A stop request (Ctrl+C, GUI button) surfaces as
+`Outcome::StoppedByUser`, never as an error. "Whatever the outcome" covers
+panics too: a panicking routine is cleaned up first, then the panic is
+re-raised unchanged.
 
-`run_routine` takes the controller by value, so for now a controller runs
-exactly one routine: there is no way to prepare a tip with one routine and
-measure with the next on the same connection. Sequence such work inside a
-single `Routine` until that changes.
+The controller is borrowed, so one connection runs routine after routine:
+prepare a tip with one, measure with the next, without reconnecting or
+restarting the data stream. Ending the connection is the owner's job
+(`SpmController::disconnect`, or dropping the controller).
+
+Two optional methods on `Routine` say what the harness should do around
+`run`:
+
+- **`run_setup()`** returns a `RunSetup`: the Z home mode and position to
+  set, and the safe-tip threshold to apply, optionally with safe-tip
+  switched off for the run. Whatever safe-tip was before is put back on
+  exit, however the run ends, and every step is in the event log. The
+  default sets a relative 50 nm home, since every calibrated approach homes
+  the tip and absolute mode would drive Z to a coordinate instead of
+  backing off, and leaves safe-tip as the operator set it. `RunSetup::NONE`
+  touches nothing, for a routine that must not move Z home either. Tip
+  prep switches safe-tip off on top, since a pulse is a current spike by
+  design.
+- **`exit_policy()`** returns an `ExitPolicy`: `Withdraw { retract_steps }`
+  (the default, with zero steps) withdraws and backs the coarse motor off;
+  `LeaveInPlace` leaves Z and the motor alone, for a routine that only
+  reconfigures the controller or measures drift with the loop closed.
 
 The pieces, in the order you meet them:
 
@@ -122,8 +145,46 @@ The pieces, in the order you meet them:
   `cleanup_failed` event, so it never disappears silently. A cleanup
   that should never fail the run handles its own errors and returns
   `Ok(())`, which is what the stability sweep does.
+- **`rt.presets()`** — `load_settings(path)` and `load_layout(path)`, for a
+  routine that depends on particular controller settings. Loading a file is
+  sometimes the only way to set a module over TCP, so this is a first-class
+  step, not a workaround. A load persists for the rest of the connection
+  and cannot be undone; it goes to the log as an action and as a typed
+  `routine/settings_loaded` or `routine/layout_loaded` event, so whoever
+  runs next can see the controller's state moved.
 - **`rt.controller()`** — the escape hatch to the bare `SpmController` for
   anything the handles don't cover; calls through it bypass event logging.
+
+## Sessions and jobs
+
+`rusty_tip::session::Session` is one connection hosting many runs: connect
+once (layout and settings files loaded, signal registry built, data stream
+started), run `Job`s against it one at a time, disconnect at the end. Each
+job gets its own JSONL log with a `run_started` header built from the job's
+schema, config and the controller facts, and `run_finished` if the job did
+not write one itself. A job that is a routine is a few lines:
+
+```rust
+use rusty_tip::session::{Job, JobCx};
+
+impl Job for TipPrepJob {
+    fn name(&self) -> &str { "tip_prep" }
+    fn log_schema(&self) -> ToolSchema { rusty_tip::tip_prep::log_schema() }
+    fn header_config(&self) -> serde_json::Value { serde_json::to_value(&self.config).unwrap() }
+    fn run(&mut self, cx: JobCx<'_>) -> Result<Outcome, SpmError> {
+        let fs = cx.registry.get_by_name("freq shift").unwrap().signal_index();
+        let mut routine = TipPrep::new(&self.config, fs);
+        run_routine(cx.controller, cx.events, cx.shutdown, &mut routine)
+    }
+}
+```
+
+A job error or panic is reported and the session stays connected; a
+connection error marks it poisoned until `reconnect()`. `Session` is
+synchronous, so a test drives it against the mock; `session::spawn` puts
+one on its own thread behind `SessionCmd`/`SessionUpdate` channels, polling
+a few live readouts (bias, Z, current, frequency shift) while idle. That is
+how a GUI uses it: exactly one thread touches the controller.
 
 The shipped `TipPrep` routine (`src/tip_prep/runner.rs`) is the reference:
 a full state machine with confirmation reads, a guarded stability sweep,

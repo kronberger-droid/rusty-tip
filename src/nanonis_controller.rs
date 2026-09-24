@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use nanonis_rs::{
@@ -23,33 +24,14 @@ use crate::utils::{PollError, poll_until};
 use nanonis_rs::piezo::{DriftCompConfig, PiezoToggle};
 use nanonis_rs::scan::ScanLineEnd;
 
-/// Configuration consumed by `NanonisController::prepare()`.
+/// Vendor-specific knobs a [`NanonisController`] is built with.
 ///
-/// Captures all the vendor-specific setup values that `prepare` needs so
-/// the binary doesn't have to poke the controller directly.
+/// Everything that belongs to a *run* (Z home, safe-tip) is supplied by the
+/// routine through [`RunSetup`](crate::routine::RunSetup), and everything
+/// that belongs to a *session* (settings and layout files, the data stream)
+/// is done by whoever owns the connection, so this is down to what the
+/// controller needs to know about itself.
 pub struct NanonisSetupConfig {
-    /// Nanonis layout file to load (absolute or relative path). `None` to skip.
-    pub layout_file: Option<String>,
-    /// Nanonis settings file to load. `None` to skip.
-    pub settings_file: Option<String>,
-    /// Z-controller home mode.
-    ///
-    /// The calibrated approach "homes" the tip to get a small distance from
-    /// the surface before centring the frequency shift. That only makes sense
-    /// as a move *relative* to wherever the tip is. In `Absolute` mode the
-    /// same call drives Z to a fixed coordinate, which, depending on where the
-    /// surface sits in the Z range, can be straight into it. Leave this at
-    /// `Relative` unless you have a reason and have checked the Z range.
-    pub z_home_mode: ZHomeMode,
-    /// Z-controller home position in metres. With `Relative` mode this is
-    /// how far the tip backs off from the surface when homed.
-    pub z_home_position_m: f64,
-    /// Safe-tip current threshold in amperes.
-    pub safe_tip_threshold_a: f64,
-    /// Switch safe-tip off for the run. `prepare` records whether it was on
-    /// and `teardown` puts it back, so the operator's setting survives
-    /// however the run ends.
-    pub disable_safe_tip: bool,
     /// Which User Output index to toggle for the TCP channel list refresh
     /// workaround.  `None` skips the workaround entirely.  Default is
     /// `Some(3)`.  Pick an output that is not driving anything critical.
@@ -59,15 +41,6 @@ pub struct NanonisSetupConfig {
 impl Default for NanonisSetupConfig {
     fn default() -> Self {
         Self {
-            layout_file: None,
-            settings_file: None,
-            // Relative, as 0.2.3 set it. 0.3 and 0.4 shipped Absolute here,
-            // which turned every calibrated approach's "back off 50 nm" into
-            // "go to Z = +50 nm". Neither version met a tip, so nothing broke.
-            z_home_mode: ZHomeMode::Relative,
-            z_home_position_m: 50e-9,
-            safe_tip_threshold_a: 1e-9,
-            disable_safe_tip: false,
             tcp_refresh_output: Some(3),
         }
     }
@@ -137,19 +110,8 @@ pub struct NanonisController {
     /// nominal base/divisor when the measurement confirmed it, otherwise
     /// the measured rate.
     stream_rate_hz: Option<f64>,
-    /// Guards against double-teardown (manual call + Drop).
-    torn_down: bool,
-    /// Safe-tip state as `prepare` found it, restored by `teardown`.
-    safe_tip_before: Option<SafeTipSnapshot>,
-}
-
-/// Safe-tip settings captured before `prepare` changes them.
-#[derive(Debug, Clone, Copy)]
-struct SafeTipSnapshot {
-    enabled: bool,
-    auto_recovery: bool,
-    auto_pause_scan: bool,
-    threshold_a: f64,
+    /// Guards against stopping the stream twice (manual `disconnect` + Drop).
+    disconnected: bool,
 }
 
 impl NanonisController {
@@ -161,8 +123,7 @@ impl NanonisController {
             signal_to_data_position: HashMap::new(),
             configured_channel_count: None,
             stream_rate_hz: None,
-            torn_down: false,
-            safe_tip_before: None,
+            disconnected: false,
         }
     }
 
@@ -540,6 +501,14 @@ impl NanonisController {
     }
 }
 
+/// The absolute form of a preset path, which is what the controller wants:
+/// it resolves paths on its own machine, and a relative one would be taken
+/// against whatever its working directory happens to be.
+fn absolute_preset_path(path: &Path, what: &str) -> Result<PathBuf> {
+    path.canonicalize()
+        .map_err(|e| SpmError::Protocol(format!("{what} file not found: {} ({e})", path.display())))
+}
+
 /// Validate that an f64 value is finite and representable as f32.
 ///
 /// Rejects NaN, infinity, and values that overflow f32.  Warns if the
@@ -586,100 +555,24 @@ impl SpmController for NanonisController {
             Capability::SafeTip,
             Capability::MultiPass,
             Capability::DriftCompensation,
+            Capability::Presets,
         ])
     }
 
     // -- Lifecycle --
 
-    fn prepare(&mut self) -> Result<()> {
-        // Load layout file if specified
-        if let Some(ref path) = self.setup.layout_file {
-            let abs = std::path::Path::new(path).canonicalize().map_err(|e| {
-                SpmError::Protocol(format!("Layout file not found: {} ({})", path, e))
-            })?;
-            self.client
-                .util_layout_load(&abs.to_string_lossy(), false)?;
-            log::info!("Layout loaded: {}", abs.display());
-        }
-
-        // Load settings file if specified
-        if let Some(ref path) = self.setup.settings_file {
-            let abs = std::path::Path::new(path).canonicalize().map_err(|e| {
-                SpmError::Protocol(format!("Settings file not found: {} ({})", path, e))
-            })?;
-            self.client
-                .util_settings_load(&abs.to_string_lossy(), false)?;
-            log::info!("Settings loaded: {}", abs.display());
-        }
-
-        // Z-controller home position
-        self.set_z_home(self.setup.z_home_mode, self.setup.z_home_position_m)?;
-        log::info!(
-            "Z home: mode={:?}, pos={:.0} nm",
-            self.setup.z_home_mode,
-            self.setup.z_home_position_m * 1e9
-        );
-
-        // Record safe-tip before touching it, so teardown can put it back.
-        let (auto_recovery, auto_pause_scan, threshold_a) = self.safe_tip_status()?;
-        let snapshot = SafeTipSnapshot {
-            enabled: self.safe_tip_enabled()?,
-            auto_recovery,
-            auto_pause_scan,
-            threshold_a,
-        };
-        log::info!(
-            "Safe-tip before run: {}, threshold {:.2e} A",
-            if snapshot.enabled { "on" } else { "off" },
-            snapshot.threshold_a
-        );
-        self.safe_tip_before = Some(snapshot);
-
-        // Safe-tip protection (auto_recovery off, auto_pause_scan on)
-        self.safe_tip_configure(false, true, self.setup.safe_tip_threshold_a)?;
-        log::info!(
-            "Safe-tip threshold: {:.2e} A",
-            self.setup.safe_tip_threshold_a
-        );
-        if self.setup.disable_safe_tip {
-            self.safe_tip_set_enabled(false)?;
-            log::info!("Safe-tip switched off for the run");
-        }
-
-        Ok(())
-    }
-
-    fn teardown(&mut self) {
-        if self.torn_down {
+    fn disconnect(&mut self) {
+        if self.disconnected {
             return;
         }
-        self.torn_down = true;
+        self.disconnected = true;
 
-        if let Err(e) = self.data_stream_stop() {
-            log::warn!("Data stream stop: {}", e);
-        }
-        if let Err(e) = self.stop_tcp_reader() {
-            log::warn!("TCP reader stop: {}", e);
-        }
-        // No snapshot means `prepare` never touched safe tip, since it reads
-        // before it writes, so there is nothing to put back. Resetting here
-        // clobbered the operator's settings for every tool that skips
-        // `prepare`, const-distance among them.
-        if let Some(before) = self.safe_tip_before.take() {
-            if let Err(e) = self.safe_tip_configure(
-                before.auto_recovery,
-                before.auto_pause_scan,
-                before.threshold_a,
-            ) {
-                log::warn!("Failed to restore safe-tip config: {}", e);
+        if self.tcp_reader.is_some() {
+            if let Err(e) = self.data_stream_stop() {
+                log::warn!("Data stream stop: {}", e);
             }
-            if let Err(e) = self.safe_tip_set_enabled(before.enabled) {
-                log::warn!("Failed to restore safe-tip on/off: {}", e);
-            } else {
-                log::info!(
-                    "Safe-tip restored: {}",
-                    if before.enabled { "on" } else { "off" }
-                );
+            if let Err(e) = self.stop_tcp_reader() {
+                log::warn!("TCP reader stop: {}", e);
             }
         }
     }
@@ -692,6 +585,24 @@ impl SpmController for NanonisController {
         log::info!("Attempting to reconnect to Nanonis...");
         self.client.reconnect()?;
         log::info!("Reconnected successfully");
+        Ok(())
+    }
+
+    // -- Presets --
+
+    fn load_settings(&mut self, path: &Path) -> Result<()> {
+        let abs = absolute_preset_path(path, "Settings")?;
+        self.client
+            .util_settings_load(&abs.to_string_lossy(), false)?;
+        log::info!("Settings loaded: {}", abs.display());
+        Ok(())
+    }
+
+    fn load_layout(&mut self, path: &Path) -> Result<()> {
+        let abs = absolute_preset_path(path, "Layout")?;
+        self.client
+            .util_layout_load(&abs.to_string_lossy(), false)?;
+        log::info!("Layout loaded: {}", abs.display());
         Ok(())
     }
 
@@ -1209,7 +1120,7 @@ fn stream_snapshot_from(
 
 impl Drop for NanonisController {
     fn drop(&mut self) {
-        self.teardown();
+        self.disconnect();
     }
 }
 
@@ -1245,9 +1156,6 @@ mod tests {
         assert!(stream_snapshot_from(&[], &positions, Instant::now()).is_none());
     }
 
-    /// The calibrated approach homes the tip to back off from the surface.
-    /// That is only a back-off in relative mode; absolute mode drives Z to a
-    /// coordinate, surface or not. 0.3 and 0.4 shipped the wrong default.
     /// The logger only delivers base / n, so a request lands on the nearest
     /// such rate; a request above the base, or nonsense, gets the base.
     #[test]
@@ -1267,13 +1175,5 @@ mod tests {
         assert_eq!(divisor_for(2000.0, 5000.0), 1);
         assert_eq!(divisor_for(2000.0, 0.0), 1);
         assert_eq!(divisor_for(0.0, 1000.0), 1);
-    }
-
-    #[test]
-    fn the_default_z_home_mode_backs_off_rather_than_going_to_a_coordinate() {
-        assert_eq!(
-            NanonisSetupConfig::default().z_home_mode,
-            ZHomeMode::Relative
-        );
     }
 }

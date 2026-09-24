@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One connection, many runs.** `run_routine` borrows the controller
+  instead of consuming it, so a second routine can start on the same
+  connection with the data stream still up. `rusty_tip::session::Session`
+  builds on that: connect once (layout and settings files, signal
+  registry, stream), run `Job`s one after another, each with its own run
+  log, disconnect at the end; `session::spawn` puts one on a thread behind
+  command and update channels for a GUI, polling live readouts while idle.
+  `SpmController` gains `disconnect` for the session-level stop, next to
+  the per-run `prepare`/`teardown`.
+- **`Routine::exit_policy`** replaces `exit_retract_steps`. `Withdraw {
+  retract_steps }` is what every routine did before; `LeaveInPlace` leaves
+  Z and the coarse motor alone, for routines that reconfigure the
+  controller or measure drift between passes with the tip engaged.
+- **`Routine::run_setup`** says what the harness sets before the run: Z
+  home mode and position, and the safe-tip threshold, optionally with
+  safe-tip switched off for the run and restored after. These were fields
+  of `NanonisSetupConfig` and applied inside `prepare`; now the routine
+  owns them, they read the same on every controller, and each step is an
+  action in the run log. The default is the relative 50 nm home every run
+  used to get, with safe-tip untouched; tip prep adds safe-tip off, as both
+  front ends did; `RunSetup::NONE` touches nothing.
+- **`rt.presets()`** with `load_settings` and `load_layout`, behind the new
+  `Capability::Presets`, so a routine that depends on particular Nanonis
+  settings loads them as part of its run. Each load is logged as an action
+  and as a typed `routine/settings_loaded` or `routine/layout_loaded`
+  event. The mock records loads in `MockObservations::settings_loaded` and
+  `layouts_loaded`.
+
 - **`rt-log`**, a terminal reader for experiment logs: `ls` a directory of
   runs, `summary` a run (outcome, time per top-level action, measurement
   spread, event counts), `timeline` the action tree with durations and
@@ -22,6 +50,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`NanonisSetupConfig` is down to `tcp_refresh_output`.** Layout and
+  settings files are loaded by whoever owns the connection through
+  `SpmController::load_layout`/`load_settings`, before the stream starts
+  (a settings file can change the TCP logger's channel list, and Nanonis
+  stops a live stream on that; before, they loaded after it). Z home and
+  safe-tip come from the routine's `run_setup`. `tip-prep` and
+  `tip-prep-gui` behave as before; `tip_prep::nanonis_setup` became
+  `tip_prep::load_presets`.
 - **The experiment log is self-describing** (`docs/experiment-log.md`).
   Every run starts with a `run_started` line carrying the tool, version,
   git commit, the config as loaded, the resolved signals and stream rate,
