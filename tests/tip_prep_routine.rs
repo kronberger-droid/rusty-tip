@@ -74,7 +74,7 @@ impl Observer for RecordingObserver {
 /// `true` if any recorded event is a `Custom { kind }` carrying the given phase.
 fn saw_phase(events: &[Event], phase: &str) -> bool {
     events.iter().any(|e| match e {
-        Event::Custom { kind, data } if kind == "tip_prep_state" => {
+        Event::Custom { kind, data, .. } if kind == "tip_prep/phase" => {
             data.get("phase").and_then(|p| p.as_str()) == Some(phase)
         }
         _ => false,
@@ -236,7 +236,7 @@ fn blunt_tip_hits_cycle_limit() {
     assert!(obs.torn_down);
 }
 
-/// The GUI plots the voltage from the `tip_prep_state` snapshot, so it must
+/// The GUI plots the voltage from the `tip_prep/cycle` event, so it must
 /// be the signed voltage that was fired, not the magnitude the pulse method
 /// tracks. Before this was pinned, every polarity switch showed positive in
 /// the GUI while the log and the instrument both saw the negative pulse.
@@ -283,7 +283,7 @@ fn snapshot_reports_the_signed_pulse_voltage() {
         .unwrap()
         .iter()
         .filter_map(|e| match e {
-            Event::Custom { kind, data } if kind == "tip_prep_state" => {
+            Event::Custom { kind, data, .. } if kind == "tip_prep/cycle" => {
                 data.get("pulse_voltage").and_then(|v| v.as_f64())
             }
             _ => None,
@@ -352,7 +352,7 @@ fn shutdown_during_the_initial_approach_stops_promptly_and_cleans_up() {
         "the approach is switched off before the cleanup withdraws, calls: {:?}",
         obs.calls
     );
-    assert_eq!(obs.motor_displacements.last(), Some(&(0, 0, -10)));
+    assert_eq!(obs.motor_displacements.last(), Some(&(0, 0, -2)));
     assert!(obs.torn_down);
 }
 
@@ -383,7 +383,8 @@ fn shutdown_before_loop_stops_by_user() {
     assert!(obs.torn_down, "cleanup must still run on shutdown");
 
     // A withdraw alone leaves the tip within piezo reach of the surface.
-    // 0.2.3 backed the coarse motor off ten steps after it; so does this.
+    // 0.2.3 backed the coarse motor off after it; so does this, by the
+    // default two steps.
     let last_withdraw = obs
         .calls
         .iter()
@@ -401,8 +402,8 @@ fn shutdown_before_loop_stops_by_user() {
     );
     assert_eq!(
         obs.motor_displacements.last(),
-        Some(&(0, 0, -10)),
-        "the retract is ten coarse steps in Z-minus, nothing lateral"
+        Some(&(0, 0, -2)),
+        "the retract is two coarse steps in Z-minus, nothing lateral"
     );
 }
 

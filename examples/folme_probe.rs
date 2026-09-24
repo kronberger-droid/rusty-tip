@@ -60,7 +60,7 @@ struct Cli {
 
     /// How far to retract, in metres, before any open-loop Z step. At 5 nm
     /// (5e-9) the tip is out of range of every short-range interaction.
-    #[arg(long, default_value_t = 5e-9)]
+    #[arg(long, default_value = "5e-9")]
     lift: f64,
 
     /// Which way "away from the surface" points in Z: +1 if increasing Z
@@ -73,11 +73,11 @@ struct Cli {
     df_signal: Option<u8>,
 
     /// FolMe speed for the waypoint replay, in m/s (20e-9 is 20 nm/s).
-    #[arg(long, default_value_t = 20e-9)]
+    #[arg(long, default_value = "20e-9")]
     folme_speed: f64,
 
     /// Length of the FolMe replay line, in metres.
-    #[arg(long, default_value_t = 5e-9)]
+    #[arg(long, default_value = "5e-9")]
     line: f64,
 
     /// Waypoints along the FolMe replay line, one way.

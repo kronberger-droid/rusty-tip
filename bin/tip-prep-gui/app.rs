@@ -13,19 +13,24 @@ use rusty_tip::config::{
     load_config_with_fallback,
 };
 use rusty_tip::event::{
-    ChannelForwarder, ConsoleLogger, Event, EventAccumulator, EventBus, FileLogger,
+    ChannelForwarder, ConsoleLogger, Event, EventBus, EventEmitter, FileLogger,
 };
+use rusty_tip::experiment_log::LogEvent;
+use rusty_tip::experiment_log::{ControllerFacts, RunHeader};
 use rusty_tip::mock_controller::{MockController, models};
-use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
+use rusty_tip::nanonis_controller::NanonisController;
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::SignalRegistry;
-use rusty_tip::spm_controller::{SpmController, ZHomeMode};
+use rusty_tip::spm_controller::SpmController;
 use rusty_tip::spm_error::SpmError;
-use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
+use rusty_tip::tip_prep::{
+    CycleEvent, MaxPulseEvent, Outcome, PhaseEvent, TipPrepParams, run_tip_prep,
+};
 use rusty_tip::{
     BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, SignalIndex,
     StabilityConfig,
 };
+use serde::Deserialize;
 
 // ============================================================================
 // Tee Writer - sends env_logger output to both stderr and GUI channel
@@ -876,30 +881,35 @@ impl TipPrepApp {
         if let Some(rx) = &self.event_receiver {
             while let Ok(event) = rx.try_recv() {
                 match &event {
-                    Event::Custom { kind, data } if kind == "tip_prep_state" => {
-                        // Parse TipPrepSnapshot from JSON
-                        if let Some(cycle) = data.get("cycle").and_then(|v| v.as_u64()) {
-                            self.tip_state.cycle = cycle as usize;
-                        }
-                        if let Some(elapsed) = data.get("elapsed_secs").and_then(|v| v.as_f64()) {
-                            self.tip_state.elapsed_secs = elapsed;
-                        }
-                        // Only the status readout — the freq-shift *plot* is fed
-                        // by the per-sample `signal_samples` stream below, which
-                        // covers these same reads at full resolution.
-                        if let Some(fs) = data.get("freq_shift").and_then(|v| v.as_f64()) {
-                            self.tip_state.freq_shift = Some(fs);
-                        }
-                        if let Some(pv) = data.get("pulse_voltage").and_then(|v| v.as_f64()) {
-                            self.tip_state.pulse_voltage = pv;
+                    // Decoded into the same structs the runner emits, so a
+                    // renamed field fails to compile rather than going quiet.
+                    Event::Custom { kind, data, .. } if kind == CycleEvent::KIND => {
+                        if let Ok(c) = CycleEvent::deserialize(data) {
+                            self.tip_state.cycle = c.cycle;
+                            self.tip_state.elapsed_secs = c.elapsed_secs;
+                            // Only the status readout: the freq-shift *plot* is
+                            // fed by the `stable_read` measurements below.
+                            self.tip_state.freq_shift = Some(c.freq_shift);
+                            self.tip_state.pulse_voltage = c.pulse_voltage;
                             self.voltage_history.push(DataPoint {
                                 time_s: elapsed_now,
-                                value: pv,
+                                value: c.pulse_voltage,
+                            });
+                            self.tip_state.is_sharp = c.is_sharp;
+                            self.tip_state.phase = "pulsing".to_string();
+                        }
+                    }
+                    Event::Custom { kind, data, .. } if kind == MaxPulseEvent::KIND => {
+                        if let Ok(p) = MaxPulseEvent::deserialize(data) {
+                            self.tip_state.pulse_voltage = p.pulse_voltage;
+                            self.voltage_history.push(DataPoint {
+                                time_s: elapsed_now,
+                                value: p.pulse_voltage,
                             });
                         }
-                        if let Some(sharp) = data.get("is_sharp").and_then(|v| v.as_bool()) {
-                            self.tip_state.is_sharp = sharp;
-                        }
+                    }
+                    // Only the phase tag is shown, so it is read as is.
+                    Event::Custom { kind, data, .. } if kind == PhaseEvent::KIND => {
                         if let Some(phase) = data.get("phase").and_then(|v| v.as_str()) {
                             self.tip_state.phase = phase.to_string();
                         }
@@ -1795,7 +1805,7 @@ fn run_controller(
     event_tx: Sender<Event>,
     simulate: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (controller, freq_shift_index) = if simulate {
+    let (controller, freq_shift_index, facts) = if simulate {
         build_mock_backend(&config)?
     } else {
         build_nanonis_backend(&config)?
@@ -1817,7 +1827,11 @@ fn run_controller(
         events.add_observer(Box::new(FileLogger::new(file)));
     }
 
-    events.add_observer(Box::new(EventAccumulator::new(500)));
+    events.emit(Event::run_started(RunHeader::new(
+        rusty_tip::tip_prep::log_schema(),
+        &config,
+        facts,
+    )));
 
     // Run tip preparation
     let result = run_tip_prep(
@@ -1846,7 +1860,7 @@ fn run_controller(
 }
 
 /// Boxed controller plus the resolved freq-shift signal index.
-type Backend = (Box<dyn SpmController>, SignalIndex);
+type Backend = (Box<dyn SpmController>, SignalIndex, ControllerFacts);
 
 /// Index of `"freq shift"` in [`MockController`]'s fixed channel layout. Checked
 /// against the registry in [`build_mock_backend`] so a change to the mock's
@@ -1863,17 +1877,7 @@ fn build_nanonis_backend(
         .address(&config.nanonis.host_ip)
         .port(config.nanonis.control_ports[0])
         .build()?;
-    let setup = NanonisSetupConfig {
-        layout_file: config.nanonis.layout_file.clone(),
-        settings_file: config.nanonis.settings_file.clone(),
-        safe_tip_threshold_a: config.tip_prep.safe_tip_threshold,
-        // Same reasoning as the CLI: the home step must back off from the
-        // surface, not travel to an absolute Z coordinate.
-        z_home_mode: ZHomeMode::Relative,
-        z_home_position_m: 50e-9,
-        ..Default::default()
-    };
-    let mut controller = NanonisController::new(client, setup);
+    let mut controller = NanonisController::new(client, rusty_tip::tip_prep::nanonis_setup(config));
     info!("Connected to Nanonis system");
 
     let registry = build_signal_registry(&mut controller, config)?;
@@ -1884,7 +1888,8 @@ fn build_nanonis_backend(
 
     setup_tcp_stream(&mut controller, &registry, config)?;
 
-    Ok((Box::new(controller), freq_shift_index))
+    let facts = ControllerFacts::gather(&mut controller, Some(&registry));
+    Ok((Box::new(controller), freq_shift_index, facts))
 }
 
 /// Drive the routine against the in-memory mock — no hardware, no TCP stream.
@@ -1921,7 +1926,7 @@ fn build_mock_backend(
         .into());
     }
 
-    Ok((Box::new(mock), resolved))
+    Ok((Box::new(mock), resolved, ControllerFacts::default()))
 }
 
 fn build_signal_registry(
@@ -1949,12 +1954,7 @@ fn setup_tcp_stream(
     registry: &SignalRegistry,
     config: &AppConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let stream = StreamSetup::new(
-        &config.nanonis.host_ip,
-        config.data_acquisition.data_port,
-        f64::from(config.data_acquisition.sample_rate),
-    );
-    controller.start_streaming(registry, &stream)?;
+    controller.start_streaming(registry, &rusty_tip::tip_prep::stream_setup(config))?;
     Ok(())
 }
 

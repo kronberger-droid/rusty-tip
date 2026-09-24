@@ -108,7 +108,7 @@ fn gaussian(x: f64, y: f64, cx: f64, cy: f64, sigma: f64, amp: f64) -> f64 {
 mod tests {
     use super::*;
 
-    const NM: f64 = 1e-9;
+    use crate::NM;
 
     fn sp() -> GridSpacing {
         GridSpacing::square(0.1 * NM)

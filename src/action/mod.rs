@@ -19,6 +19,9 @@ pub use context::ActionContext;
 pub use output::ActionOutput;
 pub use store::DataStore;
 
+use std::time::Instant;
+
+use crate::event::Event;
 use crate::spm_controller::{Capability, SpmController};
 use crate::spm_error::SpmError;
 
@@ -55,6 +58,45 @@ pub trait Action: Send + Sync {
 
     /// Execute this action against the provided context
     fn execute(&self, ctx: &mut ActionContext) -> Result<ActionOutput>;
+}
+
+/// Run `action` in `ctx`: check its capabilities, emit started, execute,
+/// emit completed or failed. The params logged are the action's own fields,
+/// and the depth is the context's, so every execution path writes the same
+/// shape to the log whether a routine or a parent action started it.
+pub fn run_action<A: Action + serde::Serialize>(
+    ctx: &mut ActionContext,
+    action: &A,
+) -> Result<ActionOutput> {
+    let name = action.name().to_string();
+    let depth = ctx.depth;
+    let params = serde_json::to_value(action).unwrap_or(serde_json::Value::Null);
+    let start = Instant::now();
+    ctx.events.emit(Event::action_started(&name, params, depth));
+    let result = match check_capabilities(action, ctx.controller) {
+        Ok(()) => action.execute(ctx),
+        Err(e) => Err(e),
+    };
+    match result {
+        Ok(output) => {
+            ctx.events.emit(Event::action_completed(
+                &name,
+                &output,
+                depth,
+                start.elapsed(),
+            ));
+            Ok(output)
+        }
+        Err(e) => {
+            ctx.events.emit(Event::action_failed(
+                &name,
+                &e.to_string(),
+                depth,
+                start.elapsed(),
+            ));
+            Err(e)
+        }
+    }
 }
 
 /// Verify the controller supports every capability `action` requires.

@@ -133,8 +133,11 @@ impl Action for ApplyMultiPass {
             .collect();
         ctx.controller.scan_buffer_ensure(&recorded)?;
 
-        ctx.controller.multi_pass_load(&self.host_path)?;
-        ctx.controller.multi_pass_activate(true)?;
+        // Through `ctx.run`, so the load and the switch-on are logged as steps.
+        ctx.run(&LoadMultiPass {
+            host_path: self.host_path.clone(),
+        })?;
+        ctx.run(&ActivateMultiPass { on: true })?;
         Ok(ActionOutput::Unit)
     }
 }

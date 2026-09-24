@@ -1,4 +1,7 @@
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+
+use crate::spm_error::SpmError;
 
 /// What an action returns after execution.
 ///
@@ -15,6 +18,26 @@ pub enum ActionOutput {
     Data(serde_json::Value),
     /// Action completed with no meaningful return value
     Unit,
+}
+
+impl ActionOutput {
+    /// Wrap an action's result struct as [`ActionOutput::Data`].
+    pub fn data<T: Serialize>(action: &str, result: &T) -> Result<Self, SpmError> {
+        serde_json::to_value(result)
+            .map(Self::Data)
+            .map_err(|e| SpmError::Workflow(format!("{action}: result does not serialize: {e}")))
+    }
+
+    /// Take back the result struct an action returned as [`ActionOutput::Data`].
+    pub fn into_data<T: DeserializeOwned>(self, action: &str) -> Result<T, SpmError> {
+        match self {
+            Self::Data(value) => serde_json::from_value(value)
+                .map_err(|e| SpmError::Workflow(format!("{action}: unexpected result shape: {e}"))),
+            other => Err(SpmError::Workflow(format!(
+                "{action}: expected structured data, got {other:?}"
+            ))),
+        }
+    }
 }
 
 #[cfg(test)]

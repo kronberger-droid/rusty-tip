@@ -53,6 +53,7 @@ mod tests {
             store: &mut store,
             events: &events,
             shutdown: &shutdown,
+            depth: 0,
         };
 
         let start = Instant::now();

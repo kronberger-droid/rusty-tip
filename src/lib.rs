@@ -13,6 +13,7 @@ pub mod tip_prep;
 pub mod config;
 pub mod controller_types;
 pub mod event;
+pub mod experiment_log;
 pub mod multi_pass;
 pub mod shutdown;
 pub mod signal_registry;

@@ -1,0 +1,257 @@
+{
+  "tool": "tip_prep",
+  "kinds": [
+    {
+      "kind": "tip_prep/cycle",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "One pulse cycle: what was fired, what was measured afterwards.\n\nThe GUI's status panel and pulse history are drawn from this.",
+        "properties": {
+          "cycle": {
+            "description": "1-based cycle number.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "elapsed_secs": {
+            "description": "Seconds since the budget clock started.",
+            "format": "double",
+            "type": "number"
+          },
+          "freq_shift": {
+            "description": "Frequency shift measured after the reposition, in Hz.",
+            "format": "double",
+            "type": "number"
+          },
+          "is_sharp": {
+            "description": "Whether `freq_shift` fell inside the sharp window.",
+            "type": "boolean"
+          },
+          "pulse_voltage": {
+            "description": "The pulse as fired, sign included, in volts.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "cycle",
+          "elapsed_secs",
+          "freq_shift",
+          "pulse_voltage",
+          "is_sharp"
+        ],
+        "title": "CycleEvent",
+        "type": "object"
+      }
+    },
+    {
+      "kind": "tip_prep/phase",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A change of phase within the sharpness confirmation and stability check.",
+        "oneOf": [
+          {
+            "description": "Three reposition-and-read confirmations are starting.",
+            "properties": {
+              "phase": {
+                "const": "confirming",
+                "type": "string"
+              }
+            },
+            "required": [
+              "phase"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Confirmed sharp; the bias sweeps are starting.",
+            "properties": {
+              "baseline_freq_shift": {
+                "description": "The confirmed frequency shift the final read is compared to, Hz.",
+                "format": "double",
+                "type": "number"
+              },
+              "phase": {
+                "const": "stability_check",
+                "type": "string"
+              }
+            },
+            "required": [
+              "phase",
+              "baseline_freq_shift"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The final read stayed within the allowed change: the tip is done.",
+            "properties": {
+              "final_freq_shift": {
+                "format": "double",
+                "type": "number"
+              },
+              "phase": {
+                "const": "stable",
+                "type": "string"
+              }
+            },
+            "required": [
+              "phase",
+              "final_freq_shift"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The final read moved past the allowed change.",
+            "properties": {
+              "change": {
+                "description": "`|final - baseline|`, Hz.",
+                "format": "double",
+                "type": "number"
+              },
+              "final_freq_shift": {
+                "format": "double",
+                "type": "number"
+              },
+              "phase": {
+                "const": "unstable",
+                "type": "string"
+              },
+              "threshold": {
+                "description": "The configured allowed change, Hz.",
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "phase",
+              "final_freq_shift",
+              "change",
+              "threshold"
+            ],
+            "type": "object"
+          }
+        ],
+        "title": "PhaseEvent"
+      }
+    },
+    {
+      "kind": "tip_prep/max_pulse",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The maximum-voltage pulse fired after a failed stability check, with the\ntip still engaged from the final read.",
+        "properties": {
+          "pulse_voltage": {
+            "description": "The pulse as fired, sign included, in volts.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "pulse_voltage"
+        ],
+        "title": "MaxPulseEvent",
+        "type": "object"
+      }
+    },
+    {
+      "kind": "routine/cleanup_failed",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A `guarded` body failed and so did its cleanup. The body's error is what\nthe run reports; this is the only record of the cleanup's.",
+        "properties": {
+          "body_error": {
+            "type": "string"
+          },
+          "cleanup_error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "body_error",
+          "cleanup_error"
+        ],
+        "title": "CleanupFailedEvent",
+        "type": "object"
+      }
+    },
+    {
+      "kind": "routine/panicked",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The routine panicked. The tip was withdrawn and the controller torn down\nbefore the panic was re-raised.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "routine": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "routine",
+          "message"
+        ],
+        "title": "PanickedEvent",
+        "type": "object"
+      }
+    },
+    {
+      "kind": "routine/stream_dump",
+      "schema": {
+        "$defs": {
+          "StreamSnapshot": {
+            "description": "The data stream's buffer as it stood at one moment, one column per signal.\n\nTaken on the way out of a run so the log keeps the last seconds of signal\nbefore the end, which is where a safe-tip trip or a crash shows.",
+            "properties": {
+              "columns": {
+                "description": "One column per entry of `signals`, each as long as `t_s`.",
+                "items": {
+                  "items": {
+                    "format": "float",
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "signals": {
+                "description": "Signal index of each column, in column order. The run header maps\nindices to names.",
+                "items": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "t_s": {
+                "description": "Time of each sample in seconds relative to the snapshot, so all\nvalues are zero or negative and the last one is the newest sample.",
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "signals",
+              "t_s",
+              "columns"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The data stream's buffer at the end of the run, written after the final\nwithdraw and before teardown stops the stream. The default buffer holds\n10 000 frames: the last 20 s at 500 Hz, 10 s at 1 kHz, either way enough\nto cover whatever ended the run.",
+        "properties": {
+          "stream": {
+            "$ref": "#/$defs/StreamSnapshot"
+          }
+        },
+        "required": [
+          "stream"
+        ],
+        "title": "StreamDumpEvent",
+        "type": "object"
+      }
+    }
+  ]
+}

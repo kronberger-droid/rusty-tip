@@ -5,11 +5,12 @@ use log::{LevelFilter, error, info};
 use std::{fs, io, path::PathBuf, process::ExitCode};
 
 use rusty_tip::config::{AppConfig, load_config};
-use rusty_tip::event::{ConsoleLogger, EventAccumulator, EventBus, FileLogger};
-use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
+use rusty_tip::event::{ConsoleLogger, Event, EventBus, EventEmitter, FileLogger};
+use rusty_tip::experiment_log::{ControllerFacts, RunHeader};
+use rusty_tip::nanonis_controller::NanonisController;
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::SignalRegistry;
-use rusty_tip::spm_controller::{SpmController, ZHomeMode};
+use rusty_tip::spm_controller::SpmController;
 use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
 
@@ -99,18 +100,8 @@ fn run() -> Result<(), RunError> {
         .address(&config.nanonis.host_ip)
         .port(config.nanonis.control_ports[0])
         .build()?;
-    let setup = NanonisSetupConfig {
-        layout_file: config.nanonis.layout_file.clone(),
-        settings_file: config.nanonis.settings_file.clone(),
-        safe_tip_threshold_a: config.tip_prep.safe_tip_threshold,
-        // Spelled out rather than defaulted: the home step of every
-        // calibrated approach is "back off 50 nm from wherever the tip is".
-        // Absolute mode would make it "go to Z = +50 nm", surface or not.
-        z_home_mode: ZHomeMode::Relative,
-        z_home_position_m: 50e-9,
-        ..Default::default()
-    };
-    let mut controller = NanonisController::new(client, setup);
+    let mut controller =
+        NanonisController::new(client, rusty_tip::tip_prep::nanonis_setup(&config));
     info!("Connected to Nanonis system");
 
     // Build signal registry
@@ -133,6 +124,14 @@ fn run() -> Result<(), RunError> {
 
     // Setup event bus
     let events = setup_event_bus(&config)?;
+
+    // First line of the log: what this run is and how to read it.
+    let facts = ControllerFacts::gather(&mut controller, Some(&registry));
+    events.emit(Event::run_started(RunHeader::new(
+        rusty_tip::tip_prep::log_schema(),
+        &config,
+        facts,
+    )));
 
     // Setup shutdown handler
     let shutdown = setup_shutdown_handler();
@@ -184,12 +183,7 @@ fn setup_tcp_stream(
     registry: &SignalRegistry,
     config: &AppConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let stream = StreamSetup::new(
-        &config.nanonis.host_ip,
-        config.data_acquisition.data_port,
-        f64::from(config.data_acquisition.sample_rate),
-    );
-    controller.start_streaming(registry, &stream)?;
+    controller.start_streaming(registry, &rusty_tip::tip_prep::stream_setup(config))?;
     Ok(())
 }
 
@@ -277,8 +271,6 @@ fn setup_event_bus(config: &AppConfig) -> Result<EventBus, Box<dyn std::error::E
         let file = fs::File::create(&log_path)?;
         events.add_observer(Box::new(FileLogger::new(file)));
     }
-
-    events.add_observer(Box::new(EventAccumulator::new(500)));
 
     Ok(events)
 }

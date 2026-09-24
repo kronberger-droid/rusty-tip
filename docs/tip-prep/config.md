@@ -31,8 +31,11 @@ The TCP logger delivers its base rate divided by an integer, so the nearest
 such rate to `sample_rate` is what arrives: on a 2 kHz base, 1000 or 667 Hz
 but not 800. The controller works out the divisor from the RT frequency,
 measures what the stream delivers, corrects the divisor once if the guess
-was off, and logs the result. The drift gate uses the measured rate, so a
-request that had to be rounded costs nothing but a warning at startup.
+was off, and logs the result. The rate it records, and the drift gate
+uses, is the nominal base over divisor once the measurement has confirmed
+it, since that is exact where the measurement carries packet-timing
+jitter. A request that had to be rounded costs nothing but a warning at
+startup.
 
 ## `[tip_prep]` — the routine
 
@@ -61,7 +64,7 @@ status_interval = 10              # log a status line every N cycles
 approach_timeout_ms = 600000      # approaches from a full withdraw (first
                                   # approach, around each stability sweep)
 reposition_approach_timeout_ms = 300000  # the short approach inside a reposition
-exit_retract_steps = 10           # coarse Z steps back after the final withdraw
+exit_retract_steps = 2            # coarse Z steps back after the final withdraw
 ```
 
 An approach that overruns its budget is stopped, the run ends in an error,

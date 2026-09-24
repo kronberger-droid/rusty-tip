@@ -132,6 +132,8 @@ pub struct ReadStableSignal {
     /// Rate the samples arrive at, used to turn the per-sample regression
     /// slope into Hz/s. Without it the effective drift tolerance would scale
     /// with `num_samples`, so a tip could pass or fail on batch size alone.
+    /// Only the fallback: the rate the controller measured on its stream
+    /// wins whenever it has one.
     #[serde(default = "default_sample_rate_hz")]
     pub sample_rate_hz: f64,
 }
@@ -181,6 +183,11 @@ impl Action for ReadStableSignal {
     }
 
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+        let sample_rate_hz = ctx
+            .controller
+            .stream_rate_hz()
+            .filter(|&hz| hz > 0.0)
+            .unwrap_or(self.sample_rate_hz);
         for attempt in 0..=self.max_retries {
             let samples = ctx
                 .controller
@@ -207,7 +214,7 @@ impl Action for ReadStableSignal {
             let (mean, std_dev, slope_per_sample) = compute_stability_metrics(&samples);
             // Compare drift in Hz/s, not Hz/sample, so the gate does not move
             // when `num_samples` or the stream's oversampling changes.
-            let drift = slope_per_sample * self.sample_rate_hz;
+            let drift = slope_per_sample * sample_rate_hz;
 
             let noise_ok = std_dev <= self.max_std_dev;
             let drift_ok = drift.abs() <= self.max_slope;

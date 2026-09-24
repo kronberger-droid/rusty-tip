@@ -318,6 +318,25 @@ pub struct MockController {
     /// for. Zero means an approach is over as soon as it starts.
     approach_polls: usize,
     approach_polls_left: usize,
+    /// A drifting Z signal, when [`MockControllerBuilder::z_drift`] set one up.
+    z_drift: Option<ZDriftSim>,
+}
+
+/// A Z signal that drifts at a constant rate and answers to the drift
+/// compensation, streamed at a fixed rate. Time only advances as samples are
+/// read, so a five-second burst costs a test nothing.
+#[derive(Debug, Clone, Copy)]
+struct ZDriftSim {
+    index: SignalIndex,
+    /// Drift with no compensation applied, m/s.
+    drift_m_s: f64,
+    /// What one m/s of `vz` adds to the drift: the sign convention under test.
+    response: f64,
+    /// Std dev of the scatter on each sample, m.
+    noise_m: f64,
+    rate_hz: f64,
+    /// Where Z is now.
+    z: f64,
 }
 
 impl MockController {
@@ -370,6 +389,11 @@ impl MockController {
 
     /// Evaluate the tip model for the freq-shift channel; constant otherwise.
     fn signal_value(&mut self, index: SignalIndex) -> f64 {
+        if let Some(sim) = self.z_drift
+            && sim.index == index
+        {
+            return sim.z;
+        }
         if index != self.freq_shift_index {
             return self.default_signal;
         }
@@ -438,6 +462,14 @@ impl SpmController for MockController {
         ])
     }
 
+    fn stream_rate_hz(&mut self) -> Option<f64> {
+        self.z_drift.map(|sim| sim.rate_hz)
+    }
+
+    fn streams_signal(&mut self, index: SignalIndex) -> bool {
+        self.z_drift.is_some_and(|sim| sim.index == index)
+    }
+
     fn read_signal_samples(&mut self, index: SignalIndex, num_samples: usize) -> Result<Vec<f64>> {
         self.enter("read_signal_samples")?;
         if num_samples == 0 {
@@ -445,6 +477,24 @@ impl SpmController for MockController {
                 "read_signal_samples: num_samples must be > 0".into(),
             ));
         }
+        if let Some(mut sim) = self.z_drift
+            && sim.index == index
+        {
+            let comp = self.obs.lock().drift_comp;
+            let vz = if comp.enabled { comp.vz } else { 0.0 };
+            let step = (sim.drift_m_s + sim.response * vz) / sim.rate_hz;
+            let mut rng = self.noise_rng;
+            let samples = (0..num_samples)
+                .map(|_| {
+                    sim.z += step;
+                    sim.z + rng.normal() * sim.noise_m
+                })
+                .collect();
+            self.noise_rng = rng;
+            self.z_drift = Some(sim);
+            return Ok(samples);
+        }
+
         // One model call per *batch*, not per sample: the tip model owns the
         // slow behavior (pulse response, drift), and scatter is layered on top.
         // Keeping drift out of the within-batch samples matters — it would show
@@ -817,6 +867,7 @@ pub struct MockControllerBuilder {
     capabilities: HashSet<Capability>,
     start_connected: bool,
     approach_polls: usize,
+    z_drift: Option<ZDriftSim>,
 }
 
 impl MockControllerBuilder {
@@ -830,6 +881,7 @@ impl MockControllerBuilder {
             default_signal: 0.0,
             sample_noise_hz: 0.0,
             noise_seed: 0x5EED_5EED,
+            z_drift: None,
             faults_once: HashMap::new(),
             faults_always: HashMap::new(),
             capabilities: all_capabilities(),
@@ -929,7 +981,35 @@ impl MockControllerBuilder {
             scan_config: mock_scan_config(),
             approach_polls: self.approach_polls,
             approach_polls_left: 0,
+            z_drift: self.z_drift,
         }
+    }
+
+    /// Stream `index` as a Z position drifting at `drift_m_s`, where one m/s
+    /// of compensation velocity adds `response` m/s to that drift. `response`
+    /// is the sign convention the drift actions have to find out: -1 for a
+    /// controller whose positive `vz` cancels positive drift, +1 for one
+    /// where it adds to it. Streams at 1 kHz with no scatter; see
+    /// [`z_drift_noise`](Self::z_drift_noise).
+    pub fn z_drift(mut self, index: SignalIndex, drift_m_s: f64, response: f64) -> Self {
+        self.z_drift = Some(ZDriftSim {
+            index,
+            drift_m_s,
+            response,
+            noise_m: 0.0,
+            rate_hz: 1000.0,
+            z: 1e-7,
+        });
+        self
+    }
+
+    /// Scatter on each streamed Z sample, std dev in metres. Call after
+    /// [`z_drift`](Self::z_drift).
+    pub fn z_drift_noise(mut self, sigma_m: f64) -> Self {
+        if let Some(sim) = &mut self.z_drift {
+            sim.noise_m = sigma_m;
+        }
+        self
     }
 
     /// Keep each approach "running" for `polls` status queries, so a test

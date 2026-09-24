@@ -7,8 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`rt-log`**, a terminal reader for experiment logs: `ls` a directory of
+  runs, `summary` a run (outcome, time per top-level action, measurement
+  spread, event counts), `timeline` the action tree with durations and
+  params, `plot` any numeric series against time, `export` flat CSV
+  tables plus a `run.json`. The series and columns come from the schema
+  in the log's header, so it needs no code per tool. The reader behind it
+  is `experiment_log::reader`, for anything else that wants a log back as
+  data; it tolerates logs from before the header and lines a crash cut
+  short. `tip-prep-mock --log <path>` writes a log from a dry run to try
+  it on.
+
 ### Changed
 
+- **The experiment log is self-describing** (`docs/experiment-log.md`).
+  Every run starts with a `run_started` line carrying the tool, version,
+  git commit, the config as loaded, the resolved signals and stream rate,
+  and the JSON Schema of every custom event the tool can write; it ends
+  with `run_finished` and the outcome. Every line has a `seq`. Actions log
+  their own fields as `params` (a pulse has its voltage now) and a `depth`,
+  so the steps inside a calibrated approach or a reposition appear as
+  children and the tree can be rebuilt. Custom events are typed structs
+  with a `tool/name` kind, declared once per tool and pinned by a schema
+  snapshot test; tip prep's `tip_prep_state` became `tip_prep/cycle`,
+  `tip_prep/phase` and `tip_prep/max_pulse`, and the harness's events are
+  `routine/cleanup_failed` and `routine/panicked`. const-distance writes a
+  log too (`--log-dir`, default `./experiments`); its actions had been
+  running with no observer attached. `schemars` is a new dependency.
 - **Fewer crates in the build.** A CLI build resolved 208 crates and the
   GUI build 367; they are now 89 and 269. `config` no longer pulls its
   default JSON5, RON, YAML and INI readers, only TOML is used. `image`,
@@ -40,6 +67,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the rate the controller measured when the stream started
   (`SpmController::stream_rate_hz`); the config value is a fallback, with a
   warning when it is more than ten percent off.
+- **The stream rate read low.** It was counted over a window that opened
+  before the logger sent its first frame, so a 500 Hz stream measured
+  458. The measurement now spans first to last frame received, and the
+  rate recorded in the log header and used by the drift gate is the
+  nominal base over divisor once the measurement has confirmed it, with
+  the measured value kept in the startup line as evidence.
 - **The stable-read backoff ignored a stop request.** The 100, 200 and
   400 ms waits between retries were plain sleeps; they go through the
   interruptible settle now.
@@ -58,7 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   withdrew, leaving the tip parked at the top of the piezo range and still
   within reach of the surface. The harness now asks the routine how far to
   retract on exit: tip prep answers with the new
-  `tip_prep.timing.exit_retract_steps` (default 10), other routines keep
+  `tip_prep.timing.exit_retract_steps` (default 2), other routines keep
   their spot with zero. Noticed on the LT system during the September
   campaign.
 - **The GUI showed every pulse as positive.** The `tip_prep_state`
@@ -99,7 +132,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   long approaches ten minutes; v2 had capped everything at five.
 - `const-distance drift status|measure|compensate|off`: the Z drift
   measurement and compensation from the action layer, runnable between
-  scans from the command line.
+  scans from the command line. It streams Z through the TCP logger,
+  finding Z's channel in the controller's signal slots and checking the
+  stream against a plain read of Z before trusting it.
 - `examples/folme_probe.rs`: measures what a FolMe constant-height trace
   depends on (round-trip latency, feedback-off timing and TipLift, Z step
   response with the loop open, whether FolMe's wait flag blocks). Every
@@ -113,13 +148,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sections, and `MultiPassConfig::constant_lift` builds that. `MPass.Load`
   resolves its path on the controller, thus `apply` takes both a local path
   and a host path rather than assuming a shared filesystem.
-- **Drift compensation** (`SpmController::compensate_drift`): measures how
-  fast Z is drifting and leaves the controller cancelling it. The sign
-  convention for the compensation velocity is undocumented, so this solves
-  for it from a trial velocity rather than guessing, and reports a
-  compensation channel that does not respond instead of writing a number
-  derived from noise. Needs the feedback loop closed, thus it is a
-  between-passes operation.
+- **Drift compensation** (`MeasureZDrift`, `CompensateDrift`): measures how
+  fast Z is drifting and leaves the controller cancelling it. A measurement
+  is a burst, every sample the data stream delivers for the window, fitted
+  through block means so the rate comes with a standard error that slow
+  noise does not flatter. Compensation is a loop of a fixed number of
+  bursts: measure, correct, measure what is left. The k-th correction
+  takes a k-th of its reading, which leaves the velocity at the mean of
+  every estimate so far, and every burst corrects whether or not its
+  reading clears the error bar, since correcting only the ones that do
+  overshoots. Each burst is a `drift/burst` log event. The sign convention for the compensation velocity is
+  undocumented, so it is learned from one deliberately large trial step
+  unless the caller says it is known, and a channel that does not respond
+  is refused with the previous velocity put back. Needs the feedback loop
+  closed, thus it is a between-passes operation.
 - **Scan buffer** (`SpmController::scan_buffer_get`/`_set`/`_ensure`): which
   signals a scan records, and at what resolution. `_ensure` adds channels
   without dropping the ones already there.

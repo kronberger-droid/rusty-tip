@@ -15,9 +15,10 @@ use crate::buffered_tcp_reader::BufferedTCPReader;
 use crate::signal_registry::{SignalIndex, SignalRegistry};
 use crate::spm_controller::{
     AcquisitionMode, Capability, DataStreamStatus, DriftComp, Result, ScanBuffer, SpmController,
-    TriggerSetup, ZControllerStatus, ZHomeMode,
+    StreamSnapshot, TriggerSetup, ZControllerStatus, ZHomeMode,
 };
 use crate::spm_error::SpmError;
+use crate::types::TimestampedSignalFrame;
 use crate::utils::{PollError, poll_until};
 use nanonis_rs::piezo::{DriftCompConfig, PiezoToggle};
 use nanonis_rs::scan::ScanLineEnd;
@@ -45,6 +46,10 @@ pub struct NanonisSetupConfig {
     pub z_home_position_m: f64,
     /// Safe-tip current threshold in amperes.
     pub safe_tip_threshold_a: f64,
+    /// Switch safe-tip off for the run. `prepare` records whether it was on
+    /// and `teardown` puts it back, so the operator's setting survives
+    /// however the run ends.
+    pub disable_safe_tip: bool,
     /// Which User Output index to toggle for the TCP channel list refresh
     /// workaround.  `None` skips the workaround entirely.  Default is
     /// `Some(3)`.  Pick an output that is not driving anything critical.
@@ -62,6 +67,7 @@ impl Default for NanonisSetupConfig {
             z_home_mode: ZHomeMode::Relative,
             z_home_position_m: 50e-9,
             safe_tip_threshold_a: 1e-9,
+            disable_safe_tip: false,
             tcp_refresh_output: Some(3),
         }
     }
@@ -101,6 +107,12 @@ const LOGGER_BASE_PER_RT: f64 = 0.1;
 /// Base rate to assume when the RT frequency cannot be read.
 const FALLBACK_LOGGER_BASE_HZ: f64 = 2000.0;
 
+/// Whether a measured rate agrees with an expected one to within 10 %,
+/// the slack `start_streaming` allows for packet-timing jitter.
+fn within_tolerance(measured_hz: f64, expected_hz: f64) -> bool {
+    (measured_hz - expected_hz).abs() <= 0.1 * expected_hz
+}
+
 /// The logger divisor that brings `base_hz` closest to `wanted_hz`.
 fn divisor_for(base_hz: f64, wanted_hz: f64) -> i32 {
     let ratio = base_hz / wanted_hz;
@@ -121,10 +133,23 @@ pub struct NanonisController {
     /// Number of channels configured in the TCP data stream.
     /// Set by `data_stream_configure`, used by `start_tcp_reader`.
     configured_channel_count: Option<u32>,
-    /// Delivered stream rate measured by `start_streaming`, in Hz.
-    measured_stream_rate_hz: Option<f64>,
+    /// The rate the stream runs at, in Hz, set by `start_streaming`: the
+    /// nominal base/divisor when the measurement confirmed it, otherwise
+    /// the measured rate.
+    stream_rate_hz: Option<f64>,
     /// Guards against double-teardown (manual call + Drop).
     torn_down: bool,
+    /// Safe-tip state as `prepare` found it, restored by `teardown`.
+    safe_tip_before: Option<SafeTipSnapshot>,
+}
+
+/// Safe-tip settings captured before `prepare` changes them.
+#[derive(Debug, Clone, Copy)]
+struct SafeTipSnapshot {
+    enabled: bool,
+    auto_recovery: bool,
+    auto_pause_scan: bool,
+    threshold_a: f64,
 }
 
 impl NanonisController {
@@ -135,8 +160,9 @@ impl NanonisController {
             tcp_reader: None,
             signal_to_data_position: HashMap::new(),
             configured_channel_count: None,
-            measured_stream_rate_hz: None,
+            stream_rate_hz: None,
             torn_down: false,
+            safe_tip_before: None,
         }
     }
 
@@ -327,23 +353,29 @@ impl NanonisController {
         // channel list.
         self.clear_tcp_buffer();
 
-        // Measure what the stream actually delivers. If it is well off the
-        // request, the guess at the logger base was wrong: the measurement
-        // gives the true base, so recompute the divisor from it and restart
-        // the logger once. A divisor that is too high starves sample
-        // collection in a way that otherwise only shows up much later as an
-        // opaque read timeout.
+        // The logger runs at exactly base/divisor, so the nominal rate is the
+        // one to record and to judge drift against; the measurement carries
+        // packet-timing jitter and only decides whether the model held. If
+        // the delivered rate is well off the nominal, the guess at the base
+        // was wrong: the measurement then gives the true base, the divisor
+        // is recomputed from it and the logger restarted once. A divisor
+        // that is too high starves sample collection in a way that otherwise
+        // only shows up much later as an opaque read timeout.
+        let mut nominal = Some(base_hz / f64::from(divisor));
         let mut measured = self.measure_stream_rate(Duration::from_millis(500));
-        if let Some(hz) = measured
-            && (hz - setup.sample_rate_hz).abs() > 0.1 * setup.sample_rate_hz
+        if let (Some(hz), Some(nom)) = (measured, nominal)
+            && !within_tolerance(hz, nom)
         {
             let true_base = hz * f64::from(divisor);
             let corrected = divisor_for(true_base, setup.sample_rate_hz);
+            log::info!(
+                "Stream delivers {hz:.0} Hz with divisor {divisor}, not the {nom:.0} Hz a \
+                 {base_hz:.0} Hz logger base would give; taking the base as {true_base:.0} Hz"
+            );
+            // From here the base is known only from the measurement.
+            nominal = None;
             if corrected != divisor {
-                log::info!(
-                    "Stream delivers {hz:.0} Hz with divisor {divisor}, so the logger base is \
-                     {true_base:.0} Hz, not {base_hz:.0}; switching to divisor {corrected}"
-                );
+                log::info!("Switching to divisor {corrected}");
                 divisor = corrected;
                 let _ = self.data_stream_stop();
                 std::thread::sleep(Duration::from_millis(200));
@@ -353,24 +385,38 @@ impl NanonisController {
                 measured = self.measure_stream_rate(Duration::from_millis(500));
             }
         }
-        self.measured_stream_rate_hz = measured;
-        match measured {
-            Some(hz) if (hz - setup.sample_rate_hz).abs() > 0.1 * setup.sample_rate_hz => {
-                log::warn!(
-                    "TCP data stream started: {hz:.0} Hz (divisor {divisor}); the requested \
-                     {:.0} Hz is not a divisor of the logger base, so this is the nearest",
-                    setup.sample_rate_hz
-                )
+        let requested = setup.sample_rate_hz;
+        self.stream_rate_hz = match (nominal, measured) {
+            (Some(nom), Some(hz)) => {
+                if within_tolerance(nom, requested) {
+                    log::info!(
+                        "TCP data stream started: {nom:.0} Hz (divisor {divisor}, measured \
+                         {hz:.0} Hz, requested {requested:.0} Hz)"
+                    );
+                } else {
+                    log::warn!(
+                        "TCP data stream started: {nom:.0} Hz (divisor {divisor}, measured \
+                         {hz:.0} Hz); the requested {requested:.0} Hz is not a divisor of the \
+                         {base_hz:.0} Hz logger base, so this is the nearest"
+                    );
+                }
+                Some(nom)
             }
-            Some(hz) => log::info!(
-                "TCP data stream started: {hz:.0} Hz (divisor {divisor}, requested {:.0} Hz)",
-                setup.sample_rate_hz
-            ),
-            None => log::warn!(
-                "TCP data stream started with divisor {divisor} but delivered no frames in \
-                 500 ms; sample collection will be slow or time out"
-            ),
-        }
+            (None, Some(hz)) => {
+                log::warn!(
+                    "TCP data stream started: {hz:.0} Hz as measured (divisor {divisor}, \
+                     requested {requested:.0} Hz)"
+                );
+                Some(hz)
+            }
+            (_, None) => {
+                log::warn!(
+                    "TCP data stream started with divisor {divisor} but delivered no frames in \
+                     500 ms; sample collection will be slow or time out"
+                );
+                None
+            }
+        };
         Ok(true)
     }
 
@@ -423,21 +469,26 @@ impl NanonisController {
 
     /// Estimate the delivered frame rate by watching the reader's buffer.
     ///
-    /// Returns `None` when no frames arrive inside the window, which means
-    /// the logger is not streaming or is oversampled into uselessness.
+    /// The rate is frames over the span between the first and the last
+    /// frame received, not over the window itself: the logger takes a
+    /// while to send its first frame after `data_stream_start`, and
+    /// counting that gap as silence read nearly 10 % low at 500 Hz.
+    ///
+    /// Returns `None` when fewer than two frames arrive inside the window,
+    /// which means the logger is not streaming or is oversampled into
+    /// uselessness.
     fn measure_stream_rate(&self, window: Duration) -> Option<f64> {
         let reader = self.tcp_reader.as_ref()?;
         let start = Instant::now();
         reader.clear_buffer();
         std::thread::sleep(window);
-        let elapsed = start.elapsed().as_secs_f64();
-        // `buffered_frames` is a length read; `get_data_since` would clone
-        // every frame in the buffer only for us to discard them.
-        let frames = reader.buffered_frames();
-        if frames == 0 {
+        let frames = reader.get_data_since(start);
+        let (first, last) = (frames.first()?, frames.last()?);
+        let span = last.timestamp.duration_since(first.timestamp).as_secs_f64();
+        if frames.len() < 2 || span <= 0.0 {
             return None;
         }
-        Some(frames as f64 / elapsed)
+        Some((frames.len() - 1) as f64 / span)
     }
 
     /// Stop the background TCP reader if running.
@@ -569,12 +620,31 @@ impl SpmController for NanonisController {
             self.setup.z_home_position_m * 1e9
         );
 
+        // Record safe-tip before touching it, so teardown can put it back.
+        let (auto_recovery, auto_pause_scan, threshold_a) = self.safe_tip_status()?;
+        let snapshot = SafeTipSnapshot {
+            enabled: self.safe_tip_enabled()?,
+            auto_recovery,
+            auto_pause_scan,
+            threshold_a,
+        };
+        log::info!(
+            "Safe-tip before run: {}, threshold {:.2e} A",
+            if snapshot.enabled { "on" } else { "off" },
+            snapshot.threshold_a
+        );
+        self.safe_tip_before = Some(snapshot);
+
         // Safe-tip protection (auto_recovery off, auto_pause_scan on)
         self.safe_tip_configure(false, true, self.setup.safe_tip_threshold_a)?;
         log::info!(
             "Safe-tip threshold: {:.2e} A",
             self.setup.safe_tip_threshold_a
         );
+        if self.setup.disable_safe_tip {
+            self.safe_tip_set_enabled(false)?;
+            log::info!("Safe-tip switched off for the run");
+        }
 
         Ok(())
     }
@@ -591,11 +661,26 @@ impl SpmController for NanonisController {
         if let Err(e) = self.stop_tcp_reader() {
             log::warn!("TCP reader stop: {}", e);
         }
-        // Disable safe-tip overrides entirely: auto_recovery=false,
-        // auto_pause_scan=false.  Keep the threshold from config so if
-        // the user re-enables safe-tip manually, it starts at a known level.
-        if let Err(e) = self.safe_tip_configure(false, false, self.setup.safe_tip_threshold_a) {
-            log::warn!("Failed to reset safe-tip config: {}", e);
+        // No snapshot means `prepare` never touched safe tip, since it reads
+        // before it writes, so there is nothing to put back. Resetting here
+        // clobbered the operator's settings for every tool that skips
+        // `prepare`, const-distance among them.
+        if let Some(before) = self.safe_tip_before.take() {
+            if let Err(e) = self.safe_tip_configure(
+                before.auto_recovery,
+                before.auto_pause_scan,
+                before.threshold_a,
+            ) {
+                log::warn!("Failed to restore safe-tip config: {}", e);
+            }
+            if let Err(e) = self.safe_tip_set_enabled(before.enabled) {
+                log::warn!("Failed to restore safe-tip on/off: {}", e);
+            } else {
+                log::info!(
+                    "Safe-tip restored: {}",
+                    if before.enabled { "on" } else { "off" }
+                );
+            }
         }
     }
 
@@ -1044,10 +1129,19 @@ impl SpmController for NanonisController {
     }
 
     fn stream_rate_hz(&mut self) -> Option<f64> {
-        self.measured_stream_rate_hz
+        self.stream_rate_hz
+    }
+
+    fn streams_signal(&mut self, index: SignalIndex) -> bool {
+        self.tcp_reader.is_some() && self.signal_to_data_position.contains_key(&index)
     }
 
     // -- Signal Reading (TCP stream override) --
+
+    fn stream_snapshot(&mut self) -> Option<StreamSnapshot> {
+        let frames = self.tcp_reader.as_ref()?.snapshot();
+        stream_snapshot_from(&frames, &self.signal_to_data_position, Instant::now())
+    }
 
     fn read_signal_samples(&mut self, index: SignalIndex, num_samples: usize) -> Result<Vec<f64>> {
         if num_samples == 0 {
@@ -1081,6 +1175,38 @@ impl SpmController for NanonisController {
     }
 }
 
+/// Turn buffered frames into columns keyed by signal index, timed relative
+/// to `now`. Signals are ordered by their position in the frame.
+fn stream_snapshot_from(
+    frames: &[TimestampedSignalFrame],
+    positions: &HashMap<SignalIndex, usize>,
+    now: Instant,
+) -> Option<StreamSnapshot> {
+    if frames.is_empty() || positions.is_empty() {
+        return None;
+    }
+    let mut order: Vec<(usize, u32)> = positions.iter().map(|(i, &p)| (p, i.0)).collect();
+    order.sort_unstable();
+    let t_s = frames
+        .iter()
+        .map(|f| -(now.saturating_duration_since(f.timestamp).as_secs_f64()))
+        .collect();
+    let columns = order
+        .iter()
+        .map(|&(pos, _)| {
+            frames
+                .iter()
+                .map(|f| f.signal_frame.data.get(pos).copied().unwrap_or(f32::NAN))
+                .collect()
+        })
+        .collect();
+    Some(StreamSnapshot {
+        signals: order.into_iter().map(|(_, i)| i).collect(),
+        t_s,
+        columns,
+    })
+}
+
 impl Drop for NanonisController {
     fn drop(&mut self) {
         self.teardown();
@@ -1091,11 +1217,47 @@ impl Drop for NanonisController {
 mod tests {
     use super::*;
 
+    /// Columns follow frame position, not signal index, and times count
+    /// back from the snapshot so the newest sample sits at zero.
+    #[test]
+    fn a_stream_snapshot_orders_columns_by_frame_position() {
+        let start = Instant::now();
+        let frame = |ms: u64, data: Vec<f32>| TimestampedSignalFrame {
+            signal_frame: crate::types::SignalFrame { counter: 0, data },
+            timestamp: start + Duration::from_millis(ms),
+            relative_time: Duration::from_millis(ms),
+        };
+        let frames = [frame(0, vec![1.0, 10.0]), frame(500, vec![2.0, 20.0])];
+        // Current (index 0) streams second, Z (index 30) first.
+        let positions = HashMap::from([(SignalIndex(0), 1), (SignalIndex(30), 0)]);
+
+        let snap =
+            stream_snapshot_from(&frames, &positions, start + Duration::from_millis(500)).unwrap();
+
+        assert_eq!(snap.signals, vec![30, 0]);
+        assert_eq!(snap.columns, vec![vec![1.0, 2.0], vec![10.0, 20.0]]);
+        assert_eq!(snap.t_s, vec![-0.5, 0.0]);
+    }
+
+    #[test]
+    fn an_empty_buffer_gives_no_snapshot() {
+        let positions = HashMap::from([(SignalIndex(0), 0)]);
+        assert!(stream_snapshot_from(&[], &positions, Instant::now()).is_none());
+    }
+
     /// The calibrated approach homes the tip to back off from the surface.
     /// That is only a back-off in relative mode; absolute mode drives Z to a
     /// coordinate, surface or not. 0.3 and 0.4 shipped the wrong default.
     /// The logger only delivers base / n, so a request lands on the nearest
     /// such rate; a request above the base, or nonsense, gets the base.
+    #[test]
+    fn a_measurement_agrees_within_ten_percent() {
+        assert!(within_tolerance(458.0, 500.0));
+        assert!(within_tolerance(540.0, 500.0));
+        assert!(!within_tolerance(449.0, 500.0));
+        assert!(!within_tolerance(1000.0, 500.0));
+    }
+
     #[test]
     fn the_divisor_picks_the_nearest_reachable_rate() {
         assert_eq!(divisor_for(2000.0, 1000.0), 2);
