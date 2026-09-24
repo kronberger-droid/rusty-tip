@@ -481,9 +481,8 @@ impl Routine for TipPrep<'_> {
         let cfg = self.config;
         let timing = &cfg.tip_prep.timing;
 
-        // The drift gate converts a per-sample slope into Hz/s, so it needs
-        // the rate samples really arrive at. The controller measured that
-        // when the stream started; the config value is only the fallback.
+        // The stable read judges drift at the rate the controller measured
+        // on its stream and falls back to the config value; say which.
         match rt.controller().stream_rate_hz() {
             Some(hz) => {
                 let configured = self.read_spec.sample_rate_hz;
@@ -493,7 +492,6 @@ impl Routine for TipPrep<'_> {
                          delivers {hz:.0} Hz; using the measured rate for the drift gate"
                     );
                 }
-                self.read_spec.sample_rate_hz = hz;
             }
             None => log::warn!(
                 "Stream rate unknown; drift gate uses data_acquisition.sample_rate = {:.0} Hz",
