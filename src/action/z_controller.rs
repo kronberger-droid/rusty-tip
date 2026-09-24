@@ -320,7 +320,7 @@ impl Action for CalibratedApproach {
         // 3. Enable safe-tip
         let was_enabled = ctx.controller.safe_tip_enabled().unwrap_or(false);
         if !was_enabled {
-            ctx.controller.safe_tip_set_enabled(true)?;
+            ctx.run(&SafeTipSet { enabled: true })?;
         }
 
         // Steps 4-7 wrapped so safe-tip is always restored on exit
@@ -352,7 +352,7 @@ impl Action for CalibratedApproach {
         })();
 
         // 8. Always restore safe-tip state before propagating errors
-        if !was_enabled && let Err(e) = ctx.controller.safe_tip_set_enabled(false) {
+        if !was_enabled && let Err(e) = ctx.run(&SafeTipSet { enabled: false }) {
             log::error!("Failed to restore safe-tip state: {}", e);
         }
 

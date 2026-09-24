@@ -54,6 +54,43 @@ fn apply_writes_loads_and_activates_in_that_order() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// Every action start, as `(name, depth)`.
+#[derive(Clone, Default)]
+struct Starts(Arc<Mutex<Vec<(String, usize)>>>);
+
+impl Observer for Starts {
+    fn on_event(&self, event: &Event) {
+        if let Event::ActionStarted { action, depth, .. } = event {
+            self.0.lock().unwrap().push((action.clone(), *depth));
+        }
+    }
+}
+
+#[test]
+fn apply_logs_the_load_and_the_switch_on_as_its_own_steps() {
+    let mut controller = MockController::builder().build();
+    let path = temp("apply-log");
+    let config = MultiPassConfig::constant_lift(SignalIndex(30), 210e-12);
+    let starts = Starts::default();
+    let mut events = EventBus::new();
+    events.add_observer(Box::new(starts.clone()));
+    let shutdown = ShutdownFlag::new();
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+    rt.multi_pass()
+        .unwrap()
+        .apply(&config, &path, path.to_string_lossy().into_owned())
+        .unwrap();
+
+    let starts = starts.0.lock().unwrap();
+    for step in ["load_multi_pass", "activate_multi_pass"] {
+        assert!(
+            starts.iter().any(|(a, d)| a == step && *d == 1),
+            "{step} should be logged one level under apply: {starts:?}"
+        );
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
 #[test]
 fn activating_stops_a_running_scan() {
     // Nanonis stops an active scan when multi-pass is activated. Anything that
