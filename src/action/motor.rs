@@ -207,6 +207,9 @@ pub struct Reposition {
     pub post_move_settle_ms: u64,
     #[serde(default = "default_settle_ms")]
     pub post_approach_settle_ms: u64,
+    /// Budget for each approach inside the calibrated re-approach.
+    #[serde(default = "default_approach_timeout_ms")]
+    pub approach_timeout_ms: u64,
 }
 
 fn default_z_retract() -> i16 {
@@ -217,6 +220,10 @@ fn default_settle_ms() -> u64 {
     500
 }
 
+fn default_approach_timeout_ms() -> u64 {
+    300_000
+}
+
 impl Default for Reposition {
     fn default() -> Self {
         Self {
@@ -225,6 +232,7 @@ impl Default for Reposition {
             z_retract: -3,
             post_move_settle_ms: 500,
             post_approach_settle_ms: 500,
+            approach_timeout_ms: default_approach_timeout_ms(),
         }
     }
 }
@@ -255,7 +263,11 @@ impl Action for Reposition {
         }
         .execute(ctx)?;
 
-        CalibratedApproach::default().execute(ctx)?;
+        CalibratedApproach {
+            wait: true,
+            timeout_ms: self.approach_timeout_ms,
+        }
+        .execute(ctx)?;
 
         Wait {
             duration_ms: self.post_approach_settle_ms,

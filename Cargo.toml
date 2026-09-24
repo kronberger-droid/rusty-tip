@@ -18,6 +18,7 @@ path = "bin/tip-prep/main.rs"
 [[bin]]
 name = "cuox-finder"
 path = "bin/cuox-finder/main.rs"
+required-features = ["cuox"]
 
 [[bin]]
 name = "const-distance"
@@ -30,7 +31,6 @@ required-features = ["gui"]
 
 [dependencies]
 nanonis-rs = "0.5.0"
-byteorder = "1.5"
 thiserror = "1.0"
 log = "0.4"
 env_logger = "0.10"
@@ -41,11 +41,11 @@ serde_json = "1.0"
 ndarray = { version = "0.16.1", features = ["rayon"] }
 ctrlc = "3.4"
 parking_lot = "0.12"
-config = { version = "0.15.18", features = [ "toml" ] }
+config = { version = "0.15.18", default-features = false, features = ["toml"] }
 clap = { version = "4.5.53", features = ["derive"] }
 crossbeam-channel = "0.5"
 rayon = "1.10"
-image = "0.25"
+image = { version = "0.25", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["consoleapi", "processenv", "wincon", "handleapi", "winbase"] }
@@ -58,6 +58,8 @@ toml = { version = "0.8", optional = true }
 
 [features]
 default = []
+# Image decoding for cuox-finder, which is the only user of the `image` crate.
+cuox = ["image"]
 gui = ["eframe", "egui_plot", "rfd", "toml"]
 
 # The profile that 'dist' will build with
