@@ -25,6 +25,9 @@ use serde_json::Value;
 use textplots::{Chart, Plot, Shape};
 
 use rusty_tip::experiment_log::reader::{ActionNode, Body, Log, Record};
+use rusty_tip::experiment_log::{LogEvent, SignalFact};
+use rusty_tip::routine::StreamDumpEvent;
+use rusty_tip::spm_controller::StreamSnapshot;
 
 /// `println!` that treats a closed pipe as the reader being done, so
 /// `rt-log timeline … | head` ends quietly instead of panicking.
@@ -144,7 +147,7 @@ fn ls(dir: &Path) -> Result<(), Box<dyn Error>> {
         "outcome"
     );
     for path in files {
-        let log = Log::read(&path)?;
+        let log = Log::read_bookends(&path)?;
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         let tool = log
             .header()
@@ -556,63 +559,38 @@ fn export(log: &Log, args: &ExportArgs) -> Result<(), Box<dyn Error>> {
     )?;
 
     // measurements.csv: one table per label, columns from the values seen.
-    let mut by_label: BTreeMap<String, Vec<&Record>> = BTreeMap::new();
+    let mut by_label: BTreeMap<&str, Vec<(&Record, &Value)>> = BTreeMap::new();
     for r in &log.records {
-        if let Body::DataCollected { label, .. } = &r.body {
-            by_label.entry(label.clone()).or_default().push(r);
+        if let Body::DataCollected { label, value } = &r.body {
+            by_label.entry(label).or_default().push((r, value));
         }
     }
-    for (label, records) in &by_label {
-        let mut fields: Vec<String> = Vec::new();
-        for r in records {
-            if let Body::DataCollected { value, .. } = &r.body
-                && let Some(obj) = value.as_object()
-            {
-                for (k, v) in obj {
-                    if !v.is_object() && !v.is_array() && !fields.contains(k) {
-                        fields.push(k.clone());
-                    }
-                }
-            }
-        }
-        let rows = records
-            .iter()
-            .map(|r| {
-                let Body::DataCollected { value, .. } = &r.body else {
-                    unreachable!()
-                };
-                let mut row = vec![r.seq.to_string(), fmt_num(log.time_s(r))];
-                row.extend(fields.iter().map(|f| cell(value.get(f))));
-                row
-            })
-            .collect::<Vec<_>>();
-        let header: Vec<&str> = ["seq", "time_s"]
-            .into_iter()
-            .chain(fields.iter().map(String::as_str))
-            .collect();
-        write_csv(&out.join(format!("{label}.csv")), &header, &rows)?;
+    for (label, rows) in &by_label {
+        let fields = scalar_keys(rows.iter().map(|(_, v)| *v));
+        write_table(&out.join(format!("{label}.csv")), log, rows, &fields)?;
     }
 
     // A stream dump is a time series, not a row per event: one file each,
     // time down the side, a column per signal.
-    for r in &log.records {
-        if let Body::Custom { kind, data } = &r.body
-            && kind == STREAM_DUMP
-        {
-            write_stream_dump(&out.join(format!("stream_dump_{}.csv", r.seq)), log, data)?;
-        }
+    let signals = log.header().map(|h| h.signals()).unwrap_or_default();
+    for (r, stream) in log.stream_dumps() {
+        write_stream_dump(
+            &out.join(format!("stream_dump_{}.csv", r.seq)),
+            &stream,
+            &signals,
+        )?;
     }
 
     // One table per declared custom kind, columns from its schema.
-    let mut by_kind: BTreeMap<String, Vec<&Record>> = BTreeMap::new();
+    let mut by_kind: BTreeMap<&str, Vec<(&Record, &Value)>> = BTreeMap::new();
     for r in &log.records {
-        if let Body::Custom { kind, .. } = &r.body
-            && kind != STREAM_DUMP
+        if let Body::Custom { kind, data } = &r.body
+            && kind != StreamDumpEvent::KIND
         {
-            by_kind.entry(kind.clone()).or_default().push(r);
+            by_kind.entry(kind).or_default().push((r, data));
         }
     }
-    for (kind, records) in &by_kind {
+    for (kind, rows) in &by_kind {
         let declared: Option<Vec<String>> = log.header().and_then(|h| {
             h.schema
                 .kinds
@@ -621,40 +599,12 @@ fn export(log: &Log, args: &ExportArgs) -> Result<(), Box<dyn Error>> {
                 .map(|k| k.scalar_fields().into_iter().map(|(f, _)| f).collect())
         });
         // Undeclared kinds (legacy logs) get the union of scalar keys seen.
-        let fields = declared.unwrap_or_else(|| {
-            let mut fields = Vec::new();
-            for r in records {
-                if let Body::Custom { data, .. } = &r.body
-                    && let Some(obj) = data.as_object()
-                {
-                    for (k, v) in obj {
-                        if !v.is_object() && !v.is_array() && !fields.contains(k) {
-                            fields.push(k.clone());
-                        }
-                    }
-                }
-            }
-            fields
-        });
-        let rows = records
-            .iter()
-            .map(|r| {
-                let Body::Custom { data, .. } = &r.body else {
-                    unreachable!()
-                };
-                let mut row = vec![r.seq.to_string(), fmt_num(log.time_s(r))];
-                row.extend(fields.iter().map(|f| cell(data.get(f))));
-                row
-            })
-            .collect::<Vec<_>>();
-        let header: Vec<&str> = ["seq", "time_s"]
-            .into_iter()
-            .chain(fields.iter().map(String::as_str))
-            .collect();
-        write_csv(
+        let fields = declared.unwrap_or_else(|| scalar_keys(rows.iter().map(|(_, v)| *v)));
+        write_table(
             &out.join(format!("{}.csv", kind.replace('/', "_"))),
-            &header,
-            &rows,
+            log,
+            rows,
+            &fields,
         )?;
     }
 
@@ -679,66 +629,79 @@ fn cell(v: Option<&Value>) -> String {
     }
 }
 
-const STREAM_DUMP: &str = "routine/stream_dump";
+/// The scalar keys seen across `values`, in first-seen order.
+fn scalar_keys<'a>(values: impl Iterator<Item = &'a Value>) -> Vec<String> {
+    let mut fields: Vec<String> = Vec::new();
+    for obj in values.filter_map(Value::as_object) {
+        for (k, v) in obj {
+            if !v.is_object() && !v.is_array() && !fields.contains(k) {
+                fields.push(k.clone());
+            }
+        }
+    }
+    fields
+}
 
-/// Write a `routine/stream_dump` as `t_s` plus one column per signal, named
-/// from the header's signal list. Values are written in exponent form, since
-/// a current in amperes does not survive `fmt_num`'s six decimals.
-fn write_stream_dump(path: &Path, log: &Log, data: &Value) -> std::io::Result<()> {
-    let stream = &data["stream"];
-    let as_f64s = |v: &Value| -> Vec<f64> {
-        v.as_array()
-            .map(|a| a.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect())
-            .unwrap_or_default()
-    };
-    let t_s = as_f64s(&stream["t_s"]);
-    let columns: Vec<Vec<f64>> = stream["columns"]
-        .as_array()
-        .map(|cols| cols.iter().map(as_f64s).collect())
-        .unwrap_or_default();
-    let names: Vec<String> = stream["signals"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(Value::as_u64)
-                .map(|i| signal_name(log, i))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let header: Vec<&str> = std::iter::once("t_s")
-        .chain(names.iter().map(String::as_str))
+/// One row per record: `seq`, `time_s`, then `fields` read from its payload.
+fn write_table(
+    path: &Path,
+    log: &Log,
+    rows: &[(&Record, &Value)],
+    fields: &[String],
+) -> std::io::Result<()> {
+    let header: Vec<&str> = ["seq", "time_s"]
+        .into_iter()
+        .chain(fields.iter().map(String::as_str))
         .collect();
-    let rows: Vec<Vec<String>> = t_s
+    let rows: Vec<Vec<String>> = rows
         .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let mut row = vec![fmt_num(*t)];
-            row.extend(
-                columns
-                    .iter()
-                    // The stream is f32; narrowing drops the digits the
-                    // f64 widening in the JSON added.
-                    .map(|c| {
-                        c.get(i)
-                            .map(|&v| format!("{:e}", v as f32))
-                            .unwrap_or_default()
-                    }),
-            );
+        .map(|(r, value)| {
+            let mut row = vec![r.seq.to_string(), fmt_num(log.time_s(r))];
+            row.extend(fields.iter().map(|f| cell(value.get(f))));
             row
         })
         .collect();
     write_csv(path, &header, &rows)
 }
 
-/// The header's first name for a signal index, or `signal_<index>`.
-fn signal_name(log: &Log, index: u64) -> String {
-    log.header()
-        .and_then(|h| h.controller["signals"].as_array())
-        .and_then(|sigs| sigs.iter().find(|s| s["index"].as_u64() == Some(index)))
-        .and_then(|s| s["name"].as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("signal_{index}"))
+/// Write a stream dump as `t_s` plus one column per signal, named from the
+/// header's signal list. Values are written in exponent form, since a
+/// current in amperes does not survive `fmt_num`'s six decimals.
+fn write_stream_dump(
+    path: &Path,
+    stream: &StreamSnapshot,
+    signals: &[SignalFact],
+) -> std::io::Result<()> {
+    let names: Vec<String> = stream
+        .signals
+        .iter()
+        .map(|&i| {
+            signals
+                .iter()
+                .find(|s| u32::from(s.index) == i)
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| format!("signal_{i}"))
+        })
+        .collect();
+    let header: Vec<&str> = std::iter::once("t_s")
+        .chain(names.iter().map(String::as_str))
+        .collect();
+    let rows: Vec<Vec<String>> = stream
+        .t_s
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let mut row = vec![fmt_num(*t)];
+            row.extend(
+                stream
+                    .columns
+                    .iter()
+                    .map(|c| c.get(i).map(|v| format!("{v:e}")).unwrap_or_default()),
+            );
+            row
+        })
+        .collect();
+    write_csv(path, &header, &rows)
 }
 
 fn write_csv(path: &Path, header: &[&str], rows: &[Vec<String>]) -> std::io::Result<()> {

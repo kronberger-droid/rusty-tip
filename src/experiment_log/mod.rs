@@ -127,7 +127,7 @@ impl RunHeader {
 }
 
 /// One signal as the controller names it.
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, serde::Deserialize, Clone, Debug)]
 pub struct SignalFact {
     pub index: u8,
     pub name: String,

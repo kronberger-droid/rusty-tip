@@ -15,6 +15,10 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::experiment_log::{LogEvent, SignalFact};
+use crate::routine::StreamDumpEvent;
+use crate::spm_controller::StreamSnapshot;
+
 /// One line of a log.
 #[derive(Deserialize, Debug, Clone)]
 pub struct Record {
@@ -90,6 +94,17 @@ pub struct Header {
     #[serde(default)]
     pub controller: Value,
     pub schema: SchemaDecl,
+}
+
+impl Header {
+    /// The signals the run resolved, from the controller facts. Empty for a
+    /// log from before they were recorded.
+    pub fn signals(&self) -> Vec<SignalFact> {
+        self.controller
+            .get("signals")
+            .and_then(|v| Vec::<SignalFact>::deserialize(v).ok())
+            .unwrap_or_default()
+    }
 }
 
 /// The tool's declared custom event kinds.
@@ -171,15 +186,47 @@ impl Log {
     pub fn parse(text: &str) -> Self {
         let mut log = Log::default();
         for (i, line) in text.lines().enumerate() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            match serde_json::from_str::<Record>(line) {
-                Ok(record) => log.records.push(record),
-                Err(e) => log.skipped.push((i + 1, e.to_string())),
+            if !line.trim().is_empty() {
+                log.push_line(i + 1, line);
             }
         }
         log
+    }
+
+    /// Only the first and last lines: enough for [`header`](Self::header),
+    /// [`started_at`](Self::started_at) and [`finished`](Self::finished),
+    /// without parsing everything in between (a stream dump alone can be
+    /// megabytes). Line numbers in `skipped` are not meaningful here.
+    pub fn read_bookends(path: impl AsRef<Path>) -> io::Result<Self> {
+        let text = fs::read_to_string(path)?;
+        let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+        let mut log = Log::default();
+        if let Some(first) = lines.next() {
+            log.push_line(1, first);
+        }
+        if let Some(last) = lines.next_back() {
+            log.push_line(0, last);
+        }
+        Ok(log)
+    }
+
+    fn push_line(&mut self, line_no: usize, line: &str) {
+        match serde_json::from_str::<Record>(line) {
+            Ok(record) => self.records.push(record),
+            Err(e) => self.skipped.push((line_no, e.to_string())),
+        }
+    }
+
+    /// Every stream dump in the log with the record that carried it.
+    pub fn stream_dumps(&self) -> impl Iterator<Item = (&Record, StreamSnapshot)> {
+        self.records.iter().filter_map(|r| match &r.body {
+            Body::Custom { kind, data } if kind == StreamDumpEvent::KIND => {
+                StreamDumpEvent::deserialize(data)
+                    .ok()
+                    .map(|e| (r, e.stream))
+            }
+            _ => None,
+        })
     }
 
     pub fn header(&self) -> Option<&Header> {
