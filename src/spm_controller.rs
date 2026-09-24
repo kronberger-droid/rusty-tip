@@ -14,7 +14,7 @@ use nanonis_rs::{
 use std::collections::HashSet;
 
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::signal_registry::SignalIndex;
 use crate::spm_error::SpmError;
@@ -115,7 +115,7 @@ pub enum AcquisitionMode {
 ///
 /// Taken on the way out of a run so the log keeps the last seconds of signal
 /// before the end, which is where a safe-tip trip or a crash shows.
-#[derive(Serialize, JsonSchema, Clone, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default, PartialEq)]
 pub struct StreamSnapshot {
     /// Signal index of each column, in column order. The run header maps
     /// indices to names.
@@ -124,7 +124,24 @@ pub struct StreamSnapshot {
     /// values are zero or negative and the last one is the newest sample.
     pub t_s: Vec<f64>,
     /// One column per entry of `signals`, each as long as `t_s`.
+    #[serde(serialize_with = "shortest_f32_columns")]
     pub columns: Vec<Vec<f32>>,
+}
+
+/// Write each sample as the shortest decimal that reads back as the same
+/// `f32`. Events reach the log through `serde_json::Value`, which holds
+/// numbers as `f64`, and a plain widening there spells `1e-10` out as
+/// `1.000000013351432e-10`, about 40 % more text across a dump.
+fn shortest_f32_columns<S: serde::Serializer>(
+    columns: &[Vec<f32>],
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    let widen = |v: f32| v.to_string().parse::<f64>().unwrap_or(f64::from(v));
+    serializer.collect_seq(
+        columns
+            .iter()
+            .map(|c| c.iter().map(|&v| widen(v)).collect::<Vec<f64>>()),
+    )
 }
 
 pub trait SpmController: Send {
