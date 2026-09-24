@@ -411,9 +411,22 @@ sketch below, and what the next step inherits:
 landed and where it differs from the sketch:
 
 - `bin/rusty-tip-gui/`: `main.rs`, `app.rs` (window, tabs, run control,
-  history, prefs), `connection.rs` (pane: `ConnectionForm` persisted,
+  history, prefs), `connection.rs` (`ConnectionForm` persisted,
   `ConnectionPane` mirroring `SessionUpdate`s, `PaneAction` back to the
-  app), `run_view.rs`, `tools/mod.rs`, `tools/tip_prep.rs`.
+  app), `run_view.rs`, `tools/mod.rs`, `tools/tip_prep.rs`,
+  `tools/drift.rs`.
+- Layout (Martin, 2026-09-24): the top bar only says whether we are
+  connected and to what (state, backend and host, stream rate) and holds
+  the Connect/Disconnect button. The left side is a tree: a `Connection`
+  node that opens the connection page in the middle (the form, the
+  session details, live readouts, signal table, capabilities), then the
+  tools. The sketch's all-in-one pane is gone.
+- Drift is already a tool (pulled forward from step 5, Martin's call):
+  `rusty_tip::drift::DriftRoutine` with `LeaveInPlace` and
+  `RunSetup::NONE`, typed `drift/status|measured|compensated` events,
+  `require_stream` instead of restarting the stream, and
+  `const-distance drift` as a thin wrapper over it. `baseline` and `plan`
+  are still step 5.
 - The `Tool` trait is the step-2 shape: `setup(ui)` draws the tool's own
   form and `job()` builds the `Job`; `prefs()`/`restore()` persist the
   setup. `schema()`/`defaults()` and `routine_tool` arrive with step 3,

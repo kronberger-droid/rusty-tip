@@ -22,6 +22,9 @@ pub const MAX_SERIES_POINTS: usize = 20_000;
 /// Records kept for the log tail.
 const TAIL_LINES: usize = 500;
 
+/// Custom events kept per kind, as rows; the oldest go first.
+const MAX_ROWS_PER_KIND: usize = 2_000;
+
 /// One numeric series, as `[time_s, value]` pairs in arrival order.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Series {
@@ -60,6 +63,9 @@ pub struct RunView {
     /// The innermost action that has started and not finished, with its depth.
     pub current_action: Option<(String, usize)>,
     pub series: BTreeMap<String, Series>,
+    /// Every custom event by kind, as `(time_s, data)` rows, for panels that
+    /// want the record rather than a number out of it.
+    pub custom: BTreeMap<String, Vec<(f64, serde_json::Value)>>,
     /// Every `phase` seen, with when.
     pub phases: Vec<(f64, String)>,
     pub finish: Option<Finish>,
@@ -116,6 +122,11 @@ impl RunView {
                     self.phases.push((t, phase.to_string()));
                 }
                 self.collect(kind, data, t);
+                let rows = self.custom.entry(kind.clone()).or_default();
+                rows.push((t, data.clone()));
+                if rows.len() > MAX_ROWS_PER_KIND {
+                    rows.remove(0);
+                }
             }
         }
 
@@ -160,6 +171,11 @@ impl RunView {
             .get(key)
             .map(|s| s.points.as_slice())
             .unwrap_or(&[])
+    }
+
+    /// The rows of one custom kind, oldest first.
+    pub fn custom(&self, kind: &str) -> &[(f64, serde_json::Value)] {
+        self.custom.get(kind).map(Vec::as_slice).unwrap_or(&[])
     }
 
     /// The last phase seen.
@@ -286,6 +302,8 @@ mod tests {
         assert_eq!(view.latest("tip_prep/cycle.pulse_voltage"), Some(3.0));
         assert_eq!(view.latest("tip_prep/cycle.is_sharp"), Some(1.0));
         assert_eq!(view.phase(), Some("confirming"));
+        assert_eq!(view.custom("tip_prep/cycle").len(), 1);
+        assert_eq!(view.custom("tip_prep/cycle")[0].1["cycle"], 1);
         assert_eq!(view.phases, vec![(3.0, "confirming".to_string())]);
         assert_eq!(view.finish.as_ref().unwrap().outcome, "completed");
         assert_eq!(view.elapsed_s(), Some(4.0));

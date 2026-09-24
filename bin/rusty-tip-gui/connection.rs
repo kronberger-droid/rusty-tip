@@ -1,10 +1,15 @@
-//! The connection pane: what to connect to, and what the session says
-//! about the controller once connected.
+//! The connection: what to connect to, and what the session says about the
+//! controller once connected.
 //!
-//! The pane holds two things. The form (backend, host, ports, files, TCP
-//! channel mapping) is the operator's, persisted between starts. The mirror
-//! (state, facts, capabilities, readouts, preset loads) is whatever the
-//! session last reported; the pane never asks the controller anything.
+//! Two views of one thing. The bar along the top says whether we are
+//! connected and to what, with the connect button. The Connection page in
+//! the middle holds the form (backend, host, ports, files, TCP channel
+//! mapping, log directory) and everything the session reports: stream,
+//! preset loads, live readouts, the signal table, capabilities.
+//!
+//! The form is the operator's and is persisted between starts. The rest is
+//! a mirror of the session's updates; the pane never asks the controller
+//! anything.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -113,6 +118,14 @@ impl ConnectionForm {
         let dir = self.log_dir.trim();
         (!dir.is_empty()).then(|| PathBuf::from(dir))
     }
+
+    /// One line saying what the form points at.
+    fn target(&self) -> String {
+        match self.kind {
+            BackendKind::Mock => "Mock".into(),
+            BackendKind::Nanonis => format!("Nanonis {}:{}", self.host.trim(), self.port.trim()),
+        }
+    }
 }
 
 /// What the pane asks the app to send to the session.
@@ -135,9 +148,6 @@ pub struct ConnectionPane {
     pub layout_load: Option<PresetLoad>,
     pub settings_load: Option<PresetLoad>,
     pub error: Option<String>,
-    show_signals: bool,
-    show_capabilities: bool,
-    show_mapping: bool,
 }
 
 impl ConnectionPane {
@@ -151,9 +161,6 @@ impl ConnectionPane {
             layout_load: None,
             settings_load: None,
             error: None,
-            show_signals: false,
-            show_capabilities: false,
-            show_mapping: false,
         }
     }
 
@@ -186,131 +193,229 @@ impl ConnectionPane {
         matches!(self.state, ConnState::Connected | ConnState::Running)
     }
 
-    /// Draw the pane. `running` disables what must not change under a job.
-    pub fn render(&mut self, ui: &mut egui::Ui, running: bool) -> Option<PaneAction> {
+    /// The state as a colour and a word.
+    pub fn state_badge(&self) -> (egui::Color32, &'static str) {
+        match self.state {
+            ConnState::Disconnected => (egui::Color32::GRAY, "disconnected"),
+            ConnState::Connecting => (egui::Color32::YELLOW, "connecting"),
+            ConnState::Connected => (egui::Color32::GREEN, "connected"),
+            ConnState::Running => (egui::Color32::LIGHT_BLUE, "running"),
+            ConnState::Poisoned => (egui::Color32::RED, "connection lost"),
+        }
+    }
+
+    /// The bar along the top: are we connected, to what, and the button.
+    pub fn render_bar(&mut self, ui: &mut egui::Ui, running: bool) -> Option<PaneAction> {
+        let mut action = None;
+        ui.horizontal(|ui| {
+            let (color, word) = self.state_badge();
+            ui.colored_label(color, "●");
+            match self.state {
+                ConnState::Disconnected => {
+                    ui.label(format!("{word} · {}", self.form.target()));
+                }
+                _ => {
+                    ui.label(format!("{word} · {}", self.form.target()));
+                    if let Some(facts) = &self.facts {
+                        ui.separator();
+                        match facts.stream_rate_hz {
+                            Some(hz) => ui.label(format!("stream {hz:.0} Hz")),
+                            None => ui.label("no stream"),
+                        };
+                    }
+                }
+            }
+            if let Some(e) = &self.error {
+                ui.separator();
+                ui.colored_label(egui::Color32::RED, e);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                action = self.render_button(ui, running);
+            });
+        });
+        action
+    }
+
+    fn render_button(&mut self, ui: &mut egui::Ui, running: bool) -> Option<PaneAction> {
+        let mut action = None;
+        match self.state {
+            ConnState::Disconnected => {
+                if ui.button("Connect").clicked() {
+                    match self.form.backend() {
+                        Ok(backend) => {
+                            self.error = None;
+                            action = Some(PaneAction::Connect(backend));
+                        }
+                        Err(e) => self.error = Some(e),
+                    }
+                }
+            }
+            ConnState::Connecting => {
+                ui.add_enabled(false, egui::Button::new("Connecting…"));
+            }
+            ConnState::Connected | ConnState::Running => {
+                if ui
+                    .add_enabled(!running, egui::Button::new("Disconnect"))
+                    .on_disabled_hover_text("Stop the running job first")
+                    .clicked()
+                {
+                    action = Some(PaneAction::Disconnect);
+                }
+            }
+            ConnState::Poisoned => {
+                if ui.button("Reconnect").clicked() {
+                    self.error = None;
+                    action = Some(PaneAction::Reconnect);
+                }
+                if ui.button("Disconnect").clicked() {
+                    action = Some(PaneAction::Disconnect);
+                }
+            }
+        }
+        action
+    }
+
+    /// The Connection page: the form, then what the session reports.
+    pub fn render_page(&mut self, ui: &mut egui::Ui, running: bool) -> Option<PaneAction> {
         let mut action = None;
         let editable = self.state == ConnState::Disconnected;
 
-        ui.horizontal(|ui| {
-            ui.label("Backend");
-            ui.add_enabled_ui(editable, |ui| {
-                egui::ComboBox::from_id_salt("backend_kind")
-                    .selected_text(match self.form.kind {
-                        BackendKind::Nanonis => "Nanonis",
-                        BackendKind::Mock => "Mock",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.form.kind, BackendKind::Nanonis, "Nanonis");
-                        ui.selectable_value(&mut self.form.kind, BackendKind::Mock, "Mock")
-                            .on_hover_text(
-                                "The in-memory mock with a realistic tip model. \
-                                 No hardware is contacted.",
+        ui.heading("Controller");
+        if !editable {
+            ui.label(egui::RichText::new("Disconnect to change the connection.").weak());
+        }
+        ui.add_space(4.0);
+        ui.add_enabled_ui(editable, |ui| {
+            egui::Grid::new("connection_form")
+                .num_columns(2)
+                .spacing([16.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label("Backend");
+                    egui::ComboBox::from_id_salt("backend_kind")
+                        .selected_text(match self.form.kind {
+                            BackendKind::Nanonis => "Nanonis",
+                            BackendKind::Mock => "Mock",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.form.kind,
+                                BackendKind::Nanonis,
+                                "Nanonis",
                             );
-                    });
-            });
+                            ui.selectable_value(&mut self.form.kind, BackendKind::Mock, "Mock")
+                                .on_hover_text(
+                                    "The in-memory mock with a realistic tip model. No \
+                                     hardware is contacted.",
+                                );
+                        });
+                    ui.end_row();
 
-            if self.form.kind == BackendKind::Nanonis {
-                ui.add_enabled_ui(editable, |ui| {
-                    ui.label("host");
-                    ui.add(egui::TextEdit::singleline(&mut self.form.host).desired_width(110.0));
-                    ui.label("port");
-                    ui.add(egui::TextEdit::singleline(&mut self.form.port).desired_width(48.0));
-                    ui.label("data");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.form.data_port).desired_width(48.0),
-                    );
-                    ui.label("rate");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.form.sample_rate_hz)
-                            .desired_width(56.0),
-                    )
-                    .on_hover_text("Stream rate to ask the TCP logger for, in Hz");
-                });
-            }
+                    if self.form.kind == BackendKind::Nanonis {
+                        ui.label("Host");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.form.host).desired_width(200.0),
+                        );
+                        ui.end_row();
 
-            ui.with_layout(
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| match self.state {
-                    ConnState::Disconnected => {
-                        if ui.button("Connect").clicked() {
-                            match self.form.backend() {
-                                Ok(backend) => {
-                                    self.error = None;
-                                    action = Some(PaneAction::Connect(backend));
-                                }
-                                Err(e) => self.error = Some(e),
+                        ui.label("Command port");
+                        ui.add(egui::TextEdit::singleline(&mut self.form.port).desired_width(80.0));
+                        ui.end_row();
+
+                        ui.label("Data port");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.form.data_port)
+                                .desired_width(80.0),
+                        )
+                        .on_hover_text("The TCP logger's data port, 6590 on a stock install");
+                        ui.end_row();
+
+                        ui.label("Stream rate (Hz)");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.form.sample_rate_hz)
+                                .desired_width(80.0),
+                        )
+                        .on_hover_text(
+                            "What to ask the TCP logger for. It delivers its base rate over \
+                             an integer, so the nearest such rate is what arrives.",
+                        );
+                        ui.end_row();
+
+                        ui.label("Layout file");
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.form.layout_file)
+                                    .desired_width(320.0),
+                            );
+                            if ui.button("…").clicked()
+                                && let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("Nanonis layout", &["lyt"])
+                                    .pick_file()
+                            {
+                                self.form.layout_file = path.display().to_string();
                             }
-                        }
+                        });
+                        ui.end_row();
+
+                        ui.label("Settings file");
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.form.settings_file)
+                                    .desired_width(320.0),
+                            );
+                            if ui.button("…").clicked()
+                                && let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("Nanonis settings", &["ini"])
+                                    .pick_file()
+                            {
+                                self.form.settings_file = path.display().to_string();
+                            }
+                        })
+                        .response
+                        .on_hover_text(
+                            "Loaded once, on connect, before the stream starts. A load \
+                             persists for the rest of the session.",
+                        );
+                        ui.end_row();
+
+                        ui.label("TCP channel mapping");
+                        ui.vertical(|ui| {
+                            let mut remove = None;
+                            for (i, (index, channel)) in
+                                self.form.tcp_channel_mapping.iter_mut().enumerate()
+                            {
+                                ui.horizontal(|ui| {
+                                    ui.label("signal");
+                                    ui.add(egui::TextEdit::singleline(index).desired_width(40.0));
+                                    ui.label("channel");
+                                    ui.add(egui::TextEdit::singleline(channel).desired_width(40.0));
+                                    if ui.small_button("remove").clicked() {
+                                        remove = Some(i);
+                                    }
+                                });
+                            }
+                            if let Some(i) = remove {
+                                self.form.tcp_channel_mapping.remove(i);
+                            }
+                            if ui.small_button("add").clicked() {
+                                self.form
+                                    .tcp_channel_mapping
+                                    .push((String::new(), String::new()));
+                            }
+                        })
+                        .response
+                        .on_hover_text(
+                            "Signal index to TCP logger channel, beyond the standard map",
+                        );
+                        ui.end_row();
                     }
-                    ConnState::Connecting => {
-                        ui.add_enabled(false, egui::Button::new("Connecting…"));
-                    }
-                    ConnState::Connected | ConnState::Running => {
-                        if ui
-                            .add_enabled(!running, egui::Button::new("Disconnect"))
-                            .on_disabled_hover_text("Stop the running job first")
-                            .clicked()
-                        {
-                            action = Some(PaneAction::Disconnect);
-                        }
-                    }
-                    ConnState::Poisoned => {
-                        if ui.button("Reconnect").clicked() {
-                            self.error = None;
-                            action = Some(PaneAction::Reconnect);
-                        }
-                        if ui.button("Disconnect").clicked() {
-                            action = Some(PaneAction::Disconnect);
-                        }
-                    }
-                },
-            );
+                });
         });
 
-        if self.form.kind == BackendKind::Nanonis {
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(editable, |ui| {
-                    ui.label("layout");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.form.layout_file).desired_width(220.0),
-                    );
-                    if ui.button("…").clicked()
-                        && let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Nanonis layout", &["lyt"])
-                            .pick_file()
-                    {
-                        self.form.layout_file = path.display().to_string();
-                    }
-                    ui.label("settings");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.form.settings_file)
-                            .desired_width(220.0),
-                    );
-                    if ui.button("…").clicked()
-                        && let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Nanonis settings", &["ini"])
-                            .pick_file()
-                    {
-                        self.form.settings_file = path.display().to_string();
-                    }
-                });
-                if self.connected()
-                    && (self.form.layout_file.trim().len() + self.form.settings_file.trim().len())
-                        > 0
-                    && ui
-                        .add_enabled(!running, egui::Button::new("Reload"))
-                        .on_hover_text("Load the layout and settings files again")
-                        .clicked()
-                {
-                    action = Some(PaneAction::ReloadPresets);
-                }
-            });
-        }
-
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
-            ui.label("log dir");
+            ui.label("Log directory");
             let before = self.form.log_dir.clone();
-            ui.add(egui::TextEdit::singleline(&mut self.form.log_dir).desired_width(220.0))
+            ui.add(egui::TextEdit::singleline(&mut self.form.log_dir).desired_width(320.0))
                 .on_hover_text("Each run writes a .jsonl log here. Empty for no logs.");
             if ui.button("…").clicked()
                 && let Some(path) = rfd::FileDialog::new().pick_folder()
@@ -320,143 +425,124 @@ impl ConnectionPane {
             if self.form.log_dir != before {
                 action = Some(PaneAction::LogDir(self.form.log_dir()));
             }
-            if self.form.kind == BackendKind::Nanonis {
-                ui.add_enabled_ui(editable, |ui| {
-                    ui.toggle_value(&mut self.show_mapping, "TCP mapping")
-                        .on_hover_text(
-                            "Signal index to TCP logger channel, beyond the standard map",
-                        );
-                });
+        });
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if let Some(a) = self.render_button(ui, running) {
+                action = Some(a);
+            }
+            if self.connected()
+                && self.form.kind == BackendKind::Nanonis
+                && !(self.form.layout_file.trim().is_empty()
+                    && self.form.settings_file.trim().is_empty())
+                && ui
+                    .add_enabled(!running, egui::Button::new("Reload files"))
+                    .on_hover_text("Load the layout and settings files again")
+                    .clicked()
+            {
+                action = Some(PaneAction::ReloadPresets);
             }
         });
 
-        if self.show_mapping && self.form.kind == BackendKind::Nanonis {
-            ui.add_enabled_ui(editable, |ui| {
-                let mut remove = None;
-                for (i, (index, channel)) in self.form.tcp_channel_mapping.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label("signal");
-                        ui.add(egui::TextEdit::singleline(index).desired_width(40.0));
-                        ui.label("channel");
-                        ui.add(egui::TextEdit::singleline(channel).desired_width(40.0));
-                        if ui.button("remove").clicked() {
-                            remove = Some(i);
-                        }
-                    });
-                }
-                if let Some(i) = remove {
-                    self.form.tcp_channel_mapping.remove(i);
-                }
-                if ui.button("add mapping").clicked() {
-                    self.form
-                        .tcp_channel_mapping
-                        .push((String::new(), String::new()));
-                }
-            });
+        if self.state != ConnState::Disconnected {
+            ui.add_space(12.0);
+            ui.separator();
+            self.render_details(ui);
         }
-
-        ui.separator();
-        self.render_status(ui);
         action
     }
 
-    fn render_status(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            let (dot, text) = match self.state {
-                ConnState::Disconnected => (egui::Color32::GRAY, "disconnected"),
-                ConnState::Connecting => (egui::Color32::YELLOW, "connecting"),
-                ConnState::Connected => (egui::Color32::GREEN, "connected"),
-                ConnState::Running => (egui::Color32::LIGHT_BLUE, "running"),
-                ConnState::Poisoned => (egui::Color32::RED, "connection lost"),
-            };
-            ui.colored_label(dot, "●");
-            ui.label(text);
-            if let Some(facts) = &self.facts {
-                ui.separator();
-                match facts.stream_rate_hz {
-                    Some(hz) => ui.label(format!("stream {hz:.0} Hz")),
-                    None => ui.label("no stream"),
-                };
-                ui.separator();
-                ui.label(format!("{} signals", facts.signals.len()));
-            }
-            if let Some(load) = &self.settings_load {
-                ui.separator();
-                ui.label(format!(
-                    "settings: {} ({}, {})",
-                    file_name(&load.path),
-                    load.by,
-                    clock(load.at)
-                ))
-                .on_hover_text(load.path.display().to_string());
-            }
-            if let Some(load) = &self.layout_load {
-                ui.separator();
-                ui.label(format!(
-                    "layout: {} ({}, {})",
-                    file_name(&load.path),
-                    load.by,
-                    clock(load.at)
-                ))
-                .on_hover_text(load.path.display().to_string());
-            }
-            if let Some(e) = &self.error {
-                ui.separator();
-                ui.colored_label(egui::Color32::RED, e);
-            }
-        });
+    fn render_details(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Session");
+        egui::Grid::new("connection_details")
+            .num_columns(2)
+            .spacing([16.0, 4.0])
+            .show(ui, |ui| {
+                ui.label("State");
+                let (color, word) = self.state_badge();
+                ui.colored_label(color, word);
+                ui.end_row();
+                if let Some(facts) = &self.facts {
+                    ui.label("Stream");
+                    ui.label(match facts.stream_rate_hz {
+                        Some(hz) => format!("{hz:.0} Hz"),
+                        None => "none".into(),
+                    });
+                    ui.end_row();
+                }
+                ui.label("Settings file");
+                ui.label(describe_load(self.settings_load.as_ref()));
+                ui.end_row();
+                ui.label("Layout file");
+                ui.label(describe_load(self.layout_load.as_ref()));
+                ui.end_row();
+            });
 
         if self.connected() {
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Live readouts").strong());
+            if self.readouts.is_empty() {
+                ui.label(egui::RichText::new("none").weak());
+            }
             ui.horizontal(|ui| {
-                if self.readouts.is_empty() {
-                    ui.label(egui::RichText::new("no readouts").weak());
-                }
                 for r in &self.readouts {
-                    ui.label(format_readout(&r.name, r.value));
-                    ui.add_space(12.0);
+                    ui.label(egui::RichText::new(format_readout(&r.name, r.value)).size(16.0));
+                    ui.add_space(16.0);
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.toggle_value(&mut self.show_capabilities, "capabilities");
-                    ui.toggle_value(&mut self.show_signals, "signals");
-                });
             });
         }
 
-        if self.show_signals
-            && let Some(facts) = &self.facts
-        {
-            egui::ScrollArea::vertical()
-                .max_height(160.0)
-                .show(ui, |ui| {
-                    egui::Grid::new("signal_table")
-                        .num_columns(3)
-                        .striped(true)
-                        .spacing([16.0, 2.0])
-                        .show(ui, |ui| {
-                            ui.label(egui::RichText::new("index").strong());
-                            ui.label(egui::RichText::new("name").strong());
-                            ui.label(egui::RichText::new("TCP channel").strong());
-                            ui.end_row();
-                            for s in &facts.signals {
-                                ui.label(s.index.to_string());
-                                ui.label(&s.name);
-                                ui.label(
-                                    s.tcp_channel
-                                        .map(|c| c.to_string())
-                                        .unwrap_or_else(|| "-".into()),
-                                );
+        if let Some(facts) = &self.facts {
+            ui.add_space(8.0);
+            ui.collapsing(format!("Signals ({})", facts.signals.len()), |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        egui::Grid::new("signal_table")
+                            .num_columns(3)
+                            .striped(true)
+                            .spacing([16.0, 2.0])
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new("index").strong());
+                                ui.label(egui::RichText::new("name").strong());
+                                ui.label(egui::RichText::new("TCP channel").strong());
                                 ui.end_row();
-                            }
-                        });
-                });
+                                for s in &facts.signals {
+                                    ui.label(s.index.to_string());
+                                    ui.label(&s.name);
+                                    ui.label(
+                                        s.tcp_channel
+                                            .map(|c| c.to_string())
+                                            .unwrap_or_else(|| "-".into()),
+                                    );
+                                    ui.end_row();
+                                }
+                            });
+                    });
+            });
         }
 
-        if self.show_capabilities && !self.capabilities.is_empty() {
+        if !self.capabilities.is_empty() {
             let mut caps: Vec<String> =
                 self.capabilities.iter().map(|c| format!("{c:?}")).collect();
             caps.sort();
-            ui.label(caps.join(", "));
+            ui.collapsing(format!("Capabilities ({})", caps.len()), |ui| {
+                ui.label(caps.join(", "));
+            });
         }
+    }
+}
+
+fn describe_load(load: Option<&PresetLoad>) -> String {
+    match load {
+        Some(load) => format!(
+            "{} (by {}, {})",
+            load.path.display(),
+            load.by,
+            clock(load.at)
+        ),
+        None => "none loaded".into(),
     }
 }
 
@@ -476,12 +562,6 @@ fn format_readout(name: &str, value: f64) -> String {
     } else {
         format!("{short} {value:.4}")
     }
-}
-
-fn file_name(path: &std::path::Path) -> String {
-    path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// Wall-clock time of day, local.
@@ -508,6 +588,7 @@ mod tests {
             }
             Backend::Mock => panic!("not the mock"),
         }
+        assert_eq!(form.target(), "Nanonis 127.0.0.1:6501");
     }
 
     #[test]

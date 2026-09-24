@@ -9,6 +9,7 @@
 //! handoff replaces it with a schema-driven form over the tool's parameter
 //! type, at which point `setup` goes and `schema`/`defaults` arrive.
 
+pub mod drift;
 pub mod tip_prep;
 
 use eframe::egui;
@@ -50,5 +51,8 @@ pub trait Tool {
 
 /// Every tool the workbench ships, in sidebar order.
 pub fn all() -> Vec<Box<dyn Tool>> {
-    vec![Box::new(tip_prep::TipPrepTool::default())]
+    vec![
+        Box::new(tip_prep::TipPrepTool::default()),
+        Box::new(drift::DriftTool::default()),
+    ]
 }

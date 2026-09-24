@@ -1,5 +1,6 @@
-//! The window: connection pane on top, tools down the side, Setup / Run /
-//! History in the middle.
+//! The window: a connection bar on top, a tree down the side (Connection,
+//! then the tools), and in the middle either the Connection page or the
+//! selected tool's Setup / Run / History.
 //!
 //! The GUI thread never touches the controller. It sends [`SessionCmd`]s to
 //! the session thread, mirrors its [`SessionUpdate`]s into the connection
@@ -52,13 +53,21 @@ struct ActiveRun {
     worker: Option<std::thread::JoinHandle<Result<Outcome, String>>>,
 }
 
+/// What the middle shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Connection,
+    Tool(usize),
+}
+
 /// Saved between starts.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct Prefs {
     connection: ConnectionForm,
     theme: String,
     tab: Tab,
-    selected_tool: String,
+    /// `"connection"` or a tool id.
+    page: String,
     tools: BTreeMap<String, serde_json::Value>,
 }
 
@@ -68,7 +77,9 @@ pub struct WorkbenchApp {
     session: SessionHandle,
     pane: ConnectionPane,
     tools: Vec<Box<dyn Tool>>,
+    /// The tool whose tabs the middle shows, and whose job Start runs.
     selected: usize,
+    page: Page,
     tab: Tab,
     run: Option<ActiveRun>,
     status: RunStatus,
@@ -98,10 +109,10 @@ impl WorkbenchApp {
                 tool.restore(saved);
             }
         }
-        let selected = tools
-            .iter()
-            .position(|t| t.id() == prefs.selected_tool)
-            .unwrap_or(0);
+        let (page, selected) = match tools.iter().position(|t| t.id() == prefs.page) {
+            Some(i) => (Page::Tool(i), i),
+            None => (Page::Connection, 0),
+        };
         let theme = match prefs.theme.as_str() {
             "light" => egui::ThemePreference::Light,
             "dark" => egui::ThemePreference::Dark,
@@ -114,6 +125,7 @@ impl WorkbenchApp {
             pane,
             tools,
             selected,
+            page,
             tab: prefs.tab,
             run: None,
             status: RunStatus::Idle,
@@ -274,6 +286,7 @@ impl WorkbenchApp {
                     && let Some(i) = self.tools.iter().position(|t| t.id() == tool)
                 {
                     self.selected = i;
+                    self.page = Page::Tool(i);
                 }
                 self.view = view;
                 self.status = RunStatus::Replay(path);
@@ -285,9 +298,7 @@ impl WorkbenchApp {
 
     // -- Rendering --
 
-    fn render_top(&mut self, ui: &mut egui::Ui) {
-        let running = self.running();
-        let action = self.pane.render(ui, running);
+    fn apply_pane_action(&mut self, action: Option<PaneAction>) {
         match action {
             Some(PaneAction::Connect(backend)) => self.send(SessionCmd::Connect(backend)),
             Some(PaneAction::Disconnect) => self.send(SessionCmd::Disconnect),
@@ -298,19 +309,38 @@ impl WorkbenchApp {
         }
     }
 
+    fn render_top(&mut self, ui: &mut egui::Ui) {
+        let running = self.running();
+        let action = self.pane.render_bar(ui, running);
+        self.apply_pane_action(action);
+    }
+
     fn render_sidebar(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Tools");
         ui.add_space(4.0);
+        let (color, _) = self.pane.state_badge();
+        let connection = egui::RichText::new("● Connection").color(color);
+        if ui
+            .selectable_label(self.page == Page::Connection, connection)
+            .clicked()
+        {
+            self.page = Page::Connection;
+        }
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new("Tools").strong());
         let running_id = self.run.as_ref().map(|r| r.tool_id);
         for i in 0..self.tools.len() {
             let label = self.tools[i].label().to_string();
             let is_running = running_id == Some(self.tools[i].id());
             let text = if is_running {
-                format!("● {label}")
+                format!("▶ {label}")
             } else {
-                label
+                format!("   {label}")
             };
-            if ui.selectable_label(self.selected == i, text).clicked() {
+            if ui
+                .selectable_label(self.page == Page::Tool(i), text)
+                .clicked()
+            {
+                self.page = Page::Tool(i);
                 self.selected = i;
             }
         }
@@ -333,6 +363,14 @@ impl WorkbenchApp {
     }
 
     fn render_center(&mut self, ui: &mut egui::Ui) {
+        if self.page == Page::Connection {
+            let running = self.running();
+            let action = egui::ScrollArea::vertical()
+                .show(ui, |ui| self.pane.render_page(ui, running))
+                .inner;
+            self.apply_pane_action(action);
+            return;
+        }
         ui.horizontal(|ui| {
             for (tab, label) in [
                 (Tab::Setup, "Setup"),
@@ -548,7 +586,10 @@ impl eframe::App for WorkbenchApp {
             }
             .into(),
             tab: self.tab,
-            selected_tool: self.tools[self.selected].id().to_string(),
+            page: match self.page {
+                Page::Connection => "connection".to_string(),
+                Page::Tool(i) => self.tools[i].id().to_string(),
+            },
             tools: self
                 .tools
                 .iter()

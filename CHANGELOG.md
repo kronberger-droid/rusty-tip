@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays until the workbench reaches parity in the lab. Built with
   `--features gui`, which now enables eframe's `persistence` so the pane
   and each tool's setup survive a restart.
+- **Drift as a tool and a routine.** `rusty_tip::drift::DriftRoutine`
+  wraps the drift actions (status, measure, compensate, off) as a
+  `Routine` with `LeaveInPlace` and `RunSetup::NONE`, writing typed
+  `drift/status`, `drift/measured` and `drift/compensated` events next to
+  the actions' `drift/burst`. It refuses to measure when the data stream
+  does not carry Z unless polling is allowed. The workbench has it as the
+  Drift tool, and `const-distance drift` is now a thin wrapper over it, so
+  the two front ends share one implementation.
 
 - **One connection, many runs.** `run_routine` borrows the controller
   instead of consuming it, so a second routine can start on the same
