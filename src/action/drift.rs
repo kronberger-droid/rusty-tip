@@ -495,7 +495,17 @@ impl CompensateDrift {
             None => {
                 let trial = vz + self.trial_vz;
                 set(ctx, trial)?;
-                let (at_trial, n) = burst(ctx, BurstRole::Trial, trial)?;
+                // A stop request lands here as an error; the trial velocity
+                // must not outlive it.
+                let (at_trial, n) = match burst(ctx, BurstRole::Trial, trial) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        if let Err(restore) = set(ctx, vz) {
+                            log::error!("compensate_drift: could not restore vz: {restore}");
+                        }
+                        return Err(e);
+                    }
+                };
                 let measured = (at_trial.rate_m_s - estimate.rate_m_s) / self.trial_vz;
                 // The velocity is in the same units as the drift, so a working
                 // channel answers close to plus or minus one.

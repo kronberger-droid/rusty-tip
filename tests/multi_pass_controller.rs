@@ -350,6 +350,48 @@ fn compensation_converges_whichever_way_the_velocity_sign_runs() {
     }
 }
 
+/// Asks for a stop as soon as the baseline burst is reported, so the request
+/// lands inside the trial burst.
+struct StopAfterBaseline(ShutdownFlag);
+
+impl Observer for StopAfterBaseline {
+    fn on_event(&self, event: &Event) {
+        if let Event::Custom { kind, data, .. } = event
+            && kind == "drift/burst"
+            && data["role"] == "baseline"
+        {
+            self.0.request();
+        }
+    }
+}
+
+#[test]
+fn a_stop_during_the_trial_puts_the_previous_velocity_back() {
+    let mut controller = MockController::builder().z_drift(Z, 4e-12, 1.0).build();
+    let obs = controller.observations();
+    let vz_before = obs.lock().drift_comp.vz;
+    let shutdown = ShutdownFlag::new();
+    let mut events = EventBus::new();
+    events.add_observer(Box::new(StopAfterBaseline(shutdown.clone())));
+    let mut rt = Rt::new(&mut controller, &events, &shutdown);
+
+    let err = rt
+        .drift()
+        .expect("the mock supports drift compensation")
+        .compensate(&CompensateDrift::new(Z))
+        .expect_err("the stop must end the compensation");
+
+    assert!(
+        matches!(err, rusty_tip::spm_error::SpmError::ShutdownRequested),
+        "{err:?}"
+    );
+    assert_eq!(
+        obs.lock().drift_comp.vz,
+        vz_before,
+        "the 20 pm/s trial velocity must not outlive the stop"
+    );
+}
+
 #[test]
 fn compensation_converges_through_measurement_noise() {
     // 20 pm of scatter per sample, five times the drift over a whole burst.
