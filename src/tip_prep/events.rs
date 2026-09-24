@@ -7,21 +7,21 @@
 //! change.
 
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::experiment_log::{LogEvent, ToolSchema};
 
 /// One pulse cycle: what was fired, what was measured afterwards.
 ///
 /// The GUI's status panel and pulse history are drawn from this.
-#[derive(Serialize, JsonSchema, Clone, Debug)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct CycleEvent {
     /// 1-based cycle number.
     pub cycle: usize,
     /// Seconds since the budget clock started.
     pub elapsed_secs: f64,
     /// Frequency shift measured after the reposition, in Hz.
-    pub freq_shift: Option<f64>,
+    pub freq_shift: f64,
     /// The pulse as fired, sign included, in volts.
     pub pulse_voltage: f64,
     /// Whether `freq_shift` fell inside the sharp window.
@@ -33,7 +33,7 @@ impl LogEvent for CycleEvent {
 }
 
 /// A change of phase within the sharpness confirmation and stability check.
-#[derive(Serialize, JsonSchema, Clone, Debug)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum PhaseEvent {
     /// Three reposition-and-read confirmations are starting.
@@ -61,7 +61,7 @@ impl LogEvent for PhaseEvent {
 
 /// The maximum-voltage pulse fired after a failed stability check, with the
 /// tip still engaged from the final read.
-#[derive(Serialize, JsonSchema, Clone, Debug)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct MaxPulseEvent {
     /// The pulse as fired, sign included, in volts.
     pub pulse_voltage: f64,

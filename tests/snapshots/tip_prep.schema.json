@@ -21,10 +21,7 @@
           "freq_shift": {
             "description": "Frequency shift measured after the reposition, in Hz.",
             "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
+            "type": "number"
           },
           "is_sharp": {
             "description": "Whether `freq_shift` fell inside the sharp window.",
@@ -39,6 +36,7 @@
         "required": [
           "cycle",
           "elapsed_secs",
+          "freq_shift",
           "pulse_voltage",
           "is_sharp"
         ],

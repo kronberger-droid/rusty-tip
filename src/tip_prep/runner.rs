@@ -573,7 +573,7 @@ impl Routine for TipPrep<'_> {
             rt.emit(Event::typed(&CycleEvent {
                 cycle,
                 elapsed_secs: cycles.elapsed().as_secs_f64(),
-                freq_shift: Some(freq_shift),
+                freq_shift,
                 // The voltage that was fired, sign included. The pulse
                 // state's `current_voltage` is a magnitude, and reporting
                 // it hid every polarity switch from the GUI.
