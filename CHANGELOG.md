@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`rusty-tip-gui`**, the workbench: one window, one controller
+  connection, several tools. The connection pane connects once (backend,
+  host, ports, layout and settings files, TCP channel mapping) and shows
+  what the session reports: state, stream rate, the signal table,
+  capabilities, four live readouts while idle, and which settings file was
+  loaded last, by whom and when. Tools sit in a sidebar with Setup, Run
+  and History tabs; a job's error is an error state, not a clean exit. Tip
+  prep is the first tool, with its config as editable TOML for now and the
+  old Control tab as its run panel. The run view is a fold over log records
+  shared by live runs and replayed logs, so History opens any `.jsonl` in
+  the log directory into the same view. `tip-prep-gui` is unchanged and
+  stays until the workbench reaches parity in the lab. Built with
+  `--features gui`, which now enables eframe's `persistence` so the pane
+  and each tool's setup survive a restart.
+
 - **One connection, many runs.** `run_routine` borrows the controller
   instead of consuming it, so a second routine can start on the same
   connection with the data stream still up. `rusty_tip::session::Session`

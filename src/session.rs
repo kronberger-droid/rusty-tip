@@ -210,6 +210,12 @@ impl Session {
         }
     }
 
+    /// Where the next job's log goes; `None` writes none. Takes effect from
+    /// the next run.
+    pub fn set_log_dir(&mut self, log_dir: Option<PathBuf>) {
+        self.log_dir = log_dir;
+    }
+
     pub fn state(&self) -> ConnState {
         match (&self.conn, self.poisoned) {
             (None, _) => ConnState::Disconnected,
@@ -626,6 +632,8 @@ pub enum SessionCmd {
     Disconnect,
     Reconnect,
     ReloadPresets,
+    /// Where the next job's log goes; `None` writes none.
+    SetLogDir(Option<PathBuf>),
     /// Run a job. `events` receives every event of the run; `shutdown` is
     /// how to stop it.
     Run {
@@ -773,6 +781,7 @@ fn handle(session: &mut Session, cmd: SessionCmd, report: &dyn Fn(SessionUpdate)
             }
             report(SessionUpdate::State(session.state()));
         }
+        SessionCmd::SetLogDir(dir) => session.set_log_dir(dir),
         SessionCmd::ReloadPresets => {
             match session.reload_presets() {
                 Ok(()) => describe(session),

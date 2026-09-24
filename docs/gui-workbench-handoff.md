@@ -407,6 +407,40 @@ sketch below, and what the next step inherits:
 
 ### Step 2: new app, connection pane, tip prep only
 
+**Done 2026-09-24** on `feat/gui-workbench-app`, stacked on step 1. What
+landed and where it differs from the sketch:
+
+- `bin/rusty-tip-gui/`: `main.rs`, `app.rs` (window, tabs, run control,
+  history, prefs), `connection.rs` (pane: `ConnectionForm` persisted,
+  `ConnectionPane` mirroring `SessionUpdate`s, `PaneAction` back to the
+  app), `run_view.rs`, `tools/mod.rs`, `tools/tip_prep.rs`.
+- The `Tool` trait is the step-2 shape: `setup(ui)` draws the tool's own
+  form and `job()` builds the `Job`; `prefs()`/`restore()` persist the
+  setup. `schema()`/`defaults()` and `routine_tool` arrive with step 3,
+  when `setup` goes.
+- Tip prep's stopgap setup is the config as TOML text (load, save,
+  validate, defaults), parsed with `toml` and `AppConfig::validate`. It
+  does not copy `EditableConfig`.
+- `RunView` folds over `Record` already; a live `Event` is serialized and
+  decoded as a `Record` (tested equal to the log line). It is schema-free:
+  every numeric or boolean field of a `DataCollected` value or custom
+  event becomes a series `label.field` / `kind.field`; the tip-prep panel
+  reads `stable_read.value`, `tip_prep/cycle.*` and
+  `tip_prep/max_pulse.pulse_voltage` by name. History is in (list the log
+  dir, open a log into the same view); generic panels (series picker,
+  action timeline) are still step 4.
+- Prefs go through eframe storage, so `eframe` gained the `persistence`
+  feature. Theme, tab, selected tool, the connection form and each tool's
+  prefs are saved; the theme selector kept its hover text.
+- The log directory is a pane field; `SessionCmd::SetLogDir` /
+  `Session::set_log_dir` were added for it.
+- A tool with `needs_connection() == false` runs on a worker thread with
+  its own bus (`app.rs::run_offline`); no such tool exists yet.
+- Acceptance: `tests/session.rs::connect_once_run_twice_stop_one_disconnect`
+  drives the exact command sequence the buttons send. The window itself
+  was launched against the mock, not clicked through, and has not met
+  hardware.
+
 - `bin/rusty-tip-gui/` with `required-features = ["gui"]` in `Cargo.toml`.
   Modules: `main.rs`, `app.rs`, `connection.rs` (pane), `tools/mod.rs`,
   `tools/tip_prep.rs`, `run_view.rs`.
