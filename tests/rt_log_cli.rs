@@ -166,3 +166,68 @@ fn summary_timeline_plot_and_export_read_a_real_log() {
 
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn export_writes_a_stream_dump_as_a_time_series() {
+    use rusty_tip::experiment_log::SignalFact;
+    use rusty_tip::routine::StreamDumpEvent;
+    use rusty_tip::spm_controller::StreamSnapshot;
+
+    let dir = scratch_dir("dump");
+    let log = dir.join("tip_prep_dump.jsonl");
+    let facts = ControllerFacts {
+        signals: vec![SignalFact {
+            index: 0,
+            name: "Current (A)".into(),
+            tcp_channel: Some(0),
+        }],
+        stream_rate_hz: Some(500.0),
+    };
+    let mut bus = EventBus::new();
+    bus.add_observer(Box::new(FileLogger::new(fs::File::create(&log).unwrap())));
+    bus.emit(Event::run_started(RunHeader::new(
+        log_schema(),
+        serde_json::Value::Null,
+        facts,
+    )));
+    bus.emit(Event::typed(&StreamDumpEvent {
+        stream: StreamSnapshot {
+            // Index 30 is not in the header, so it falls back to its number.
+            signals: vec![0, 30],
+            t_s: vec![-0.002, 0.0],
+            columns: vec![vec![1e-10, 4.2e-9], vec![1.5e-8, 1.4e-8]],
+        },
+    }));
+    drop(bus);
+
+    let export_dir = dir.join("export");
+    let (ok, _, err) = rt_log(&[
+        "export",
+        log.to_str().unwrap(),
+        "--out",
+        export_dir.to_str().unwrap(),
+    ]);
+    assert!(ok, "{err}");
+    let names: Vec<String> = fs::read_dir(&export_dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !names.iter().any(|n| n == "routine_stream_dump.csv"),
+        "the dump is not also flattened into an empty per-kind table: {names:?}"
+    );
+    let dump = names
+        .iter()
+        .find(|n| n.starts_with("stream_dump_"))
+        .unwrap_or_else(|| panic!("no stream dump in {names:?}"));
+    let csv = fs::read_to_string(export_dir.join(dump)).unwrap();
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines[0], "t_s,Current (A),signal_30");
+    assert_eq!(
+        lines[1], "-0.002,1e-10,1.5e-8",
+        "currents keep their precision"
+    );
+    assert_eq!(lines.len(), 3, "header plus two samples");
+
+    fs::remove_dir_all(&dir).unwrap();
+}

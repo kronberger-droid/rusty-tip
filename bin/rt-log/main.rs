@@ -593,10 +593,22 @@ fn export(log: &Log, args: &ExportArgs) -> Result<(), Box<dyn Error>> {
         write_csv(&out.join(format!("{label}.csv")), &header, &rows)?;
     }
 
+    // A stream dump is a time series, not a row per event: one file each,
+    // time down the side, a column per signal.
+    for r in &log.records {
+        if let Body::Custom { kind, data } = &r.body
+            && kind == STREAM_DUMP
+        {
+            write_stream_dump(&out.join(format!("stream_dump_{}.csv", r.seq)), log, data)?;
+        }
+    }
+
     // One table per declared custom kind, columns from its schema.
     let mut by_kind: BTreeMap<String, Vec<&Record>> = BTreeMap::new();
     for r in &log.records {
-        if let Body::Custom { kind, .. } = &r.body {
+        if let Body::Custom { kind, .. } = &r.body
+            && kind != STREAM_DUMP
+        {
             by_kind.entry(kind.clone()).or_default().push(r);
         }
     }
@@ -665,6 +677,68 @@ fn cell(v: Option<&Value>) -> String {
         Some(Value::Bool(b)) => b.to_string(),
         Some(other) => other.to_string(),
     }
+}
+
+const STREAM_DUMP: &str = "routine/stream_dump";
+
+/// Write a `routine/stream_dump` as `t_s` plus one column per signal, named
+/// from the header's signal list. Values are written in exponent form, since
+/// a current in amperes does not survive `fmt_num`'s six decimals.
+fn write_stream_dump(path: &Path, log: &Log, data: &Value) -> std::io::Result<()> {
+    let stream = &data["stream"];
+    let as_f64s = |v: &Value| -> Vec<f64> {
+        v.as_array()
+            .map(|a| a.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect())
+            .unwrap_or_default()
+    };
+    let t_s = as_f64s(&stream["t_s"]);
+    let columns: Vec<Vec<f64>> = stream["columns"]
+        .as_array()
+        .map(|cols| cols.iter().map(as_f64s).collect())
+        .unwrap_or_default();
+    let names: Vec<String> = stream["signals"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_u64)
+                .map(|i| signal_name(log, i))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let header: Vec<&str> = std::iter::once("t_s")
+        .chain(names.iter().map(String::as_str))
+        .collect();
+    let rows: Vec<Vec<String>> = t_s
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let mut row = vec![fmt_num(*t)];
+            row.extend(
+                columns
+                    .iter()
+                    // The stream is f32; narrowing drops the digits the
+                    // f64 widening in the JSON added.
+                    .map(|c| {
+                        c.get(i)
+                            .map(|&v| format!("{:e}", v as f32))
+                            .unwrap_or_default()
+                    }),
+            );
+            row
+        })
+        .collect();
+    write_csv(path, &header, &rows)
+}
+
+/// The header's first name for a signal index, or `signal_<index>`.
+fn signal_name(log: &Log, index: u64) -> String {
+    log.header()
+        .and_then(|h| h.controller["signals"].as_array())
+        .and_then(|sigs| sigs.iter().find(|s| s["index"].as_u64() == Some(index)))
+        .and_then(|s| s["name"].as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("signal_{index}"))
 }
 
 fn write_csv(path: &Path, header: &[&str], rows: &[Vec<String>]) -> std::io::Result<()> {
