@@ -204,7 +204,7 @@ impl Default for RepositionSpec {
             z_retract: -3,
             post_move_settle_ms: 500,
             post_approach_settle_ms: 500,
-            approach_timeout_ms: 300_000,
+            approach_timeout_ms: crate::action::z_controller::DEFAULT_APPROACH_TIMEOUT_MS,
         }
     }
 }

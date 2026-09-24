@@ -124,7 +124,7 @@ fn default_approach_timeout_ms() -> u64 {
 }
 /// A reposition retracts three coarse steps, so its approach is short.
 fn default_reposition_approach_timeout_ms() -> u64 {
-    300_000
+    crate::action::z_controller::DEFAULT_APPROACH_TIMEOUT_MS
 }
 /// 0.2.3 backed the coarse motor off ten steps after the final withdraw; the
 /// default here is a shorter two.

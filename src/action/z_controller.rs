@@ -107,15 +107,18 @@ pub struct AutoApproach {
     pub timeout_ms: u64,
 }
 
+/// Budget for one auto-approach when the caller names none: five minutes.
+pub const DEFAULT_APPROACH_TIMEOUT_MS: u64 = 300_000;
+
 fn default_approach_timeout_ms() -> u64 {
-    300_000 // 5 minutes
+    DEFAULT_APPROACH_TIMEOUT_MS
 }
 
 impl Default for AutoApproach {
     fn default() -> Self {
         Self {
             wait: true,
-            timeout_ms: 300_000,
+            timeout_ms: DEFAULT_APPROACH_TIMEOUT_MS,
         }
     }
 }
@@ -288,7 +291,7 @@ impl Default for CalibratedApproach {
     fn default() -> Self {
         Self {
             wait: true,
-            timeout_ms: 300_000,
+            timeout_ms: DEFAULT_APPROACH_TIMEOUT_MS,
         }
     }
 }

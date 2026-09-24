@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use nanonis_rs::motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D};
 
 use crate::action::util::Wait;
-use crate::action::z_controller::{CalibratedApproach, Withdraw};
+use crate::action::z_controller::{CalibratedApproach, DEFAULT_APPROACH_TIMEOUT_MS, Withdraw};
 use crate::action::{Action, ActionContext, ActionOutput};
 use crate::spm_controller::Capability;
 
@@ -221,7 +221,7 @@ fn default_settle_ms() -> u64 {
 }
 
 fn default_approach_timeout_ms() -> u64 {
-    300_000
+    DEFAULT_APPROACH_TIMEOUT_MS
 }
 
 impl Default for Reposition {
