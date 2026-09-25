@@ -13,18 +13,22 @@
 //! `drift/burst`), and is kept on the routine as a [`DriftReport`] for a
 //! caller that wants to print it.
 
+use std::fmt;
 use std::time::Duration;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::action::drift::{CompensateDrift, DriftCompensation, DriftEstimate};
+use crate::action::drift::CompensateDrift;
 use crate::event::Event;
 use crate::experiment_log::{LogEvent, ToolSchema};
 use crate::routine::{ExitPolicy, Outcome, Routine, Rt, RunSetup};
 use crate::signal_registry::SignalIndex;
 use crate::spm_controller::DriftComp;
 use crate::spm_error::SpmError;
+
+/// Picometres to metres: the unit drift is spoken of in.
+pub const PM: f64 = 1e-12;
 
 /// Which drift operation to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -113,7 +117,7 @@ impl Default for DriftParams {
 }
 
 /// When a status was taken.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StatusWhen {
     Before,
@@ -121,7 +125,7 @@ pub enum StatusWhen {
 }
 
 /// The compensation as the controller reports it.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DriftStatusEvent {
     pub when: StatusWhen,
     pub enabled: bool,
@@ -150,12 +154,59 @@ impl DriftStatusEvent {
     }
 }
 
+impl DriftStatusEvent {
+    /// Taken after the operation, rather than before it.
+    pub fn after(&self) -> bool {
+        self.when == StatusWhen::After
+    }
+
+    /// The axes that have run out of range, if any.
+    pub fn saturated(&self) -> Vec<&'static str> {
+        [
+            (self.x_saturated, "x"),
+            (self.y_saturated, "y"),
+            (self.z_saturated, "z"),
+        ]
+        .into_iter()
+        .filter_map(|(s, axis)| s.then_some(axis))
+        .collect()
+    }
+}
+
+impl fmt::Display for DriftStatusEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "compensation {}: vx {:.3} pm/s, vy {:.3} pm/s, vz {:.3} pm/s; ",
+            if self.enabled { "on" } else { "off" },
+            self.vx_m_s / PM,
+            self.vy_m_s / PM,
+            self.vz_m_s / PM
+        )?;
+        let saturated = self.saturated();
+        if saturated.is_empty() {
+            write!(
+                f,
+                "no axis saturated (limit {}% of range)",
+                self.saturation_limit_percent
+            )
+        } else {
+            write!(
+                f,
+                "SATURATED on {}: compensation on that axis has stopped and only an \
+                 off/on cycle restarts it",
+                saturated.join(", ")
+            )
+        }
+    }
+}
+
 impl LogEvent for DriftStatusEvent {
     const KIND: &'static str = "drift/status";
 }
 
 /// One measured drift rate.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DriftMeasuredEvent {
     pub rate_m_s: f64,
     pub std_err_m_s: f64,
@@ -165,12 +216,30 @@ pub struct DriftMeasuredEvent {
     pub negligible: bool,
 }
 
+impl fmt::Display for DriftMeasuredEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Z drift: {:+.3} ± {:.3} pm/s ({} samples over {:.1} s){}",
+            self.rate_m_s / PM,
+            self.std_err_m_s / PM,
+            self.samples,
+            self.window_s,
+            if self.negligible {
+                ", consistent with zero"
+            } else {
+                ""
+            }
+        )
+    }
+}
+
 impl LogEvent for DriftMeasuredEvent {
     const KIND: &'static str = "drift/measured";
 }
 
 /// Where a compensation run left things.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DriftCompensatedEvent {
     pub residual_rate_m_s: f64,
     pub residual_std_err_m_s: f64,
@@ -179,6 +248,24 @@ pub struct DriftCompensatedEvent {
     pub response: Option<f64>,
     pub bursts: usize,
     pub converged: bool,
+}
+
+impl fmt::Display for DriftCompensatedEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "residual Z drift: {:+.3} ± {:.3} pm/s after {} bursts, {}",
+            self.residual_rate_m_s / PM,
+            self.residual_std_err_m_s / PM,
+            self.bursts,
+            if self.converged {
+                "inside its error bar"
+            } else {
+                "outside its error bar (one burst does that from noise now and then; if \
+                 it repeats, lengthen the window)"
+            }
+        )
+    }
 }
 
 impl LogEvent for DriftCompensatedEvent {
@@ -195,13 +282,15 @@ pub fn log_schema() -> ToolSchema {
         .including(crate::routine::log_schema())
 }
 
-/// What a run found, for a caller that prints rather than reads the log.
+/// What a run found, as the events it wrote, for a caller that prints
+/// rather than reads the log. Each one displays as the sentence the CLI
+/// prints.
 #[derive(Debug, Clone, Default)]
 pub struct DriftReport {
-    pub before: Option<DriftComp>,
-    pub estimate: Option<DriftEstimate>,
-    pub compensation: Option<DriftCompensation>,
-    pub after: Option<DriftComp>,
+    pub before: Option<DriftStatusEvent>,
+    pub estimate: Option<DriftMeasuredEvent>,
+    pub compensation: Option<DriftCompensatedEvent>,
+    pub after: Option<DriftStatusEvent>,
 }
 
 /// One drift operation as a routine. See the [module docs](self).
@@ -221,10 +310,10 @@ impl DriftRoutine {
         }
     }
 
-    fn status(&mut self, rt: &mut Rt, when: StatusWhen) -> Result<DriftComp, SpmError> {
-        let comp = rt.drift()?.get()?;
-        rt.emit(Event::typed(&DriftStatusEvent::new(when, &comp)));
-        Ok(comp)
+    fn status(&mut self, rt: &mut Rt, when: StatusWhen) -> Result<DriftStatusEvent, SpmError> {
+        let status = DriftStatusEvent::new(when, &rt.drift()?.get()?);
+        rt.emit(Event::typed(&status));
+        Ok(status)
     }
 }
 
@@ -252,8 +341,7 @@ impl Routine for DriftRoutine {
             )));
         }
 
-        let before = self.status(rt, StatusWhen::Before)?;
-        self.report.before = Some(before);
+        self.report.before = Some(self.status(rt, StatusWhen::Before)?);
 
         match p.op {
             DriftOp::Status => {}
@@ -261,14 +349,15 @@ impl Routine for DriftRoutine {
                 let estimate = rt
                     .drift()?
                     .measure_z(self.z, Duration::from_millis(p.window_ms))?;
-                rt.emit(Event::typed(&DriftMeasuredEvent {
+                let measured = DriftMeasuredEvent {
                     rate_m_s: estimate.rate_m_s,
                     std_err_m_s: estimate.std_err_m_s,
                     samples: estimate.samples,
                     window_s: estimate.window_s,
                     negligible: estimate.is_negligible(0.0),
-                }));
-                self.report.estimate = Some(estimate);
+                };
+                rt.emit(Event::typed(&measured));
+                self.report.estimate = Some(measured);
             }
             DriftOp::Compensate => {
                 let result = rt.drift()?.compensate(&CompensateDrift {
@@ -279,22 +368,22 @@ impl Routine for DriftRoutine {
                     response: p.response,
                     ..CompensateDrift::new(self.z)
                 })?;
-                rt.emit(Event::typed(&DriftCompensatedEvent {
+                let compensated = DriftCompensatedEvent {
                     residual_rate_m_s: result.residual.rate_m_s,
                     residual_std_err_m_s: result.residual.std_err_m_s,
                     vz_m_s: result.vz_m_s,
                     response: result.response,
                     bursts: result.bursts,
                     converged: result.converged,
-                }));
-                self.report.compensation = Some(result);
+                };
+                rt.emit(Event::typed(&compensated));
+                self.report.compensation = Some(compensated);
                 self.report.after = Some(self.status(rt, StatusWhen::After)?);
             }
             DriftOp::Off => {
-                rt.drift()?.set(&DriftComp {
-                    enabled: false,
-                    ..before
-                })?;
+                let mut comp = rt.drift()?.get()?;
+                comp.enabled = false;
+                rt.drift()?.set(&comp)?;
                 self.report.after = Some(self.status(rt, StatusWhen::After)?);
             }
         }
@@ -373,7 +462,8 @@ mod tests {
 
         let after = routine.report.after.unwrap();
         assert!(!after.enabled);
-        assert_eq!(after.vz, 3e-12);
+        assert_eq!(after.vz_m_s, 3e-12);
+        assert!(after.to_string().starts_with("compensation off: vx"));
     }
 
     #[test]

@@ -447,8 +447,20 @@ landed and where it differs from the sketch:
   prefs are saved; the theme selector kept its hover text.
 - The log directory is a pane field; `SessionCmd::SetLogDir` /
   `Session::set_log_dir` were added for it.
-- A tool with `needs_connection() == false` runs on a worker thread with
-  its own bus (`app.rs::run_offline`); no such tool exists yet.
+- No offline-run path: `Tool::needs_connection` and the worker-thread
+  runner were removed in the simplify pass since no tool used them. When
+  `plan` lands (step 5), give the library an `OfflineJob` sharing
+  `Session::run`'s log bracket and let `Tool::job()` return which kind it
+  built, rather than a flag that can disagree with the job.
+- Follow-ups the review left open on purpose: the session learns that a
+  routine job closed its own log by watching the bus for `run_finished`
+  (`FinishedFlag`); one owner of the log bracket would be cleaner and is a
+  library change that belongs with the harness, not this branch. The log
+  tail's one-line rendering (`run_view.rs::summarize`) and rt-log's
+  `timeline` produce the same shape from two private copies; a shared
+  `Body::one_line` in `experiment_log::reader` would fix that. `TeeWriter`
+  and `PlotColors` are copied from `tip-prep-gui`, which stays untouched
+  until it retires.
 - Acceptance: `tests/session.rs::connect_once_run_twice_stop_one_disconnect`
   drives the exact command sequence the buttons send. The window itself
   was launched against the mock, not clicked through, and has not met

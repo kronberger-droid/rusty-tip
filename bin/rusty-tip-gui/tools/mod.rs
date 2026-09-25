@@ -5,9 +5,10 @@
 //! run view while its job runs. The session never sees a tool and a tool
 //! never sees a thread.
 //!
-//! This is the step-2 shape: `setup` is a hand-drawn form. Step 3 of the
-//! handoff replaces it with a schema-driven form over the tool's parameter
-//! type, at which point `setup` goes and `schema`/`defaults` arrive.
+//! Tip prep draws its setup from its config's JSON Schema
+//! ([`crate::form`]); drift draws a small form by hand, since it greys
+//! fields out by operation, which the schema form cannot say yet. A tool
+//! that needs no connection (the handoff's `plan`) is not catered for yet.
 
 pub mod drift;
 pub mod tip_prep;
@@ -25,7 +26,8 @@ use crate::run_view::RunView;
 /// `connection` into the file on save, and hands a file's settings back
 /// through `import` on load, for the page to take when disconnected.
 pub struct SetupCx {
-    pub connection: ConnectionSettings,
+    /// The page as it stands, or what is wrong with it.
+    pub connection: Result<ConnectionSettings, String>,
     pub import: Option<ConnectionSettings>,
 }
 
@@ -36,13 +38,6 @@ pub trait Tool {
 
     /// What the sidebar shows.
     fn label(&self) -> &str;
-
-    /// Whether the job needs the session's controller. A tool that says no
-    /// runs on a worker thread of its own, so it works while disconnected
-    /// and while another job holds the session.
-    fn needs_connection(&self) -> bool {
-        true
-    }
 
     /// The Setup tab.
     fn setup(&mut self, ui: &mut egui::Ui, cx: &mut SetupCx);

@@ -9,6 +9,7 @@ mod connection;
 mod form;
 mod run_view;
 mod tools;
+mod widgets;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use log::LevelFilter;

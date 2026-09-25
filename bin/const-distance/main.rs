@@ -59,7 +59,7 @@ use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, Strea
 use rusty_tip::routine::{Outcome, run_routine};
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::{SignalIndex, SignalRegistry};
-use rusty_tip::spm_controller::{DriftComp, SpmController};
+use rusty_tip::spm_controller::SpmController;
 
 /// Nanometres to metres.
 const NM: f64 = 1e-9;
@@ -605,37 +605,14 @@ fn drift_op(
     );
     let outcome = run_routine(controller, events, &ShutdownFlag::new(), &mut routine)?;
     let report = routine.report;
-
     if let Some(before) = &report.before {
-        print_status(before);
+        println!("{before}");
     }
     if let Some(estimate) = &report.estimate {
-        println!(
-            "Z drift: {:+.3} ± {:.3} pm/s ({} samples over {:.1} s){}",
-            estimate.rate_m_s / PM,
-            estimate.std_err_m_s / PM,
-            estimate.samples,
-            estimate.window_s,
-            match estimate.is_negligible(0.0) {
-                true => ", consistent with zero",
-                false => "",
-            }
-        );
+        println!("{estimate}");
     }
     if let Some(result) = &report.compensation {
-        println!(
-            "residual Z drift: {:+.3} ± {:.3} pm/s after {} bursts, {}",
-            result.residual.rate_m_s / PM,
-            result.residual.std_err_m_s / PM,
-            result.bursts,
-            match result.converged {
-                true => "inside its error bar",
-                false => {
-                    "outside its error bar. One burst does that from noise now and then; \
-                     if it repeats, raise --window"
-                }
-            }
-        );
+        println!("{result}");
         match (result.response, args.response) {
             (Some(r), None) => println!(
                 "response {r:+.2}: a positive vz {} the measured drift. Pass --response {} \
@@ -648,42 +625,12 @@ fn drift_op(
         }
     }
     if let Some(after) = &report.after {
-        print_status(after);
+        println!("{after}");
     }
 
     match outcome {
         Outcome::Completed => Ok(()),
         other => Err(format!("drift did not complete: {other:?}").into()),
-    }
-}
-
-/// The compensation as the controller reports it, in pm/s.
-fn print_status(comp: &DriftComp) {
-    println!(
-        "compensation {}: vx {:.3} pm/s, vy {:.3} pm/s, vz {:.3} pm/s",
-        if comp.enabled { "on" } else { "off" },
-        comp.vx / PM,
-        comp.vy / PM,
-        comp.vz / PM
-    );
-    let saturated: Vec<&str> = [
-        (comp.x_saturated, "x"),
-        (comp.y_saturated, "y"),
-        (comp.z_saturated, "z"),
-    ]
-    .into_iter()
-    .filter_map(|(s, axis)| s.then_some(axis))
-    .collect();
-    match saturated.is_empty() {
-        true => println!(
-            "no axis saturated (limit {}% of range)",
-            comp.saturation_limit_percent
-        ),
-        false => println!(
-            "SATURATED on {}: compensation on that axis has stopped and only \
-             an off/on cycle restarts it",
-            saturated.join(", ")
-        ),
     }
 }
 
