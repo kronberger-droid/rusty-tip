@@ -490,7 +490,7 @@ for (a real form with checkboxes, the important settings on top):
 
 - `JsonSchema` on `AppConfig` and everything under it, with `x-unit` and
   `x-display-unit` extensions. `bin/rusty-tip-gui/form.rs` is
-  `SchemaForm`: `render` draws the whole value as collapsible sections,
+  `SchemaForm`: `render_except` draws the whole value as collapsible sections,
   `render_path` draws one field by dotted path for the featured block.
   Covered: objects, numbers (drag values scaled to the display unit),
   integers, booleans, strings, `Option<T>` (checkbox plus field), string
@@ -505,7 +505,9 @@ for (a real form with checkboxes, the important settings on top):
   `egui::Context::run`: drawing the default config edits nothing and round
   trips, every `configs/*.toml` survives the form, the schema default
   deserializes, switching the pulse method builds the variant's defaults.
-- Where connection settings live (Martin, 2026-09-25): the config file
+- Where connection settings live (proposed 2026-09-25 after Martin asked to
+  think about the duplicated config locations; his call on it is still
+  open): the config file
   keeps its connection tables so the CLI stays self-contained, and in the
   workbench the Connection page is their only editor. The tip-prep form
   hides those tables (`CONNECTION_SECTIONS`), `Tool::setup` gets a

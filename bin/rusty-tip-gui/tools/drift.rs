@@ -4,6 +4,7 @@
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints, Points};
 
+use rusty_tip::action::drift::DriftBurstEvent;
 use rusty_tip::drift::{
     DriftCompensatedEvent, DriftMeasuredEvent, DriftOp, DriftParams, DriftRoutine,
     DriftStatusEvent, PM,
@@ -271,7 +272,11 @@ impl Tool for DriftTool {
             };
         }
 
-        let bursts = view.custom("drift/burst");
+        let bursts: Vec<DriftBurstEvent> = view
+            .custom(DriftBurstEvent::KIND)
+            .iter()
+            .filter_map(|(_, d)| serde_json::from_value(d.clone()).ok())
+            .collect();
         if !bursts.is_empty() {
             ui.add_space(8.0);
             ui.label("Bursts");
@@ -284,15 +289,14 @@ impl Tool for DriftTool {
                         ui.label(egui::RichText::new(h).strong());
                     }
                     ui.end_row();
-                    for (_, b) in bursts {
-                        let pm = |key: &str| b[key].as_f64().unwrap_or(f64::NAN) / PM;
-                        ui.label(b["burst"].to_string());
-                        ui.label(b["role"].as_str().unwrap_or("?"));
-                        ui.label(format!("{:+.3}", pm("vz_m_s")));
+                    for b in &bursts {
+                        ui.label(b.burst.to_string());
+                        ui.label(format!("{:?}", b.role).to_lowercase());
+                        ui.label(format!("{:+.3}", b.vz_m_s / PM));
                         ui.label(format!(
                             "{:+.3} ± {:.3}",
-                            pm("drift_m_s"),
-                            pm("std_err_m_s")
+                            b.drift_m_s / PM,
+                            b.std_err_m_s / PM
                         ));
                         ui.end_row();
                     }
@@ -300,7 +304,7 @@ impl Tool for DriftTool {
 
             let drift: Vec<[f64; 2]> = bursts
                 .iter()
-                .filter_map(|(_, b)| Some([b["burst"].as_f64()?, b["drift_m_s"].as_f64()? / PM]))
+                .map(|b| [b.burst as f64, b.drift_m_s / PM])
                 .collect();
             let color = if ui.visuals().dark_mode {
                 egui::Color32::LIGHT_BLUE

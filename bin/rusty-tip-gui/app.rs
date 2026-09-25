@@ -163,6 +163,11 @@ impl WorkbenchApp {
                 self.finish(result);
             }
         }
+        self.drain_run_events();
+    }
+
+    /// Fold everything the running job has sent since the last frame.
+    fn drain_run_events(&mut self) {
         if let Some(run) = &self.run {
             while let Ok(event) = run.events.try_recv() {
                 self.view.apply_event(&event);
@@ -172,11 +177,8 @@ impl WorkbenchApp {
 
     fn finish(&mut self, result: Result<Outcome, String>) {
         // Whatever is still in the channel belongs to this run.
-        if let Some(run) = self.run.take() {
-            while let Ok(event) = run.events.try_recv() {
-                self.view.apply_event(&event);
-            }
-        }
+        self.drain_run_events();
+        self.run = None;
         self.message = Some(match &result {
             Ok(outcome) => Note::ok(format!("Run finished: {}", outcome_text(*outcome))),
             Err(e) => Note::err(format!("Run failed: {e}")),
@@ -365,6 +367,7 @@ impl WorkbenchApp {
                     connection: self.pane.form.settings(),
                     import: None,
                 };
+                note(ui, &self.message);
                 self.tools[tool].setup(ui, &mut cx);
                 if let Some(settings) = cx.import {
                     self.import_connection(settings);
@@ -464,17 +467,18 @@ impl WorkbenchApp {
         let mut open = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
             egui::Grid::new("history")
-                .num_columns(4)
+                .num_columns(5)
                 .striped(true)
                 .spacing([16.0, 4.0])
                 .show(ui, |ui| {
-                    for h in ["file", "tool", "outcome", ""] {
+                    for h in ["file", "tool", "started", "outcome", ""] {
                         ui.label(egui::RichText::new(h).strong());
                     }
                     ui.end_row();
                     for entry in &self.history {
                         ui.label(file_name(&entry.path));
                         ui.label(entry.tool.as_deref().unwrap_or("(no header)"));
+                        ui.label(entry.started_at.map(started_text).unwrap_or_default());
                         ui.label(match &entry.finished {
                             Some((outcome, Some(detail), _)) => format!("{outcome} ({detail})"),
                             Some((outcome, None, _)) => outcome.clone(),
@@ -572,6 +576,17 @@ fn outcome_text(outcome: Outcome) -> String {
         Some(detail) => format!("{name} ({detail})"),
         None => name,
     }
+}
+
+/// A log's first timestamp as local date and time.
+fn started_text(unix_secs: f64) -> String {
+    chrono::DateTime::from_timestamp(unix_secs as i64, 0)
+        .map(|t| {
+            t.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_default()
 }
 
 fn file_name(path: &std::path::Path) -> String {

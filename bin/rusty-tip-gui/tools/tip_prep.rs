@@ -68,8 +68,10 @@ const MAX_PULSE: &str = "tip_prep/max_pulse.pulse_voltage";
 /// `Line` renders nothing until the second point arrives.
 const MARKER_RADIUS: f32 = 2.5;
 
-/// The config tables the Connection page owns. Not drawn here; written
-/// from the page on save, offered to the page on load.
+/// The config tables the Connection page owns, plus `console`, which only
+/// the CLI reads. Not drawn here; the connection tables are written from
+/// the page on save and offered to the page on load, `console` is kept as
+/// the file had it.
 const CONNECTION_SECTIONS: &[&str] = &[
     "nanonis",
     "data_acquisition",
@@ -198,13 +200,12 @@ impl Tool for TipPrepTool {
         ui.horizontal(|ui| {
             ui.label("Config file");
             let width = (ui.available_width() - 40.0).max(120.0);
-            let picked = path_field(ui, &mut self.path, width, || {
+            let (field, picked) = path_field(ui, &mut self.path, width, || {
                 rfd::FileDialog::new()
                     .add_filter("TOML", &["toml"])
                     .pick_file()
             });
-            let entered = ui.input(|i| i.key_pressed(egui::Key::Enter))
-                && ui.memory(|m| m.has_focus(ui.id().with("path")));
+            let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             load = picked || entered;
         });
         if load {

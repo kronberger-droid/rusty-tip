@@ -102,7 +102,7 @@ impl NanonisBackend {
                 .control_ports
                 .first()
                 .copied()
-                .unwrap_or(6501),
+                .unwrap_or(Self::default().port),
             data_port: config.data_acquisition.data_port,
             sample_rate_hz: f64::from(config.data_acquisition.sample_rate),
             layout_file: config.nanonis.layout_file.as_ref().map(PathBuf::from),

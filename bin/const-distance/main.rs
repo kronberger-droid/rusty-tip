@@ -50,7 +50,7 @@ use rusty_tip::action::{ActionContext, DataStore, run_action};
 use rusty_tip::analyzer::rolling_ellipsoid::{
     Border, GridSpacing, RollingEllipsoid, vertical_clearance,
 };
-use rusty_tip::drift::{DriftOp as DriftRoutineOp, DriftParams, DriftRoutine};
+use rusty_tip::drift::{DriftOp as DriftRoutineOp, DriftParams, DriftRoutine, PM};
 use rusty_tip::event::{Event, EventBus, EventEmitter, FileLogger, Observer};
 use rusty_tip::experiment_log::{ControllerFacts, LogEvent, RunHeader, ToolSchema};
 use rusty_tip::export::{gsf, write_table, write_xyz};
@@ -603,7 +603,7 @@ fn drift_op(
             require_stream: !args.no_stream,
         },
     );
-    let outcome = run_routine(controller, events, &ShutdownFlag::new(), &mut routine)?;
+    let outcome = run_routine(controller, events, &ctrl_c_flag(), &mut routine)?;
     let report = routine.report;
     if let Some(before) = &report.before {
         println!("{before}");
@@ -633,9 +633,6 @@ fn drift_op(
         other => Err(format!("drift did not complete: {other:?}").into()),
     }
 }
-
-/// Picometres to metres.
-const PM: f64 = 1e-12;
 
 /// Build the constant-lift multi-pass configuration and, unless `--dry-run`,
 /// load and activate it on the controller.

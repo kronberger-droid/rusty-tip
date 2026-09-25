@@ -15,21 +15,23 @@ pub fn status_dot(ui: &mut egui::Ui, color: egui::Color32) {
 }
 
 /// A text field for a path with a `…` button that opens `dialog`. Returns
-/// `true` when the dialog picked a path, which is then in `text`.
+/// the field's response and whether the dialog picked a path, which is
+/// then in `text`.
 pub fn path_field(
     ui: &mut egui::Ui,
     text: &mut String,
     width: f32,
     dialog: impl FnOnce() -> Option<PathBuf>,
-) -> bool {
-    ui.add(egui::TextEdit::singleline(text).desired_width(width));
+) -> (egui::Response, bool) {
+    let response = ui.add(egui::TextEdit::singleline(text).desired_width(width));
+    let mut picked = false;
     if ui.button("…").clicked()
         && let Some(path) = dialog()
     {
         *text = path.display().to_string();
-        return true;
+        picked = true;
     }
-    false
+    (response, picked)
 }
 
 /// A line of feedback under a control: plain for news, red for a problem.
