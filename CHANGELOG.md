@@ -30,7 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   schema: checkboxes, drag values with units, combo boxes for enums and
   the pulse method, a checkbox plus field for optional limits, and the
   settings that decide a run at the top. A shipped config survives the
-  form unchanged, which a test checks for every file in `configs/`.
+  form unchanged, which a test checks for every file in `configs/`. The
+  file's connection tables (`[nanonis]`, `[data_acquisition]`,
+  `[experiment_logging]`, the TCP mapping) are not on the form: the
+  Connection page owns them in the workbench, loading a file offers them
+  to the page when disconnected, and Save writes the page's settings back
+  into the file, so one file serves the CLI and the workbench.
 - **Drift as a tool and a routine.** `rusty_tip::drift::DriftRoutine`
   wraps the drift actions (status, measure, compensate, off) as a
   `Routine` with `LeaveInPlace` and `RunSetup::NONE`, writing typed

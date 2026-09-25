@@ -9,14 +9,15 @@
 use eframe::egui;
 use egui_plot::{HLine, Line, Plot, PlotPoints, Points};
 
-use rusty_tip::config::AppConfig;
+use rusty_tip::config::{AppConfig, TcpChannelMapping};
 use rusty_tip::experiment_log::ToolSchema;
 use rusty_tip::routine::{Outcome, run_routine};
 use rusty_tip::session::{Job, JobCx};
 use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::TipPrep;
 
-use super::Tool;
+use super::{SetupCx, Tool};
+use crate::connection::ConnectionSettings;
 use crate::form::SchemaForm;
 use crate::run_view::RunView;
 
@@ -64,6 +65,16 @@ const MAX_PULSE: &str = "tip_prep/max_pulse.pulse_voltage";
 /// `Line` renders nothing until the second point arrives.
 const MARKER_RADIUS: f32 = 2.5;
 
+/// The config tables the Connection page owns. Not drawn here; written
+/// from the page on save, offered to the page on load.
+const CONNECTION_SECTIONS: &[&str] = &[
+    "nanonis",
+    "data_acquisition",
+    "experiment_logging",
+    "console",
+    "tcp_channel_mapping",
+];
+
 /// The fields that decide a run, shown above everything else, in order.
 const FEATURED: &[&str] = &[
     "tip_prep.sharp_tip_bounds",
@@ -87,6 +98,9 @@ pub struct TipPrepTool {
     /// The last successful parse of `value`, for the sharp band.
     parsed: Option<AppConfig>,
     message: Option<(String, bool)>,
+    /// A loaded file's connection tables, handed to the Connection page on
+    /// the next frame.
+    import: Option<ConnectionSettings>,
 }
 
 impl Default for TipPrepTool {
@@ -99,6 +113,7 @@ impl Default for TipPrepTool {
             form: SchemaForm::new(schema),
             parsed: None,
             message: None,
+            import: None,
         };
         tool.set_config(&AppConfig::default());
         tool
@@ -136,6 +151,7 @@ impl TipPrepTool {
             .and_then(|text| toml::from_str::<AppConfig>(&text).map_err(|e| e.to_string()));
         match loaded {
             Ok(config) => {
+                self.import = Some(connection_of(&config));
                 self.set_config(&config);
                 self.message = Some((format!("Loaded {}", self.path), false));
             }
@@ -143,13 +159,18 @@ impl TipPrepTool {
         }
     }
 
-    fn save(&mut self) {
+    /// Write the file with the Connection page's settings in its
+    /// connection tables, so the same file drives the CLI.
+    fn save(&mut self, connection: &ConnectionSettings) {
         if !self.path.to_lowercase().ends_with(".toml") {
             self.path.push_str(".toml");
         }
         let written = self
             .parse()
-            .and_then(|config| toml::to_string_pretty(&config).map_err(|e| e.to_string()))
+            .and_then(|mut config| {
+                set_connection(&mut config, connection);
+                toml::to_string_pretty(&config).map_err(|e| e.to_string())
+            })
             .and_then(|text| {
                 std::fs::write(&self.path, text)
                     .map_err(|e| format!("Cannot write {}: {e}", self.path))
@@ -175,10 +196,17 @@ impl Tool for TipPrepTool {
         "Tip prep"
     }
 
-    fn setup(&mut self, ui: &mut egui::Ui) {
+    fn setup(&mut self, ui: &mut egui::Ui, cx: &mut SetupCx) {
+        // The path on its own line, taking the width there is; the buttons
+        // wrap below it, so a narrow window pushes nothing off the edge.
         ui.horizontal(|ui| {
-            ui.label("Config file:");
-            ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(360.0));
+            ui.label("Config file");
+            let browse_width = 90.0;
+            let width = (ui.available_width() - browse_width).max(120.0);
+            let path = ui.add(egui::TextEdit::singleline(&mut self.path).desired_width(width));
+            if path.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                self.load();
+            }
             if ui.button("Browse…").clicked()
                 && let Some(path) = rfd::FileDialog::new()
                     .add_filter("TOML", &["toml"])
@@ -187,17 +215,32 @@ impl Tool for TipPrepTool {
                 self.path = path.display().to_string();
                 self.load();
             }
+        });
+        ui.horizontal_wrapped(|ui| {
             if ui
-                .add_enabled(!self.path.is_empty(), egui::Button::new("Load"))
+                .add_enabled(!self.path.is_empty(), egui::Button::new("Reload"))
+                .on_hover_text("Read the file again, dropping edits made here")
                 .clicked()
             {
                 self.load();
             }
             if ui
                 .add_enabled(!self.path.is_empty(), egui::Button::new("Save"))
+                .on_hover_text(
+                    "Write the form to the file, with the Connection page's settings \
+                     in its connection tables",
+                )
                 .clicked()
             {
-                self.save();
+                self.save(&cx.connection);
+            }
+            if ui.button("Save as…").clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .add_filter("TOML", &["toml"])
+                    .save_file()
+            {
+                self.path = path.display().to_string();
+                self.save(&cx.connection);
             }
             if ui.button("Validate").clicked() {
                 self.validate();
@@ -207,6 +250,9 @@ impl Tool for TipPrepTool {
                 self.message = Some(("Reset to the built-in defaults".into(), false));
             }
         });
+        if let Some(import) = self.import.take() {
+            cx.import = Some(import);
+        }
         if let Some((msg, is_error)) = &self.message {
             if *is_error {
                 ui.colored_label(egui::Color32::RED, msg);
@@ -233,12 +279,14 @@ impl Tool for TipPrepTool {
             ui.label(egui::RichText::new("Everything").strong());
             ui.label(
                 egui::RichText::new(
-                    "The connection and logging sections are kept for the CLI; the \
-                     workbench uses its Connection page instead.",
+                    "Where the controller is and where logs go are set on the Connection \
+                     page; Save writes them into the file so the CLI reads the same one.",
                 )
                 .weak(),
             );
-            changed |= self.form.render(ui, &mut self.value);
+            changed |= self
+                .form
+                .render_except(ui, &mut self.value, CONNECTION_SECTIONS);
             if changed {
                 self.message = None;
                 // Keep the sharp band on the plot in step with the form.
@@ -380,6 +428,52 @@ impl Tool for TipPrepTool {
     }
 }
 
+/// The connection tables of a config, as the Connection page holds them.
+fn connection_of(config: &AppConfig) -> ConnectionSettings {
+    ConnectionSettings {
+        host: config.nanonis.host_ip.clone(),
+        port: config
+            .nanonis
+            .control_ports
+            .first()
+            .copied()
+            .unwrap_or(6501),
+        data_port: config.data_acquisition.data_port,
+        sample_rate_hz: f64::from(config.data_acquisition.sample_rate),
+        layout_file: config.nanonis.layout_file.clone(),
+        settings_file: config.nanonis.settings_file.clone(),
+        tcp_channel_mapping: config.tcp_channel_mapping.clone().unwrap_or_default(),
+        log_dir: config
+            .experiment_logging
+            .enabled
+            .then(|| config.experiment_logging.output_path.clone()),
+    }
+}
+
+/// Put the Connection page's settings into a config's connection tables.
+fn set_connection(config: &mut AppConfig, s: &ConnectionSettings) {
+    config.nanonis.host_ip = s.host.clone();
+    if config.nanonis.control_ports.is_empty() {
+        config.nanonis.control_ports.push(s.port);
+    } else {
+        config.nanonis.control_ports[0] = s.port;
+    }
+    config.nanonis.layout_file = s.layout_file.clone();
+    config.nanonis.settings_file = s.settings_file.clone();
+    config.data_acquisition.data_port = s.data_port;
+    config.data_acquisition.sample_rate = s.sample_rate_hz.round() as u32;
+    config.tcp_channel_mapping = (!s.tcp_channel_mapping.is_empty())
+        .then(|| s.tcp_channel_mapping.clone())
+        .map(|m: Vec<TcpChannelMapping>| m);
+    match &s.log_dir {
+        Some(dir) => {
+            config.experiment_logging.enabled = true;
+            config.experiment_logging.output_path = dir.clone();
+        }
+        None => config.experiment_logging.enabled = false,
+    }
+}
+
 /// Every pulse fired, the cycle pulses and the max pulses merged in time.
 fn pulse_history(view: &RunView) -> Vec<[f64; 2]> {
     let mut pulses: Vec<[f64; 2]> = view
@@ -421,5 +515,48 @@ impl PlotColors {
                 bounds: egui::Color32::from_rgba_unmultiplied(0, 120, 40, 180),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A file's connection tables go into the Connection page and come back
+    /// out unchanged, so saving from the workbench cannot lose what the CLI
+    /// needs.
+    #[test]
+    fn connection_tables_round_trip_through_the_page() {
+        let mut config = AppConfig::default();
+        config.nanonis.host_ip = "192.168.1.10".into();
+        config.nanonis.layout_file = Some("a.lyt".into());
+        config.data_acquisition.sample_rate = 500;
+        config.tcp_channel_mapping = Some(vec![TcpChannelMapping {
+            nanonis_index: 76,
+            tcp_channel: 3,
+        }]);
+        let settings = connection_of(&config);
+        assert_eq!(settings.host, "192.168.1.10");
+        assert_eq!(settings.port, 6501);
+        assert_eq!(settings.sample_rate_hz, 500.0);
+        assert_eq!(settings.log_dir.as_deref(), Some("./experiments"));
+
+        let mut written = AppConfig::default();
+        set_connection(&mut written, &settings);
+        assert_eq!(connection_of(&written), settings);
+        assert_eq!(written.nanonis.host_ip, "192.168.1.10");
+        assert_eq!(written.tcp_channel_mapping.unwrap()[0].nanonis_index, 76);
+    }
+
+    #[test]
+    fn a_page_without_a_log_dir_switches_logging_off_in_the_file() {
+        let settings = ConnectionSettings {
+            log_dir: None,
+            ..connection_of(&AppConfig::default())
+        };
+        let mut written = AppConfig::default();
+        set_connection(&mut written, &settings);
+        assert!(!written.experiment_logging.enabled);
+        assert_eq!(connection_of(&written).log_dir, None);
     }
 }

@@ -23,7 +23,7 @@ use rusty_tip::shutdown::ShutdownFlag;
 
 use crate::connection::{ConnectionForm, ConnectionPane, PaneAction, status_dot};
 use crate::run_view::RunView;
-use crate::tools::{self, Tool};
+use crate::tools::{self, SetupCx, Tool};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 enum Tab {
@@ -296,6 +296,32 @@ impl WorkbenchApp {
         }
     }
 
+    /// A loaded file's connection tables: taken into the Connection page
+    /// when disconnected, mentioned when not.
+    fn import_connection(&mut self, settings: crate::connection::ConnectionSettings) {
+        if settings == self.pane.form.settings() {
+            return;
+        }
+        if self.pane.state != ConnState::Disconnected {
+            self.message = Some((
+                "The file's connection settings differ from the Connection page; \
+                 disconnect and load again to take them"
+                    .into(),
+                false,
+            ));
+            return;
+        }
+        let log_dir_before = self.pane.form.log_dir();
+        self.pane.form.apply_settings(&settings);
+        if self.pane.form.log_dir() != log_dir_before {
+            self.send(SessionCmd::SetLogDir(self.pane.form.log_dir()));
+        }
+        self.message = Some((
+            "Connection page updated from the file's connection tables".into(),
+            false,
+        ));
+    }
+
     // -- Rendering --
 
     fn apply_pane_action(&mut self, action: Option<PaneAction>) {
@@ -392,8 +418,14 @@ impl WorkbenchApp {
         ui.separator();
         match self.tab {
             Tab::Setup => {
-                let tool = &mut self.tools[self.selected];
-                tool.setup(ui);
+                let mut cx = SetupCx {
+                    connection: self.pane.form.settings(),
+                    import: None,
+                };
+                self.tools[self.selected].setup(ui, &mut cx);
+                if let Some(settings) = cx.import {
+                    self.import_connection(settings);
+                }
             }
             Tab::Run => self.render_run(ui),
             Tab::History => self.render_history(ui),

@@ -493,6 +493,14 @@ for (a real form with checkboxes, the important settings on top):
   `egui::Context::run`: drawing the default config edits nothing and round
   trips, every `configs/*.toml` survives the form, the schema default
   deserializes, switching the pulse method builds the variant's defaults.
+- Where connection settings live (Martin, 2026-09-25): the config file
+  keeps its connection tables so the CLI stays self-contained, and in the
+  workbench the Connection page is their only editor. The tip-prep form
+  hides those tables (`CONNECTION_SECTIONS`), `Tool::setup` gets a
+  `SetupCx` carrying the page's `ConnectionSettings`, loading a file
+  offers its tables to the page through `SetupCx::import` (taken only
+  when disconnected), and Save writes the page's settings into the file.
+  Picking a file with Browse, or Enter in the path field, loads it.
 
 - Derive `JsonSchema` on `AppConfig` and every nested config type (in
   `src/config.rs`), with unit annotations.

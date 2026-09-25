@@ -15,7 +15,19 @@ pub mod tip_prep;
 use eframe::egui;
 use rusty_tip::session::Job;
 
+use crate::connection::ConnectionSettings;
 use crate::run_view::RunView;
+
+/// What the Setup tab knows about the rest of the window.
+///
+/// Connection settings are the Connection page's. A tool whose config
+/// file also carries them (tip prep's does, for the CLI) writes
+/// `connection` into the file on save, and hands a file's settings back
+/// through `import` on load, for the page to take when disconnected.
+pub struct SetupCx {
+    pub connection: ConnectionSettings,
+    pub import: Option<ConnectionSettings>,
+}
 
 pub trait Tool {
     /// Short identifier, stable across versions: the sidebar key and the
@@ -33,7 +45,7 @@ pub trait Tool {
     }
 
     /// The Setup tab.
-    fn setup(&mut self, ui: &mut egui::Ui);
+    fn setup(&mut self, ui: &mut egui::Ui, cx: &mut SetupCx);
 
     /// Build the job from the current setup, or say what is wrong with it.
     fn job(&self) -> Result<Box<dyn Job>, String>;

@@ -10,7 +10,7 @@ use rusty_tip::routine::{Outcome, run_routine};
 use rusty_tip::session::{Job, JobCx};
 use rusty_tip::spm_error::SpmError;
 
-use super::Tool;
+use super::{SetupCx, Tool};
 use crate::run_view::RunView;
 
 /// Picometres to metres.
@@ -144,7 +144,7 @@ impl Tool for DriftTool {
         "Drift"
     }
 
-    fn setup(&mut self, ui: &mut egui::Ui) {
+    fn setup(&mut self, ui: &mut egui::Ui, _cx: &mut SetupCx) {
         ui.label(
             egui::RichText::new(
                 "Measures how fast Z drifts with the feedback closed and the scan stopped, \

@@ -30,14 +30,19 @@ impl SchemaForm {
         Self { root: schema }
     }
 
-    /// Draw the whole value: each top-level field a collapsible section.
-    /// Returns whether anything was edited.
-    pub fn render(&self, ui: &mut egui::Ui, value: &mut Value) -> bool {
+    /// Draw the whole value, each top-level field a collapsible section,
+    /// except the top-level fields named in `hidden`: their values stay in
+    /// `value` untouched, they are just not drawn, for sections another
+    /// page owns. Returns whether anything was edited.
+    pub fn render_except(&self, ui: &mut egui::Ui, value: &mut Value, hidden: &[&str]) -> bool {
         let schema = self.resolve(&self.root);
         let mut changed = false;
         if let Some(props) = schema.get("properties").and_then(Value::as_object) {
             let object = ensure_object(value);
             for (key, prop) in props {
+                if hidden.contains(&key.as_str()) {
+                    continue;
+                }
                 let prop = self.resolve(prop);
                 let field = object
                     .entry(key.clone())
@@ -195,18 +200,19 @@ impl SchemaForm {
     }
 
     /// The inside of a section: an object's fields as a grid, or the single
-    /// field the section stands for.
+    /// field the section stands for, as a one-row grid (more rows for a
+    /// tagged enum, which lays its variant's fields out below the combo).
     fn render_body(&self, ui: &mut egui::Ui, schema: &Value, value: &mut Value, id: &str) -> bool {
         match classify(schema) {
             Kind::Object => self.render_object(ui, schema, value, id),
-            Kind::Tagged { .. } | Kind::Optional(_) => self.render_field(ui, schema, value, "", id),
             _ => {
                 let mut changed = false;
+                let key = id.rsplit('.').next().unwrap_or(id).to_string();
                 egui::Grid::new(format!("{id}.grid"))
                     .num_columns(2)
                     .spacing([16.0, 6.0])
                     .show(ui, |ui| {
-                        changed = self.render_field(ui, schema, value, id, id);
+                        changed = self.render_field(ui, schema, value, &key, id);
                         ui.end_row();
                     });
                 changed
@@ -255,8 +261,9 @@ impl SchemaForm {
         changed
     }
 
-    /// One labelled field. Inside a two-column grid this draws the label and
-    /// the editor as the two cells; with an empty label only the editor.
+    /// One labelled field, inside a two-column grid: the label and the
+    /// editor as the two cells. A tagged enum adds a row per variant field
+    /// after its combo; the caller ends the last row.
     fn render_field(
         &self,
         ui: &mut egui::Ui,
@@ -348,48 +355,63 @@ impl SchemaForm {
                             .map(str::to_string)
                     })
                     .collect();
-                ui.vertical(|ui| {
-                    egui::ComboBox::from_id_salt(format!("{id}.{tag}"))
-                        .selected_text(&current)
-                        .show_ui(ui, |ui| {
-                            for (name, variant) in names.iter().zip(&variants) {
-                                let response = ui.selectable_label(*name == current, name);
-                                if let Some(d) = description(variant) {
-                                    response.clone().on_hover_text(d);
-                                }
-                                if response.clicked() && *name != current {
-                                    *value = self.default_variant(&tag, variant);
-                                    changed = true;
-                                }
+                egui::ComboBox::from_id_salt(format!("{id}.{tag}"))
+                    .selected_text(&current)
+                    .show_ui(ui, |ui| {
+                        for (name, variant) in names.iter().zip(&variants) {
+                            let response = ui.selectable_label(*name == current, name);
+                            if let Some(d) = description(variant) {
+                                response.clone().on_hover_text(d);
                             }
-                        });
-                    let current = value
-                        .get(&tag)
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    if let Some(variant) = names
-                        .iter()
-                        .position(|n| *n == current)
-                        .and_then(|i| variants.get(i))
-                    {
-                        let mut without_tag = variant.clone();
-                        if let Some(props) = without_tag
-                            .get_mut("properties")
-                            .and_then(Value::as_object_mut)
-                        {
-                            props.remove(&tag);
+                            if response.clicked() && *name != current {
+                                *value = self.default_variant(&tag, variant);
+                                changed = true;
+                            }
                         }
-                        changed |=
-                            self.render_object(ui, &without_tag, value, &format!("{id}.{current}"));
+                    });
+                // The variant's fields as rows of the enclosing grid, so they
+                // line up with everything else instead of nesting a grid in
+                // a cell.
+                let current = value
+                    .get(&tag)
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let Some(variant) = names
+                    .iter()
+                    .position(|n| *n == current)
+                    .and_then(|i| variants.get(i))
+                else {
+                    return changed;
+                };
+                let Some(props) = variant.get("properties").and_then(Value::as_object) else {
+                    return changed;
+                };
+                let object = ensure_object(value);
+                for (key, prop) in props {
+                    if *key == tag {
+                        continue;
                     }
-                });
+                    let prop = self.resolve(prop).into_owned();
+                    ui.end_row();
+                    let label = ui.label(format!("    {}", label_for(key, &prop)));
+                    if let Some(d) = description(&prop) {
+                        label.on_hover_text(d);
+                    }
+                    let field = object
+                        .entry(key.clone())
+                        .or_insert_with(|| self.default_for(&prop));
+                    changed |=
+                        self.render_editor(ui, &prop, field, &format!("{id}.{current}.{key}"));
+                }
                 changed
             }
             Kind::Object => {
+                // An object standing in a cell (an optional struct, a list
+                // item): its fields on one line.
                 let mut changed = false;
-                ui.vertical(|ui| {
-                    changed = self.render_object(ui, schema, value, id);
+                ui.horizontal(|ui| {
+                    changed = self.render_inline(ui, schema, value, id);
                 });
                 changed
             }
@@ -726,7 +748,7 @@ mod tests {
                 for path in featured {
                     changed |= form.render_path(ui, value, path);
                 }
-                changed |= form.render(ui, value);
+                changed |= form.render_except(ui, value, &[]);
             });
         });
         changed

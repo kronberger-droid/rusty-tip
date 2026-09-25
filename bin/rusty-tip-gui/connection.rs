@@ -128,6 +128,66 @@ impl ConnectionForm {
     }
 }
 
+/// The connection as a config file carries it, so a file written for the
+/// CLI and the workbench's Connection page describe the same thing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConnectionSettings {
+    pub host: String,
+    pub port: u16,
+    pub data_port: u16,
+    pub sample_rate_hz: f64,
+    pub layout_file: Option<String>,
+    pub settings_file: Option<String>,
+    pub tcp_channel_mapping: Vec<TcpChannelMapping>,
+    pub log_dir: Option<String>,
+}
+
+impl ConnectionForm {
+    /// The form as settings, for writing into a config file. The mock has
+    /// no host, so the Nanonis fields go out as typed even then.
+    pub fn settings(&self) -> ConnectionSettings {
+        let optional = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
+        ConnectionSettings {
+            host: self.host.trim().to_string(),
+            port: self.port.trim().parse().unwrap_or(6501),
+            data_port: self.data_port.trim().parse().unwrap_or(6590),
+            sample_rate_hz: self.sample_rate_hz.trim().parse().unwrap_or(1000.0),
+            layout_file: optional(&self.layout_file),
+            settings_file: optional(&self.settings_file),
+            tcp_channel_mapping: self
+                .tcp_channel_mapping
+                .iter()
+                .filter_map(|(i, c)| {
+                    Some(TcpChannelMapping {
+                        nanonis_index: i.trim().parse().ok()?,
+                        tcp_channel: c.trim().parse().ok()?,
+                    })
+                })
+                .collect(),
+            log_dir: optional(&self.log_dir),
+        }
+    }
+
+    /// Take a file's settings into the form. The backend kind is left as it
+    /// is: a file says where the Nanonis is, not whether to use the mock.
+    pub fn apply_settings(&mut self, s: &ConnectionSettings) {
+        self.host = s.host.clone();
+        self.port = s.port.to_string();
+        self.data_port = s.data_port.to_string();
+        self.sample_rate_hz = format!("{}", s.sample_rate_hz);
+        self.layout_file = s.layout_file.clone().unwrap_or_default();
+        self.settings_file = s.settings_file.clone().unwrap_or_default();
+        self.tcp_channel_mapping = s
+            .tcp_channel_mapping
+            .iter()
+            .map(|m| (m.nanonis_index.to_string(), m.tcp_channel.to_string()))
+            .collect();
+        if let Some(dir) = &s.log_dir {
+            self.log_dir = dir.clone();
+        }
+    }
+}
+
 /// What the pane asks the app to send to the session.
 #[derive(Debug)]
 pub enum PaneAction {
