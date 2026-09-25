@@ -407,6 +407,65 @@ sketch below, and what the next step inherits:
 
 ### Step 2: new app, connection pane, tip prep only
 
+**Done 2026-09-24** on `feat/gui-workbench-app`, stacked on step 1. What
+landed and where it differs from the sketch:
+
+- `bin/rusty-tip-gui/`: `main.rs`, `app.rs` (window, tabs, run control,
+  history, prefs), `connection.rs` (`ConnectionForm` persisted,
+  `ConnectionPane` mirroring `SessionUpdate`s, `PaneAction` back to the
+  app), `run_view.rs`, `tools/mod.rs`, `tools/tip_prep.rs`,
+  `tools/drift.rs`.
+- Layout (Martin, 2026-09-24): the top bar only says whether we are
+  connected and to what (state, backend and host, stream rate) and holds
+  the Connect/Disconnect button. The left side is a tree: a `Connection`
+  node that opens the connection page in the middle (the form, the
+  session details, live readouts, signal table, capabilities), then the
+  tools. The sketch's all-in-one pane is gone.
+- Drift is already a tool (pulled forward from step 5, Martin's call):
+  `rusty_tip::drift::DriftRoutine` with `LeaveInPlace` and
+  `RunSetup::NONE`, typed `drift/status|measured|compensated` events,
+  `require_stream` instead of restarting the stream, and
+  `const-distance drift` as a thin wrapper over it. `baseline` and `plan`
+  are still step 5.
+- The `Tool` trait is the step-2 shape: `setup(ui)` draws the tool's own
+  form and `job()` builds the `Job`; `prefs()`/`restore()` persist the
+  setup. `schema()`/`defaults()` and `routine_tool` arrive with step 3,
+  when `setup` goes.
+- Tip prep's stopgap setup is the config as TOML text (load, save,
+  validate, defaults), parsed with `toml` and `AppConfig::validate`. It
+  does not copy `EditableConfig`.
+- `RunView` folds over `Record` already; a live `Event` is serialized and
+  decoded as a `Record` (tested equal to the log line). It is schema-free:
+  every numeric or boolean field of a `DataCollected` value or custom
+  event becomes a series `label.field` / `kind.field`; the tip-prep panel
+  reads `stable_read.value`, `tip_prep/cycle.*` and
+  `tip_prep/max_pulse.pulse_voltage` by name. History is in (list the log
+  dir, open a log into the same view); generic panels (series picker,
+  action timeline) are still step 4.
+- Prefs go through eframe storage, so `eframe` gained the `persistence`
+  feature. Theme, tab, selected tool, the connection form and each tool's
+  prefs are saved; the theme selector kept its hover text.
+- The log directory is a pane field; `SessionCmd::SetLogDir` /
+  `Session::set_log_dir` were added for it.
+- No offline-run path: `Tool::needs_connection` and the worker-thread
+  runner were removed in the simplify pass since no tool used them. When
+  `plan` lands (step 5), give the library an `OfflineJob` sharing
+  `Session::run`'s log bracket and let `Tool::job()` return which kind it
+  built, rather than a flag that can disagree with the job.
+- Follow-ups the review left open on purpose: the session learns that a
+  routine job closed its own log by watching the bus for `run_finished`
+  (`FinishedFlag`); one owner of the log bracket would be cleaner and is a
+  library change that belongs with the harness, not this branch. The log
+  tail's one-line rendering (`run_view.rs::summarize`) and rt-log's
+  `timeline` produce the same shape from two private copies; a shared
+  `Body::one_line` in `experiment_log::reader` would fix that. `TeeWriter`
+  and `PlotColors` are copied from `tip-prep-gui`, which stays untouched
+  until it retires.
+- Acceptance: `tests/session.rs::connect_once_run_twice_stop_one_disconnect`
+  drives the exact command sequence the buttons send. The window itself
+  was launched against the mock, not clicked through, and has not met
+  hardware.
+
 - `bin/rusty-tip-gui/` with `required-features = ["gui"]` in `Cargo.toml`.
   Modules: `main.rs`, `app.rs`, `connection.rs` (pane), `tools/mod.rs`,
   `tools/tip_prep.rs`, `run_view.rs`.
@@ -425,6 +484,37 @@ sketch below, and what the next step inherits:
   mid-run, disconnect; the second run does not reconnect.
 
 ### Step 3: schema forms
+
+**Done 2026-09-25** on `feat/gui-workbench-app`, in the shape Martin asked
+for (a real form with checkboxes, the important settings on top):
+
+- `JsonSchema` on `AppConfig` and everything under it, with `x-unit` and
+  `x-display-unit` extensions. `bin/rusty-tip-gui/form.rs` is
+  `SchemaForm`: `render_except` draws the whole value as collapsible sections,
+  `render_path` draws one field by dotted path for the featured block.
+  Covered: objects, numbers (drag values scaled to the display unit),
+  integers, booleans, strings, `Option<T>` (checkbox plus field), string
+  enums, the internally tagged `PulseMethod`, fixed arrays and tuples,
+  lists; anything else is a raw JSON field.
+- Tip prep's `FEATURED` list names the fields shown above the tree. The
+  `Tool` trait still has `setup(ui)`; the tip-prep tool implements it with
+  the form, drift keeps its hand form since it greys fields by operation,
+  which a generic form cannot do yet. `schema()`/`defaults()` on the trait
+  and a `routine_tool` helper are still open.
+- Tests in `form.rs` lay the form out headlessly with
+  `egui::Context::run`: drawing the default config edits nothing and round
+  trips, every `configs/*.toml` survives the form, the schema default
+  deserializes, switching the pulse method builds the variant's defaults.
+- Where connection settings live (proposed 2026-09-25 after Martin asked to
+  think about the duplicated config locations; his call on it is still
+  open): the config file
+  keeps its connection tables so the CLI stays self-contained, and in the
+  workbench the Connection page is their only editor. The tip-prep form
+  hides those tables (`CONNECTION_SECTIONS`), `Tool::setup` gets a
+  `SetupCx` carrying the page's `ConnectionSettings`, loading a file
+  offers its tables to the page through `SetupCx::import` (taken only
+  when disconnected), and Save writes the page's settings into the file.
+  Picking a file with Browse, or Enter in the path field, loads it.
 
 - Derive `JsonSchema` on `AppConfig` and every nested config type (in
   `src/config.rs`), with unit annotations.

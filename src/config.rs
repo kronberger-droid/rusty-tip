@@ -1,16 +1,20 @@
 use config::{Config, ConfigError, Environment, File};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::controller_types::{PulseMethod, StabilityConfig};
 
-#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+/// One signal index to TCP logger channel assignment beyond the standard map.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, JsonSchema)]
 pub struct TcpChannelMapping {
     pub nanonis_index: u8,
     pub tcp_channel: u8,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+/// Everything a tip-prep run is configured with. Units are SI throughout;
+/// the field docs say which.
+#[derive(Debug, Deserialize, Serialize, Clone, Default, JsonSchema)]
 pub struct AppConfig {
     pub nanonis: NanonisConfig,
     pub data_acquisition: DataAcquisitionConfig,
@@ -46,11 +50,16 @@ impl AppConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+/// Where the controller is. The workbench connects through its own
+/// Connection page and ignores this section.
+#[derive(Debug, Deserialize, Serialize, Clone, JsonSchema)]
 pub struct NanonisConfig {
     pub host_ip: String,
+    /// Command ports; the first one is used.
     pub control_ports: Vec<u16>,
+    /// Nanonis layout file, loaded on connect.
     pub layout_file: Option<String>,
+    /// Nanonis settings file, loaded on connect.
     pub settings_file: Option<String>,
 }
 
@@ -60,28 +69,33 @@ fn default_stable_signal_samples() -> usize {
 
 /// How the signal stream is acquired. The thresholds a reading is *judged*
 /// against live in [`SignalStabilityConfig`], not here.
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, JsonSchema)]
 pub struct DataAcquisitionConfig {
+    /// TCP logger data port.
     pub data_port: u16,
     /// Stream rate to ask the TCP logger for, in Hz. The logger delivers its
     /// base rate divided by an integer, so the nearest such rate is what
     /// arrives; the controller measures it at startup, logs it, and the
     /// routine judges drift at the measured rate. 1000 Hz makes the default
     /// 100-sample stable read take a tenth of a second.
+    #[schemars(extend("x-unit" = "Hz"))]
     pub sample_rate: u32,
     /// Number of TCP stream samples to average for a stable signal read.
     #[serde(default = "default_stable_signal_samples")]
     pub stable_signal_samples: usize,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+/// The JSONL run log. The workbench writes logs where its Connection page
+/// says and ignores this section.
+#[derive(Debug, Deserialize, Serialize, Clone, JsonSchema)]
 pub struct ExperimentLoggingConfig {
     pub enabled: bool,
     pub output_path: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, JsonSchema)]
 pub struct ConsoleConfig {
+    /// trace, debug, info, warn or error.
     pub verbosity: String,
 }
 
@@ -132,25 +146,40 @@ fn default_exit_retract_steps() -> u16 {
     2
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+/// Settle times and step counts, in milliseconds and coarse steps.
+#[derive(Debug, Deserialize, Serialize, Clone, JsonSchema)]
 pub struct TimingConfig {
+    /// Length of one bias pulse.
     #[serde(default = "default_pulse_width_ms")]
+    #[schemars(extend("x-unit" = "ms"))]
     pub pulse_width_ms: u64,
+    /// Settle after an approach.
     #[serde(default = "default_post_approach_settle_ms")]
+    #[schemars(extend("x-unit" = "ms"))]
     pub post_approach_settle_ms: u64,
+    /// Settle at the end of a reposition.
     #[serde(default = "default_post_reposition_settle_ms")]
+    #[schemars(extend("x-unit" = "ms"))]
     pub post_reposition_settle_ms: u64,
     /// Settle time between the motor move and the approach during a
     /// reposition. Was hard-coded at 500 ms (V1 parity) before it became
     /// configurable.
     #[serde(default = "default_post_move_settle_ms")]
+    #[schemars(extend("x-unit" = "ms"))]
     pub post_move_settle_ms: u64,
+    /// Wait after clearing the stream buffer before the first read.
     #[serde(default = "default_buffer_clear_wait_ms")]
+    #[schemars(extend("x-unit" = "ms"))]
     pub buffer_clear_wait_ms: u64,
+    /// Settle after a pulse, before the reposition.
     #[serde(default = "default_post_pulse_settle_ms")]
+    #[schemars(extend("x-unit" = "ms"))]
     pub post_pulse_settle_ms: u64,
+    /// Coarse motor steps in x and y for each reposition.
     #[serde(default = "default_reposition_steps")]
+    #[schemars(extend("x-unit" = "steps"))]
     pub reposition_steps: [i16; 2],
+    /// Log a status line every this many cycles.
     #[serde(default = "default_status_interval")]
     pub status_interval: usize,
     /// Budget for an approach that starts from a full withdraw: the first
@@ -158,16 +187,19 @@ pub struct TimingConfig {
     /// An approach that overruns it is stopped and the run ends in an error,
     /// with the tip withdrawn.
     #[serde(default = "default_approach_timeout_ms")]
+    #[schemars(extend("x-unit" = "ms"))]
     pub approach_timeout_ms: u64,
     /// Budget for the approach inside a reposition, which starts only three
     /// coarse steps off the surface.
     #[serde(default = "default_reposition_approach_timeout_ms")]
+    #[schemars(extend("x-unit" = "ms"))]
     pub reposition_approach_timeout_ms: u64,
     /// Coarse Z steps to back off after the final withdraw, however the run
     /// ends. A withdraw alone parks the tip at the top of the piezo range,
     /// still within reach of the surface; this puts real distance behind it.
     /// Zero disables the retract.
     #[serde(default = "default_exit_retract_steps")]
+    #[schemars(extend("x-unit" = "steps"))]
     pub exit_retract_steps: u16,
 }
 
@@ -212,13 +244,15 @@ fn default_read_retry_count() -> u32 {
 /// Signal-read stability thresholds: how clean a frequency-shift reading must
 /// be to be trusted as a measurement. Loosen these for noisier tips, tighten
 /// for cleaner ones. Tunable at runtime via the config file.
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, JsonSchema)]
 pub struct SignalStabilityConfig {
     /// Maximum standard deviation (Hz) of the reading to count as stable.
     #[serde(default = "default_max_std_dev_hz")]
+    #[schemars(extend("x-unit" = "Hz"))]
     pub max_std_dev_hz: f64,
     /// Maximum drift rate (Hz/s) of the reading to count as stable.
     #[serde(default = "default_max_slope_hz_per_s")]
+    #[schemars(extend("x-unit" = "Hz/s"))]
     pub max_slope_hz_per_s: f64,
     /// Data-collection window (ms) for one stable read.
     ///
@@ -226,6 +260,7 @@ pub struct SignalStabilityConfig {
     /// `data_acquisition.stable_signal_samples` instead. Kept so configs
     /// written for v1 still parse.
     #[serde(default = "default_data_collection_duration_ms")]
+    #[schemars(extend("x-unit" = "ms"))]
     pub data_collection_duration_ms: u64,
     /// Timeout (s) for acquiring a stable read.
     ///
@@ -233,6 +268,7 @@ pub struct SignalStabilityConfig {
     /// and its exponential backoff instead. Kept so configs written for v1
     /// still parse.
     #[serde(default = "default_read_timeout_secs")]
+    #[schemars(extend("x-unit" = "s"))]
     pub read_timeout_secs: u64,
     /// Number of retries when a stable read isn't found.
     #[serde(default = "default_read_retry_count")]
@@ -251,18 +287,29 @@ impl Default for SignalStabilityConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, JsonSchema)]
 pub struct TipPrepConfig {
+    /// Frequency shift window that counts as a sharp tip, lower then upper.
+    #[schemars(extend("x-unit" = "Hz"))]
     pub sharp_tip_bounds: [f64; 2],
+    /// Pulse cycles to spend before giving up. Unset means unlimited.
     pub max_cycles: Option<usize>,
+    /// Wall-clock budget for the run. Unset means unlimited.
+    #[schemars(extend("x-unit" = "s"))]
     pub max_duration_secs: Option<u64>,
     #[serde(default)]
     pub stability: StabilityConfig,
+    /// Bias set before the first approach.
     #[serde(default = "default_initial_bias_v")]
+    #[schemars(extend("x-unit" = "V", "x-display-unit" = "mV"))]
     pub initial_bias_v: f64,
+    /// Z-controller setpoint, a current.
     #[serde(default = "default_initial_z_setpoint_a")]
+    #[schemars(extend("x-unit" = "A", "x-display-unit" = "pA"))]
     pub initial_z_setpoint_a: f64,
+    /// Safe-tip current threshold for the run.
     #[serde(default = "default_safe_tip_threshold")]
+    #[schemars(extend("x-unit" = "A", "x-display-unit" = "pA"))]
     pub safe_tip_threshold: f64,
     #[serde(default)]
     pub timing: TimingConfig,
