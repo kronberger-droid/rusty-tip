@@ -35,7 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[experiment_logging]`, the TCP mapping) are not on the form: the
   Connection page owns them in the workbench, loading a file offers them
   to the page when disconnected, and Save writes the page's settings back
-  into the file, so one file serves the CLI and the workbench.
+  into the file, so one file serves the CLI and the workbench. A field
+  annotated `x-enabled-by` is drawn only while the sibling boolean it
+  names is on, which is how the stability settings follow
+  `check_stability`. Units have one home in the workbench: a bare `A` or
+  `m` field is edited in `pA` or `nm` without an annotation, hovering a
+  scaled field shows the stored SI value, and readouts, the run panel and
+  the events tail take the prefix that fits the value (`120.0 pA`,
+  `-500.0 mV`).
 - **Drift as a tool and a routine.** `rusty_tip::drift::DriftRoutine`
   wraps the drift actions (status, measure, compensate, off) as a
   `Routine` with `LeaveInPlace` and `RunSetup::NONE`, writing typed
