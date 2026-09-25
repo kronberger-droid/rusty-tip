@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   host, ports, layout and settings files, TCP channel mapping) and shows
   what the session reports: state, stream rate, the signal table,
   capabilities, four live readouts while idle, and which settings file was
-  loaded last, by whom and when. Tools sit in a sidebar with Setup, Run
+  loaded last, by whom and when. Tools sit in a sidebar with Run, Setup
   and History tabs; a job's error is an error state, not a clean exit. Tip
   prep is the first tool, with the old Control tab as its run panel. The
   run view is a fold over log records shared by live runs and replayed

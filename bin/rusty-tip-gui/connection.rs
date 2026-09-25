@@ -492,10 +492,7 @@ impl ConnectionPane {
             .spacing([16.0, 4.0])
             .show(ui, |ui| {
                 ui.label("State");
-                ui.horizontal(|ui| {
-                    status_dot(ui, self.state_color());
-                    ui.label(self.state_word());
-                });
+                ui.label(self.state_word());
                 ui.end_row();
                 if let Some(facts) = &self.facts {
                     ui.label("Stream");
