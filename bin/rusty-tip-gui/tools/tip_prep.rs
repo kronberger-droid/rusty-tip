@@ -1,11 +1,10 @@
 //! Tip preparation as a workbench tool.
 //!
-//! Setup is the config file as TOML text, loaded from and saved to disk and
-//! validated the way the CLI validates it. That is the stopgap the handoff
-//! allows for until schema forms (step 3) exist; it deliberately does not
-//! copy the old GUI's field-by-field `EditableConfig`. The Run panel is the
-//! old Control tab: tip state, the frequency-shift trace with the sharp
-//! band, and the pulse voltage history.
+//! Setup is a form drawn from `AppConfig`'s JSON Schema, with the settings
+//! that decide a run at the top and the rest in sections below, plus load
+//! and save as TOML. The Run panel is the old Control tab: tip state, the
+//! frequency-shift trace with the sharp band, and the pulse voltage
+//! history.
 
 use eframe::egui;
 use egui_plot::{HLine, Line, Plot, PlotPoints, Points};
@@ -18,6 +17,7 @@ use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::TipPrep;
 
 use super::Tool;
+use crate::form::SchemaForm;
 use crate::run_view::RunView;
 
 /// Tip prep as a [`Job`]: what the session runs.
@@ -64,39 +64,58 @@ const MAX_PULSE: &str = "tip_prep/max_pulse.pulse_voltage";
 /// `Line` renders nothing until the second point arrives.
 const MARKER_RADIUS: f32 = 2.5;
 
+/// The fields that decide a run, shown above everything else, in order.
+const FEATURED: &[&str] = &[
+    "tip_prep.sharp_tip_bounds",
+    "pulse_method",
+    "tip_prep.max_cycles",
+    "tip_prep.max_duration_secs",
+    "tip_prep.stability.check_stability",
+    "tip_prep.stability.stable_tip_allowed_change",
+    "tip_prep.initial_bias_v",
+    "tip_prep.initial_z_setpoint_a",
+    "tip_prep.safe_tip_threshold",
+];
+
 pub struct TipPrepTool {
-    /// The config file the text was loaded from, or will be saved to.
+    /// The config file the form was loaded from, or will be saved to.
     path: String,
-    /// The config as TOML, edited in place.
-    text: String,
-    /// The last parse of `text`, for the sharp band and the header.
+    /// The config as the form edits it: JSON, SI units, the shape of
+    /// `AppConfig`.
+    value: serde_json::Value,
+    form: SchemaForm,
+    /// The last successful parse of `value`, for the sharp band.
     parsed: Option<AppConfig>,
     message: Option<(String, bool)>,
 }
 
 impl Default for TipPrepTool {
     fn default() -> Self {
+        let schema = serde_json::to_value(schemars::schema_for!(AppConfig))
+            .expect("the config schema serializes");
         let mut tool = Self {
             path: String::new(),
-            text: String::new(),
+            value: serde_json::Value::Null,
+            form: SchemaForm::new(schema),
             parsed: None,
             message: None,
         };
-        tool.reset_to_defaults();
+        tool.set_config(&AppConfig::default());
         tool
     }
 }
 
 impl TipPrepTool {
-    fn reset_to_defaults(&mut self) {
-        let config = AppConfig::default();
-        self.text = toml::to_string_pretty(&config).unwrap_or_default();
-        self.parsed = Some(config);
+    fn set_config(&mut self, config: &AppConfig) {
+        self.value = serde_json::to_value(config).unwrap_or(serde_json::Value::Null);
+        self.parsed = Some(config.clone());
     }
 
-    /// Parse and validate the text the way the CLI would a file.
+    /// The form's value as a config, validated the way the CLI validates a
+    /// file.
     fn parse(&self) -> Result<AppConfig, String> {
-        let config: AppConfig = toml::from_str(&self.text).map_err(|e| e.to_string())?;
+        let config: AppConfig =
+            serde_json::from_value(self.value.clone()).map_err(|e| e.to_string())?;
         config.validate().map_err(|e| e.to_string())?;
         Ok(config)
     }
@@ -112,15 +131,15 @@ impl TipPrepTool {
     }
 
     fn load(&mut self) {
-        match std::fs::read_to_string(&self.path) {
-            Ok(text) => {
-                self.text = text;
-                self.validate();
-                if let Some((msg, false)) = &mut self.message {
-                    *msg = format!("Loaded {}", self.path);
-                }
+        let loaded = std::fs::read_to_string(&self.path)
+            .map_err(|e| format!("Cannot read {}: {e}", self.path))
+            .and_then(|text| toml::from_str::<AppConfig>(&text).map_err(|e| e.to_string()));
+        match loaded {
+            Ok(config) => {
+                self.set_config(&config);
+                self.message = Some((format!("Loaded {}", self.path), false));
             }
-            Err(e) => self.message = Some((format!("Cannot read {}: {e}", self.path), true)),
+            Err(e) => self.message = Some((e, true)),
         }
     }
 
@@ -128,11 +147,16 @@ impl TipPrepTool {
         if !self.path.to_lowercase().ends_with(".toml") {
             self.path.push_str(".toml");
         }
-        // Save what the operator wrote, not a re-serialization of it, so
-        // comments in the file survive.
-        match std::fs::write(&self.path, &self.text) {
+        let written = self
+            .parse()
+            .and_then(|config| toml::to_string_pretty(&config).map_err(|e| e.to_string()))
+            .and_then(|text| {
+                std::fs::write(&self.path, text)
+                    .map_err(|e| format!("Cannot write {}: {e}", self.path))
+            });
+        match written {
             Ok(()) => self.message = Some((format!("Saved {}", self.path), false)),
-            Err(e) => self.message = Some((format!("Cannot write {}: {e}", self.path), true)),
+            Err(e) => self.message = Some((e, true)),
         }
     }
 
@@ -179,7 +203,7 @@ impl Tool for TipPrepTool {
                 self.validate();
             }
             if ui.button("Defaults").clicked() {
-                self.reset_to_defaults();
+                self.set_config(&AppConfig::default());
                 self.message = Some(("Reset to the built-in defaults".into(), false));
             }
         });
@@ -190,21 +214,35 @@ impl Tool for TipPrepTool {
                 ui.label(msg);
             }
         }
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(
-                "The run uses this text as its config. Units are SI: 0.2e-9 is 0.2 nm. \
-                 A schema-driven form replaces this editor in a later step.",
-            )
-            .small(),
-        );
+        ui.add_space(8.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
-            let editor = egui::TextEdit::multiline(&mut self.text)
-                .code_editor()
-                .desired_width(f32::INFINITY)
-                .desired_rows(30);
-            if ui.add(editor).changed() {
+            let mut changed = false;
+            ui.label(egui::RichText::new("Key settings").strong());
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                egui::Grid::new("tip_prep_featured")
+                    .num_columns(2)
+                    .spacing([16.0, 6.0])
+                    .show(ui, |ui| {
+                        for path in FEATURED {
+                            changed |= self.form.render_path(ui, &mut self.value, path);
+                            ui.end_row();
+                        }
+                    });
+            });
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Everything").strong());
+            ui.label(
+                egui::RichText::new(
+                    "The connection and logging sections are kept for the CLI; the \
+                     workbench uses its Connection page instead.",
+                )
+                .weak(),
+            );
+            changed |= self.form.render(ui, &mut self.value);
+            if changed {
                 self.message = None;
+                // Keep the sharp band on the plot in step with the form.
+                self.parsed = serde_json::from_value(self.value.clone()).ok();
             }
         });
     }
@@ -325,18 +363,19 @@ impl Tool for TipPrepTool {
     }
 
     fn prefs(&self) -> serde_json::Value {
-        serde_json::json!({ "path": self.path, "text": self.text })
+        serde_json::json!({ "path": self.path, "config": self.value })
     }
 
     fn restore(&mut self, prefs: &serde_json::Value) {
         if let Some(path) = prefs.get("path").and_then(|p| p.as_str()) {
             self.path = path.to_string();
         }
-        if let Some(text) = prefs.get("text").and_then(|t| t.as_str())
-            && !text.trim().is_empty()
+        // Only a config that still deserializes is worth restoring; a
+        // saved value from an older field layout falls back to the defaults.
+        if let Some(saved) = prefs.get("config")
+            && let Ok(config) = serde_json::from_value::<AppConfig>(saved.clone())
         {
-            self.text = text.to_string();
-            self.parsed = self.parse().ok();
+            self.set_config(&config);
         }
     }
 }

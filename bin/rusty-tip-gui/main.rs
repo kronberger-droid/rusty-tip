@@ -6,6 +6,7 @@
 
 mod app;
 mod connection;
+mod form;
 mod run_view;
 mod tools;
 

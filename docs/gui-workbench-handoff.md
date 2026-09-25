@@ -473,6 +473,27 @@ landed and where it differs from the sketch:
 
 ### Step 3: schema forms
 
+**Done 2026-09-25** on `feat/gui-workbench-app`, in the shape Martin asked
+for (a real form with checkboxes, the important settings on top):
+
+- `JsonSchema` on `AppConfig` and everything under it, with `x-unit` and
+  `x-display-unit` extensions. `bin/rusty-tip-gui/form.rs` is
+  `SchemaForm`: `render` draws the whole value as collapsible sections,
+  `render_path` draws one field by dotted path for the featured block.
+  Covered: objects, numbers (drag values scaled to the display unit),
+  integers, booleans, strings, `Option<T>` (checkbox plus field), string
+  enums, the internally tagged `PulseMethod`, fixed arrays and tuples,
+  lists; anything else is a raw JSON field.
+- Tip prep's `FEATURED` list names the fields shown above the tree. The
+  `Tool` trait still has `setup(ui)`; the tip-prep tool implements it with
+  the form, drift keeps its hand form since it greys fields by operation,
+  which a generic form cannot do yet. `schema()`/`defaults()` on the trait
+  and a `routine_tool` helper are still open.
+- Tests in `form.rs` lay the form out headlessly with
+  `egui::Context::run`: drawing the default config edits nothing and round
+  trips, every `configs/*.toml` survives the form, the schema default
+  deserializes, switching the pulse method builds the variant's defaults.
+
 - Derive `JsonSchema` on `AppConfig` and every nested config type (in
   `src/config.rs`), with unit annotations.
 - `form.rs` as specified; tip prep switches to it; `EditableConfig` is not

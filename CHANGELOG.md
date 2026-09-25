@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays until the workbench reaches parity in the lab. Built with
   `--features gui`, which now enables eframe's `persistence` so the pane
   and each tool's setup survive a restart.
+- **Schema-driven setup forms.** `AppConfig` and every config type under
+  it derive `JsonSchema`, with unit annotations (`x-unit`,
+  `x-display-unit`) so a current stored in amperes is edited in
+  picoamperes. The workbench draws the tip-prep Setup page from that
+  schema: checkboxes, drag values with units, combo boxes for enums and
+  the pulse method, a checkbox plus field for optional limits, and the
+  settings that decide a run at the top. A shipped config survives the
+  form unchanged, which a test checks for every file in `configs/`.
 - **Drift as a tool and a routine.** `rusty_tip::drift::DriftRoutine`
   wraps the drift actions (status, measure, compensate, off) as a
   `Routine` with `LeaveInPlace` and `RunSetup::NONE`, writing typed
