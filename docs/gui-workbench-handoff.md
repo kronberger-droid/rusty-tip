@@ -574,6 +574,72 @@ for (a real form with checkboxes, the important settings on top):
 - Candidates that fit this shape next: CuOx tip prep, the Python classifier
   interface (`Classifier` trait, HTTP + npy sidecar), the double-pass routine.
 
+### Controllers: read, write, profiles, then models
+
+Martin's ask (2026-09-27): a general tool for the feedback controllers,
+starting with reading and writing their parameters as a bare Setup tab,
+then per common kind a way to get a sense of what a setting will do
+before it meets the tip. Start with the Z-controller and the PLL pair, no
+multiprobe.
+
+What the protocol allows sets the shape: over TCP you can pick one of the
+Z-controllers Nanonis has defined (`ZCtrl.CtrlListGet` / `ActiveCtrlSet`)
+and set setpoint, P and T, limits, tip lift, switch-off delay and
+withdraw rate, but not define one; which signal a loop reads and linear
+or log input come from the settings file. `nanonis-rs` wraps all of it,
+including the PLL amplitude and phase loops (setpoint, P and T,
+bandwidth, on/off per modulator), the generic PI controllers (`GenPICtrl`,
+`PICtrl` 1 to 8) and the Kelvin controller, which are the next kinds.
+
+**Done (2026-09-27, branch `feat/gui-controllers`):**
+
+- `src/controllers.rs`: `ControllerId` (`Z`, `PllAmplitude { modulator }`,
+  `PllPhase { modulator }`), one params struct per kind with `JsonSchema`
+  and units, `ControllerParams` over them with `to_fields`/`from_fields`
+  for the form, `ControllerReading` (params plus `enabled`, `status`,
+  `available`), `ControllerProfile` as TOML (`settings_file`, entries),
+  events `controller/read`, `controller/applied` (before and after),
+  `controller/settings_loaded`, and three jobs: `ReadControllers`,
+  `ApplyProfile`, `SetControllerEnabled`. Applying never switches a loop.
+- `SpmController`: `controllers`, `read_controller`, `write_controller`,
+  `set_controller_enabled` behind `Capability::Controllers`; Nanonis
+  implements them for the Z-controller and modulator 1's PLL loops (a
+  second modulator is not probed for, since asking a PLL that is not there
+  is a wire error); the mock holds the same loops with two defined
+  Z-controllers, `Current log` active.
+- `bin/rusty-tip-gui/tools/controllers.rs`: profile path with Load and
+  Save, settings file field, Read from controller, Apply (writes only the
+  controllers whose form differs from the last reading), Revert, a row of
+  the controllers with a dot on the ones that are on, the selected one's
+  form (`active` as a combo over the defined loops once read), a line
+  saying which fields differ, and Switch on/off for the selected loop.
+  The Run panel lists what an apply changed, field by field, and the
+  closing read. `SetupCx` gained `run`, `view` and `can_run` for this: a
+  tab puts a job in `run` and the window starts it while staying on Setup.
+- Tests: `tests/controllers.rs` runs the jobs through a `Session` on the
+  mock; the tool's unit tests cover the read-fills-forms and
+  apply-only-what-differs rules.
+
+**Next, in order:**
+
+1. A strip chart under the form: the selected loop's input against its
+   setpoint and its output from the session stream, since watching the
+   loop while nudging a gain is the cheapest sense of what it does. Needs
+   the session's readouts to be per tool rather than the fixed four.
+2. The setpoint step routine (feedback on, step A to B, record from the
+   stream, report settle time, overshoot, steady-state error, noise) and a
+   gain scan over it. `LeaveInPlace`, `RunSetup::NONE`.
+3. Models: the Z loop (PI on `ln(I / I_sp)`, exponential current, RT
+   loop rate from `Util.RTFreqGet`, an amplifier lag fitted from a step),
+   then the PLL loops on a resonator whose `f0` and `Q` the PLL frequency
+   sweep gives. Each gets the same preview panel: sliders, surface at a
+   scan speed, Z and current traces, a crash verdict, and a speed against
+   gain map. Uncalibrated it ranks settings; calibrated by one step it is
+   quantitative for that microscope.
+4. Kinds after these: `GenPICtrl`, `PICtrl` 1 to 8, `KelvinCtrl`. The
+   `ControllerParams` enum grows a variant per kind and nothing else
+   changes.
+
 ## Conventions
 
 - Commits via the `commit-writer` skill, author

@@ -164,6 +164,11 @@ impl RunView {
         Some(self.last_at? - self.started_at?)
     }
 
+    /// When the run's first record was, which tells one run from the next.
+    pub fn started_at(&self) -> Option<f64> {
+        self.started_at
+    }
+
     pub fn latest(&self, key: &str) -> Option<f64> {
         self.series.get(key)?.latest()
     }

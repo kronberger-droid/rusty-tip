@@ -77,7 +77,7 @@ impl Tool for DriftTool {
         "Drift"
     }
 
-    fn setup(&mut self, ui: &mut egui::Ui, _cx: &mut SetupCx) {
+    fn setup(&mut self, ui: &mut egui::Ui, _cx: &mut SetupCx<'_>) {
         ui.label(
             egui::RichText::new(
                 "Measures how fast Z drifts with the feedback closed and the scan stopped, \

@@ -48,7 +48,7 @@
 //! println!("pulses fired: {}", obs.lock().pulses.len());
 //! ```
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -64,6 +64,10 @@ use nanonis_rs::scan::{
 use nanonis_rs::tcplog::TCPLogStatus;
 use nanonis_rs::tip_recovery::TipShaperConfig;
 
+use crate::controllers::{
+    ControllerId, ControllerParams, ControllerReading, PllAmplitudeParams, PllPhaseParams,
+    ZControllerParams,
+};
 use crate::signal_registry::SignalIndex;
 use nanonis_rs::scan::{ScanLineEnd, ScanLineMovement};
 
@@ -334,6 +338,8 @@ pub struct MockController {
     approach_polls_left: usize,
     /// A drifting Z signal, when [`MockControllerBuilder::z_drift`] set one up.
     z_drift: Option<ZDriftSim>,
+    /// The feedback controllers, as written; nothing here models them.
+    loops: BTreeMap<ControllerId, MockLoop>,
 }
 
 /// A Z signal that drifts at a constant rate and answers to the drift
@@ -639,6 +645,75 @@ impl SpmController for MockController {
             (false, true) => ZControllerStatus::On,
             (false, false) => ZControllerStatus::Off,
         })
+    }
+
+    // -- Feedback controllers --
+
+    fn controllers(&mut self) -> Result<Vec<ControllerId>> {
+        self.enter("controllers")?;
+        Ok(self.loops.keys().copied().collect())
+    }
+
+    fn read_controller(&mut self, id: ControllerId) -> Result<ControllerReading> {
+        self.enter("read_controller")?;
+        let l = self
+            .loops
+            .get(&id)
+            .ok_or_else(|| SpmError::Workflow(format!("the mock has no controller {id}")))?;
+        Ok(ControllerReading {
+            id,
+            params: l.params.clone(),
+            enabled: l.enabled,
+            status: if l.enabled { "on" } else { "off" }.into(),
+            available: match id {
+                ControllerId::Z => MOCK_Z_CONTROLLERS.iter().map(|s| s.to_string()).collect(),
+                _ => Vec::new(),
+            },
+        })
+    }
+
+    fn write_controller(&mut self, id: ControllerId, params: &ControllerParams) -> Result<()> {
+        self.enter("write_controller")?;
+        if !params.fits(id) {
+            return Err(SpmError::Workflow(format!(
+                "the parameters given for {id} are of another kind"
+            )));
+        }
+        if let ControllerParams::Z(z) = params
+            && !z.active.is_empty()
+            && !MOCK_Z_CONTROLLERS.contains(&z.active.as_str())
+        {
+            return Err(SpmError::Workflow(format!(
+                "no Z-controller called {:?}",
+                z.active
+            )));
+        }
+        let l = self
+            .loops
+            .get_mut(&id)
+            .ok_or_else(|| SpmError::Workflow(format!("the mock has no controller {id}")))?;
+        l.params = params.clone();
+        // An empty `active` leaves the active controller as it was, as
+        // on the real module.
+        if let (ControllerParams::Z(written), ControllerParams::Z(held)) = (params, &mut l.params)
+            && written.active.is_empty()
+        {
+            held.active = "Current log".into();
+        }
+        Ok(())
+    }
+
+    fn set_controller_enabled(&mut self, id: ControllerId, on: bool) -> Result<()> {
+        self.enter("set_controller_enabled")?;
+        let l = self
+            .loops
+            .get_mut(&id)
+            .ok_or_else(|| SpmError::Workflow(format!("the mock has no controller {id}")))?;
+        l.enabled = on;
+        if id == ControllerId::Z {
+            self.obs.lock().z_controller_on = on;
+        }
+        Ok(())
     }
 
     // -- Piezo Positioning --
@@ -1022,6 +1097,7 @@ impl MockControllerBuilder {
             approach_polls: self.approach_polls,
             approach_polls_left: 0,
             z_drift: self.z_drift,
+            loops: mock_controllers(),
         }
     }
 
@@ -1280,7 +1356,50 @@ fn all_capabilities() -> HashSet<Capability> {
         Capability::MultiPass,
         Capability::DriftCompensation,
         Capability::Presets,
+        Capability::Controllers,
     ])
+}
+
+/// What the mock's controllers hold to begin with: a Z-controller with two
+/// defined loops, `Current log` active, and the first modulator's PLL
+/// loops, all on.
+fn mock_controllers() -> BTreeMap<ControllerId, MockLoop> {
+    let mut loops = BTreeMap::new();
+    loops.insert(
+        ControllerId::Z,
+        MockLoop {
+            params: ControllerParams::Z(ZControllerParams {
+                active: "Current log".into(),
+                ..ZControllerParams::default()
+            }),
+            enabled: true,
+        },
+    );
+    loops.insert(
+        ControllerId::PllAmplitude { modulator: 1 },
+        MockLoop {
+            params: ControllerParams::PllAmplitude(PllAmplitudeParams::default()),
+            enabled: true,
+        },
+    );
+    loops.insert(
+        ControllerId::PllPhase { modulator: 1 },
+        MockLoop {
+            params: ControllerParams::PllPhase(PllPhaseParams::default()),
+            enabled: true,
+        },
+    );
+    loops
+}
+
+/// The Z-controllers the mock says Nanonis has defined.
+const MOCK_Z_CONTROLLERS: [&str; 2] = ["Current log", "Freq shift"];
+
+/// One feedback loop as the mock holds it.
+#[derive(Debug, Clone)]
+struct MockLoop {
+    params: ControllerParams,
+    enabled: bool,
 }
 
 fn mock_scan_config() -> ScanConfig {
