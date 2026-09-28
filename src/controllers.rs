@@ -64,9 +64,87 @@ impl fmt::Display for ControllerId {
     }
 }
 
+/// What a defined Z-controller reads, as far as its name says. Nanonis
+/// names them by law and signal (`log Current`, `abs Conductance`,
+/// `Frequency (neg)`), and over TCP the name is the only place the
+/// definition shows, so this is parsed from it. A `(neg)` or `(pos)` is
+/// the slope sign of a frequency loop and is left in the name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ZLoopInput {
+    pub quantity: ZQuantity,
+    pub law: ZLaw,
+}
+
+/// The physical quantity a Z-controller's input signal is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ZQuantity {
+    Current,
+    Conductance,
+    Frequency,
+    Phase,
+    Excitation,
+    Amplitude,
+    /// A name this code does not know; the setpoint's unit is unknown too.
+    Unknown,
+}
+
+/// How the error is formed from the input: the log of the ratio to the
+/// setpoint, or the plain difference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ZLaw {
+    Log,
+    Linear,
+}
+
+impl ZLoopInput {
+    /// From a defined controller's name, case-insensitively: a leading
+    /// `log` is the log law, anything else (`abs`, a bare `Frequency`) is
+    /// linear; the quantity is the first word this code knows.
+    pub fn from_name(name: &str) -> Self {
+        let lower = name.to_lowercase();
+        let law = if lower.trim_start().starts_with("log") {
+            ZLaw::Log
+        } else {
+            ZLaw::Linear
+        };
+        let quantity = if lower.contains("current") {
+            ZQuantity::Current
+        } else if lower.contains("conductance") {
+            ZQuantity::Conductance
+        } else if lower.contains("freq") {
+            ZQuantity::Frequency
+        } else if lower.contains("phase") {
+            ZQuantity::Phase
+        } else if lower.contains("excitation") {
+            ZQuantity::Excitation
+        } else if lower.contains("amplitude") {
+            ZQuantity::Amplitude
+        } else {
+            ZQuantity::Unknown
+        };
+        Self { quantity, law }
+    }
+
+    /// The SI unit the setpoint is in, if the quantity is known.
+    pub fn unit(&self) -> Option<&'static str> {
+        match self.quantity {
+            ZQuantity::Current => Some("A"),
+            ZQuantity::Conductance => Some("S"),
+            ZQuantity::Frequency => Some("Hz"),
+            ZQuantity::Phase => Some("°"),
+            ZQuantity::Excitation => Some("V"),
+            ZQuantity::Amplitude => Some("m"),
+            ZQuantity::Unknown => None,
+        }
+    }
+}
+
 /// The Z-controller's settable parameters. The setpoint is in the unit of
 /// the active controller's input signal, amperes for a current loop and
-/// hertz for a frequency-shift loop, which is why it carries no unit here.
+/// hertz for a frequency-shift loop, which is why it carries no unit here;
+/// [`input`](Self::input) says which from the active controller's name.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct ZControllerParams {
@@ -79,7 +157,7 @@ pub struct ZControllerParams {
     #[schemars(extend("x-unit" = "m", "x-display-unit" = "pm"))]
     pub p_gain_m: f64,
     /// Time constant; the integral gain is P over this.
-    #[schemars(extend("x-unit" = "s", "x-display-unit" = "µs"))]
+    #[schemars(extend("x-unit" = "s", "x-display-unit" = "ms"))]
     pub time_constant_s: f64,
     /// Retract by this much when the loop is switched off.
     #[schemars(extend("x-unit" = "m", "x-display-unit" = "nm"))]
@@ -88,9 +166,11 @@ pub struct ZControllerParams {
     /// parked position is reproducible.
     #[schemars(extend("x-unit" = "s", "x-display-unit" = "ms"))]
     pub switch_off_delay_s: f64,
-    /// Slew rate of a withdraw.
+    /// Slew rate of a withdraw. Unset is unlimited, which the module
+    /// shows as `Inf`; a JSON number cannot be infinite, so it is an
+    /// option here.
     #[schemars(extend("x-unit" = "m/s", "x-display-unit" = "nm/s"))]
-    pub withdraw_rate_m_s: f64,
+    pub withdraw_rate_m_s: Option<f64>,
     /// Whether the Z position limits below apply.
     pub limits_enabled: bool,
     /// Z position limits, high then low. Without `limits_enabled` these
@@ -103,15 +183,22 @@ impl Default for ZControllerParams {
     fn default() -> Self {
         Self {
             active: String::new(),
-            setpoint: 100e-12,
-            p_gain_m: 10e-12,
-            time_constant_s: 100e-6,
+            setpoint: 50e-12,
+            p_gain_m: 200e-12,
+            time_constant_s: 1e-3,
             tip_lift_m: 0.0,
             switch_off_delay_s: 0.0,
-            withdraw_rate_m_s: 1e-6,
+            withdraw_rate_m_s: None,
             limits_enabled: false,
             limits_m: (0.0, 0.0),
         }
+    }
+}
+
+impl ZControllerParams {
+    /// What the active controller reads, from its name.
+    pub fn input(&self) -> ZLoopInput {
+        ZLoopInput::from_name(&self.active)
     }
 }
 
@@ -521,6 +608,32 @@ mod tests {
             }],
         };
         assert!(wrong.validate().unwrap_err().contains("Z-controller"));
+    }
+
+    #[test]
+    fn a_loop_name_says_its_law_and_quantity() {
+        let log_current = ZLoopInput::from_name("log Current");
+        assert_eq!(log_current.law, ZLaw::Log);
+        assert_eq!(log_current.quantity, ZQuantity::Current);
+        assert_eq!(log_current.unit(), Some("A"));
+        let df = ZLoopInput::from_name("Frequency (neg)");
+        assert_eq!(df.law, ZLaw::Linear);
+        assert_eq!(df.unit(), Some("Hz"));
+        assert_eq!(ZLoopInput::from_name("abs Conductance").unit(), Some("S"));
+        assert_eq!(ZLoopInput::from_name("Amplitude").unit(), Some("m"));
+        assert_eq!(ZLoopInput::from_name("").unit(), None);
+        assert_eq!(ZLoopInput::from_name("").law, ZLaw::Linear);
+    }
+
+    #[test]
+    fn an_unlimited_withdraw_rate_survives_json() {
+        let params = ControllerParams::Z(ZControllerParams::default());
+        let fields = params.to_fields();
+        assert!(fields["withdraw_rate_m_s"].is_null());
+        assert_eq!(
+            ControllerParams::from_fields(ControllerId::Z, fields).unwrap(),
+            params
+        );
     }
 
     #[test]

@@ -605,8 +605,23 @@ bandwidth, on/off per modulator), the generic PI controllers (`GenPICtrl`,
   `set_controller_enabled` behind `Capability::Controllers`; Nanonis
   implements them for the Z-controller and modulator 1's PLL loops (a
   second modulator is not probed for, since asking a PLL that is not there
-  is a wire error); the mock holds the same loops with two defined
-  Z-controllers, `Current log` active.
+  is a wire error); the mock holds the same loops with the nine defined
+  Z-controllers of the lab machine, `log Current` active.
+- What the lab's Z-controller panel showed (Martin, 2026-09-28): the
+  defined loops are `log Current`, `abs Current`, `log Conductance`,
+  `abs Conductance`, `Frequency (neg)`, `Frequency (pos)`, `Phase`,
+  `Excitation`, `Amplitude`, and the df and current ones are what they
+  run. Law and signal are in the name and nowhere else over TCP, so
+  `ZLoopInput::from_name` parses them and the tool gives the setpoint
+  its unit (`pA` for a current loop, `Hz` for a frequency loop) from the
+  active name. Typical values: setpoint 50 pA, P 200 pm, T 1 ms, tip lift
+  and off delay 0, withdraw slew rate `Inf`, which is `None` in
+  `withdraw_rate_m_s` since JSON has no infinity. The panel's setpoint,
+  P and T sliders are log-scaled over 1 pA to 1 nA, 2 pm to 20 nm and
+  10 µs to 100 ms; the form's drag values are linear, a log slider is a
+  follow-up. Safe tip, home position and the P/I versus P/T choice are
+  on the panel too and stay where they are (`safe_tip_configure`,
+  `RunSetup`, always P/T here).
 - `bin/rusty-tip-gui/tools/controllers.rs`: profile path with Load and
   Save, settings file field, Read from controller, Apply (writes only the
   controllers whose form differs from the last reading), Revert, a row of

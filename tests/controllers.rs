@@ -81,9 +81,14 @@ fn a_read_reports_every_controller_with_its_definitions() {
     let z = &reads[0];
     assert!(z.enabled);
     assert_eq!(z.status, "on");
-    assert_eq!(z.available, vec!["Current log", "Freq shift"]);
+    assert_eq!(z.available.len(), 9);
+    assert_eq!(z.available[0], "log Current");
+    assert!(z.available.contains(&"Frequency (neg)".to_string()));
     match &z.params {
-        ControllerParams::Z(p) => assert_eq!(p.active, "Current log"),
+        ControllerParams::Z(p) => {
+            assert_eq!(p.active, "log Current");
+            assert_eq!(p.input().unit(), Some("A"));
+        }
         other => panic!("not Z parameters: {other:?}"),
     }
 }
@@ -92,7 +97,7 @@ fn a_read_reports_every_controller_with_its_definitions() {
 fn apply_loads_the_settings_file_then_writes_and_reads_back() {
     let (mut session, obs) = session();
     let wanted = ZControllerParams {
-        active: "Freq shift".into(),
+        active: "Frequency (neg)".into(),
         setpoint: -2.0,
         p_gain_m: 5e-12,
         ..Default::default()

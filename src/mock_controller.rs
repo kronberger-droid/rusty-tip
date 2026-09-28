@@ -698,7 +698,7 @@ impl SpmController for MockController {
         if let (ControllerParams::Z(written), ControllerParams::Z(held)) = (params, &mut l.params)
             && written.active.is_empty()
         {
-            held.active = "Current log".into();
+            held.active = MOCK_Z_CONTROLLERS[0].into();
         }
         Ok(())
     }
@@ -1360,16 +1360,16 @@ fn all_capabilities() -> HashSet<Capability> {
     ])
 }
 
-/// What the mock's controllers hold to begin with: a Z-controller with two
-/// defined loops, `Current log` active, and the first modulator's PLL
-/// loops, all on.
+/// What the mock's controllers hold to begin with: a Z-controller with the
+/// loops a lab machine defines, `log Current` active, and the first
+/// modulator's PLL loops, all on.
 fn mock_controllers() -> BTreeMap<ControllerId, MockLoop> {
     let mut loops = BTreeMap::new();
     loops.insert(
         ControllerId::Z,
         MockLoop {
             params: ControllerParams::Z(ZControllerParams {
-                active: "Current log".into(),
+                active: "log Current".into(),
                 ..ZControllerParams::default()
             }),
             enabled: true,
@@ -1392,8 +1392,19 @@ fn mock_controllers() -> BTreeMap<ControllerId, MockLoop> {
     loops
 }
 
-/// The Z-controllers the mock says Nanonis has defined.
-const MOCK_Z_CONTROLLERS: [&str; 2] = ["Current log", "Freq shift"];
+/// The Z-controllers the mock says Nanonis has defined: the list from a
+/// lab machine, law and signal in the name.
+const MOCK_Z_CONTROLLERS: [&str; 9] = [
+    "log Current",
+    "abs Current",
+    "log Conductance",
+    "abs Conductance",
+    "Frequency (neg)",
+    "Frequency (pos)",
+    "Phase",
+    "Excitation",
+    "Amplitude",
+];
 
 /// One feedback loop as the mock holds it.
 #[derive(Debug, Clone)]

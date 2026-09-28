@@ -811,7 +811,10 @@ impl SpmController for NanonisController {
                         time_constant_s: f64::from(time_constant),
                         tip_lift_m: f64::from(self.client.z_ctrl_tip_lift_get()?),
                         switch_off_delay_s: f64::from(self.client.z_ctrl_switch_off_delay_get()?),
-                        withdraw_rate_m_s: f64::from(self.client.z_ctrl_withdraw_rate_get()?),
+                        withdraw_rate_m_s: {
+                            let rate = f64::from(self.client.z_ctrl_withdraw_rate_get()?);
+                            rate.is_finite().then_some(rate)
+                        },
                         limits_enabled: self.client.z_ctrl_limits_enabled_get()?,
                         limits_m: (f64::from(high), f64::from(low)),
                     }),
@@ -891,8 +894,9 @@ impl SpmController for NanonisController {
                 self.client.z_ctrl_tip_lift_set(p.tip_lift_m as f32)?;
                 self.client
                     .z_ctrl_switch_off_delay_set(p.switch_off_delay_s as f32)?;
-                self.client
-                    .z_ctrl_withdraw_rate_set(p.withdraw_rate_m_s as f32)?;
+                self.client.z_ctrl_withdraw_rate_set(
+                    p.withdraw_rate_m_s.map_or(f32::INFINITY, |r| r as f32),
+                )?;
                 self.client.z_ctrl_limits_enabled_set(p.limits_enabled)?;
                 if p.limits_enabled {
                     self.client

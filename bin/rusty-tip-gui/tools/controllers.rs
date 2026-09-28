@@ -17,6 +17,7 @@ use serde_json::Value;
 use rusty_tip::controllers::{
     ApplyProfile, ControllerAppliedEvent, ControllerId, ControllerParams, ControllerProfile,
     ControllerReading, ProfileEntry, ReadControllers, SetControllerEnabled, SettingsLoadedEvent,
+    ZLaw, ZLoopInput,
 };
 use rusty_tip::experiment_log::LogEvent;
 use rusty_tip::session::Job;
@@ -24,7 +25,7 @@ use rusty_tip::session::Job;
 use super::{SetupCx, Tool};
 use crate::form::SchemaForm;
 use crate::run_view::RunView;
-use crate::units::format_si;
+use crate::units::{display_unit_for, format_si, prefix_scale};
 use crate::widgets::{Note, note, path_field};
 
 /// The controllers a profile can be composed for before anything is read.
@@ -235,12 +236,56 @@ impl ControllersTool {
                                 }
                             });
                         ui.end_row();
+                    } else if key == "setpoint" && id == ControllerId::Z {
+                        // The setpoint's unit is the active loop's input,
+                        // which only its name says.
+                        let input = ZLoopInput::from_name(
+                            value.get("active").and_then(Value::as_str).unwrap_or(""),
+                        );
+                        let label = match input.law {
+                            ZLaw::Log => "Setpoint (log loop)",
+                            ZLaw::Linear => "Setpoint",
+                        };
+                        ui.label(label).on_hover_text(
+                            "In the active loop's input signal; a log loop forms its error \
+                             from the ratio to this, a linear one from the difference",
+                        );
+                        changed |= setpoint_editor(ui, value, input.unit());
+                        ui.end_row();
                     } else {
                         changed |= form.render_path(ui, value, &key);
                     }
                 }
             });
         changed
+    }
+}
+
+/// A drag value for the Z setpoint in the display unit of `unit`, or bare
+/// when the loop's quantity is unknown.
+fn setpoint_editor(ui: &mut egui::Ui, value: &mut Value, unit: Option<&str>) -> bool {
+    let display = unit.map(display_unit_for);
+    let scale = display.and_then(prefix_scale).unwrap_or(1.0);
+    let si = value.get("setpoint").and_then(Value::as_f64).unwrap_or(0.0);
+    let mut shown = si * scale;
+    let speed = (shown.abs() * 0.01).max(0.001);
+    let mut drag = egui::DragValue::new(&mut shown)
+        .speed(speed)
+        .max_decimals(6);
+    if let Some(d) = display {
+        drag = drag.suffix(format!(" {d}"));
+    }
+    let response = ui.add(drag);
+    if let Some(u) = unit
+        && scale != 1.0
+    {
+        response.clone().on_hover_text(format!("{si:e} {u}"));
+    }
+    if response.changed() {
+        value["setpoint"] = serde_json::json!(shown / scale);
+        true
+    } else {
+        false
     }
 }
 
@@ -556,7 +601,7 @@ mod tests {
             params,
             enabled: true,
             status: "on".into(),
-            available: vec!["Current log".into(), "Freq shift".into()],
+            available: vec!["log Current".into(), "Frequency (neg)".into()],
         })
     }
 
@@ -565,7 +610,7 @@ mod tests {
         let mut tool = ControllersTool::default();
         let mut view = RunView::default();
         let z = ControllerParams::Z(ZControllerParams {
-            active: "Current log".into(),
+            active: "log Current".into(),
             setpoint: 50e-12,
             ..Default::default()
         });
