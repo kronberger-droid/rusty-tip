@@ -26,11 +26,13 @@ use crate::run_view::RunView;
 use crate::tools::{self, SetupCx, Tool};
 use crate::widgets::{Note, note, status_dot};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// Which of a tool's tabs is shown. Not saved: a start opens on Run,
+/// where the Start button and the last run are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Tab {
-    Setup,
     #[default]
     Run,
+    Setup,
     History,
 }
 
@@ -63,7 +65,6 @@ enum Page {
 struct Prefs {
     connection: ConnectionForm,
     theme: egui::ThemePreference,
-    tab: Tab,
     /// `"connection"` or a tool id.
     page: String,
     tools: BTreeMap<String, serde_json::Value>,
@@ -119,7 +120,7 @@ impl WorkbenchApp {
             pane,
             tools,
             page,
-            tab: prefs.tab,
+            tab: Tab::default(),
             run: None,
             status: RunStatus::Idle,
             view: RunView::default(),
@@ -345,8 +346,8 @@ impl WorkbenchApp {
         };
         ui.horizontal(|ui| {
             for (tab, label) in [
-                (Tab::Setup, "Setup"),
                 (Tab::Run, "Run"),
+                (Tab::Setup, "Setup"),
                 (Tab::History, "History"),
             ] {
                 if ui.selectable_label(self.tab == tab, label).clicked() {
@@ -526,7 +527,6 @@ impl eframe::App for WorkbenchApp {
         let prefs = Prefs {
             connection: self.pane.form.clone(),
             theme: self.theme,
-            tab: self.tab,
             page: match self.page {
                 Page::Connection => "connection".to_string(),
                 Page::Tool(i) => self.tools[i].id().to_string(),

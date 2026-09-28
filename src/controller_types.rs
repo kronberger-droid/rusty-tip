@@ -36,22 +36,24 @@ pub struct StabilityConfig {
     /// Maximum allowed change in signal for tip to be considered stable (in Hz)
     /// During the bias sweep, if the signal changes more than this threshold,
     /// the tip is considered unstable
-    #[schemars(extend("x-unit" = "Hz"))]
+    #[schemars(extend("x-unit" = "Hz", "x-enabled-by" = "check_stability"))]
     pub stable_tip_allowed_change: f64,
     /// Bias voltage range for stability sweep (lower, upper) in V
     /// Must be positive magnitude-only; polarity_mode determines sign
-    #[schemars(extend("x-unit" = "V"))]
+    #[schemars(extend("x-unit" = "V", "x-enabled-by" = "check_stability"))]
     pub bias_range: (f64, f64),
     /// Number of steps in the bias sweep
+    #[schemars(extend("x-enabled-by" = "check_stability"))]
     pub bias_steps: u16,
     /// Time to wait at each step in ms
-    #[schemars(extend("x-unit" = "ms"))]
+    #[schemars(extend("x-unit" = "ms", "x-enabled-by" = "check_stability"))]
     pub step_period_ms: u64,
     /// Polarity mode for bias sweep
     #[serde(default)]
+    #[schemars(extend("x-enabled-by" = "check_stability"))]
     pub polarity_mode: BiasSweepPolarity,
     /// Scan speed for stability check in m/s (None = use current scan speed)
-    #[schemars(extend("x-unit" = "m/s", "x-display-unit" = "nm/s"))]
+    #[schemars(extend("x-unit" = "m/s", "x-display-unit" = "nm/s", "x-enabled-by" = "check_stability"))]
     pub scan_speed_m_s: Option<f64>,
 }
 

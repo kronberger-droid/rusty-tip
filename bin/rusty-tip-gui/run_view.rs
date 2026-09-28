@@ -16,6 +16,8 @@ use std::collections::{BTreeMap, VecDeque};
 use rusty_tip::event::Event;
 use rusty_tip::experiment_log::reader::{Body, Header, Record};
 
+use crate::units::number;
+
 /// Upper bound on points per series; the oldest go first.
 pub const MAX_SERIES_POINTS: usize = 20_000;
 
@@ -257,10 +259,7 @@ fn compact(value: &serde_json::Value) -> String {
             .map(|(k, v)| format!("{k}={}", compact(v)))
             .collect::<Vec<_>>()
             .join(" "),
-        serde_json::Value::Number(n) => match n.as_f64() {
-            Some(f) if f.fract() != 0.0 => format!("{f:.4}"),
-            _ => n.to_string(),
-        },
+        serde_json::Value::Number(n) => n.as_f64().map(number).unwrap_or_else(|| n.to_string()),
         serde_json::Value::String(s) => s.clone(),
         other => other.to_string(),
     };

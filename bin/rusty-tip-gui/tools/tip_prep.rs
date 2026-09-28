@@ -22,6 +22,7 @@ use super::{SetupCx, Tool};
 use crate::connection::ConnectionSettings;
 use crate::form::SchemaForm;
 use crate::run_view::RunView;
+use crate::units::{format_si, number};
 use crate::widgets::{Note, note, path_field};
 
 /// Tip prep as a [`Job`]: what the session runs.
@@ -320,7 +321,7 @@ impl Tool for TipPrepTool {
                     ui.label(
                         view.latest(CYCLE_FREQ_SHIFT)
                             .or_else(|| view.latest(FREQ_SHIFT_SERIES))
-                            .map(|f| format!("{f:.2} Hz"))
+                            .map(|f| format_si(f, "Hz"))
                             .unwrap_or_else(|| "-".into()),
                     );
                     ui.end_row();
@@ -329,13 +330,13 @@ impl Tool for TipPrepTool {
                     ui.label(
                         pulses
                             .last()
-                            .map(|p| format!("{:.2} V", p[1]))
+                            .map(|p| format_si(p[1], "V"))
                             .unwrap_or_else(|| "-".into()),
                     );
                     ui.label("Sharp band:");
                     ui.label(
                         self.sharp_bounds()
-                            .map(|(lo, hi)| format!("{lo:.2} to {hi:.2} Hz"))
+                            .map(|(lo, hi)| format!("{} to {} Hz", number(lo), number(hi)))
                             .unwrap_or_else(|| "-".into()),
                     );
                     ui.end_row();

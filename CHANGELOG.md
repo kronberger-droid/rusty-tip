@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   host, ports, layout and settings files, TCP channel mapping) and shows
   what the session reports: state, stream rate, the signal table,
   capabilities, four live readouts while idle, and which settings file was
-  loaded last, by whom and when. Tools sit in a sidebar with Setup, Run
+  loaded last, by whom and when. Tools sit in a sidebar with Run, Setup
   and History tabs; a job's error is an error state, not a clean exit. Tip
   prep is the first tool, with the old Control tab as its run panel. The
   run view is a fold over log records shared by live runs and replayed
@@ -35,7 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[experiment_logging]`, the TCP mapping) are not on the form: the
   Connection page owns them in the workbench, loading a file offers them
   to the page when disconnected, and Save writes the page's settings back
-  into the file, so one file serves the CLI and the workbench.
+  into the file, so one file serves the CLI and the workbench. A field
+  annotated `x-enabled-by` is drawn only while the sibling boolean it
+  names is on, which is how the stability settings follow
+  `check_stability`. Units have one home in the workbench: a bare `A` or
+  `m` field is edited in `pA` or `nm` without an annotation, hovering a
+  scaled field shows the stored SI value, and readouts, the run panel and
+  the events tail take the prefix that fits the value (`120.0 pA`,
+  `-500.0 mV`).
 - **Drift as a tool and a routine.** `rusty_tip::drift::DriftRoutine`
   wraps the drift actions (status, measure, compensate, off) as a
   `Routine` with `LeaveInPlace` and `RunSetup::NONE`, writing typed

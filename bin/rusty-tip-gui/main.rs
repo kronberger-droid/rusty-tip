@@ -9,6 +9,7 @@ mod connection;
 mod form;
 mod run_view;
 mod tools;
+mod units;
 mod widgets;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
