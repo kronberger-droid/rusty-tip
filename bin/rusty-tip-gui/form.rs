@@ -9,11 +9,13 @@
 //! and tuples as a row of inputs, and lists with add and remove. Anything
 //! else falls back to a raw JSON field, never a panic.
 //!
-//! Units: values stay SI in the value; a field annotated with `x-unit` and
-//! `x-display-unit` is shown scaled (`A` as `pA`, `m` as `nm`) and converted
-//! back on edit. Doc comments arrive as `description` and become hover text.
-//! Validation is the tool's business: it deserializes the value into its
-//! type when the run starts.
+//! Units: values stay SI in the value; a field annotated with `x-unit` is
+//! shown in its display unit, `x-display-unit` where the schema names one
+//! and the unit's usual one otherwise (`A` as `pA`, `m` as `nm`, the rest as
+//! they are), and converted back on edit. A field annotated `x-enabled-by`
+//! is drawn only while the sibling boolean it names is set. Doc comments
+//! arrive as `description` and become hover text. Validation is the tool's
+//! business: it deserializes the value into its type when the run starts.
 //!
 //! Every `$ref` is inlined once when the form is built, so drawing walks a
 //! plain tree and borrows from it.
@@ -23,7 +25,7 @@ use std::borrow::Cow;
 use eframe::egui;
 use serde_json::{Map, Value, json};
 
-use crate::widgets::prefix_scale;
+use crate::units::{display_unit_for, prefix_scale};
 
 pub struct SchemaForm {
     root: Value,
@@ -74,6 +76,9 @@ impl SchemaForm {
                 return false;
             };
             let object = ensure_object(node);
+            if !is_shown(prop, object) {
+                return false;
+            }
             node = object
                 .entry(segment.to_string())
                 .or_insert_with(|| default_for(prop));
@@ -134,7 +139,7 @@ impl SchemaForm {
         let mut changed = grid(ui, id, |ui| {
             let mut changed = false;
             for (key, prop) in props {
-                if matches!(classify(prop), Kind::Object) {
+                if matches!(classify(prop), Kind::Object) || !is_shown(prop, object) {
                     continue;
                 }
                 let field = object
@@ -145,7 +150,7 @@ impl SchemaForm {
             changed
         });
         for (key, prop) in props {
-            if !matches!(classify(prop), Kind::Object) {
+            if !matches!(classify(prop), Kind::Object) || !is_shown(prop, object) {
                 continue;
             }
             let field = object
@@ -221,7 +226,7 @@ impl SchemaForm {
         };
         let object = ensure_object(value);
         for (key, prop) in props {
-            if key == tag {
+            if key == tag || !is_shown(prop, object) {
                 continue;
             }
             let label = ui.label(format!("    {}", label_for(key, prop)));
@@ -307,6 +312,9 @@ fn render_editor(ui: &mut egui::Ui, schema: &Value, value: &mut Value, id: &str)
             let mut changed = false;
             ui.horizontal(|ui| {
                 for (key, prop) in props {
+                    if !is_shown(prop, object) {
+                        continue;
+                    }
                     let field = object
                         .entry(key.clone())
                         .or_insert_with(|| default_for(prop));
@@ -356,12 +364,18 @@ fn render_editor(ui: &mut egui::Ui, schema: &Value, value: &mut Value, id: &str)
             if let Some(unit) = unit_suffix(schema) {
                 drag = drag.suffix(unit);
             }
-            if ui.add(drag).changed() {
+            let response = ui.add(drag);
+            let changed = response.changed();
+            if changed {
                 *value = json!(shown / scale);
-                true
-            } else {
-                false
             }
+            // The stored value, for anyone checking the conversion.
+            if scale != 1.0
+                && let Some(unit) = schema.get("x-unit").and_then(Value::as_str)
+            {
+                response.on_hover_text(format!("{:e} {unit}", value.as_f64().unwrap_or(0.0)));
+            }
+            changed
         }
         Kind::Str => {
             let mut s = value.as_str().unwrap_or("").to_string();
@@ -605,6 +619,13 @@ fn classify(schema: &Value) -> Kind<'_> {
             };
         }
     }
+    // A unit-variant enum without doc comments: `type: string, enum: [..]`.
+    if let Some(options) = schema.get("enum").and_then(Value::as_array) {
+        let names: Vec<&str> = options.iter().filter_map(Value::as_str).collect();
+        if !names.is_empty() && names.len() == options.len() {
+            return Kind::StringEnum(names);
+        }
+    }
     match schema.get("type").and_then(Value::as_str) {
         Some("object") => Kind::Object,
         Some("boolean") => Kind::Bool,
@@ -643,6 +664,15 @@ fn ensure_array(value: &mut Value, n: usize, default: impl Fn(usize) -> Value) -
     array
 }
 
+/// Whether a field is drawn: one annotated `x-enabled-by` only while the
+/// sibling boolean it names is `true`. A missing sibling hides nothing.
+fn is_shown(schema: &Value, siblings: &Map<String, Value>) -> bool {
+    match schema.get("x-enabled-by").and_then(Value::as_str) {
+        Some(gate) => siblings.get(gate).and_then(Value::as_bool).unwrap_or(true),
+        None => true,
+    }
+}
+
 fn description(schema: &Value) -> Option<&str> {
     schema.get("description").and_then(Value::as_str)
 }
@@ -666,23 +696,27 @@ fn label_for(key: &str, schema: &Value) -> String {
     label
 }
 
+/// The unit a field is shown in: `x-display-unit`, or the usual one for
+/// its `x-unit`.
+fn display_unit(schema: &Value) -> Option<(&str, &str)> {
+    let unit = schema.get("x-unit").and_then(Value::as_str)?;
+    let display = schema
+        .get("x-display-unit")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| display_unit_for(unit));
+    Some((unit, display))
+}
+
 /// Multiply an SI value by this to show it in the display unit.
 fn display_scale(schema: &Value) -> f64 {
-    let unit = schema.get("x-unit").and_then(Value::as_str);
-    let display = schema.get("x-display-unit").and_then(Value::as_str);
-    match (unit, display) {
-        (Some(u), Some(d)) if u == d => 1.0,
-        (Some(_), Some(d)) => prefix_scale(d).unwrap_or(1.0),
+    match display_unit(schema) {
+        Some((unit, display)) if unit != display => prefix_scale(display).unwrap_or(1.0),
         _ => 1.0,
     }
 }
 
 fn unit_suffix(schema: &Value) -> Option<String> {
-    let unit = schema
-        .get("x-display-unit")
-        .or_else(|| schema.get("x-unit"))?
-        .as_str()?;
-    Some(format!(" {unit}"))
+    display_unit(schema).map(|(_, display)| format!(" {display}"))
 }
 
 #[cfg(test)]
@@ -818,6 +852,10 @@ mod tests {
         assert_eq!(display_scale(&speed), 1e9);
         let plain = json!({"x-unit": "Hz"});
         assert_eq!(display_scale(&plain), 1.0);
+        let current = json!({"x-unit": "A"});
+        assert_eq!(display_scale(&current), 1e12, "a bare current shows as pA");
+        assert_eq!(unit_suffix(&current).as_deref(), Some(" pA"));
+        assert_eq!(unit_suffix(&plain).as_deref(), Some(" Hz"));
 
         assert_eq!(label_for("initial_bias_v", &volts), "Initial bias");
         assert_eq!(label_for("scan_speed_m_s", &speed), "Scan speed");
@@ -849,9 +887,63 @@ mod tests {
             classify(&stab["properties"]["bias_range"]),
             Kind::FixedArray(2)
         ));
+        let stepping = form.root["properties"]["pulse_method"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["properties"]["type"]["const"] == "stepping")
+            .unwrap();
+        assert_eq!(
+            classify(&stepping["properties"]["polarity"]),
+            Kind::StringEnum(vec!["positive", "negative"]),
+            "an enum without doc comments arrives as a plain `enum` list"
+        );
         assert!(matches!(
             classify(&form.root["properties"]["tcp_channel_mapping"]),
             Kind::Optional(_)
         ));
+    }
+
+    #[test]
+    fn stability_fields_hide_while_the_check_is_off() {
+        let form = form();
+        let stab = &form.root["properties"]["tip_prep"]["properties"]["stability"]["properties"];
+        assert_eq!(
+            stab["stable_tip_allowed_change"]["x-enabled-by"],
+            "check_stability"
+        );
+        assert!(stab["check_stability"].get("x-enabled-by").is_none());
+        let on = json!({"check_stability": true})
+            .as_object()
+            .unwrap()
+            .clone();
+        let off = json!({"check_stability": false})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(is_shown(&stab["stable_tip_allowed_change"], &on));
+        assert!(!is_shown(&stab["stable_tip_allowed_change"], &off));
+        assert!(is_shown(&stab["check_stability"], &off));
+        assert!(
+            is_shown(&stab["bias_range"], &Map::new()),
+            "no sibling to ask hides nothing"
+        );
+
+        // Drawing a config with the check off still edits nothing and loses
+        // nothing: hidden fields keep their values.
+        let mut config = AppConfig::default();
+        config.tip_prep.stability.check_stability = false;
+        let before = serde_json::to_value(&config).unwrap();
+        let mut value = before.clone();
+        let changed = draw(
+            &form,
+            &mut value,
+            &[
+                "tip_prep.stability.check_stability",
+                "tip_prep.stability.stable_tip_allowed_change",
+            ],
+        );
+        assert!(!changed);
+        assert_eq!(value, before);
     }
 }

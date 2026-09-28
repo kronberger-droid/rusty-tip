@@ -443,8 +443,9 @@ landed and where it differs from the sketch:
   dir, open a log into the same view); generic panels (series picker,
   action timeline) are still step 4.
 - Prefs go through eframe storage, so `eframe` gained the `persistence`
-  feature. Theme, tab, selected tool, the connection form and each tool's
-  prefs are saved; the theme selector kept its hover text.
+  feature. Theme, selected tool, the connection form and each tool's
+  prefs are saved; the theme selector kept its hover text. The tab is
+  not: a start opens on Run (Martin, 2026-09-25).
 - The log directory is a pane field; `SessionCmd::SetLogDir` /
   `Session::set_log_dir` were added for it.
 - No offline-run path: `Tool::needs_connection` and the worker-thread
@@ -494,13 +495,36 @@ for (a real form with checkboxes, the important settings on top):
   `render_path` draws one field by dotted path for the featured block.
   Covered: objects, numbers (drag values scaled to the display unit),
   integers, booleans, strings, `Option<T>` (checkbox plus field), string
-  enums, the internally tagged `PulseMethod`, fixed arrays and tuples,
-  lists; anything else is a raw JSON field.
+  enums (both the `oneOf`/`const` shape a documented enum gets and the
+  plain `enum` list an undocumented one gets), the internally tagged
+  `PulseMethod`, fixed arrays and tuples, lists; anything else is a raw
+  JSON field. A field annotated `x-enabled-by` is drawn only while the
+  sibling boolean it names is `true`: the stability fields behind
+  `check_stability` (Martin, 2026-09-25).
+- Units live in `bin/rusty-tip-gui/units.rs` (2026-09-25): `prefix_scale`
+  and the display unit a base unit gets when the schema names none (`A`
+  as `pA`, `m` as `nm`, `m/s` as `nm/s`), `format_si` for readouts and
+  status lines with the prefix that fits the value, `number` for the
+  events tail. A scaled form field shows its stored SI value on hover.
 - Tip prep's `FEATURED` list names the fields shown above the tree. The
   `Tool` trait still has `setup(ui)`; the tip-prep tool implements it with
-  the form, drift keeps its hand form since it greys fields by operation,
-  which a generic form cannot do yet. `schema()`/`defaults()` on the trait
-  and a `routine_tool` helper are still open.
+  the form, drift keeps its hand form since it greys fields by the chosen
+  operation, and `x-enabled-by` gates on a boolean only; an
+  `x-enabled-when = "op=compensate"` form of it would let drift move onto
+  the schema form. `schema()`/`defaults()` on the trait and a
+  `routine_tool` helper are still open.
+- Wanted (Martin, 2026-09-25, not yet): a picture of the pulse method
+  next to its fields. Proposal: a small `egui_plot` beside the
+  pulse-method rows, drawn from the form's value each frame. Fixed is a
+  flat line of voltage against cycle; Stepping an idealised staircase,
+  `voltage_steps` treads each `cycles_before_step` wide from the lower
+  bound to the upper (the real schedule only climbs while the shift stays
+  within `threshold_value`, which the caption should say); Linear is
+  voltage against frequency shift, flat at the upper bound outside
+  `linear_clamp` and a ramp inside it. Polarity flips the sign. The Linear
+  curve should come from a pure function in `tip_prep/pulse_state.rs`
+  rather than a copy of its interpolation, which means extracting one
+  from `update_voltage` first.
 - Tests in `form.rs` lay the form out headlessly with
   `egui::Context::run`: drawing the default config edits nothing and round
   trips, every `configs/*.toml` survives the form, the schema default

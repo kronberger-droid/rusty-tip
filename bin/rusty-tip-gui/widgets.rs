@@ -1,5 +1,5 @@
 //! Small pieces the pages share: the status dot, a path field with its file
-//! dialog, a message line, and the SI prefix table behind display units.
+//! dialog, and a message line.
 
 use std::path::PathBuf;
 
@@ -64,39 +64,5 @@ pub fn note(ui: &mut egui::Ui, note: &Option<Note>) {
         } else {
             ui.label(&note.text);
         }
-    }
-}
-
-/// How many of `display_unit` make one base unit, from the SI prefix it
-/// starts with: `pA` gives 1e12, `mV` gives 1e3, `Hz` gives nothing.
-pub fn prefix_scale(display_unit: &str) -> Option<f64> {
-    let first = display_unit.chars().next()?;
-    // Only when the rest is a plain base unit, so `m/s` is not "milli".
-    let rest = &display_unit[first.len_utf8()..];
-    if rest.is_empty() || !rest.starts_with(|c: char| c.is_ascii_alphabetic()) {
-        return None;
-    }
-    match first {
-        'p' => Some(1e12),
-        'n' => Some(1e9),
-        'µ' | 'u' => Some(1e6),
-        'm' => Some(1e3),
-        'k' => Some(1e-3),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn prefixes_scale_and_bare_units_do_not() {
-        assert_eq!(prefix_scale("pA"), Some(1e12));
-        assert_eq!(prefix_scale("mV"), Some(1e3));
-        assert_eq!(prefix_scale("nm/s"), Some(1e9));
-        assert_eq!(prefix_scale("m/s"), None, "metres per second is not milli");
-        assert_eq!(prefix_scale("Hz"), None);
-        assert_eq!(prefix_scale("V"), None);
     }
 }

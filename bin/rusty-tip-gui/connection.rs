@@ -23,7 +23,8 @@ use rusty_tip::experiment_log::ControllerFacts;
 use rusty_tip::session::{Backend, ConnState, NanonisBackend, PresetLoad, Readout, SessionUpdate};
 use rusty_tip::spm_controller::Capability;
 
-use crate::widgets::{path_field, prefix_scale, status_dot};
+use crate::units::{format_si, number};
+use crate::widgets::{path_field, status_dot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BackendKind {
@@ -491,10 +492,7 @@ impl ConnectionPane {
             .spacing([16.0, 4.0])
             .show(ui, |ui| {
                 ui.label("State");
-                ui.horizontal(|ui| {
-                    status_dot(ui, self.state_color());
-                    ui.label(self.state_word());
-                });
+                ui.label(self.state_word());
                 ui.end_row();
                 if let Some(facts) = &self.facts {
                     ui.label("Stream");
@@ -582,26 +580,22 @@ fn describe_load(load: Option<&PresetLoad>) -> String {
     }
 }
 
-/// A readout in the unit its name promises, since the controller reports
-/// everything in SI base units.
+/// A readout in the unit its name declares (`Z (m)`), in the prefix that
+/// fits the value; a frequency shift is in hertz by name, anything else is
+/// a bare number.
 fn format_readout(name: &str, value: f64) -> String {
-    let lower = name.to_lowercase();
     let short = name.split('(').next().unwrap_or(name).trim();
-    let scaled = |unit: &str, decimals: usize| {
-        let scale = prefix_scale(unit).unwrap_or(1.0);
-        format!("{short} {:.*} {unit}", decimals, value * scale)
+    let declared = name
+        .rsplit_once('(')
+        .and_then(|(_, rest)| rest.strip_suffix(')'))
+        .map(str::trim)
+        .filter(|u| !u.is_empty());
+    let shown = match declared {
+        Some(unit) => format_si(value, unit),
+        None if name.to_lowercase().contains("freq") => format_si(value, "Hz"),
+        None => number(value),
     };
-    if lower.contains("(m)") {
-        scaled("nm", 3)
-    } else if lower.contains("(a)") {
-        scaled("pA", 1)
-    } else if lower.contains("(v)") {
-        scaled("V", 3)
-    } else if lower.contains("freq") {
-        scaled("Hz", 2)
-    } else {
-        format!("{short} {value:.4}")
-    }
+    format!("{short} {shown}")
 }
 
 /// Wall-clock time of day, local.
@@ -667,9 +661,10 @@ mod tests {
 
     #[test]
     fn readouts_show_human_units() {
-        assert_eq!(format_readout("Z (m)", 12.3e-9), "Z 12.300 nm");
-        assert_eq!(format_readout("Current (A)", 50.1e-12), "Current 50.1 pA");
-        assert_eq!(format_readout("Bias (V)", 0.2), "Bias 0.200 V");
-        assert_eq!(format_readout("freq shift", -3.2), "freq shift -3.20 Hz");
+        assert_eq!(format_readout("Z (m)", 12.3e-9), "Z 12.30 nm");
+        assert_eq!(format_readout("Current (A)", 50.1e-12), "Current 50.10 pA");
+        assert_eq!(format_readout("Bias (V)", 0.2), "Bias 200.0 mV");
+        assert_eq!(format_readout("freq shift", -3.2), "freq shift -3.200 Hz");
+        assert_eq!(format_readout("Phase", 1.5), "Phase 1.5");
     }
 }
