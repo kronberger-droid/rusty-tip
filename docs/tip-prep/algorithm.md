@@ -90,7 +90,9 @@ off the same way and ends the run in an error.
 
 Whatever the outcome — success, limits, Ctrl+C, or a hardware error — the
 routine withdraws the tip, backs the coarse motor off by
-`exit_retract_steps` (two by default; 0.2.3 used ten), and tears the
-controller down before returning. The withdraw alone only parks the tip at
-the top of the piezo range; the coarse retract is what puts real distance
-behind it.
+`exit_retract_steps` (two by default; 0.2.3 used ten), puts safe-tip back
+the way it was before the run, and tears the controller down before
+returning. The withdraw alone only parks the tip at the top of the piezo
+range; the coarse retract is what puts real distance behind it. The
+connection and the data stream stay up: they belong to whoever owns the
+controller, not to the run.

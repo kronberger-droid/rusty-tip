@@ -7,7 +7,7 @@ use std::{fs, io, path::PathBuf, process::ExitCode};
 use rusty_tip::config::{AppConfig, load_config};
 use rusty_tip::event::{ConsoleLogger, Event, EventBus, EventEmitter, FileLogger};
 use rusty_tip::experiment_log::{ControllerFacts, RunHeader};
-use rusty_tip::nanonis_controller::NanonisController;
+use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::SignalRegistry;
 use rusty_tip::spm_controller::SpmController;
@@ -100,9 +100,10 @@ fn run() -> Result<(), RunError> {
         .address(&config.nanonis.host_ip)
         .port(config.nanonis.control_ports[0])
         .build()?;
-    let mut controller =
-        NanonisController::new(client, rusty_tip::tip_prep::nanonis_setup(&config));
+    let mut controller = NanonisController::new(client, NanonisSetupConfig::default());
     info!("Connected to Nanonis system");
+
+    rusty_tip::tip_prep::load_presets(&mut controller, &config)?;
 
     // Build signal registry
     let registry = build_signal_registry(&mut controller, &config)?;

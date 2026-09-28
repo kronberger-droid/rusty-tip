@@ -8,7 +8,7 @@ use crate::spm_error::SpmError;
 
 use super::Outcome;
 use super::events::CleanupFailedEvent;
-use super::subsystems::{Bias, Drift, Motor, MultiPass, Scan, Signals, ZCtrl};
+use super::subsystems::{Bias, Drift, Motor, MultiPass, Presets, Scan, Signals, ZCtrl};
 
 /// The routine runtime: what a [`super::Routine`] runs against.
 ///
@@ -80,6 +80,12 @@ impl<'a> Rt<'a> {
     pub fn multi_pass(&mut self) -> Result<MultiPass<'_, 'a>, SpmError> {
         self.require(Capability::MultiPass)?;
         Ok(MultiPass { rt: self })
+    }
+
+    /// Settings and layout files. Requires [`Capability::Presets`].
+    pub fn presets(&mut self) -> Result<Presets<'_, 'a>, SpmError> {
+        self.require(Capability::Presets)?;
+        Ok(Presets { rt: self })
     }
 
     /// Escape hatch: the bare controller, for operations the subsystem

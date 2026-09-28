@@ -43,6 +43,29 @@ impl LogEvent for StreamDumpEvent {
     const KIND: &'static str = "routine/stream_dump";
 }
 
+/// A settings file was loaded into the controller during the run. The load
+/// outlives the run: whatever it set stays set for the rest of the session.
+#[derive(Serialize, JsonSchema, Clone, Debug)]
+pub struct SettingsLoadedEvent {
+    /// The path as the routine gave it.
+    pub path: String,
+}
+
+impl LogEvent for SettingsLoadedEvent {
+    const KIND: &'static str = "routine/settings_loaded";
+}
+
+/// A layout file was loaded into the controller during the run.
+#[derive(Serialize, JsonSchema, Clone, Debug)]
+pub struct LayoutLoadedEvent {
+    /// The path as the routine gave it.
+    pub path: String,
+}
+
+impl LogEvent for LayoutLoadedEvent {
+    const KIND: &'static str = "routine/layout_loaded";
+}
+
 /// The kinds any routine's log can contain. A tool includes this in its own
 /// schema with [`ToolSchema::including`].
 pub fn log_schema() -> ToolSchema {
@@ -50,4 +73,6 @@ pub fn log_schema() -> ToolSchema {
         .with::<CleanupFailedEvent>()
         .with::<PanickedEvent>()
         .with::<StreamDumpEvent>()
+        .with::<SettingsLoadedEvent>()
+        .with::<LayoutLoadedEvent>()
 }

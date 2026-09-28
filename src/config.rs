@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::controller_types::{PulseMethod, StabilityConfig};
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct TcpChannelMapping {
     pub nanonis_index: u8,
     pub tcp_channel: u8,
