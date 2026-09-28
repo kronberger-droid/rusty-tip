@@ -532,10 +532,12 @@ impl Tool for ControllersTool {
     }
 
     fn prefs(&self) -> Value {
+        // A JSON object needs string keys, so the edits go as pairs.
+        let edits: Vec<(&ControllerId, &Value)> = self.edits.iter().collect();
         serde_json::json!({
             "profile_path": self.profile_path,
             "settings_file": self.settings_file,
-            "edits": self.edits,
+            "edits": edits,
             "selected": self.selected,
         })
     }
@@ -549,7 +551,7 @@ impl Tool for ControllersTool {
         }
         if let Some(edits) = prefs
             .get("edits")
-            .and_then(|e| serde_json::from_value::<BTreeMap<ControllerId, Value>>(e.clone()).ok())
+            .and_then(|e| serde_json::from_value::<Vec<(ControllerId, Value)>>(e.clone()).ok())
         {
             // Only fields that still deserialize are worth keeping.
             for (id, fields) in edits {
@@ -644,6 +646,28 @@ mod tests {
         fresh.apply_event(&reading(ControllerId::Z, z));
         tool.take_readings(&fresh);
         assert_eq!(tool.edits[&ControllerId::Z]["setpoint"], 50e-12);
+    }
+
+    #[test]
+    fn prefs_round_trip_with_the_edits() {
+        let mut tool = ControllersTool::default();
+        tool.edits.insert(
+            ControllerId::PllPhase { modulator: 1 },
+            ControllerParams::default_for(ControllerId::PllPhase { modulator: 1 }).to_fields(),
+        );
+        tool.selected = Some(ControllerId::PllPhase { modulator: 1 });
+        tool.profile_path = "loops.toml".into();
+        let prefs = tool.prefs();
+        assert!(
+            prefs["edits"].is_array(),
+            "ids are not strings, so not a map"
+        );
+
+        let mut back = ControllersTool::default();
+        back.restore(&prefs);
+        assert_eq!(back.edits, tool.edits);
+        assert_eq!(back.selected, tool.selected);
+        assert_eq!(back.profile_path, "loops.toml");
     }
 
     #[test]
