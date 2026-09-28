@@ -43,7 +43,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use parking_lot::Mutex;
 
-use crate::config::TcpChannelMapping;
+use crate::config::{AppConfig, TcpChannelMapping};
 use crate::event::{ChannelForwarder, Event, EventBus, EventEmitter, FileLogger, Observer};
 use crate::experiment_log::{ControllerFacts, LogEvent, RunHeader, ToolSchema};
 use crate::mock_controller::{MockController, models};
@@ -88,6 +88,43 @@ impl Default for NanonisBackend {
             settings_file: None,
             tcp_channel_mapping: Vec::new(),
         }
+    }
+}
+
+impl NanonisBackend {
+    /// The connection a tip-prep config file describes: its `[nanonis]`,
+    /// `[data_acquisition]` and TCP mapping tables.
+    pub fn from_config(config: &AppConfig) -> Self {
+        Self {
+            host: config.nanonis.host_ip.clone(),
+            port: config
+                .nanonis
+                .control_ports
+                .first()
+                .copied()
+                .unwrap_or(Self::default().port),
+            data_port: config.data_acquisition.data_port,
+            sample_rate_hz: f64::from(config.data_acquisition.sample_rate),
+            layout_file: config.nanonis.layout_file.as_ref().map(PathBuf::from),
+            settings_file: config.nanonis.settings_file.as_ref().map(PathBuf::from),
+            tcp_channel_mapping: config.tcp_channel_mapping.clone().unwrap_or_default(),
+        }
+    }
+
+    /// Write this connection into a config's connection tables, the
+    /// inverse of [`from_config`](Self::from_config).
+    pub fn write_into(&self, config: &mut AppConfig) {
+        config.nanonis.host_ip = self.host.clone();
+        match config.nanonis.control_ports.first_mut() {
+            Some(first) => *first = self.port,
+            None => config.nanonis.control_ports.push(self.port),
+        }
+        config.nanonis.layout_file = self.layout_file.as_ref().map(|p| p.display().to_string());
+        config.nanonis.settings_file = self.settings_file.as_ref().map(|p| p.display().to_string());
+        config.data_acquisition.data_port = self.data_port;
+        config.data_acquisition.sample_rate = self.sample_rate_hz.round() as u32;
+        config.tcp_channel_mapping =
+            (!self.tcp_channel_mapping.is_empty()).then(|| self.tcp_channel_mapping.clone());
     }
 }
 
@@ -208,6 +245,12 @@ impl Session {
             conn: None,
             poisoned: false,
         }
+    }
+
+    /// Where the next job's log goes; `None` writes none. Takes effect from
+    /// the next run.
+    pub fn set_log_dir(&mut self, log_dir: Option<PathBuf>) {
+        self.log_dir = log_dir;
     }
 
     pub fn state(&self) -> ConnState {
@@ -474,10 +517,7 @@ impl Session {
 
         if !finished.seen() {
             let (outcome, detail) = match &result {
-                Ok(Outcome::Completed) => ("completed", None),
-                Ok(Outcome::StoppedByUser) => ("stopped_by_user", None),
-                Ok(Outcome::CycleLimit(n)) => ("cycle_limit", Some(n.to_string())),
-                Ok(Outcome::TimedOut(d)) => ("timed_out", Some(format!("{:.0}s", d.as_secs_f64()))),
+                Ok(outcome) => outcome.log_name(),
                 Err(e) => ("error", Some(e.to_string())),
             };
             events.emit(Event::run_finished(outcome, detail, started.elapsed()));
@@ -626,6 +666,8 @@ pub enum SessionCmd {
     Disconnect,
     Reconnect,
     ReloadPresets,
+    /// Where the next job's log goes; `None` writes none.
+    SetLogDir(Option<PathBuf>),
     /// Run a job. `events` receives every event of the run; `shutdown` is
     /// how to stop it.
     Run {
@@ -773,6 +815,7 @@ fn handle(session: &mut Session, cmd: SessionCmd, report: &dyn Fn(SessionUpdate)
             }
             report(SessionUpdate::State(session.state()));
         }
+        SessionCmd::SetLogDir(dir) => session.set_log_dir(dir),
         SessionCmd::ReloadPresets => {
             match session.reload_presets() {
                 Ok(()) => describe(session),

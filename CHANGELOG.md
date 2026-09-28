@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`rusty-tip-gui`**, the workbench: one window, one controller
+  connection, several tools. The connection pane connects once (backend,
+  host, ports, layout and settings files, TCP channel mapping) and shows
+  what the session reports: state, stream rate, the signal table,
+  capabilities, four live readouts while idle, and which settings file was
+  loaded last, by whom and when. Tools sit in a sidebar with Setup, Run
+  and History tabs; a job's error is an error state, not a clean exit. Tip
+  prep is the first tool, with the old Control tab as its run panel. The
+  run view is a fold over log records shared by live runs and replayed
+  logs, so History opens any `.jsonl` in the log directory into the same
+  view. `tip-prep-gui` is unchanged and
+  stays until the workbench reaches parity in the lab. Built with
+  `--features gui`, which now enables eframe's `persistence` so the pane
+  and each tool's setup survive a restart.
+- **Schema-driven setup forms.** `AppConfig` and every config type under
+  it derive `JsonSchema`, with unit annotations (`x-unit`,
+  `x-display-unit`) so a current stored in amperes is edited in
+  picoamperes. The workbench draws the tip-prep Setup page from that
+  schema: checkboxes, drag values with units, combo boxes for enums and
+  the pulse method, a checkbox plus field for optional limits, and the
+  settings that decide a run at the top. A shipped config survives the
+  form unchanged, which a test checks for every file in `configs/`. The
+  file's connection tables (`[nanonis]`, `[data_acquisition]`,
+  `[experiment_logging]`, the TCP mapping) are not on the form: the
+  Connection page owns them in the workbench, loading a file offers them
+  to the page when disconnected, and Save writes the page's settings back
+  into the file, so one file serves the CLI and the workbench.
+- **Drift as a tool and a routine.** `rusty_tip::drift::DriftRoutine`
+  wraps the drift actions (status, measure, compensate, off) as a
+  `Routine` with `LeaveInPlace` and `RunSetup::NONE`, writing typed
+  `drift/status`, `drift/measured` and `drift/compensated` events next to
+  the actions' `drift/burst`. It refuses to measure when the data stream
+  does not carry Z unless polling is allowed. The workbench has it as the
+  Drift tool, and `const-distance drift` is now a thin wrapper over it, so
+  the two front ends share one implementation.
+
 - **One connection, many runs.** `run_routine` borrows the controller
   instead of consuming it, so a second routine can start on the same
   connection with the data stream still up. `rusty_tip::session::Session`

@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -359,6 +359,45 @@ impl ActionNode {
             child.walk(f);
         }
     }
+}
+
+/// One log in a directory, from its bookends only.
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub path: PathBuf,
+    /// The tool from the header, when the log has one.
+    pub tool: Option<String>,
+    /// Timestamp of the first line.
+    pub started_at: Option<f64>,
+    /// `(outcome, detail, duration_ms)` from the last line, when the run got
+    /// to write one.
+    pub finished: Option<(String, Option<String>, f64)>,
+}
+
+/// Every `.jsonl` log in `dir`, newest first by name, each read by its
+/// bookends only so a directory of long runs lists quickly. A file that
+/// cannot be read is left out.
+pub fn list_dir(dir: &Path) -> io::Result<Vec<LogEntry>> {
+    let mut paths: Vec<PathBuf> = fs::read_dir(dir)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
+        .collect();
+    paths.sort();
+    paths.reverse();
+    Ok(paths
+        .into_iter()
+        .filter_map(|path| {
+            let log = Log::read_bookends(&path).ok()?;
+            Some(LogEntry {
+                tool: log.header().map(|h| h.tool.clone()),
+                started_at: log.started_at(),
+                finished: log
+                    .finished()
+                    .map(|(o, d, ms)| (o.to_string(), d.map(str::to_string), ms)),
+                path,
+            })
+        })
+        .collect())
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ pub mod spm_error;
 
 // -- Actions and orchestration --
 pub mod action;
+pub mod drift;
 pub mod routine;
 pub mod tip_prep;
 

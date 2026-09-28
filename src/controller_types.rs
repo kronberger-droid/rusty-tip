@@ -1,10 +1,11 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
 // BIAS SWEEP POLARITY
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum BiasSweepPolarity {
     /// Sweep from upper_bound toward lower_bound (toward zero)
@@ -20,7 +21,7 @@ pub enum BiasSweepPolarity {
 // STABILITY CONFIG
 // ============================================================================
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, JsonSchema)]
 // `default` at the container level so a config may set only the stability
 // fields it cares about — `configs/tip_prep_no_stability.toml` sets just
 // `check_stability = false` — and the rest fall back to `Default`. Without this,
@@ -35,18 +36,22 @@ pub struct StabilityConfig {
     /// Maximum allowed change in signal for tip to be considered stable (in Hz)
     /// During the bias sweep, if the signal changes more than this threshold,
     /// the tip is considered unstable
+    #[schemars(extend("x-unit" = "Hz"))]
     pub stable_tip_allowed_change: f64,
     /// Bias voltage range for stability sweep (lower, upper) in V
     /// Must be positive magnitude-only; polarity_mode determines sign
+    #[schemars(extend("x-unit" = "V"))]
     pub bias_range: (f64, f64),
     /// Number of steps in the bias sweep
     pub bias_steps: u16,
     /// Time to wait at each step in ms
+    #[schemars(extend("x-unit" = "ms"))]
     pub step_period_ms: u64,
     /// Polarity mode for bias sweep
     #[serde(default)]
     pub polarity_mode: BiasSweepPolarity,
     /// Scan speed for stability check in m/s (None = use current scan speed)
+    #[schemars(extend("x-unit" = "m/s", "x-display-unit" = "nm/s"))]
     pub scan_speed_m_s: Option<f64>,
 }
 
@@ -96,7 +101,7 @@ impl StabilityConfig {
 // POLARITY
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PolaritySign {
     #[default]
@@ -117,7 +122,8 @@ impl PolaritySign {
 // RANDOM POLARITY SWITCH
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Flip the pulse polarity every so many pulses.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RandomPolaritySwitch {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
@@ -132,20 +138,27 @@ fn default_enabled() -> bool {
 // PULSE METHOD
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// How the pulse voltage is chosen from cycle to cycle.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum PulseMethod {
+    /// The same voltage every cycle.
     Fixed {
+        #[schemars(extend("x-unit" = "V"))]
         voltage: f64,
         #[serde(default)]
         polarity: PolaritySign,
         #[serde(default, alias = "random_switch")]
         random_polarity_switch: Option<RandomPolaritySwitch>,
     },
+    /// Step the voltage up through a range, so many cycles per step, while
+    /// the tip stays outside the threshold.
     Stepping {
+        #[schemars(extend("x-unit" = "V"))]
         voltage_bounds: (f64, f64),
         voltage_steps: u16,
         cycles_before_step: u16,
+        #[schemars(extend("x-unit" = "Hz"))]
         threshold_value: f64,
         #[serde(default)]
         polarity: PolaritySign,
@@ -158,7 +171,9 @@ pub enum PulseMethod {
     /// If freq_shift is outside linear_clamp range, pulse with max voltage
     /// If freq_shift is inside linear_clamp range, linearly interpolate voltage
     Linear {
+        #[schemars(extend("x-unit" = "V"))]
         voltage_bounds: (f64, f64),
+        #[schemars(extend("x-unit" = "Hz"))]
         linear_clamp: (f64, f64),
         #[serde(default)]
         polarity: PolaritySign,

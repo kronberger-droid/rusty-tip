@@ -184,6 +184,19 @@ impl Default for RunSetup {
     }
 }
 
+impl Outcome {
+    /// The outcome as the log spells it (`completed`, `stopped_by_user`,
+    /// `cycle_limit`, `timed_out`), with the detail a budget outcome carries.
+    pub fn log_name(&self) -> (&'static str, Option<String>) {
+        match self {
+            Outcome::Completed => ("completed", None),
+            Outcome::StoppedByUser => ("stopped_by_user", None),
+            Outcome::CycleLimit(n) => ("cycle_limit", Some(n.to_string())),
+            Outcome::TimedOut(d) => ("timed_out", Some(format!("{:.0}s", d.as_secs_f64()))),
+        }
+    }
+}
+
 /// An automation routine, runnable via [`run_routine`].
 ///
 /// Implementations hold their own configuration and mutable state; all
@@ -305,10 +318,7 @@ pub fn run_routine(
         other => other,
     });
     let (outcome, detail) = match &caught {
-        Ok(Ok(Outcome::Completed)) => ("completed", None),
-        Ok(Ok(Outcome::StoppedByUser)) => ("stopped_by_user", None),
-        Ok(Ok(Outcome::CycleLimit(n))) => ("cycle_limit", Some(n.to_string())),
-        Ok(Ok(Outcome::TimedOut(d))) => ("timed_out", Some(format!("{:.0}s", d.as_secs_f64()))),
+        Ok(Ok(outcome)) => outcome.log_name(),
         Ok(Err(e)) => ("error", Some(e.to_string())),
         Err(payload) => ("panicked", Some(panic_message(&**payload))),
     };
