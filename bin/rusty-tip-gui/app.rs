@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use rusty_tip::event::Event;
 use rusty_tip::experiment_log::reader::{self, Log, LogEntry};
 use rusty_tip::routine::Outcome;
-use rusty_tip::session::{self, ConnState, SessionCmd, SessionHandle, SessionUpdate};
+use rusty_tip::session::{self, ConnState, Job, SessionCmd, SessionHandle, SessionUpdate};
 use rusty_tip::shutdown::ShutdownFlag;
 
 use crate::connection::{ConnectionForm, ConnectionPane, ConnectionSettings, PaneAction};
@@ -187,6 +187,7 @@ impl WorkbenchApp {
         self.status = RunStatus::Finished(result);
     }
 
+    /// Start the tool's job from the Run tab.
     fn start(&mut self, tool: usize) {
         let job = match self.tools[tool].job() {
             Ok(job) => job,
@@ -196,12 +197,17 @@ impl WorkbenchApp {
                 return;
             }
         };
+        self.tab = Tab::Run;
+        self.start_job(tool, job);
+    }
+
+    /// Start a job for a tool, on whichever tab is up.
+    fn start_job(&mut self, tool: usize, job: Box<dyn Job>) {
         let shutdown = ShutdownFlag::new();
         let (tx, rx) = unbounded();
         self.view = RunView::default();
         self.status = RunStatus::Running;
         self.message = None;
-        self.tab = Tab::Run;
         self.send(SessionCmd::Run {
             job,
             shutdown: shutdown.clone(),
@@ -367,11 +373,20 @@ impl WorkbenchApp {
                 let mut cx = SetupCx {
                     connection: self.pane.form.settings(),
                     import: None,
+                    can_run: !self.running() && self.pane.state == ConnState::Connected,
+                    run: None,
+                    view: &self.view,
                 };
                 note(ui, &self.message);
                 self.tools[tool].setup(ui, &mut cx);
-                if let Some(settings) = cx.import {
+                let SetupCx { import, run, .. } = cx;
+                if let Some(settings) = import {
                     self.import_connection(settings);
+                }
+                if let Some(job) = run
+                    && !self.running()
+                {
+                    self.start_job(tool, job);
                 }
             }
             Tab::Run => self.render_run(ui, tool),

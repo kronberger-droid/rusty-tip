@@ -13,6 +13,10 @@ use nanonis_rs::{
 use std::collections::HashSet;
 
 use crate::buffered_tcp_reader::BufferedTCPReader;
+use crate::controllers::{
+    ControllerId, ControllerParams, ControllerReading, PllAmplitudeParams, PllPhaseParams,
+    ZControllerParams,
+};
 use crate::signal_registry::{SignalIndex, SignalRegistry};
 use crate::spm_controller::{
     AcquisitionMode, Capability, DataStreamStatus, DriftComp, Result, ScanBuffer, SpmController,
@@ -556,6 +560,7 @@ impl SpmController for NanonisController {
             Capability::MultiPass,
             Capability::DriftCompensation,
             Capability::Presets,
+            Capability::Controllers,
         ])
     }
 
@@ -770,6 +775,175 @@ impl SpmController for NanonisController {
 
     fn z_controller_status(&mut self) -> Result<ZControllerStatus> {
         Ok(self.client.z_ctrl_status_get()?)
+    }
+
+    // -- Feedback controllers --
+
+    /// The Z-controller and the first modulator's PLL loops. A second
+    /// modulator is not probed for, since asking a PLL that is not there
+    /// is an error on the wire.
+    fn controllers(&mut self) -> Result<Vec<ControllerId>> {
+        Ok(vec![
+            ControllerId::Z,
+            ControllerId::PllAmplitude { modulator: 1 },
+            ControllerId::PllPhase { modulator: 1 },
+        ])
+    }
+
+    fn read_controller(&mut self, id: ControllerId) -> Result<ControllerReading> {
+        match id {
+            ControllerId::Z => {
+                let (available, active_index) = self.client.z_ctrl_ctrl_list_get()?;
+                let active = usize::try_from(active_index)
+                    .ok()
+                    .and_then(|i| available.get(i))
+                    .cloned()
+                    .unwrap_or_default();
+                let (p_gain, time_constant, _i_gain) = self.client.z_ctrl_gain_get()?;
+                let (high, low) = self.client.z_ctrl_limits_get()?;
+                let status = self.client.z_ctrl_status_get()?;
+                Ok(ControllerReading {
+                    id,
+                    params: ControllerParams::Z(ZControllerParams {
+                        active,
+                        setpoint: f64::from(self.client.z_ctrl_setpoint_get()?),
+                        p_gain_m: f64::from(p_gain),
+                        time_constant_s: f64::from(time_constant),
+                        tip_lift_m: f64::from(self.client.z_ctrl_tip_lift_get()?),
+                        switch_off_delay_s: f64::from(self.client.z_ctrl_switch_off_delay_get()?),
+                        withdraw_rate_m_s: {
+                            let rate = f64::from(self.client.z_ctrl_withdraw_rate_get()?);
+                            rate.is_finite().then_some(rate)
+                        },
+                        limits_enabled: self.client.z_ctrl_limits_enabled_get()?,
+                        limits_m: (f64::from(high), f64::from(low)),
+                    }),
+                    enabled: self.client.z_ctrl_on_off_get()?,
+                    status: z_status_word(status).into(),
+                    available,
+                })
+            }
+            ControllerId::PllAmplitude { modulator } => {
+                let m = i32::from(modulator);
+                let (p_gain, time_constant) = self.client.pll_amp_ctrl_gain_get(m)?;
+                let enabled = self.client.pll_amp_ctrl_on_off_get(m)?;
+                Ok(ControllerReading {
+                    id,
+                    params: ControllerParams::PllAmplitude(PllAmplitudeParams {
+                        setpoint_m: f64::from(self.client.pll_amp_ctrl_setpnt_get(m)?),
+                        p_gain_v_m: f64::from(p_gain),
+                        time_constant_s: f64::from(time_constant),
+                        bandwidth_hz: f64::from(self.client.pll_amp_ctrl_bandwidth_get(m)?),
+                    }),
+                    enabled,
+                    status: on_off_word(enabled).into(),
+                    available: Vec::new(),
+                })
+            }
+            ControllerId::PllPhase { modulator } => {
+                let m = i32::from(modulator);
+                let gain = self.client.pll_phas_ctrl_gain_get(m)?;
+                let enabled = self.client.pll_phas_ctrl_on_off_get(m)?;
+                Ok(ControllerReading {
+                    id,
+                    params: ControllerParams::PllPhase(PllPhaseParams {
+                        p_gain_hz_deg: f64::from(gain.p_gain_hz_per_deg),
+                        time_constant_s: f64::from(gain.time_constant_s),
+                        bandwidth_hz: f64::from(self.client.pll_phas_ctrl_bandwidth_get(m)?),
+                    }),
+                    enabled,
+                    status: on_off_word(enabled).into(),
+                    available: Vec::new(),
+                })
+            }
+        }
+    }
+
+    fn write_controller(&mut self, id: ControllerId, params: &ControllerParams) -> Result<()> {
+        match (id, params) {
+            (ControllerId::Z, ControllerParams::Z(p)) => {
+                if !p.active.is_empty() {
+                    let (available, active_index) = self.client.z_ctrl_ctrl_list_get()?;
+                    let wanted = available
+                        .iter()
+                        .position(|name| *name == p.active)
+                        .ok_or_else(|| {
+                            SpmError::Workflow(format!(
+                                "no Z-controller called {:?}; the module has {}",
+                                p.active,
+                                available.join(", ")
+                            ))
+                        })?;
+                    if i32::try_from(wanted).ok() != Some(active_index) {
+                        self.client.z_ctrl_active_ctrl_set(wanted as i32)?;
+                    }
+                }
+                self.client.z_ctrl_setpoint_set(p.setpoint as f32)?;
+                // The module derives I from P and T; sending the same
+                // quotient keeps the three consistent.
+                let i_gain = if p.time_constant_s > 0.0 {
+                    p.p_gain_m / p.time_constant_s
+                } else {
+                    0.0
+                };
+                self.client.z_ctrl_gain_set(
+                    p.p_gain_m as f32,
+                    p.time_constant_s as f32,
+                    i_gain as f32,
+                )?;
+                self.client.z_ctrl_tip_lift_set(p.tip_lift_m as f32)?;
+                self.client
+                    .z_ctrl_switch_off_delay_set(p.switch_off_delay_s as f32)?;
+                self.client.z_ctrl_withdraw_rate_set(
+                    p.withdraw_rate_m_s.map_or(f32::INFINITY, |r| r as f32),
+                )?;
+                self.client.z_ctrl_limits_enabled_set(p.limits_enabled)?;
+                if p.limits_enabled {
+                    self.client
+                        .z_ctrl_limits_set(p.limits_m.0 as f32, p.limits_m.1 as f32)?;
+                }
+                Ok(())
+            }
+            (ControllerId::PllAmplitude { modulator }, ControllerParams::PllAmplitude(p)) => {
+                let m = i32::from(modulator);
+                self.client
+                    .pll_amp_ctrl_setpnt_set(m, p.setpoint_m as f32)?;
+                self.client.pll_amp_ctrl_gain_set(
+                    m,
+                    p.p_gain_v_m as f32,
+                    p.time_constant_s as f32,
+                )?;
+                self.client
+                    .pll_amp_ctrl_bandwidth_set(m, p.bandwidth_hz as f32)?;
+                Ok(())
+            }
+            (ControllerId::PllPhase { modulator }, ControllerParams::PllPhase(p)) => {
+                let m = i32::from(modulator);
+                self.client.pll_phas_ctrl_gain_set(
+                    m,
+                    p.p_gain_hz_deg as f32,
+                    p.time_constant_s as f32,
+                )?;
+                self.client
+                    .pll_phas_ctrl_bandwidth_set(m, p.bandwidth_hz as f32)?;
+                Ok(())
+            }
+            (id, _) => Err(SpmError::Workflow(format!(
+                "the parameters given for {id} are of another kind"
+            ))),
+        }
+    }
+
+    fn set_controller_enabled(&mut self, id: ControllerId, on: bool) -> Result<()> {
+        match id {
+            ControllerId::Z => Ok(self.client.z_ctrl_on_off_set(on)?),
+            ControllerId::PllAmplitude { modulator } => Ok(self
+                .client
+                .pll_amp_ctrl_on_off_set(i32::from(modulator), on)?),
+            ControllerId::PllPhase { modulator } => Ok(self
+                .client
+                .pll_phas_ctrl_on_off_set(i32::from(modulator), on)?),
+        }
     }
 
     // -- Piezo Positioning (FolMe) --
@@ -1122,6 +1296,22 @@ impl Drop for NanonisController {
     fn drop(&mut self) {
         self.disconnect();
     }
+}
+
+/// The status word of a reading, lowercase, as the module names it.
+fn z_status_word(status: ZControllerStatus) -> &'static str {
+    match status {
+        ZControllerStatus::Off => "off",
+        ZControllerStatus::On => "on",
+        ZControllerStatus::Hold => "hold",
+        ZControllerStatus::SwitchingOff => "switching off",
+        ZControllerStatus::SafeTip => "safe tip",
+        ZControllerStatus::Withdrawing => "withdrawing",
+    }
+}
+
+fn on_off_word(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
 }
 
 #[cfg(test)]

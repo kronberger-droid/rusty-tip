@@ -64,13 +64,13 @@ winapi = { version = "0.3", features = ["consoleapi", "processenv", "wincon", "h
 eframe = { version = "0.33", optional = true, default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "persistence"] }
 egui_plot = { version = "0.34", optional = true }
 rfd = { version = "0.17", optional = true }
-toml = { version = "0.8", optional = true }
+toml = "0.8"
 
 [features]
 default = []
 # Image decoding for cuox-finder, which is the only user of the `image` crate.
 cuox = ["image"]
-gui = ["eframe", "egui_plot", "rfd", "toml"]
+gui = ["eframe", "egui_plot", "rfd"]
 
 # The profile that 'dist' will build with
 [profile.dist]

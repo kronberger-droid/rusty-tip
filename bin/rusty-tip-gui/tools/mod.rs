@@ -10,6 +10,7 @@
 //! fields out by operation, which the schema form cannot say yet. A tool
 //! that needs no connection (the handoff's `plan`) is not catered for yet.
 
+pub mod controllers;
 pub mod drift;
 pub mod tip_prep;
 
@@ -25,10 +26,19 @@ use crate::run_view::RunView;
 /// file also carries them (tip prep's does, for the CLI) writes
 /// `connection` into the file on save, and hands a file's settings back
 /// through `import` on load, for the page to take when disconnected.
-pub struct SetupCx {
+///
+/// A tab that needs the controller (reading a loop's parameters, say)
+/// puts a job in `run`; the window starts it and stays on Setup. `view`
+/// is the current or last run, so the tab can pick its results up.
+pub struct SetupCx<'a> {
     /// The page as it stands, or what is wrong with it.
     pub connection: Result<ConnectionSettings, String>,
     pub import: Option<ConnectionSettings>,
+    /// Connected and idle: a job could start now.
+    pub can_run: bool,
+    /// A job the tab wants started.
+    pub run: Option<Box<dyn Job>>,
+    pub view: &'a RunView,
 }
 
 pub trait Tool {
@@ -40,7 +50,7 @@ pub trait Tool {
     fn label(&self) -> &str;
 
     /// The Setup tab.
-    fn setup(&mut self, ui: &mut egui::Ui, cx: &mut SetupCx);
+    fn setup(&mut self, ui: &mut egui::Ui, cx: &mut SetupCx<'_>);
 
     /// Build the job from the current setup, or say what is wrong with it.
     fn job(&self) -> Result<Box<dyn Job>, String>;
@@ -61,5 +71,6 @@ pub fn all() -> Vec<Box<dyn Tool>> {
     vec![
         Box::new(tip_prep::TipPrepTool::default()),
         Box::new(drift::DriftTool::default()),
+        Box::new(controllers::ControllersTool::default()),
     ]
 }

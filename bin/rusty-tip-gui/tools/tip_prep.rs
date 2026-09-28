@@ -140,7 +140,7 @@ impl TipPrepTool {
 
     /// Read the file into the form and offer its connection tables to the
     /// Connection page.
-    fn load(&mut self, cx: &mut SetupCx) {
+    fn load(&mut self, cx: &mut SetupCx<'_>) {
         let loaded = std::fs::read_to_string(&self.path)
             .map_err(|e| format!("Cannot read {}: {e}", self.path))
             .and_then(|text| toml::from_str::<AppConfig>(&text).map_err(|e| e.to_string()));
@@ -194,7 +194,7 @@ impl Tool for TipPrepTool {
         "Tip prep"
     }
 
-    fn setup(&mut self, ui: &mut egui::Ui, cx: &mut SetupCx) {
+    fn setup(&mut self, ui: &mut egui::Ui, cx: &mut SetupCx<'_>) {
         // The path on its own line, taking the width there is; the buttons
         // wrap below it, so a narrow window pushes nothing off the edge.
         let mut load = false;
