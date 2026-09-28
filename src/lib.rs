@@ -15,6 +15,7 @@ pub mod controller_types;
 pub mod event;
 pub mod experiment_log;
 pub mod multi_pass;
+pub mod session;
 pub mod shutdown;
 pub mod signal_registry;
 
@@ -34,7 +35,7 @@ pub use controller_types::{
 };
 pub use multi_pass::{CallbackVi, MultiPassConfig, Pass};
 pub use plotting::{plot_values, plot_values_with_range};
-pub use routine::{Outcome, Routine, Rt, run_routine};
+pub use routine::{ExitPolicy, Outcome, Routine, Rt, RunSetup, run_routine};
 pub use shutdown::ShutdownFlag;
 pub use signal_registry::{Signal, SignalIndex, SignalRegistry};
 pub use types::TipShape;

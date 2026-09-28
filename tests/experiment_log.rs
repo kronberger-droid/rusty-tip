@@ -118,9 +118,9 @@ fn composite_actions_log_their_steps_one_level_deeper_with_params() {
         }
     }
 
-    let mock = MockController::builder().build();
+    let mut mock = MockController::builder().build();
     let (bus, events) = recording_bus();
-    run_routine(Box::new(mock), &bus, &ShutdownFlag::new(), &mut OneApproach).unwrap();
+    run_routine(&mut mock, &bus, &ShutdownFlag::new(), &mut OneApproach).unwrap();
 
     let events = events.lock().unwrap();
     let started: Vec<(String, usize, serde_json::Value)> = events

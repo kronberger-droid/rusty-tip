@@ -6,25 +6,28 @@ pub use events::{CycleEvent, MaxPulseEvent, PhaseEvent, log_schema};
 pub use pulse_state::PulseState;
 pub use runner::{Outcome, TipPrep, TipPrepParams, run_tip_prep};
 
-use crate::config::AppConfig;
-use crate::nanonis_controller::{NanonisSetupConfig, StreamSetup};
-use crate::spm_controller::ZHomeMode;
+use std::path::Path;
 
-/// How tip prep sets the Nanonis up, shared by the CLI and the GUI.
-pub fn nanonis_setup(config: &AppConfig) -> NanonisSetupConfig {
-    NanonisSetupConfig {
-        layout_file: config.nanonis.layout_file.clone(),
-        settings_file: config.nanonis.settings_file.clone(),
-        safe_tip_threshold_a: config.tip_prep.safe_tip_threshold,
-        // Spelled out rather than defaulted: the home step of every
-        // calibrated approach is "back off 50 nm from wherever the tip is".
-        // Absolute mode would make it "go to Z = +50 nm", surface or not.
-        z_home_mode: ZHomeMode::Relative,
-        z_home_position_m: 50e-9,
-        // Off for the run, restored on exit by teardown.
-        disable_safe_tip: true,
-        ..Default::default()
+use crate::config::AppConfig;
+use crate::nanonis_controller::StreamSetup;
+use crate::spm_controller::SpmController;
+use crate::spm_error::SpmError;
+
+/// Load the config's layout and settings files, shared by the CLI and the
+/// GUI. Call it before the stream starts: a settings file can change the
+/// TCP logger's channel list, and Nanonis stops a live stream on that. Z
+/// home and safe-tip are the routine's business ([`TipPrep::run_setup`]).
+pub fn load_presets(
+    controller: &mut dyn SpmController,
+    config: &AppConfig,
+) -> Result<(), SpmError> {
+    if let Some(path) = &config.nanonis.layout_file {
+        controller.load_layout(Path::new(path))?;
     }
+    if let Some(path) = &config.nanonis.settings_file {
+        controller.load_settings(Path::new(path))?;
+    }
+    Ok(())
 }
 
 /// The data stream tip prep reads its stable signals from.

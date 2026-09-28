@@ -11,8 +11,8 @@ Fields without a default are required.
 [nanonis]
 host_ip = "127.0.0.1"                 # required
 control_ports = [6501, 6502, 6503, 6504]  # required; the first port is used
-layout_file = "./layout.lyt"          # optional, loaded during prepare()
-settings_file = "./settings.ini"      # optional, loaded during prepare()
+layout_file = "./layout.lyt"          # optional, loaded on connect, before the stream starts
+settings_file = "./settings.ini"      # optional, loaded on connect, before the stream starts
 ```
 
 ## `[data_acquisition]` — TCP data stream
