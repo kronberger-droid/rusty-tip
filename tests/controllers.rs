@@ -1,43 +1,17 @@
 //! The controller jobs against the mock: what a read reports, what an
 //! apply writes and reads back, and that switching is its own job.
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use rusty_tip::ShutdownFlag;
 use rusty_tip::controllers::{
     ApplyProfile, ControllerAppliedEvent, ControllerId, ControllerParams, ControllerProfile,
-    ControllerReading, ProfileEntry, ReadControllers, SetControllerEnabled, SettingsLoadedEvent,
-    ZControllerParams,
+    ControllerReading, ProfileEntry, ReadControllers, SetControllerEnabled, ZControllerParams,
 };
-use rusty_tip::event::{Event, Observer};
-use rusty_tip::experiment_log::LogEvent;
+use rusty_tip::event::EventAccumulator;
 use rusty_tip::mock_controller::{MockController, models};
+use rusty_tip::routine::SettingsLoadedEvent;
 use rusty_tip::session::{Job, PresetFiles, Session};
 use rusty_tip::signal_registry::{SignalIndex, SignalRegistry};
-
-#[derive(Clone, Default)]
-struct Recorder(Arc<Mutex<Vec<Event>>>);
-
-impl Observer for Recorder {
-    fn on_event(&self, event: &Event) {
-        self.0.lock().unwrap().push(event.clone());
-    }
-}
-
-impl Recorder {
-    fn custom<E: LogEvent + serde::de::DeserializeOwned>(&self) -> Vec<E> {
-        self.0
-            .lock()
-            .unwrap()
-            .iter()
-            .filter_map(|e| match e {
-                Event::Custom { kind, data, .. } if kind == E::KIND => {
-                    serde_json::from_value(data.clone()).ok()
-                }
-                _ => None,
-            })
-            .collect()
-    }
-}
 
 fn session() -> (
     Session,
@@ -56,8 +30,8 @@ fn session() -> (
     (session, obs)
 }
 
-fn run(session: &mut Session, job: &mut dyn Job) -> Recorder {
-    let recorder = Recorder::default();
+fn run(session: &mut Session, job: &mut dyn Job) -> Arc<EventAccumulator> {
+    let recorder = Arc::new(EventAccumulator::new(usize::MAX));
     session
         .run(job, &ShutdownFlag::new(), vec![Box::new(recorder.clone())])
         .unwrap();

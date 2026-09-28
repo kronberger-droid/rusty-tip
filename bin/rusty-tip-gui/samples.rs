@@ -48,12 +48,12 @@ impl Samples {
 
     /// The signal's points, time relative to the newest piece (zero and
     /// negative), value scaled by `scale`.
-    pub fn points(&self, index: u32, scale: f64) -> Vec<[f64; 2]> {
+    pub fn points(&self, index: u32, scale: f64) -> impl Iterator<Item = [f64; 2]> + '_ {
         let now = self.now_s.unwrap_or(0.0);
         self.rings
             .get(&index)
-            .map(|r| r.iter().map(|p| [p[0] - now, p[1] * scale]).collect())
-            .unwrap_or_default()
+            .into_iter()
+            .flat_map(move |r| r.iter().map(move |p| [p[0] - now, p[1] * scale]))
     }
 
     /// The newest value of a signal.
@@ -86,15 +86,15 @@ mod tests {
         s.take(&piece(1.5, &[4.0]));
         assert!(s.has(3));
         assert!(!s.has(0));
-        let pts = s.points(3, 1.0);
+        let pts: Vec<_> = s.points(3, 1.0).collect();
         assert_eq!(pts.len(), 4);
         assert_eq!(pts.last().unwrap(), &[0.0, 4.0], "newest at zero");
         assert!((pts[0][0] - (1.0 - 0.002 - 1.5)).abs() < 1e-9);
         assert_eq!(s.latest(3), Some(4.0));
 
         s.take(&piece(1.5 + KEEP_S + 0.1, &[5.0]));
-        assert_eq!(s.points(3, 1.0).len(), 1, "older than the window is gone");
-        assert_eq!(s.points(3, 2.0)[0][1], 10.0, "scaled");
+        assert_eq!(s.points(3, 1.0).count(), 1, "older than the window is gone");
+        assert_eq!(s.points(3, 2.0).next().unwrap()[1], 10.0, "scaled");
         s.clear();
         assert!(!s.has(3));
     }

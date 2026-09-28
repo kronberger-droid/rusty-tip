@@ -66,7 +66,7 @@ use nanonis_rs::tip_recovery::TipShaperConfig;
 
 use crate::controllers::{
     ControllerId, ControllerParams, ControllerReading, PllAmplitudeParams, PllPhaseParams,
-    ZControllerParams,
+    ZControllerParams, ZLoopInput,
 };
 use crate::loop_model::{Sample, ZLoop};
 use crate::signal_registry::SignalIndex;
@@ -364,30 +364,44 @@ struct LoopSim {
     last_tap: Option<Instant>,
 }
 
+impl MockController {
+    /// After anything changed the Z-controller's entry in `loops`: the
+    /// observations and the loop model, if there is one, follow it.
+    fn sync_z_loop(&mut self) {
+        let Some(l) = self.loops.get(&ControllerId::Z) else {
+            return;
+        };
+        {
+            let mut obs = self.obs.lock();
+            obs.z_controller_on = l.enabled;
+            if let ControllerParams::Z(p) = &l.params {
+                obs.z_setpoint = p.setpoint;
+            }
+        }
+        if let Some(sim) = &mut self.loop_sim {
+            sim.adopt(l);
+        }
+    }
+}
+
 impl LoopSim {
     fn owns(&self, index: SignalIndex) -> bool {
         index == self.z_index || index == self.current_index || self.freq_shift_index == Some(index)
     }
 
     /// Bring the model's parameters up to date with the Z-controller's.
+    /// Only what the parameters say changes, so the loop keeps its state
+    /// across a write.
     fn adopt(&mut self, loop_state: &MockLoop) {
         if let ControllerParams::Z(p) = &loop_state.params {
-            let name = p.active.clone();
-            let engaged = self.model.enabled;
-            let z = self.model.z_m;
-            let mut fresh = ZLoop::for_name(&name, z);
-            fresh.setpoint = p.setpoint;
-            fresh.p_gain_m = p.p_gain_m;
-            fresh.time_constant_s = p.time_constant_s;
-            fresh.lag_s = self.model.lag_s;
-            fresh.plant = self.model.plant;
-            // Keep the loop's state when only a parameter changed.
-            if engaged {
-                fresh.engage();
-            } else {
-                fresh.disengage();
-            }
-            self.model = fresh;
+            let input = ZLoopInput::from_name(&p.active);
+            let model = &mut self.model;
+            model.law = input.law;
+            model.quantity = input.quantity;
+            model.slope = if input.negative { -1.0 } else { 1.0 };
+            model.setpoint = p.setpoint;
+            model.p_gain_m = p.p_gain_m;
+            model.time_constant_s = p.time_constant_s;
         }
         if loop_state.enabled != self.model.enabled {
             if loop_state.enabled {
@@ -766,10 +780,8 @@ impl SpmController for MockController {
             && let ControllerParams::Z(p) = &mut l.params
         {
             p.setpoint = setpoint;
-            if let Some(sim) = &mut self.loop_sim {
-                sim.adopt(l);
-            }
         }
+        self.sync_z_loop();
         Ok(())
     }
 
@@ -854,13 +866,8 @@ impl SpmController for MockController {
                 previous_active
             };
         }
-        if id == ControllerId::Z
-            && let Some(sim) = &mut self.loop_sim
-        {
-            sim.adopt(l);
-            if let ControllerParams::Z(p) = &l.params {
-                self.obs.lock().z_setpoint = p.setpoint;
-            }
+        if id == ControllerId::Z {
+            self.sync_z_loop();
         }
         Ok(())
     }
@@ -873,10 +880,7 @@ impl SpmController for MockController {
             .ok_or_else(|| SpmError::Workflow(format!("the mock has no controller {id}")))?;
         l.enabled = on;
         if id == ControllerId::Z {
-            self.obs.lock().z_controller_on = on;
-            if let Some(sim) = &mut self.loop_sim {
-                sim.adopt(l);
-            }
+            self.sync_z_loop();
         }
         Ok(())
     }

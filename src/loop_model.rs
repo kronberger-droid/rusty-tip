@@ -48,10 +48,12 @@ impl Default for Plant {
 }
 
 impl Plant {
+    /// The tunnelling current at `z_m`.
     pub fn current_at(&self, z_m: f64) -> f64 {
         self.current_at_contact_a * (-self.current_decay_per_m * (z_m - self.surface_m)).exp()
     }
 
+    /// The frequency shift at `z_m`.
     pub fn freq_shift_at(&self, z_m: f64) -> f64 {
         -self.freq_shift_at_contact_hz * (-(z_m - self.surface_m) / self.freq_shift_decay_m).exp()
     }
@@ -101,15 +103,10 @@ impl ZLoop {
     /// engaged at `z_m` with the default plant.
     pub fn for_name(name: &str, z_m: f64) -> Self {
         let input = ZLoopInput::from_name(name);
-        let slope = if name.to_lowercase().contains("(neg)") {
-            -1.0
-        } else {
-            1.0
-        };
         Self {
             law: input.law,
             quantity: input.quantity,
-            slope,
+            slope: if input.negative { -1.0 } else { 1.0 },
             setpoint: match input.quantity {
                 ZQuantity::Frequency => -2.0,
                 _ => 50e-12,

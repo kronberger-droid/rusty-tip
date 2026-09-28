@@ -7,17 +7,19 @@
 //!
 //! Tip prep draws its setup from its config's JSON Schema
 //! ([`crate::form`]); drift draws a small form by hand, since it greys
-//! fields out by operation, which the schema form cannot say yet. A tool
-//! that needs no connection (the handoff's `plan`) is not catered for yet.
+//! fields out by operation, and the schema form's `x-enabled-by` gates
+//! only on a sibling boolean. A tool that needs no connection (the
+//! handoff's `plan`) is not catered for yet.
 
 pub mod controllers;
 pub mod drift;
 pub mod tip_prep;
 
 use eframe::egui;
-use rusty_tip::session::Job;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
-use rusty_tip::experiment_log::ControllerFacts;
+use rusty_tip::session::{Job, Readout};
 
 use crate::connection::ConnectionSettings;
 use crate::run_view::RunView;
@@ -45,7 +47,9 @@ pub struct SetupCx<'a> {
     /// The last seconds of the stream, for a live chart.
     pub samples: &'a Samples,
     /// What the connection knows about its signals, to find one by name.
-    pub facts: Option<&'a ControllerFacts>,
+    /// The session's idle readouts, each with the registry name it was
+    /// asked for, so a tool finds a signal the way the session did.
+    pub readouts: &'a [Readout],
 }
 
 pub trait Tool {
@@ -71,6 +75,22 @@ pub trait Tool {
     }
 
     fn restore(&mut self, _prefs: &serde_json::Value) {}
+}
+
+/// Read a TOML file into a `T`, the path in the error.
+pub fn load_toml<T: DeserializeOwned>(path: &str) -> Result<T, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("Cannot read {path}: {e}"))?;
+    toml::from_str(&text).map_err(|e| e.to_string())
+}
+
+/// Write `value` to `path` as TOML, giving the name a `.toml` ending
+/// first when it has none.
+pub fn save_toml<T: Serialize>(path: &mut String, value: &T) -> Result<(), String> {
+    if !path.to_lowercase().ends_with(".toml") {
+        path.push_str(".toml");
+    }
+    let text = toml::to_string_pretty(value).map_err(|e| e.to_string())?;
+    std::fs::write(&*path, text).map_err(|e| format!("Cannot write {path}: {e}"))
 }
 
 /// Every tool the workbench ships, in sidebar order.

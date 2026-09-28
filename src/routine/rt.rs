@@ -10,6 +10,17 @@ use super::Outcome;
 use super::events::CleanupFailedEvent;
 use super::subsystems::{Bias, Drift, Motor, MultiPass, Presets, Scan, Signals, ZCtrl};
 
+/// `Unsupported` unless the controller has `cap`.
+pub(crate) fn require(controller: &dyn SpmController, cap: Capability) -> Result<(), SpmError> {
+    if controller.capabilities().contains(&cap) {
+        Ok(())
+    } else {
+        Err(SpmError::Unsupported(format!(
+            "controller does not support the {cap:?} subsystem"
+        )))
+    }
+}
+
 /// The routine runtime: what a [`super::Routine`] runs against.
 ///
 /// Hands out capability-checked subsystem handles and provides the
@@ -179,14 +190,7 @@ impl<'a> Rt<'a> {
     // -- Internal --
 
     fn require(&self, cap: Capability) -> Result<(), SpmError> {
-        if self.controller.capabilities().contains(&cap) {
-            Ok(())
-        } else {
-            Err(SpmError::Unsupported(format!(
-                "controller does not support the {:?} subsystem",
-                cap
-            )))
-        }
+        require(self.controller, cap)
     }
 
     /// Emit the same started/completed/failed triple as [`exec`] around a

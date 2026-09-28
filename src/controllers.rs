@@ -14,7 +14,6 @@
 //! profile: [`crate::spm_controller::SpmController::set_controller_enabled`]
 //! is its own call, so a profile cannot drop the Z feedback by accident.
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -23,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::{Event, EventEmitter};
 use crate::experiment_log::{LogEvent, ToolSchema};
-use crate::routine::Outcome;
+use crate::routine::{Outcome, SettingsLoadedEvent, require};
 use crate::session::{Job, JobCx};
 use crate::spm_controller::{Capability, SpmController};
 use crate::spm_error::SpmError;
@@ -43,17 +42,6 @@ pub enum ControllerId {
     PllPhase { modulator: u8 },
 }
 
-impl ControllerId {
-    /// A stable key for maps and ids: `z`, `pll1_amplitude`.
-    pub fn key(&self) -> String {
-        match self {
-            ControllerId::Z => "z".into(),
-            ControllerId::PllAmplitude { modulator } => format!("pll{modulator}_amplitude"),
-            ControllerId::PllPhase { modulator } => format!("pll{modulator}_phase"),
-        }
-    }
-}
-
 impl fmt::Display for ControllerId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -67,11 +55,13 @@ impl fmt::Display for ControllerId {
 /// What a defined Z-controller reads, as far as its name says. Nanonis
 /// names them by law and signal (`log Current`, `abs Conductance`,
 /// `Frequency (neg)`), and over TCP the name is the only place the
-/// definition shows, so this is parsed from it. A `(neg)` or `(pos)` is
-/// the slope sign of a frequency loop and is left in the name.
+/// definition shows, so this is parsed from it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ZLoopInput {
     pub quantity: ZQuantity,
+    /// `(neg)` in the name: the loop acts on the negative of its input,
+    /// as a frequency loop on an attractive shift does.
+    pub negative: bool,
     pub law: ZLaw,
 }
 
@@ -109,6 +99,7 @@ impl ZLoopInput {
         } else {
             ZLaw::Linear
         };
+        let negative = lower.contains("(neg)");
         let quantity = if lower.contains("current") {
             ZQuantity::Current
         } else if lower.contains("conductance") {
@@ -124,7 +115,11 @@ impl ZLoopInput {
         } else {
             ZQuantity::Unknown
         };
-        Self { quantity, law }
+        Self {
+            quantity,
+            law,
+            negative,
+        }
     }
 
     /// The SI unit the setpoint is in, if the quantity is known.
@@ -364,22 +359,12 @@ impl LogEvent for ControllerAppliedEvent {
     const KIND: &'static str = "controller/applied";
 }
 
-/// A settings file loaded as part of a profile.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct SettingsLoadedEvent {
-    pub path: String,
-}
-
-impl LogEvent for SettingsLoadedEvent {
-    const KIND: &'static str = "controller/settings_loaded";
-}
-
 /// The events these jobs write.
 pub fn log_schema() -> ToolSchema {
     ToolSchema::new("controllers")
         .with::<ControllerReading>()
         .with::<ControllerAppliedEvent>()
-        .with::<SettingsLoadedEvent>()
+        .including(crate::routine::log_schema())
 }
 
 /// A set of controller parameters to apply together, as a TOML file: the
@@ -396,6 +381,7 @@ pub struct ControllerProfile {
     pub controllers: Vec<ProfileEntry>,
 }
 
+/// One controller's parameters in a profile.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ProfileEntry {
     pub id: ControllerId,
@@ -403,11 +389,6 @@ pub struct ProfileEntry {
 }
 
 impl ControllerProfile {
-    /// The profile's parameters by controller.
-    pub fn by_id(&self) -> BTreeMap<ControllerId, &ControllerParams> {
-        self.controllers.iter().map(|e| (e.id, &e.params)).collect()
-    }
-
     /// Every entry's parameters are of its id's kind.
     pub fn validate(&self) -> Result<(), String> {
         for entry in &self.controllers {
@@ -446,9 +427,11 @@ impl Job for ReadControllers {
     }
 }
 
-/// Load the profile's settings file, then write each controller and read it
-/// back, writing a `controller/applied` event per controller and a final
-/// `controller/read` of everything. Loops are not switched on or off.
+/// Load the profile's settings file (a `routine/settings_loaded` event,
+/// as a routine's load writes), then write each controller and read it
+/// back, writing a `controller/applied` event per written controller and
+/// a `controller/read` of every controller, the written ones as they read
+/// back. Loops are not switched on or off.
 #[derive(Debug, Clone)]
 pub struct ApplyProfile {
     pub profile: ControllerProfile,
@@ -477,20 +460,28 @@ impl Job for ApplyProfile {
             }));
         }
         require(cx.controller, Capability::Controllers)?;
+        let mut written = Vec::new();
         for entry in &self.profile.controllers {
             if cx.shutdown.is_requested() {
                 return Ok(Outcome::StoppedByUser);
             }
             let before = cx.controller.read_controller(entry.id)?.params;
             cx.controller.write_controller(entry.id, &entry.params)?;
-            let after = cx.controller.read_controller(entry.id)?.params;
+            let after = cx.controller.read_controller(entry.id)?;
             cx.events.emit(Event::typed(&ControllerAppliedEvent {
                 id: entry.id,
                 before,
-                after,
+                after: after.params.clone(),
             }));
+            cx.events.emit(Event::typed(&after));
+            written.push(entry.id);
         }
-        read_all(cx.controller, cx.events)?;
+        for id in cx.controller.controllers()? {
+            if !written.contains(&id) {
+                cx.events
+                    .emit(Event::typed(&cx.controller.read_controller(id)?));
+            }
+        }
         Ok(Outcome::Completed)
     }
 }
@@ -524,16 +515,6 @@ impl Job for SetControllerEnabled {
     }
 }
 
-fn require(controller: &mut dyn SpmController, cap: Capability) -> Result<(), SpmError> {
-    if controller.capabilities().contains(&cap) {
-        Ok(())
-    } else {
-        Err(SpmError::Unsupported(format!(
-            "this controller has no {cap:?} capability"
-        )))
-    }
-}
-
 fn read_all(controller: &mut dyn SpmController, events: &dyn EventEmitter) -> Result<(), SpmError> {
     require(controller, Capability::Controllers)?;
     for id in controller.controllers()? {
@@ -548,12 +529,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ids_have_stable_keys_and_names() {
-        assert_eq!(ControllerId::Z.key(), "z");
-        assert_eq!(
-            ControllerId::PllAmplitude { modulator: 1 }.key(),
-            "pll1_amplitude"
-        );
+    fn ids_have_names() {
+        assert_eq!(ControllerId::Z.to_string(), "Z-controller");
         assert_eq!(
             ControllerId::PllPhase { modulator: 2 }.to_string(),
             "PLL 2 phase"

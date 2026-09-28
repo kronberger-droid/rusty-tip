@@ -2,11 +2,11 @@
 //! survives between them.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use rusty_tip::config::AppConfig;
-use rusty_tip::event::{Event, Observer};
+use rusty_tip::event::{Event, EventAccumulator};
 use rusty_tip::experiment_log::{ToolSchema, reader::Log};
 use rusty_tip::mock_controller::{FaultKind, MockController, MockObservations, models};
 use rusty_tip::routine::{ExitPolicy, Outcome, Routine, Rt, run_routine};
@@ -143,13 +143,8 @@ impl Job for Panicking {
     }
 }
 
-#[derive(Clone, Default)]
-struct Recorder(Arc<StdMutex<Vec<Event>>>);
-
-impl Observer for Recorder {
-    fn on_event(&self, event: &Event) {
-        self.0.lock().unwrap().push(event.clone());
-    }
+fn recorder() -> Arc<EventAccumulator> {
+    Arc::new(EventAccumulator::new(usize::MAX))
 }
 
 fn mock() -> (MockController, Arc<parking_lot::Mutex<MockObservations>>) {
@@ -266,7 +261,7 @@ fn a_leave_in_place_job_never_withdraws_and_its_settings_load_is_recorded() {
         .unwrap();
     assert!(session.settings_load().is_none());
 
-    let recorder = Recorder::default();
+    let recorder = recorder();
     let mut job = LoadAndLeave {
         settings: PathBuf::from("settings/drift.ini"),
     };
@@ -287,7 +282,7 @@ fn a_leave_in_place_job_never_withdraws_and_its_settings_load_is_recorded() {
     assert_eq!(load.path, Path::new("settings/drift.ini"));
     assert_eq!(load.by, "load_and_leave");
 
-    let events = recorder.0.lock().unwrap();
+    let events = recorder.all();
     assert!(
         events.iter().any(|e| matches!(
             e,
@@ -326,7 +321,7 @@ fn the_session_closes_the_log_of_a_job_that_is_not_a_routine() {
         .connect_with(Box::new(mock), reg, PresetFiles::default())
         .unwrap();
 
-    let recorder = Recorder::default();
+    let recorder = recorder();
     let mut job = Bare(Err(SpmError::Workflow("nope".into())));
     let err = session
         .run(
@@ -337,7 +332,7 @@ fn the_session_closes_the_log_of_a_job_that_is_not_a_routine() {
         .unwrap_err();
     assert_eq!(err.to_string(), "nope");
 
-    let events = recorder.0.lock().unwrap();
+    let events = recorder.all();
     let finished: Vec<_> = events
         .iter()
         .filter_map(|e| match e {
@@ -364,7 +359,7 @@ fn a_routine_job_gets_exactly_one_run_finished() {
         .connect_with(Box::new(mock), reg, PresetFiles::default())
         .unwrap();
 
-    let recorder = Recorder::default();
+    let recorder = recorder();
     let mut job = TipPrepJob {
         config: fast_config(),
     };
@@ -376,7 +371,7 @@ fn a_routine_job_gets_exactly_one_run_finished() {
         )
         .unwrap();
 
-    let events = recorder.0.lock().unwrap();
+    let events = recorder.all();
     let finished = events
         .iter()
         .filter(|e| matches!(e, Event::RunFinished { .. }))

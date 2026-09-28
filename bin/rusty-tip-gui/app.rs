@@ -40,8 +40,8 @@ enum Tab {
 /// What the Run tab reports about the last or current job.
 #[derive(Debug, Clone, PartialEq)]
 enum RunStatus {
+    /// Nothing finished yet; `run` says whether one is going.
     Idle,
-    Running,
     Finished(Result<Outcome, String>),
     /// A log opened from the History tab.
     Replay(PathBuf),
@@ -178,7 +178,7 @@ impl WorkbenchApp {
     fn drain_run_events(&mut self) {
         if let Some(run) = &self.run {
             while let Ok(event) = run.events.try_recv() {
-                self.view.apply_event(&event);
+                self.view.apply_event(event);
             }
         }
     }
@@ -213,7 +213,7 @@ impl WorkbenchApp {
         let shutdown = ShutdownFlag::new();
         let (tx, rx) = unbounded();
         self.view = RunView::default();
-        self.status = RunStatus::Running;
+        self.status = RunStatus::Idle;
         self.message = None;
         self.send(SessionCmd::Run {
             job,
@@ -245,7 +245,7 @@ impl WorkbenchApp {
         match Log::read(&path) {
             Ok(log) => {
                 let mut view = RunView::default();
-                for record in &log.records {
+                for record in log.records {
                     view.apply(record);
                 }
                 if let Some(tool) = view.header.as_ref().map(|h| h.tool.clone())
@@ -384,7 +384,7 @@ impl WorkbenchApp {
                     run: None,
                     view: &self.view,
                     samples: &self.samples,
-                    facts: self.pane.facts.as_ref(),
+                    readouts: &self.pane.readouts,
                 };
                 note(ui, &self.message);
                 self.tools[tool].setup(ui, &mut cx);
@@ -432,10 +432,11 @@ impl WorkbenchApp {
             ui.separator();
             match &self.status {
                 RunStatus::Idle => {
-                    ui.label("ready");
-                }
-                RunStatus::Running => {
-                    ui.label("running");
+                    ui.label(if self.run.is_some() {
+                        "running"
+                    } else {
+                        "ready"
+                    });
                 }
                 RunStatus::Finished(Ok(outcome)) => {
                     ui.label(outcome_text(*outcome));

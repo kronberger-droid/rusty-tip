@@ -19,8 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prep is the first tool, with the old Control tab as its run panel. The
   run view is a fold over log records shared by live runs and replayed
   logs, so History opens any `.jsonl` in the log directory into the same
-  view. `tip-prep-gui` is unchanged and
-  stays until the workbench reaches parity in the lab. Built with
+  view. `tip-prep-gui` keeps its screens and stays until the workbench
+  reaches parity in the lab; the one change to it is that its files load
+  before the stream starts, as the CLI's now do. Built with
   `--features gui`, which now enables eframe's `persistence` so the pane
   and each tool's setup survive a restart.
 - **Schema-driven setup forms.** `AppConfig` and every config type under

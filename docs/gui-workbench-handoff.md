@@ -60,10 +60,8 @@ Standing decisions from earlier work that still bind:
 - Known wart: `RunStatus::Error` exists but a clean `Ok(())` from
   `run_controller` hides routine errors because `run_controller` logs them and
   returns `Ok(())` (`:1860` onward).
-- **Divergence:** the CLI sets `disable_safe_tip: true`
-  (`bin/tip-prep/main.rs`, the `NanonisSetupConfig` literal), the GUI leaves
-  it at the default `false`. The new tip-prep tool must pick one on purpose;
-  match the CLI unless Martin says otherwise.
+- The CLI and the GUI both set `disable_safe_tip: true` through
+  `nanonis_setup`; the new tip-prep tool keeps that (`TipPrep::run_setup`).
 
 **Leave `tip-prep-gui` untouched** until the new app reaches parity. It is in
 use for the lab campaign.
@@ -598,8 +596,8 @@ bandwidth, on/off per modulator), the generic PI controllers (`GenPICtrl`,
   and units, `ControllerParams` over them with `to_fields`/`from_fields`
   for the form, `ControllerReading` (params plus `enabled`, `status`,
   `available`), `ControllerProfile` as TOML (`settings_file`, entries),
-  events `controller/read`, `controller/applied` (before and after),
-  `controller/settings_loaded`, and three jobs: `ReadControllers`,
+  events `controller/read`, `controller/applied` (before and after), the
+  routine's `settings_loaded`, and three jobs: `ReadControllers`,
   `ApplyProfile`, `SetControllerEnabled`. Applying never switches a loop.
 - `SpmController`: `controllers`, `read_controller`, `write_controller`,
   `set_controller_enabled` behind `Capability::Controllers`; Nanonis

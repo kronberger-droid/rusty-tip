@@ -5,7 +5,38 @@
 use std::path::PathBuf;
 
 use eframe::egui;
-use egui_plot::{HLine, Line, LineStyle, Plot, PlotPoints};
+use egui_plot::{HLine, Line, LineStyle, Plot, PlotPoint, PlotPoints};
+
+/// Plot colours for one theme, shared by every tool's plots.
+pub struct Palette {
+    /// The first series: what the tool is about.
+    pub first: egui::Color32,
+    /// A second series, or a control signal.
+    pub second: egui::Color32,
+    /// A band of acceptable values.
+    pub bounds: egui::Color32,
+}
+
+impl Palette {
+    /// The dark palette is pale series and faint bounds, which wash out on
+    /// white, so light mode gets saturated, darker equivalents and far more
+    /// opaque bounds. That is what makes a screenshot survive being printed.
+    pub fn for_theme(dark_mode: bool) -> Self {
+        if dark_mode {
+            Self {
+                first: egui::Color32::LIGHT_BLUE,
+                second: egui::Color32::from_rgb(255, 165, 0),
+                bounds: egui::Color32::from_rgba_unmultiplied(0, 255, 0, 80),
+            }
+        } else {
+            Self {
+                first: egui::Color32::from_rgb(0, 84, 159),
+                second: egui::Color32::from_rgb(191, 87, 0),
+                bounds: egui::Color32::from_rgba_unmultiplied(0, 120, 40, 180),
+            }
+        }
+    }
+}
 
 /// A filled circle the height of a line of text, the one place the
 /// workbench uses colour for state.
@@ -82,7 +113,8 @@ pub struct StripChart<'a> {
 }
 
 impl StripChart<'_> {
-    pub fn show(&self, ui: &mut egui::Ui, points: Vec<[f64; 2]>) {
+    pub fn show(&self, ui: &mut egui::Ui, points: impl IntoIterator<Item = [f64; 2]>) {
+        let points: Vec<PlotPoint> = points.into_iter().map(PlotPoint::from).collect();
         Plot::new(self.id)
             .width(self.size[0])
             .height(self.size[1])
@@ -103,7 +135,7 @@ impl StripChart<'_> {
                             .style(LineStyle::Dashed { length: 5.0 }),
                     );
                 }
-                plot_ui.line(Line::new("Signal", PlotPoints::from(points)).color(self.color));
+                plot_ui.line(Line::new("Signal", PlotPoints::Owned(points)).color(self.color));
             });
     }
 }
