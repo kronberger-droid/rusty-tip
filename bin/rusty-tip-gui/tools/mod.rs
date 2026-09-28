@@ -17,8 +17,11 @@ pub mod tip_prep;
 use eframe::egui;
 use rusty_tip::session::Job;
 
+use rusty_tip::experiment_log::ControllerFacts;
+
 use crate::connection::ConnectionSettings;
 use crate::run_view::RunView;
+use crate::samples::Samples;
 
 /// What the Setup tab knows about the rest of the window.
 ///
@@ -39,6 +42,10 @@ pub struct SetupCx<'a> {
     /// A job the tab wants started.
     pub run: Option<Box<dyn Job>>,
     pub view: &'a RunView,
+    /// The last seconds of the stream, for a live chart.
+    pub samples: &'a Samples,
+    /// What the connection knows about its signals, to find one by name.
+    pub facts: Option<&'a ControllerFacts>,
 }
 
 pub trait Tool {

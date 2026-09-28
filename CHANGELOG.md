@@ -68,6 +68,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read, edit one controller at a time in a form drawn from its schema,
   see what differs from the last reading, apply, revert, and load or
   save profiles; the Run tab lists what an apply changed.
+- **A loop behind the mock, and the stream live in the workbench.**
+  `rusty_tip::loop_model::ZLoop` is a Z feedback loop as arithmetic: a PI
+  controller on a log or linear input, a tunnelling current and a
+  frequency shift that fall off with the gap, and an actuator lag. The
+  mock runs one behind its Z-controller (`MockControllerBuilder::
+  loop_model`), so Z and the current answer to the setpoint and gains,
+  to withdraw and to approach, and stream at 1 kHz; the `Mock` backend
+  has it on. `SpmController::stream_since` hands out the stream in
+  pieces, the session thread taps it ten times a second while idle
+  (`SessionUpdate::Samples`), and the workbench keeps the last twelve
+  seconds per signal. Under the Z-controller's form, two strip charts
+  show the loop's input against the setpoint the form holds, and Z.
 
 - **One connection, many runs.** `run_routine` borrows the controller
   instead of consuming it, so a second routine can start on the same

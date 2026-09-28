@@ -23,6 +23,7 @@ use rusty_tip::shutdown::ShutdownFlag;
 
 use crate::connection::{ConnectionForm, ConnectionPane, ConnectionSettings, PaneAction};
 use crate::run_view::RunView;
+use crate::samples::Samples;
 use crate::tools::{self, SetupCx, Tool};
 use crate::widgets::{Note, note, status_dot};
 
@@ -95,6 +96,8 @@ pub struct WorkbenchApp {
     log_lines: Vec<String>,
     log_rx: Receiver<String>,
     history: Vec<LogEntry>,
+    /// The last seconds of the stream while the session is idle.
+    samples: Samples,
 }
 
 impl WorkbenchApp {
@@ -129,6 +132,7 @@ impl WorkbenchApp {
             log_lines: Vec::new(),
             log_rx,
             history: Vec::new(),
+            samples: Samples::default(),
         }
     }
 
@@ -160,8 +164,11 @@ impl WorkbenchApp {
         }
         for update in self.session.drain() {
             self.pane.apply(&update);
-            if let SessionUpdate::JobFinished(result) = update {
-                self.finish(result);
+            match update {
+                SessionUpdate::JobFinished(result) => self.finish(result),
+                SessionUpdate::Samples(piece) => self.samples.take(&piece),
+                SessionUpdate::State(ConnState::Disconnected) => self.samples.clear(),
+                _ => {}
             }
         }
         self.drain_run_events();
@@ -376,6 +383,8 @@ impl WorkbenchApp {
                     can_run: !self.running() && self.pane.state == ConnState::Connected,
                     run: None,
                     view: &self.view,
+                    samples: &self.samples,
+                    facts: self.pane.facts.as_ref(),
                 };
                 note(ui, &self.message);
                 self.tools[tool].setup(ui, &mut cx);

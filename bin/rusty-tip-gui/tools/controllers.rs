@@ -17,8 +17,9 @@ use serde_json::Value;
 use rusty_tip::controllers::{
     ApplyProfile, ControllerAppliedEvent, ControllerId, ControllerParams, ControllerProfile,
     ControllerReading, ProfileEntry, ReadControllers, SetControllerEnabled, SettingsLoadedEvent,
-    ZLaw, ZLoopInput,
+    ZLaw, ZLoopInput, ZQuantity,
 };
+use rusty_tip::experiment_log::ControllerFacts;
 use rusty_tip::experiment_log::LogEvent;
 use rusty_tip::session::Job;
 
@@ -26,7 +27,7 @@ use super::{SetupCx, Tool};
 use crate::form::SchemaForm;
 use crate::run_view::RunView;
 use crate::units::{display_unit_for, format_si, prefix_scale};
-use crate::widgets::{Note, note, path_field};
+use crate::widgets::{Note, StripChart, note, path_field};
 
 /// The controllers a profile can be composed for before anything is read.
 const KNOWN: [ControllerId; 3] = [
@@ -261,6 +262,115 @@ impl ControllersTool {
     }
 }
 
+/// How far back the live charts look.
+const CHART_WINDOW_S: f64 = 10.0;
+const CHART_HEIGHT: f32 = 120.0;
+
+impl ControllersTool {
+    /// The Z loop live: its input against the setpoint the form holds,
+    /// and Z, from the last seconds of the stream. Drawn from the
+    /// session's idle tap, so it stands still while a job runs.
+    fn render_z_chart(&self, ui: &mut egui::Ui, cx: &SetupCx<'_>) {
+        let Some(facts) = cx.facts else {
+            ui.label(egui::RichText::new("Connect to see the loop live").weak());
+            return;
+        };
+        let fields = self.edits.get(&ControllerId::Z);
+        let active = fields
+            .and_then(|f| f.get("active"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let input = ZLoopInput::from_name(active);
+        let input_signal = match input.quantity {
+            ZQuantity::Frequency => find_signal(facts, &["freq", "df"]),
+            ZQuantity::Current => find_signal(facts, &["current", "(a)"]),
+            _ => None,
+        };
+        let z_signal = find_signal(facts, &["z (m)", "z"]);
+        let (Some(input_index), Some(z_index)) = (input_signal, z_signal) else {
+            ui.label(
+                egui::RichText::new("The loop's input or Z is not among the connection's signals")
+                    .weak(),
+            );
+            return;
+        };
+        if !cx.samples.has(input_index) && !cx.samples.has(z_index) {
+            ui.label(egui::RichText::new("Waiting for the stream").weak());
+            return;
+        }
+        let unit = input.unit().unwrap_or("");
+        let display = display_unit_for(unit);
+        let scale = prefix_scale(display).unwrap_or(1.0);
+        let setpoint = fields
+            .and_then(|f| f.get("setpoint"))
+            .and_then(Value::as_f64)
+            .map(|s| s * scale);
+        let gap = ui.spacing().item_spacing.x;
+        let half = ((ui.available_width() - gap) / 2.0).max(200.0);
+        let dark = ui.visuals().dark_mode;
+        let input_color = if dark {
+            egui::Color32::LIGHT_BLUE
+        } else {
+            egui::Color32::from_rgb(0, 84, 159)
+        };
+        let z_color = if dark {
+            egui::Color32::from_rgb(255, 165, 0)
+        } else {
+            egui::Color32::from_rgb(191, 87, 0)
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(half);
+                let latest = cx
+                    .samples
+                    .latest(input_index)
+                    .map(|v| format_si(v, unit))
+                    .unwrap_or_default();
+                ui.label(format!("{active}: {latest}"));
+                StripChart {
+                    id: "z_loop_input",
+                    unit: display,
+                    setpoint,
+                    window_s: CHART_WINDOW_S,
+                    size: [half, CHART_HEIGHT],
+                    color: input_color,
+                }
+                .show(ui, cx.samples.points(input_index, scale));
+            });
+            ui.vertical(|ui| {
+                ui.set_width(half);
+                let latest = cx
+                    .samples
+                    .latest(z_index)
+                    .map(|v| format_si(v, "m"))
+                    .unwrap_or_default();
+                ui.label(format!("Z: {latest}"));
+                StripChart {
+                    id: "z_loop_z",
+                    unit: "nm",
+                    setpoint: None,
+                    window_s: CHART_WINDOW_S,
+                    size: [half, CHART_HEIGHT],
+                    color: z_color,
+                }
+                .show(ui, cx.samples.points(z_index, 1e9));
+            });
+        });
+    }
+}
+
+/// The index of the first signal whose lowercase name contains one of
+/// `needles`, in the order given.
+fn find_signal(facts: &ControllerFacts, needles: &[&str]) -> Option<u32> {
+    needles.iter().find_map(|needle| {
+        facts
+            .signals
+            .iter()
+            .find(|s| s.name.to_lowercase().contains(needle))
+            .map(|s| u32::from(s.index))
+    })
+}
+
 /// A drag value for the Z setpoint in the display unit of `unit`, or bare
 /// when the loop's quantity is unknown.
 fn setpoint_editor(ui: &mut egui::Ui, value: &mut Value, unit: Option<&str>) -> bool {
@@ -429,6 +539,10 @@ impl Tool for ControllersTool {
             ui.add_space(4.0);
             if self.render_form(ui, id) {
                 self.message = None;
+            }
+            if id == ControllerId::Z {
+                ui.add_space(6.0);
+                self.render_z_chart(ui, cx);
             }
 
             if let (Some(reading), Some(fields)) = (self.readings.get(&id), self.edits.get(&id)) {

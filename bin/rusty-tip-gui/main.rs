@@ -8,6 +8,7 @@ mod app;
 mod connection;
 mod form;
 mod run_view;
+mod samples;
 mod tools;
 mod units;
 mod widgets;

@@ -1,9 +1,11 @@
 //! Small pieces the pages share: the status dot, a path field with its file
-//! dialog, and a message line.
+//! dialog, a message line, and a strip chart for the last seconds of a
+//! signal.
 
 use std::path::PathBuf;
 
 use eframe::egui;
+use egui_plot::{HLine, Line, LineStyle, Plot, PlotPoints};
 
 /// A filled circle the height of a line of text, the one place the
 /// workbench uses colour for state.
@@ -64,5 +66,44 @@ pub fn note(ui: &mut egui::Ui, note: &Option<Note>) {
         } else {
             ui.label(&note.text);
         }
+    }
+}
+
+/// A strip chart: the last seconds of a signal, time running to zero at
+/// the right, the value in whatever unit the caller scaled to, and a
+/// dashed line where a setpoint sits. Not interactive.
+pub struct StripChart<'a> {
+    pub id: &'a str,
+    pub unit: &'a str,
+    pub setpoint: Option<f64>,
+    pub window_s: f64,
+    pub size: [f32; 2],
+    pub color: egui::Color32,
+}
+
+impl StripChart<'_> {
+    pub fn show(&self, ui: &mut egui::Ui, points: Vec<[f64; 2]>) {
+        Plot::new(self.id)
+            .width(self.size[0])
+            .height(self.size[1])
+            .allow_drag(false)
+            .allow_zoom(false)
+            .allow_scroll(false)
+            .allow_boxed_zoom(false)
+            .show_x(false)
+            .include_x(-self.window_s)
+            .include_x(0.0)
+            .x_axis_label("s")
+            .y_axis_label(self.unit)
+            .show(ui, |plot_ui| {
+                if let Some(sp) = self.setpoint {
+                    plot_ui.hline(
+                        HLine::new("Setpoint", sp)
+                            .color(self.color.gamma_multiply(0.6))
+                            .style(LineStyle::Dashed { length: 5.0 }),
+                    );
+                }
+                plot_ui.line(Line::new("Signal", PlotPoints::from(points)).color(self.color));
+            });
     }
 }
