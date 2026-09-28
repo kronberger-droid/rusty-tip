@@ -323,7 +323,7 @@ impl Tool for DriftTool {
                     plot_ui.points(
                         Points::new("bursts", PlotPoints::from(drift))
                             .color(color)
-                            .radius(3.0),
+                            .radius(3.0_f32),
                     );
                 });
         }
