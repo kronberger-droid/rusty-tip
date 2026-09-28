@@ -51,6 +51,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not carry Z unless polling is allowed. The workbench has it as the
   Drift tool, and `const-distance drift` is now a thin wrapper over it, so
   the two front ends share one implementation.
+- **Feedback controllers as parameter sets.** `rusty_tip::controllers`
+  gives the Z-controller and the PLL's amplitude and phase loops one
+  struct each of the fields the protocol lets you set, in SI with unit
+  annotations, and `SpmController` gains `controllers`, `read_controller`,
+  `write_controller` and `set_controller_enabled` behind
+  `Capability::Controllers`. A read also reports whether the loop is on,
+  its status word and, for the Z-controller, the loops Nanonis has
+  defined; which one runs is the `active` parameter. A
+  `ControllerProfile` is a TOML file naming a settings file to load first
+  and the parameters to write; `ApplyProfile` loads, writes each
+  controller, reads it back and logs `controller/applied` with before and
+  after, then `controller/read` for everything. Switching a loop on or off
+  is a separate job, never a side effect of applying. The mock holds the
+  same loops. The workbench's Controllers tool is the bare Setup tab:
+  read, edit one controller at a time in a form drawn from its schema,
+  see what differs from the last reading, apply, revert, and load or
+  save profiles; the Run tab lists what an apply changed.
 
 - **One connection, many runs.** `run_routine` borrows the controller
   instead of consuming it, so a second routine can start on the same

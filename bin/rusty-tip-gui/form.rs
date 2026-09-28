@@ -88,6 +88,24 @@ impl SchemaForm {
         self.render_field(ui, schema, node, last, path)
     }
 
+    /// The top-level field names, in the schema's order.
+    pub fn keys(&self) -> Vec<String> {
+        self.root
+            .get("properties")
+            .and_then(Value::as_object)
+            .map(|p| p.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// The base unit of a top-level field, when its schema gives one.
+    pub fn unit_of(&self, key: &str) -> Option<&str> {
+        self.root
+            .get("properties")?
+            .get(key)?
+            .get("x-unit")?
+            .as_str()
+    }
+
     /// A value with every field at its schema default.
     #[cfg(test)]
     pub fn default_value(&self) -> Value {

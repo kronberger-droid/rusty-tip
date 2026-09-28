@@ -17,6 +17,7 @@ use std::collections::HashSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::controllers::{ControllerId, ControllerParams, ControllerReading};
 use crate::signal_registry::SignalIndex;
 use crate::spm_error::SpmError;
 
@@ -102,6 +103,9 @@ pub enum Capability {
     /// Loading settings and layout files the controller keeps on its own
     /// machine (load_settings, load_layout)
     Presets,
+    /// Reading and writing feedback-controller parameters (controllers,
+    /// read_controller, write_controller, set_controller_enabled)
+    Controllers,
 }
 
 /// What data the oscilloscope should return
@@ -258,6 +262,38 @@ pub trait SpmController: Send {
     fn go_z_home(&mut self) -> Result<()>;
     /// Query the current z-controller status.
     fn z_controller_status(&mut self) -> Result<ZControllerStatus>;
+
+    // -- Feedback controllers (see `crate::controllers`) --
+
+    /// The controllers this connection can read and write. Requires
+    /// [`Capability::Controllers`]; the default has none.
+    fn controllers(&mut self) -> Result<Vec<ControllerId>> {
+        Ok(Vec::new())
+    }
+
+    /// A controller's parameters, plus whether it is on, its status and,
+    /// for the Z-controller, the list of defined controllers.
+    fn read_controller(&mut self, _id: ControllerId) -> Result<ControllerReading> {
+        Err(SpmError::Unsupported(
+            "this controller cannot read controller parameters".into(),
+        ))
+    }
+
+    /// Write a controller's parameters. Never switches the loop on or off;
+    /// that is [`set_controller_enabled`](Self::set_controller_enabled).
+    /// Read back afterwards to see what the module accepted.
+    fn write_controller(&mut self, _id: ControllerId, _params: &ControllerParams) -> Result<()> {
+        Err(SpmError::Unsupported(
+            "this controller cannot write controller parameters".into(),
+        ))
+    }
+
+    /// Switch a loop on or off.
+    fn set_controller_enabled(&mut self, _id: ControllerId, _on: bool) -> Result<()> {
+        Err(SpmError::Unsupported(
+            "this controller cannot switch controllers".into(),
+        ))
+    }
 
     // -- Piezo Positioning (FolMe) --
     fn get_position(&mut self, wait_for_newest: bool) -> Result<Position>;
