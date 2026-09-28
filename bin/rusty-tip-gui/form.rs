@@ -373,27 +373,8 @@ fn render_editor(ui: &mut egui::Ui, schema: &Value, value: &mut Value, id: &str)
             }
         }
         Kind::Number => {
-            let scale = display_scale(schema);
-            let mut shown = value.as_f64().unwrap_or(0.0) * scale;
-            let speed = (shown.abs() * 0.01).max(0.001);
-            let mut drag = egui::DragValue::new(&mut shown)
-                .speed(speed)
-                .max_decimals(6);
-            if let Some(unit) = unit_suffix(schema) {
-                drag = drag.suffix(unit);
-            }
-            let response = ui.add(drag);
-            let changed = response.changed();
-            if changed {
-                *value = json!(shown / scale);
-            }
-            // The stored value, for anyone checking the conversion.
-            if scale != 1.0
-                && let Some(unit) = schema.get("x-unit").and_then(Value::as_str)
-            {
-                response.on_hover_text(format!("{:e} {unit}", value.as_f64().unwrap_or(0.0)));
-            }
-            changed
+            let units = display_unit(schema);
+            number_field(ui, value, units.map(|u| u.0), units.map(|u| u.1))
         }
         Kind::Str => {
             let mut s = value.as_str().unwrap_or("").to_string();
@@ -725,7 +706,42 @@ fn display_unit(schema: &Value) -> Option<(&str, &str)> {
     Some((unit, display))
 }
 
+/// A drag value for a number stored in `unit` and shown in `display`, an
+/// SI-prefixed form of it; the edit is written back in `unit`. Hovering
+/// shows the stored value when the two differ.
+pub fn number_field(
+    ui: &mut egui::Ui,
+    value: &mut Value,
+    unit: Option<&str>,
+    display: Option<&str>,
+) -> bool {
+    let scale = match (unit, display) {
+        (Some(unit), Some(display)) if unit != display => prefix_scale(display).unwrap_or(1.0),
+        _ => 1.0,
+    };
+    let mut shown = value.as_f64().unwrap_or(0.0) * scale;
+    let speed = (shown.abs() * 0.01).max(0.001);
+    let mut drag = egui::DragValue::new(&mut shown)
+        .speed(speed)
+        .max_decimals(6);
+    if let Some(display) = display {
+        drag = drag.suffix(format!(" {display}"));
+    }
+    let response = ui.add(drag);
+    let changed = response.changed();
+    if changed {
+        *value = json!(shown / scale);
+    }
+    if scale != 1.0
+        && let Some(unit) = unit
+    {
+        response.on_hover_text(format!("{:e} {unit}", value.as_f64().unwrap_or(0.0)));
+    }
+    changed
+}
+
 /// Multiply an SI value by this to show it in the display unit.
+#[cfg(test)]
 fn display_scale(schema: &Value) -> f64 {
     match display_unit(schema) {
         Some((unit, display)) if unit != display => prefix_scale(display).unwrap_or(1.0),

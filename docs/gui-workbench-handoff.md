@@ -60,10 +60,8 @@ Standing decisions from earlier work that still bind:
 - Known wart: `RunStatus::Error` exists but a clean `Ok(())` from
   `run_controller` hides routine errors because `run_controller` logs them and
   returns `Ok(())` (`:1860` onward).
-- **Divergence:** the CLI sets `disable_safe_tip: true`
-  (`bin/tip-prep/main.rs`, the `NanonisSetupConfig` literal), the GUI leaves
-  it at the default `false`. The new tip-prep tool must pick one on purpose;
-  match the CLI unless Martin says otherwise.
+- The CLI and the GUI both set `disable_safe_tip: true` through
+  `nanonis_setup`; the new tip-prep tool keeps that (`TipPrep::run_setup`).
 
 **Leave `tip-prep-gui` untouched** until the new app reaches parity. It is in
 use for the lab campaign.
@@ -598,8 +596,8 @@ bandwidth, on/off per modulator), the generic PI controllers (`GenPICtrl`,
   and units, `ControllerParams` over them with `to_fields`/`from_fields`
   for the form, `ControllerReading` (params plus `enabled`, `status`,
   `available`), `ControllerProfile` as TOML (`settings_file`, entries),
-  events `controller/read`, `controller/applied` (before and after),
-  `controller/settings_loaded`, and three jobs: `ReadControllers`,
+  events `controller/read`, `controller/applied` (before and after), the
+  routine's `settings_loaded`, and three jobs: `ReadControllers`,
   `ApplyProfile`, `SetControllerEnabled`. Applying never switches a loop.
 - `SpmController`: `controllers`, `read_controller`, `write_controller`,
   `set_controller_enabled` behind `Capability::Controllers`; Nanonis
@@ -635,22 +633,54 @@ bandwidth, on/off per modulator), the generic PI controllers (`GenPICtrl`,
   mock; the tool's unit tests cover the read-fills-forms and
   apply-only-what-differs rules.
 
+**Done 2026-09-28 (branch `feat/gui-loop-model`, stacked on
+`feat/gui-controllers`):**
+
+- `src/loop_model.rs`: `ZLoop`, a PI loop on a log or linear input with
+  a `Plant` (current and frequency shift as exponentials in the gap) and
+  a first-order actuator lag, integrated at 50 kHz. `for_name` builds
+  one as a defined Nanonis loop of that name would behave, `(neg)` in
+  the name flipping the slope. Tests pin that a log current loop settles
+  on its setpoint, that a setpoint step moves Z by `ln 2 / 2κ`, that a
+  negative frequency loop retracts when the shift falls, and that a
+  shorter time constant settles faster. The lag and the plant are the
+  numbers a measured step will fit.
+- The mock runs one behind its Z-controller
+  (`MockControllerBuilder::loop_model(z, current, freq_shift)`): Z and
+  the current are the model's with a little scatter, stream at 1 kHz,
+  and answer to `write_controller`, `set_controller_enabled`,
+  `set_z_setpoint`, withdraw (parks a micron out, loop off) and approach
+  (half a nanometre in, loop on). The `Mock` backend has it on with the
+  tip model keeping the frequency shift, so tip prep on the mock is
+  unchanged.
+- `SpmController::stream_since(Instant)`: the stream since a time, as a
+  `StreamSnapshot`; Nanonis serves it from the TCP reader's buffer, the
+  mock generates the wall-clock interval, at most two seconds. The
+  session thread taps it every 100 ms while idle and reports
+  `SessionUpdate::Samples { at_s, snapshot }`; readouts moved to every
+  fifth tap. The workbench's `samples.rs` keeps twelve seconds per
+  signal; `SetupCx` carries it and the connection's facts.
+- Under the Z-controller's form: the loop's input (found by name, current
+  or frequency by the active loop) against the setpoint the form holds,
+  in display units, and Z in nm, as two strip charts (`widgets::
+  StripChart`). They stand still while a job runs, since the session
+  thread is inside the job then; an Apply is sub-second, so that is fine
+  in practice.
+
 **Next, in order:**
 
-1. A strip chart under the form: the selected loop's input against its
-   setpoint and its output from the session stream, since watching the
-   loop while nudging a gain is the cheapest sense of what it does. Needs
-   the session's readouts to be per tool rather than the fixed four.
+1. Guard rails on Apply: a confirmation for a large change with the
+   feedback on, an "apply withdrawn" option, restore on error.
 2. The setpoint step routine (feedback on, step A to B, record from the
    stream, report settle time, overshoot, steady-state error, noise) and a
-   gain scan over it. `LeaveInPlace`, `RunSetup::NONE`.
-3. Models: the Z loop (PI on `ln(I / I_sp)`, exponential current, RT
-   loop rate from `Util.RTFreqGet`, an amplifier lag fitted from a step),
-   then the PLL loops on a resonator whose `f0` and `Q` the PLL frequency
-   sweep gives. Each gets the same preview panel: sliders, surface at a
-   scan speed, Z and current traces, a crash verdict, and a speed against
-   gain map. Uncalibrated it ranks settings; calibrated by one step it is
-   quantitative for that microscope.
+   gain scan over it. `LeaveInPlace`, `RunSetup::NONE`. Open: whether
+   the 1 kHz stream is enough or `OsciHR` is needed, and whether a step
+   may run on a real tip over flat ground.
+3. The preview panel on `ZLoop`: sliders, a surface moving at a scan
+   speed, Z and current traces, a crash verdict, a speed against gain
+   map; fitted to one measured step it is quantitative for that
+   microscope. Then the PLL loops on a resonator whose `f0` and `Q` the
+   PLL frequency sweep gives.
 4. Kinds after these: `GenPICtrl`, `PICtrl` 1 to 8, `KelvinCtrl`. The
    `ControllerParams` enum grows a variant per kind and nothing else
    changes.

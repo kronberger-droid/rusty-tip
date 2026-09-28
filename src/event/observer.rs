@@ -4,7 +4,10 @@ use std::io::{BufWriter, Write};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use serde::de::DeserializeOwned;
+
 use super::Event;
+use crate::experiment_log::LogEvent;
 
 /// Trait for consuming events.
 pub trait Observer: Send + Sync {
@@ -142,6 +145,26 @@ impl EventAccumulator {
     pub fn clear(&self) {
         let mut events = self.events.lock().unwrap_or_else(|e| e.into_inner());
         events.clear();
+    }
+
+    /// The custom events of one kind, decoded, in order.
+    pub fn custom<E: LogEvent + DeserializeOwned>(&self) -> Vec<E> {
+        let events = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Custom { kind, data, .. } if kind == E::KIND => {
+                    serde_json::from_value(data.clone()).ok()
+                }
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+impl<O: Observer + ?Sized> Observer for std::sync::Arc<O> {
+    fn on_event(&self, event: &Event) {
+        (**self).on_event(event)
     }
 }
 

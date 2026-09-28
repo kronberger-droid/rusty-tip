@@ -16,17 +16,18 @@ use serde_json::Value;
 
 use rusty_tip::controllers::{
     ApplyProfile, ControllerAppliedEvent, ControllerId, ControllerParams, ControllerProfile,
-    ControllerReading, ProfileEntry, ReadControllers, SetControllerEnabled, SettingsLoadedEvent,
-    ZLaw, ZLoopInput,
+    ControllerReading, ProfileEntry, ReadControllers, SetControllerEnabled, ZLaw, ZLoopInput,
+    ZQuantity,
 };
 use rusty_tip::experiment_log::LogEvent;
+use rusty_tip::routine::SettingsLoadedEvent;
 use rusty_tip::session::Job;
 
-use super::{SetupCx, Tool};
-use crate::form::SchemaForm;
+use super::{SetupCx, Tool, load_toml, save_toml};
+use crate::form::{SchemaForm, number_field};
 use crate::run_view::RunView;
 use crate::units::{display_unit_for, format_si, prefix_scale};
-use crate::widgets::{Note, note, path_field};
+use crate::widgets::{Note, Palette, StripChart, note, path_field};
 
 /// The controllers a profile can be composed for before anything is read.
 const KNOWN: [ControllerId; 3] = [
@@ -114,44 +115,28 @@ impl ControllersTool {
         self.seen.1 = rows.len();
     }
 
-    /// The controllers whose form differs from the last reading, or every
-    /// form when nothing has been read, as a profile.
-    fn profile(&self) -> Result<ControllerProfile, String> {
+    /// The forms as a profile: every one for saving, or only those that
+    /// differ from the last reading (every one when nothing has been
+    /// read) for applying.
+    fn profile(&self, only_changed: bool) -> Result<ControllerProfile, String> {
         let mut controllers = Vec::new();
         for (id, fields) in &self.edits {
             let params = ControllerParams::from_fields(*id, fields.clone())
                 .map_err(|e| format!("{id}: {e}"))?;
             let unchanged = self.readings.get(id).is_some_and(|r| r.params == params);
-            if !unchanged {
+            if !(only_changed && unchanged) {
                 controllers.push(ProfileEntry { id: *id, params });
             }
         }
+        let settings_file = self.settings_file.trim();
         Ok(ControllerProfile {
-            settings_file: (!self.settings_file.trim().is_empty())
-                .then(|| PathBuf::from(self.settings_file.trim())),
-            controllers,
-        })
-    }
-
-    /// Every form as a profile, for saving.
-    fn whole_profile(&self) -> Result<ControllerProfile, String> {
-        let mut controllers = Vec::new();
-        for (id, fields) in &self.edits {
-            let params = ControllerParams::from_fields(*id, fields.clone())
-                .map_err(|e| format!("{id}: {e}"))?;
-            controllers.push(ProfileEntry { id: *id, params });
-        }
-        Ok(ControllerProfile {
-            settings_file: (!self.settings_file.trim().is_empty())
-                .then(|| PathBuf::from(self.settings_file.trim())),
+            settings_file: (!settings_file.is_empty()).then(|| PathBuf::from(settings_file)),
             controllers,
         })
     }
 
     fn load_profile(&mut self) {
-        let loaded = std::fs::read_to_string(&self.profile_path)
-            .map_err(|e| format!("Cannot read {}: {e}", self.profile_path))
-            .and_then(|text| toml::from_str::<ControllerProfile>(&text).map_err(|e| e.to_string()))
+        let loaded = load_toml::<ControllerProfile>(&self.profile_path)
             .and_then(|p| p.validate().map(|()| p));
         match loaded {
             Ok(profile) => {
@@ -173,16 +158,9 @@ impl ControllersTool {
     }
 
     fn save_profile(&mut self) {
-        if !self.profile_path.to_lowercase().ends_with(".toml") {
-            self.profile_path.push_str(".toml");
-        }
         let written = self
-            .whole_profile()
-            .and_then(|p| toml::to_string_pretty(&p).map_err(|e| e.to_string()))
-            .and_then(|text| {
-                std::fs::write(&self.profile_path, text)
-                    .map_err(|e| format!("Cannot write {}: {e}", self.profile_path))
-            });
+            .profile(false)
+            .and_then(|p| save_toml(&mut self.profile_path, &p));
         self.message = Some(match written {
             Ok(()) => Note::ok(format!("Saved {}", self.profile_path)),
             Err(e) => Note::err(e),
@@ -206,7 +184,7 @@ impl ControllersTool {
             .entry(id)
             .or_insert_with(|| ControllerParams::default_for(id).to_fields());
         let mut changed = false;
-        egui::Grid::new(format!("controller_form_{}", id.key()))
+        egui::Grid::new(format!("controller_form_{id}"))
             .num_columns(2)
             .spacing([16.0, 6.0])
             .show(ui, |ui| {
@@ -250,7 +228,13 @@ impl ControllersTool {
                             "In the active loop's input signal; a log loop forms its error \
                              from the ratio to this, a linear one from the difference",
                         );
-                        changed |= setpoint_editor(ui, value, input.unit());
+                        let unit = input.unit();
+                        changed |= number_field(
+                            ui,
+                            &mut value["setpoint"],
+                            unit,
+                            unit.map(display_unit_for),
+                        );
                         ui.end_row();
                     } else {
                         changed |= form.render_path(ui, value, &key);
@@ -261,31 +245,91 @@ impl ControllersTool {
     }
 }
 
-/// A drag value for the Z setpoint in the display unit of `unit`, or bare
-/// when the loop's quantity is unknown.
-fn setpoint_editor(ui: &mut egui::Ui, value: &mut Value, unit: Option<&str>) -> bool {
-    let display = unit.map(display_unit_for);
-    let scale = display.and_then(prefix_scale).unwrap_or(1.0);
-    let si = value.get("setpoint").and_then(Value::as_f64).unwrap_or(0.0);
-    let mut shown = si * scale;
-    let speed = (shown.abs() * 0.01).max(0.001);
-    let mut drag = egui::DragValue::new(&mut shown)
-        .speed(speed)
-        .max_decimals(6);
-    if let Some(d) = display {
-        drag = drag.suffix(format!(" {d}"));
-    }
-    let response = ui.add(drag);
-    if let Some(u) = unit
-        && scale != 1.0
-    {
-        response.clone().on_hover_text(format!("{si:e} {u}"));
-    }
-    if response.changed() {
-        value["setpoint"] = serde_json::json!(shown / scale);
-        true
-    } else {
-        false
+/// How far back the live charts look.
+const CHART_WINDOW_S: f64 = 10.0;
+const CHART_HEIGHT: f32 = 120.0;
+
+impl ControllersTool {
+    /// The Z loop live: its input against the setpoint the form holds,
+    /// and Z, from the last seconds of the stream. Drawn from the
+    /// session's idle tap, so it stands still while a job runs.
+    fn render_z_chart(&self, ui: &mut egui::Ui, cx: &SetupCx<'_>) {
+        if cx.readouts.is_empty() {
+            ui.label(egui::RichText::new("Connect to see the loop live").weak());
+            return;
+        }
+        let fields = self.edits.get(&ControllerId::Z);
+        let active = fields
+            .and_then(|f| f.get("active"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let input = ZLoopInput::from_name(active);
+        // By the registry name the session resolved, as the pane shows it.
+        let readout = |key: &str| cx.readouts.iter().find(|r| r.key == key).map(|r| r.index.0);
+        let input_signal = match input.quantity {
+            ZQuantity::Frequency => readout("freq shift"),
+            ZQuantity::Current => readout("current"),
+            _ => None,
+        };
+        let (Some(input_index), Some(z_index)) = (input_signal, readout("z")) else {
+            ui.label(
+                egui::RichText::new("The loop's input or Z is not among the connection's signals")
+                    .weak(),
+            );
+            return;
+        };
+        if !cx.samples.has(input_index) && !cx.samples.has(z_index) {
+            ui.label(egui::RichText::new("Waiting for the stream").weak());
+            return;
+        }
+        let unit = input.unit().unwrap_or("");
+        let display = display_unit_for(unit);
+        let scale = prefix_scale(display).unwrap_or(1.0);
+        let setpoint = fields
+            .and_then(|f| f.get("setpoint"))
+            .and_then(Value::as_f64)
+            .map(|s| s * scale);
+        let gap = ui.spacing().item_spacing.x;
+        let half = ((ui.available_width() - gap) / 2.0).max(200.0);
+        let colors = Palette::for_theme(ui.visuals().dark_mode);
+        ui.horizontal_wrapped(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(half);
+                let latest = cx
+                    .samples
+                    .latest(input_index)
+                    .map(|v| format_si(v, unit))
+                    .unwrap_or_default();
+                ui.label(format!("{active}: {latest}"));
+                StripChart {
+                    id: "z_loop_input",
+                    unit: display,
+                    setpoint,
+                    window_s: CHART_WINDOW_S,
+                    size: [half, CHART_HEIGHT],
+                    color: colors.first,
+                }
+                .show(ui, cx.samples.points(input_index, scale));
+            });
+            ui.vertical(|ui| {
+                ui.set_width(half);
+                let latest = cx
+                    .samples
+                    .latest(z_index)
+                    .map(|v| format_si(v, "m"))
+                    .unwrap_or_default();
+                ui.label(format!("Z: {latest}"));
+                StripChart {
+                    id: "z_loop_z",
+                    unit: "nm",
+                    setpoint: None,
+                    window_s: CHART_WINDOW_S,
+                    size: [half, CHART_HEIGHT],
+                    color: colors.second,
+                }
+                .show(ui, cx.samples.points(z_index, 1e9));
+            });
+        });
     }
 }
 
@@ -430,6 +474,10 @@ impl Tool for ControllersTool {
             if self.render_form(ui, id) {
                 self.message = None;
             }
+            if id == ControllerId::Z {
+                ui.add_space(6.0);
+                self.render_z_chart(ui, cx);
+            }
 
             if let (Some(reading), Some(fields)) = (self.readings.get(&id), self.edits.get(&id)) {
                 let diff = changed_fields(&reading.params.to_fields(), fields);
@@ -450,7 +498,7 @@ impl Tool for ControllersTool {
     }
 
     fn job(&self) -> Result<Box<dyn Job>, String> {
-        let profile = self.profile()?;
+        let profile = self.profile(true)?;
         if profile.controllers.is_empty() && profile.settings_file.is_none() {
             return Err("nothing differs from the last reading, and no settings file".into());
         }
@@ -616,8 +664,8 @@ mod tests {
             setpoint: 50e-12,
             ..Default::default()
         });
-        view.apply_event(&reading(ControllerId::Z, z.clone()));
-        view.apply_event(&reading(
+        view.apply_event(reading(ControllerId::Z, z.clone()));
+        view.apply_event(reading(
             ControllerId::PllPhase { modulator: 1 },
             ControllerParams::default_for(ControllerId::PllPhase { modulator: 1 }),
         ));
@@ -630,7 +678,7 @@ mod tests {
         );
 
         tool.edits.get_mut(&ControllerId::Z).unwrap()["setpoint"] = serde_json::json!(80e-12);
-        let profile = tool.profile().unwrap();
+        let profile = tool.profile(true).unwrap();
         assert_eq!(
             profile.controllers.len(),
             1,
@@ -643,7 +691,7 @@ mod tests {
         tool.take_readings(&view);
         assert_eq!(tool.edits[&ControllerId::Z]["setpoint"], 80e-12);
         let mut fresh = RunView::default();
-        fresh.apply_event(&reading(ControllerId::Z, z));
+        fresh.apply_event(reading(ControllerId::Z, z));
         tool.take_readings(&fresh);
         assert_eq!(tool.edits[&ControllerId::Z]["setpoint"], 50e-12);
     }

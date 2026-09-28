@@ -8,6 +8,7 @@ pub mod spm_error;
 pub mod action;
 pub mod controllers;
 pub mod drift;
+pub mod loop_model;
 pub mod routine;
 pub mod tip_prep;
 

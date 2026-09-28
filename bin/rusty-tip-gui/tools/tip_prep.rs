@@ -18,12 +18,12 @@ use rusty_tip::session::{Job, JobCx, NanonisBackend};
 use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::TipPrep;
 
-use super::{SetupCx, Tool};
+use super::{SetupCx, Tool, load_toml, save_toml};
 use crate::connection::ConnectionSettings;
 use crate::form::SchemaForm;
 use crate::run_view::RunView;
 use crate::units::{format_si, number};
-use crate::widgets::{Note, note, path_field};
+use crate::widgets::{Note, Palette, note, path_field};
 
 /// Tip prep as a [`Job`]: what the session runs.
 pub struct TipPrepJob {
@@ -141,10 +141,7 @@ impl TipPrepTool {
     /// Read the file into the form and offer its connection tables to the
     /// Connection page.
     fn load(&mut self, cx: &mut SetupCx<'_>) {
-        let loaded = std::fs::read_to_string(&self.path)
-            .map_err(|e| format!("Cannot read {}: {e}", self.path))
-            .and_then(|text| toml::from_str::<AppConfig>(&text).map_err(|e| e.to_string()));
-        match loaded {
+        match load_toml::<AppConfig>(&self.path) {
             Ok(config) => {
                 cx.import = Some(connection_of(&config));
                 self.set_config(&config);
@@ -157,21 +154,15 @@ impl TipPrepTool {
     /// Write the file with the Connection page's settings in its
     /// connection tables, so the same file drives the CLI.
     fn save(&mut self, connection: &Result<ConnectionSettings, String>) {
-        if !self.path.to_lowercase().ends_with(".toml") {
-            self.path.push_str(".toml");
-        }
         let written = connection
             .clone()
             .map_err(|e| format!("Fix the Connection page first: {e}"))
             .and_then(|connection| {
                 let mut config = self.parse()?;
                 set_connection(&mut config, &connection);
-                toml::to_string_pretty(&config).map_err(|e| e.to_string())
+                Ok(config)
             })
-            .and_then(|text| {
-                std::fs::write(&self.path, text)
-                    .map_err(|e| format!("Cannot write {}: {e}", self.path))
-            });
+            .and_then(|config| save_toml(&mut self.path, &config));
         self.message = Some(match written {
             Ok(()) => Note::ok(format!("Saved {}", self.path)),
             Err(e) => Note::err(e),
@@ -343,15 +334,15 @@ impl Tool for TipPrepTool {
                 });
         });
 
-        let colors = PlotColors::for_theme(ui.visuals().dark_mode);
+        let colors = Palette::for_theme(ui.visuals().dark_mode);
 
         ui.add_space(6.0);
         ui.label("Freq shift, one point per stable read");
         let fs = view.points(FREQ_SHIFT_SERIES);
         let fs_line =
-            Line::new("Freq shift (Hz)", PlotPoints::from(fs.to_vec())).color(colors.freq_shift);
+            Line::new("Freq shift (Hz)", PlotPoints::from(fs.to_vec())).color(colors.first);
         let fs_marks = Points::new("Measurements", PlotPoints::from(fs.to_vec()))
-            .color(colors.freq_shift)
+            .color(colors.first)
             .radius(MARKER_RADIUS);
         let bounds = self.sharp_bounds();
         Plot::new("tip_prep_freq_shift")
@@ -377,10 +368,10 @@ impl Tool for TipPrepTool {
 
         ui.add_space(6.0);
         ui.label("Pulse voltage, as fired");
-        let v_line = Line::new("Pulse voltage (V)", PlotPoints::from(pulses.clone()))
-            .color(colors.pulse_voltage);
+        let v_line =
+            Line::new("Pulse voltage (V)", PlotPoints::from(pulses.clone())).color(colors.second);
         let v_marks = Points::new("Pulses", PlotPoints::from(pulses))
-            .color(colors.pulse_voltage)
+            .color(colors.second)
             .radius(MARKER_RADIUS);
         Plot::new("tip_prep_pulses")
             .height(120.0)
@@ -455,38 +446,20 @@ fn pulse_history(view: &RunView) -> Vec<[f64; 2]> {
     merged
 }
 
-/// Plot colours for one theme.
-struct PlotColors {
-    freq_shift: egui::Color32,
-    pulse_voltage: egui::Color32,
-    bounds: egui::Color32,
-}
-
-impl PlotColors {
-    /// The dark palette is pale series and faint bounds, which wash out on
-    /// white, so light mode gets saturated, darker equivalents and far more
-    /// opaque bounds. That is what makes a screenshot survive being printed.
-    fn for_theme(dark_mode: bool) -> Self {
-        if dark_mode {
-            Self {
-                freq_shift: egui::Color32::LIGHT_BLUE,
-                pulse_voltage: egui::Color32::from_rgb(255, 165, 0),
-                bounds: egui::Color32::from_rgba_unmultiplied(0, 255, 0, 80),
-            }
-        } else {
-            Self {
-                freq_shift: egui::Color32::from_rgb(0, 84, 159),
-                pulse_voltage: egui::Color32::from_rgb(191, 87, 0),
-                bounds: egui::Color32::from_rgba_unmultiplied(0, 120, 40, 180),
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use rusty_tip::config::TcpChannelMapping;
+    use rusty_tip::experiment_log::LogEvent;
+    use rusty_tip::tip_prep::{CycleEvent, MaxPulseEvent};
+
+    #[test]
+    fn the_series_keys_follow_the_event_kinds() {
+        for key in [CYCLE, CYCLE_FREQ_SHIFT, CYCLE_PULSE, CYCLE_SHARP] {
+            assert!(key.starts_with(&format!("{}.", CycleEvent::KIND)), "{key}");
+        }
+        assert!(MAX_PULSE.starts_with(&format!("{}.", MaxPulseEvent::KIND)));
+    }
 
     /// A file's connection tables go into the Connection page and come back
     /// out unchanged, so saving from the workbench cannot lose what the CLI
@@ -534,7 +507,7 @@ mod tests {
             ("tip_prep/max_pulse", 6.0),
             ("tip_prep/cycle", 3.5),
         ] {
-            view.apply_event(&rusty_tip::event::Event::custom(
+            view.apply_event(rusty_tip::event::Event::custom(
                 kind,
                 serde_json::json!({ "pulse_voltage": v }),
             ));

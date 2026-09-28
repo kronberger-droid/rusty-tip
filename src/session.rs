@@ -3,8 +3,8 @@
 //! A [`Session`] owns the controller for as long as it is connected and runs
 //! [`Job`]s against it one at a time. Connecting loads the layout and
 //! settings files, builds the signal registry and starts the data stream;
-//! each job then gets `prepare`/`teardown` around it and its own JSONL log,
-//! and the connection, the stream and the registry carry over to the next.
+//! each job then gets its own JSONL log, and the connection, the stream
+//! and the registry carry over to the next.
 //!
 //! `Session` is synchronous and knows nothing about threads or windows, so
 //! a test can drive it against the mock. [`spawn`] puts one on a thread of
@@ -51,19 +51,22 @@ use crate::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSet
 use crate::routine::{LayoutLoadedEvent, Outcome, SettingsLoadedEvent, panic_message};
 use crate::shutdown::ShutdownFlag;
 use crate::signal_registry::{SignalIndex, SignalRegistry};
-use crate::spm_controller::{Capability, SpmController};
+use crate::spm_controller::{Capability, SpmController, StreamSnapshot};
 use crate::spm_error::SpmError;
 
 /// The signals the session polls while idle, by registry name. Fixed for
 /// now; a tool cannot yet say which readouts matter to it.
 const READOUT_NAMES: [&str; 4] = ["bias", "z", "current", "freq shift"];
 
-/// How often the session thread polls readouts while idle.
-const READOUT_PERIOD: Duration = Duration::from_millis(500);
+/// How often the session thread taps the stream while idle, and every
+/// how many taps it polls the readouts.
+const TAP_PERIOD: Duration = Duration::from_millis(100);
+const READOUT_EVERY: u32 = 5;
 
 /// A Nanonis controller to connect to.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NanonisBackend {
+    /// Host name or address of the machine running Nanonis.
     pub host: String,
     /// Command port, 6501 by default.
     pub port: u16,
@@ -154,11 +157,24 @@ pub struct PresetLoad {
     pub at: SystemTime,
 }
 
+impl PresetLoad {
+    /// A load of `path` by `by`, stamped now.
+    pub fn now(path: impl Into<PathBuf>, by: &str) -> Self {
+        Self {
+            path: path.into(),
+            by: by.to_string(),
+            at: SystemTime::now(),
+        }
+    }
+}
+
 /// Where the session stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnState {
     Disconnected,
+    /// A connect is under way on the session thread.
     Connecting,
+    /// Connected and idle: the stream and the readouts are live.
     Connected,
     /// A job is running; the controller is busy.
     Running,
@@ -169,6 +185,8 @@ pub enum ConnState {
 /// One live value from the idle poll.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Readout {
+    /// The registry name it was asked for: `"current"`, `"freq shift"`.
+    pub key: &'static str,
     /// The signal's name as the controller reports it.
     pub name: String,
     pub index: SignalIndex,
@@ -226,7 +244,7 @@ struct Connection {
     facts: ControllerFacts,
     settings: Option<PresetLoad>,
     layout: Option<PresetLoad>,
-    readouts: Vec<(String, SignalIndex)>,
+    readouts: Vec<(&'static str, String, SignalIndex)>,
 }
 
 /// A connection and the runs on it. See the [module docs](self).
@@ -253,6 +271,8 @@ impl Session {
         self.log_dir = log_dir;
     }
 
+    /// Where the session stands; never `Connecting` or `Running`, which
+    /// only the thread around it reports.
     pub fn state(&self) -> ConnState {
         match (&self.conn, self.poisoned) {
             (None, _) => ConnState::Disconnected,
@@ -276,6 +296,10 @@ impl Session {
                     // `max_std_dev`, so the stable-read statistics do real
                     // work without stalling in retries.
                     .sample_noise_hz(0.25)
+                    // Z and current come from a loop behind the
+                    // Z-controller, so the workbench has something to
+                    // chart; the tip model keeps the frequency shift.
+                    .loop_model(SignalIndex(3), SignalIndex(0), None)
                     .build();
                 let registry = build_registry(&mut mock, &[])?;
                 // The model answers for index 2; make sure the registry
@@ -353,8 +377,8 @@ impl Session {
         let facts = ControllerFacts::gather(&mut *controller, Some(&registry));
         let readouts = READOUT_NAMES
             .iter()
-            .filter_map(|name| registry.get_by_name(name))
-            .map(|s| (s.name.clone(), s.signal_index()))
+            .filter_map(|key| registry.get_by_name(key).map(|s| (key, s)))
+            .map(|(key, s)| (*key, s.name.clone(), s.signal_index()))
             .collect();
         self.poisoned = false;
         self.conn = Some(Connection {
@@ -403,15 +427,12 @@ impl Session {
         self.conn.as_ref().map(|c| &c.facts)
     }
 
+    /// What the connected controller can do; empty while disconnected.
     pub fn capabilities(&self) -> HashSet<Capability> {
         self.conn
             .as_ref()
             .map(|c| c.controller.capabilities())
             .unwrap_or_default()
-    }
-
-    pub fn registry(&self) -> Option<&SignalRegistry> {
-        self.conn.as_ref().map(|c| &c.registry)
     }
 
     /// The last settings file loaded this session, by whom and when.
@@ -424,10 +445,15 @@ impl Session {
         self.conn.as_ref().and_then(|c| c.layout.as_ref())
     }
 
+    /// The stream's samples since `since`, if the connection streams.
+    pub fn stream_since(&mut self, since: Instant) -> Option<StreamSnapshot> {
+        self.conn.as_mut()?.controller.stream_since(since)
+    }
+
     /// Read the idle readouts once. A connection error poisons the session.
     pub fn read_readouts(&mut self) -> Result<Vec<Readout>, SpmError> {
         let conn = self.connected_mut()?;
-        let indices: Vec<SignalIndex> = conn.readouts.iter().map(|(_, i)| *i).collect();
+        let indices: Vec<SignalIndex> = conn.readouts.iter().map(|(_, _, i)| *i).collect();
         if indices.is_empty() {
             return Ok(Vec::new());
         }
@@ -444,7 +470,8 @@ impl Session {
             .readouts
             .iter()
             .zip(values)
-            .map(|((name, index), value)| Readout {
+            .map(|((key, name, index), value)| Readout {
+                key,
                 name: name.clone(),
                 index: *index,
                 value,
@@ -526,18 +553,10 @@ impl Session {
         // A load during the run moved the controller's state for good.
         let (layout, settings) = loads.take();
         if let Some(path) = layout {
-            conn.layout = Some(PresetLoad {
-                path,
-                by: name.clone(),
-                at: SystemTime::now(),
-            });
+            conn.layout = Some(PresetLoad::now(path, &name));
         }
         if let Some(path) = settings {
-            conn.settings = Some(PresetLoad {
-                path,
-                by: name.clone(),
-                at: SystemTime::now(),
-            });
+            conn.settings = Some(PresetLoad::now(path, &name));
         }
         if !conn.controller.is_connected() {
             log::warn!("The connection is poisoned after job '{name}'; reconnect before the next");
@@ -581,22 +600,17 @@ fn load_presets(
     files: &PresetFiles,
     by: &str,
 ) -> Result<(Option<PresetLoad>, Option<PresetLoad>), SpmError> {
-    let stamp = |path: &Path| PresetLoad {
-        path: path.to_path_buf(),
-        by: by.to_string(),
-        at: SystemTime::now(),
-    };
     let layout = match &files.layout {
         Some(path) => {
             controller.load_layout(path)?;
-            Some(stamp(path))
+            Some(PresetLoad::now(path, by))
         }
         None => None,
     };
     let settings = match &files.settings {
         Some(path) => {
             controller.load_settings(path)?;
-            Some(stamp(path))
+            Some(PresetLoad::now(path, by))
         }
         None => None,
     };
@@ -662,9 +676,12 @@ impl Observer for Arc<LoadWatcher> {
 
 /// What a GUI asks the session thread to do.
 pub enum SessionCmd {
+    /// Connect to a backend, closing any connection first.
     Connect(Backend),
     Disconnect,
+    /// Connect again to the same backend, after a poisoned connection.
     Reconnect,
+    /// Load the connection's layout and settings files again.
     ReloadPresets,
     /// Where the next job's log goes; `None` writes none.
     SetLogDir(Option<PathBuf>),
@@ -688,6 +705,9 @@ pub enum SessionUpdate {
     Capabilities(HashSet<Capability>),
     /// Idle only, about twice a second.
     Readouts(Vec<Readout>),
+    /// Idle only, about ten times a second: the stream's samples since the
+    /// last piece, for a live chart.
+    Samples(StreamSamples),
     /// The last loads, after a connect, a reload or a job that loaded one.
     PresetsLoaded {
         layout: Option<PresetLoad>,
@@ -695,6 +715,15 @@ pub enum SessionUpdate {
     },
     JobFinished(Result<Outcome, String>),
     Error(String),
+}
+
+/// A piece of the stream: `at_s` is when it was taken, in seconds since
+/// the session thread started, and the snapshot's times are relative to
+/// that, so a sample's time is `at_s + t_s[i]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StreamSamples {
+    pub at_s: f64,
+    pub snapshot: StreamSnapshot,
 }
 
 /// The GUI's end of a session thread. Dropping it asks the thread to quit.
@@ -763,12 +792,27 @@ fn run_loop(mut session: Session, commands: Receiver<SessionCmd>, updates: Sende
         let _ = updates.send(update);
     };
     report(SessionUpdate::State(session.state()));
+    let epoch = Instant::now();
+    let mut last_tap = epoch;
+    let mut tick: u32 = 0;
     loop {
-        match commands.recv_timeout(READOUT_PERIOD) {
+        match commands.recv_timeout(TAP_PERIOD) {
             Ok(SessionCmd::Quit) => break,
             Ok(cmd) => handle(&mut session, cmd, &report),
             Err(RecvTimeoutError::Timeout) => {
-                if session.state() == ConnState::Connected {
+                if session.state() != ConnState::Connected {
+                    continue;
+                }
+                let now = Instant::now();
+                if let Some(snapshot) = session.stream_since(last_tap) {
+                    report(SessionUpdate::Samples(StreamSamples {
+                        at_s: now.duration_since(epoch).as_secs_f64(),
+                        snapshot,
+                    }));
+                }
+                last_tap = now;
+                tick = tick.wrapping_add(1);
+                if tick.is_multiple_of(READOUT_EVERY) {
                     match session.read_readouts() {
                         Ok(readouts) => report(SessionUpdate::Readouts(readouts)),
                         Err(e) => {

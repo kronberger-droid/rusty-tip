@@ -172,7 +172,9 @@ impl Job for TipPrepJob {
     fn log_schema(&self) -> ToolSchema { rusty_tip::tip_prep::log_schema() }
     fn header_config(&self) -> serde_json::Value { serde_json::to_value(&self.config).unwrap() }
     fn run(&mut self, cx: JobCx<'_>) -> Result<Outcome, SpmError> {
-        let fs = cx.registry.get_by_name("freq shift").unwrap().signal_index();
+        let fs = cx.registry.get_by_name("freq shift")
+            .ok_or_else(|| SpmError::Workflow("no freq shift signal".into()))?
+            .signal_index();
         let mut routine = TipPrep::new(&self.config, fs);
         run_routine(cx.controller, cx.events, cx.shutdown, &mut routine)
     }

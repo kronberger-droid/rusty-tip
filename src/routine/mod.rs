@@ -68,6 +68,7 @@ pub use events::{
     CleanupFailedEvent, LayoutLoadedEvent, PanickedEvent, SettingsLoadedEvent, StreamDumpEvent,
     log_schema,
 };
+pub(crate) use rt::require;
 pub use rt::{Cycles, Rt};
 pub use subsystems::{Bias, Motor, Presets, RepositionSpec, Scan, Signals, StableReadSpec, ZCtrl};
 
@@ -262,6 +263,11 @@ pub fn run_routine(
         restore_safe_tip(&mut rt, safe_tip_before.take());
         drop(rt);
         controller.teardown();
+        events.emit(Event::run_finished(
+            "error",
+            Some(e.to_string()),
+            started.elapsed(),
+        ));
         return Err(e);
     }
 
