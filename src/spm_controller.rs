@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub use nanonis_rs::z_ctrl::{ZControllerStatus, ZHomeMode};
 
@@ -446,6 +446,15 @@ pub trait SpmController: Send {
     /// Everything the data stream currently holds, or `None` without a
     /// stream or with an empty buffer. Default is `None`.
     fn stream_snapshot(&mut self) -> Option<StreamSnapshot> {
+        None
+    }
+
+    /// The stream's samples newer than `since`, as a snapshot whose times
+    /// are relative to now, or `None` without a stream or new samples. A
+    /// caller that keeps `since` at its last call gets the stream as a
+    /// sequence of pieces, which is what a live chart needs. Default is
+    /// `None`.
+    fn stream_since(&mut self, _since: Instant) -> Option<StreamSnapshot> {
         None
     }
 

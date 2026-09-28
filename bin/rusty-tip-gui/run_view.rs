@@ -19,7 +19,7 @@ use rusty_tip::experiment_log::reader::{Body, Header, Record};
 use crate::units::number;
 
 /// Upper bound on points per series; the oldest go first.
-pub const MAX_SERIES_POINTS: usize = 20_000;
+const MAX_SERIES_POINTS: usize = 20_000;
 
 /// Records kept for the log tail.
 const TAIL_LINES: usize = 500;
@@ -40,10 +40,7 @@ impl Series {
 
     fn push(&mut self, time_s: f64, value: f64) {
         self.points.push([time_s, value]);
-        if self.points.len() > MAX_SERIES_POINTS {
-            let excess = self.points.len() - MAX_SERIES_POINTS;
-            self.points.drain(0..excess);
-        }
+        trim_front(&mut self.points, MAX_SERIES_POINTS);
     }
 }
 
@@ -77,7 +74,7 @@ pub struct RunView {
 
 impl RunView {
     /// Fold one record in.
-    pub fn apply(&mut self, record: &Record) {
+    pub fn apply(&mut self, record: Record) {
         self.records += 1;
         if record.timestamp > 0.0 {
             if self.started_at.is_none() {
@@ -87,9 +84,14 @@ impl RunView {
         }
         let t = self.time_of(record.timestamp);
 
-        match &record.body {
+        self.tail.push_back(summarize(t, &record.body));
+        if self.tail.len() > TAIL_LINES {
+            self.tail.pop_front();
+        }
+
+        match record.body {
             Body::RunStarted { header } => {
-                self.header = Some(header.clone());
+                self.header = Some(header);
             }
             Body::RunFinished {
                 outcome,
@@ -97,58 +99,71 @@ impl RunView {
                 duration,
             } => {
                 self.finish = Some(Finish {
-                    outcome: outcome.clone(),
-                    detail: detail.clone(),
-                    duration_ms: *duration,
+                    outcome,
+                    detail,
+                    duration_ms: duration,
                 });
                 self.current_action = None;
             }
             Body::ActionStarted { action, depth, .. } => {
-                self.current_action = Some((action.clone(), *depth));
+                self.current_action = Some((action, depth));
             }
             Body::ActionCompleted { action, depth, .. }
             | Body::ActionFailed { action, depth, .. } => {
                 if self
                     .current_action
                     .as_ref()
-                    .is_some_and(|(a, d)| a == action && d == depth)
+                    .is_some_and(|(a, d)| *a == action && *d == depth)
                 {
                     self.current_action = None;
                 }
             }
             Body::DataCollected { label, value } => {
-                self.collect(label, value, t);
+                self.collect(&label, &value, t);
             }
             Body::Custom { kind, data } => {
                 if let Some(phase) = data.get("phase").and_then(|p| p.as_str()) {
                     self.phases.push((t, phase.to_string()));
                 }
-                self.collect(kind, data, t);
-                let rows = self.custom.entry(kind.clone()).or_default();
-                rows.push((t, data.clone()));
-                if rows.len() > MAX_ROWS_PER_KIND {
-                    rows.remove(0);
-                }
+                self.collect(&kind, &data, t);
+                let rows = self.custom.entry(kind).or_default();
+                rows.push((t, data));
+                trim_front(rows, MAX_ROWS_PER_KIND);
             }
-        }
-
-        self.tail.push_back(summarize(t, &record.body));
-        if self.tail.len() > TAIL_LINES {
-            self.tail.pop_front();
         }
     }
 
     /// Fold a live event in, through the same path a log line takes.
     ///
     /// `Event` serializes to exactly what `FileLogger` writes, so decoding
-    /// it as a [`Record`] is the same conversion the reader does. An event
-    /// that does not decode is dropped and counted; the writer and reader
-    /// are in this crate, so that is a bug, not a runtime condition.
-    pub fn apply_event(&mut self, event: &Event) {
-        match serde_json::to_value(event).and_then(serde_json::from_value::<Record>) {
-            Ok(record) => self.apply(&record),
-            Err(e) => log::warn!("RunView: event does not decode as a record: {e}"),
-        }
+    /// it as a [`Record`] is the same conversion the reader does. A custom
+    /// event is moved across rather than decoded, since a stream dump is
+    /// megabytes. An event that does not decode is dropped and counted;
+    /// the writer and reader are in this crate, so that is a bug, not a
+    /// runtime condition.
+    pub fn apply_event(&mut self, event: Event) {
+        let record = match event {
+            Event::Custom {
+                kind,
+                data,
+                timestamp,
+            } => Record {
+                seq: 0,
+                timestamp: timestamp
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0),
+                body: Body::Custom { kind, data },
+            },
+            other => match serde_json::to_value(&other).and_then(serde_json::from_value) {
+                Ok(record) => record,
+                Err(e) => {
+                    log::warn!("RunView: event does not decode as a record: {e}");
+                    return;
+                }
+            },
+        };
+        self.apply(record);
     }
 
     /// Seconds from the first record to `timestamp`.
@@ -255,10 +270,21 @@ fn summarize(t: f64, body: &Body) -> String {
     format!("{t:8.1}s  {what}")
 }
 
-/// A short rendering of a value: objects without braces, long ones cut.
+/// Drop the oldest tenth once `v` grows past `cap`, so a full buffer does
+/// not shift on every push.
+fn trim_front<T>(v: &mut Vec<T>, cap: usize) {
+    if v.len() > cap {
+        let excess = v.len() - cap + cap / 10;
+        v.drain(0..excess);
+    }
+}
+
+/// A short rendering of a value: objects without braces, arrays by their
+/// length, long ones cut.
 fn compact(value: &serde_json::Value) -> String {
     let s = match value {
         serde_json::Value::Null => String::new(),
+        serde_json::Value::Array(items) => format!("[{} items]", items.len()),
         serde_json::Value::Object(fields) => fields
             .iter()
             .map(|(k, v)| format!("{k}={}", compact(v)))
@@ -297,7 +323,7 @@ mod tests {
     fn folds_series_phases_actions_and_the_outcome() {
         let log = Log::parse(SAMPLE);
         let mut view = RunView::default();
-        for r in &log.records {
+        for r in log.records {
             view.apply(r);
         }
         assert_eq!(view.header.as_ref().unwrap().tool, "tip_prep");
@@ -323,14 +349,14 @@ mod tests {
         let log = Log::parse(SAMPLE);
         let mut view = RunView::default();
         for r in &log.records[..3] {
-            view.apply(r);
+            view.apply(r.clone());
         }
         assert_eq!(
             view.current_action,
             Some(("withdraw".to_string(), 1)),
             "the child is open"
         );
-        view.apply(&log.records[3]);
+        view.apply(log.records[3].clone());
         assert!(
             view.current_action.is_none(),
             "closing the child leaves nothing; the parent's start is not replayed"
@@ -340,13 +366,13 @@ mod tests {
     #[test]
     fn a_live_event_folds_the_same_as_its_log_line() {
         let event = Event::data_collected("stable_read", serde_json::json!({"value": -2.0}));
-        let mut live = RunView::default();
-        live.apply_event(&event);
-
         let line = serde_json::to_string(&event).unwrap();
+        let mut live = RunView::default();
+        live.apply_event(event);
+
         let log = Log::parse(&line);
         let mut replayed = RunView::default();
-        replayed.apply(&log.records[0]);
+        replayed.apply(log.records[0].clone());
 
         assert_eq!(live.series, replayed.series);
         assert_eq!(live.tail, replayed.tail);
@@ -361,17 +387,27 @@ mod tests {
             serde_json::Value::Null,
         ));
         let mut view = RunView::default();
-        view.apply_event(&event);
+        view.apply_event(event);
         assert_eq!(view.header.unwrap().tool, "tip_prep");
     }
 
     #[test]
     fn series_are_capped() {
         let mut s = Series::default();
-        for i in 0..(MAX_SERIES_POINTS + 10) {
+        for i in 0..(MAX_SERIES_POINTS + 1) {
             s.push(i as f64, 0.0);
         }
-        assert_eq!(s.points.len(), MAX_SERIES_POINTS);
-        assert_eq!(s.points[0][0], 10.0, "the oldest went first");
+        let kept = MAX_SERIES_POINTS - MAX_SERIES_POINTS / 10;
+        assert_eq!(s.points.len(), kept, "a tenth goes at once");
+        assert_eq!(
+            s.points[0][0],
+            (MAX_SERIES_POINTS + 1 - kept) as f64,
+            "the oldest went first"
+        );
+        assert_eq!(s.latest(), Some(0.0));
+        for i in 0..(MAX_SERIES_POINTS / 10) {
+            s.push(i as f64, 1.0);
+        }
+        assert_eq!(s.points.len(), MAX_SERIES_POINTS, "full again, untrimmed");
     }
 }

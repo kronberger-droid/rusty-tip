@@ -51,7 +51,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
@@ -66,14 +66,15 @@ use nanonis_rs::tip_recovery::TipShaperConfig;
 
 use crate::controllers::{
     ControllerId, ControllerParams, ControllerReading, PllAmplitudeParams, PllPhaseParams,
-    ZControllerParams,
+    ZControllerParams, ZLoopInput,
 };
+use crate::loop_model::{Sample, ZLoop};
 use crate::signal_registry::SignalIndex;
 use nanonis_rs::scan::{ScanLineEnd, ScanLineMovement};
 
 use crate::spm_controller::{
     AcquisitionMode, Capability, DataStreamStatus, DriftComp, Result, ScanBuffer, SpmController,
-    TriggerSetup, ZControllerStatus, ZHomeMode,
+    StreamSnapshot, TriggerSetup, ZControllerStatus, ZHomeMode,
 };
 use crate::spm_error::SpmError;
 
@@ -338,8 +339,89 @@ pub struct MockController {
     approach_polls_left: usize,
     /// A drifting Z signal, when [`MockControllerBuilder::z_drift`] set one up.
     z_drift: Option<ZDriftSim>,
-    /// The feedback controllers, as written; nothing here models them.
+    /// The feedback controllers, as written.
     loops: BTreeMap<ControllerId, MockLoop>,
+    /// A Z loop that answers to the Z-controller's parameters and drives
+    /// the Z and current signals, when
+    /// [`MockControllerBuilder::loop_model`] set one up.
+    loop_sim: Option<LoopSim>,
+}
+
+/// The Z loop model behind the mock's Z-controller: which signal indices
+/// it owns, and when it was last streamed from.
+#[derive(Debug, Clone)]
+struct LoopSim {
+    z_index: SignalIndex,
+    current_index: SignalIndex,
+    /// The frequency-shift index, when the model owns it rather than the
+    /// tip model.
+    freq_shift_index: Option<SignalIndex>,
+    rate_hz: f64,
+    /// Relative scatter on the current and absolute on Z, per sample.
+    current_noise: f64,
+    z_noise_m: f64,
+    model: ZLoop,
+    last_tap: Option<Instant>,
+}
+
+impl MockController {
+    /// After anything changed the Z-controller's entry in `loops`: the
+    /// observations and the loop model, if there is one, follow it.
+    fn sync_z_loop(&mut self) {
+        let Some(l) = self.loops.get(&ControllerId::Z) else {
+            return;
+        };
+        {
+            let mut obs = self.obs.lock();
+            obs.z_controller_on = l.enabled;
+            if let ControllerParams::Z(p) = &l.params {
+                obs.z_setpoint = p.setpoint;
+            }
+        }
+        if let Some(sim) = &mut self.loop_sim {
+            sim.adopt(l);
+        }
+    }
+}
+
+impl LoopSim {
+    fn owns(&self, index: SignalIndex) -> bool {
+        index == self.z_index || index == self.current_index || self.freq_shift_index == Some(index)
+    }
+
+    /// Bring the model's parameters up to date with the Z-controller's.
+    /// Only what the parameters say changes, so the loop keeps its state
+    /// across a write.
+    fn adopt(&mut self, loop_state: &MockLoop) {
+        if let ControllerParams::Z(p) = &loop_state.params {
+            let input = ZLoopInput::from_name(&p.active);
+            let model = &mut self.model;
+            model.law = input.law;
+            model.quantity = input.quantity;
+            model.slope = if input.negative { -1.0 } else { 1.0 };
+            model.setpoint = p.setpoint;
+            model.p_gain_m = p.p_gain_m;
+            model.time_constant_s = p.time_constant_s;
+        }
+        if loop_state.enabled != self.model.enabled {
+            if loop_state.enabled {
+                self.model.engage();
+            } else {
+                self.model.disengage();
+            }
+        }
+    }
+
+    /// One sample of the owned signal, with scatter.
+    fn value(&self, index: SignalIndex, sample: Sample, rng: &mut Rng) -> f64 {
+        if index == self.z_index {
+            sample.z_m + rng.normal() * self.z_noise_m
+        } else if index == self.current_index {
+            sample.current_a * (1.0 + rng.normal() * self.current_noise)
+        } else {
+            sample.freq_shift_hz
+        }
+    }
 }
 
 /// A Z signal that drifts at a constant rate and answers to the drift
@@ -413,6 +495,12 @@ impl MockController {
             && sim.index == index
         {
             return sim.z;
+        }
+        if let Some(sim) = &mut self.loop_sim
+            && sim.owns(index)
+        {
+            let sample = sim.model.step(1.0 / sim.rate_hz);
+            return sim.value(index, sample, &mut self.noise_rng);
         }
         if index != self.freq_shift_index {
             return self.default_signal;
@@ -508,11 +596,47 @@ impl SpmController for MockController {
     }
 
     fn stream_rate_hz(&mut self) -> Option<f64> {
-        self.z_drift.map(|sim| sim.rate_hz)
+        self.z_drift
+            .map(|sim| sim.rate_hz)
+            .or_else(|| self.loop_sim.as_ref().map(|sim| sim.rate_hz))
     }
 
     fn streams_signal(&mut self, index: SignalIndex) -> bool {
         self.z_drift.is_some_and(|sim| sim.index == index)
+            || self.loop_sim.as_ref().is_some_and(|sim| sim.owns(index))
+    }
+
+    /// The loop model's signals for the wall-clock time since the last
+    /// tap, at most two seconds of it, so a chart on the mock moves in
+    /// real time.
+    fn stream_since(&mut self, since: Instant) -> Option<StreamSnapshot> {
+        let sim = self.loop_sim.as_mut()?;
+        let now = Instant::now();
+        let from = match sim.last_tap {
+            Some(last) if last > since => last,
+            _ => since,
+        };
+        sim.last_tap = Some(now);
+        let elapsed = now.saturating_duration_since(from).as_secs_f64().min(2.0);
+        let n = (elapsed * sim.rate_hz) as usize;
+        if n == 0 {
+            return None;
+        }
+        let dt = 1.0 / sim.rate_hz;
+        let mut indices = vec![sim.z_index, sim.current_index];
+        indices.extend(sim.freq_shift_index);
+        let mut columns: Vec<Vec<f32>> = vec![Vec::with_capacity(n); indices.len()];
+        for _ in 0..n {
+            let sample = sim.model.step(dt);
+            for (column, index) in columns.iter_mut().zip(&indices) {
+                column.push(sim.value(*index, sample, &mut self.noise_rng) as f32);
+            }
+        }
+        Some(StreamSnapshot {
+            signals: indices.iter().map(|i| i.0).collect(),
+            t_s: (0..n).map(|i| -((n - 1 - i) as f64) * dt).collect(),
+            columns,
+        })
     }
 
     fn read_signal_samples(&mut self, index: SignalIndex, num_samples: usize) -> Result<Vec<f64>> {
@@ -521,6 +645,18 @@ impl SpmController for MockController {
             return Err(SpmError::Protocol(
                 "read_signal_samples: num_samples must be > 0".into(),
             ));
+        }
+        if let Some(sim) = &mut self.loop_sim
+            && sim.owns(index)
+        {
+            let dt = 1.0 / sim.rate_hz;
+            let samples = (0..num_samples)
+                .map(|_| {
+                    let sample = sim.model.step(dt);
+                    sim.value(index, sample, &mut self.noise_rng)
+                })
+                .collect();
+            return Ok(samples);
         }
         if let Some(mut sim) = self.z_drift
             && sim.index == index
@@ -592,9 +728,18 @@ impl SpmController for MockController {
 
     fn withdraw(&mut self, _wait: bool, _timeout: Duration) -> Result<()> {
         self.enter("withdraw")?;
-        let mut obs = self.obs.lock();
-        obs.withdraw_count += 1;
-        obs.scan_running = false;
+        {
+            let mut obs = self.obs.lock();
+            obs.withdraw_count += 1;
+            obs.scan_running = false;
+        }
+        if let Some(sim) = &mut self.loop_sim {
+            sim.model.disengage();
+            sim.model.place(WITHDRAWN_Z_M);
+            if let Some(l) = self.loops.get_mut(&ControllerId::Z) {
+                l.enabled = false;
+            }
+        }
         Ok(())
     }
 
@@ -602,6 +747,13 @@ impl SpmController for MockController {
         self.enter("auto_approach")?;
         self.obs.lock().approach_count += 1;
         self.approach_polls_left = self.approach_polls;
+        if let Some(sim) = &mut self.loop_sim {
+            sim.model.place(APPROACHED_Z_M);
+            sim.model.engage();
+            if let Some(l) = self.loops.get_mut(&ControllerId::Z) {
+                l.enabled = true;
+            }
+        }
         Ok(())
     }
 
@@ -624,6 +776,12 @@ impl SpmController for MockController {
     fn set_z_setpoint(&mut self, setpoint: f64) -> Result<()> {
         self.enter("set_z_setpoint")?;
         self.obs.lock().z_setpoint = setpoint;
+        if let Some(l) = self.loops.get_mut(&ControllerId::Z)
+            && let ControllerParams::Z(p) = &mut l.params
+        {
+            p.setpoint = setpoint;
+        }
+        self.sync_z_loop();
         Ok(())
     }
 
@@ -692,13 +850,24 @@ impl SpmController for MockController {
             .loops
             .get_mut(&id)
             .ok_or_else(|| SpmError::Workflow(format!("the mock has no controller {id}")))?;
+        let previous_active = match &l.params {
+            ControllerParams::Z(p) => p.active.clone(),
+            _ => String::new(),
+        };
         l.params = params.clone();
         // An empty `active` leaves the active controller as it was, as
         // on the real module.
         if let (ControllerParams::Z(written), ControllerParams::Z(held)) = (params, &mut l.params)
             && written.active.is_empty()
         {
-            held.active = MOCK_Z_CONTROLLERS[0].into();
+            held.active = if previous_active.is_empty() {
+                MOCK_Z_CONTROLLERS[0].into()
+            } else {
+                previous_active
+            };
+        }
+        if id == ControllerId::Z {
+            self.sync_z_loop();
         }
         Ok(())
     }
@@ -711,7 +880,7 @@ impl SpmController for MockController {
             .ok_or_else(|| SpmError::Workflow(format!("the mock has no controller {id}")))?;
         l.enabled = on;
         if id == ControllerId::Z {
-            self.obs.lock().z_controller_on = on;
+            self.sync_z_loop();
         }
         Ok(())
     }
@@ -983,6 +1152,7 @@ pub struct MockControllerBuilder {
     start_connected: bool,
     approach_polls: usize,
     z_drift: Option<ZDriftSim>,
+    loop_sim: Option<LoopSim>,
 }
 
 impl MockControllerBuilder {
@@ -997,6 +1167,7 @@ impl MockControllerBuilder {
             sample_noise_hz: 0.0,
             noise_seed: 0x5EED_5EED,
             z_drift: None,
+            loop_sim: None,
             faults_once: HashMap::new(),
             faults_always: HashMap::new(),
             capabilities: all_capabilities(),
@@ -1098,6 +1269,7 @@ impl MockControllerBuilder {
             approach_polls_left: 0,
             z_drift: self.z_drift,
             loops: mock_controllers(),
+            loop_sim: self.loop_sim,
         }
     }
 
@@ -1125,6 +1297,32 @@ impl MockControllerBuilder {
         if let Some(sim) = &mut self.z_drift {
             sim.noise_m = sigma_m;
         }
+        self
+    }
+
+    /// Run a Z loop behind the Z-controller: `z` and `current` are then the
+    /// model's, streamed at 1 kHz, and answer to the Z-controller's
+    /// parameters, to `set_z_setpoint`, to withdraw and to approach. With
+    /// `freq_shift` the model owns that signal too; without it the tip
+    /// model keeps it. The loop starts engaged on `log Current` at 50 pA.
+    pub fn loop_model(
+        mut self,
+        z: SignalIndex,
+        current: SignalIndex,
+        freq_shift: Option<SignalIndex>,
+    ) -> Self {
+        let mut model = ZLoop::for_name(MOCK_Z_CONTROLLERS[0], APPROACHED_Z_M);
+        model.engage();
+        self.loop_sim = Some(LoopSim {
+            z_index: z,
+            current_index: current,
+            freq_shift_index: freq_shift,
+            rate_hz: 1000.0,
+            current_noise: 0.02,
+            z_noise_m: 1e-12,
+            model,
+            last_tap: None,
+        });
         self
     }
 
@@ -1391,6 +1589,11 @@ fn mock_controllers() -> BTreeMap<ControllerId, MockLoop> {
     );
     loops
 }
+
+/// Where the loop model parks the tip on a withdraw and starts it after an
+/// approach: a micron out, and half a nanometre in.
+const WITHDRAWN_Z_M: f64 = 1e-6;
+const APPROACHED_Z_M: f64 = 0.5e-9;
 
 /// The Z-controllers the mock says Nanonis has defined: the list from a
 /// lab machine, law and signal in the name.

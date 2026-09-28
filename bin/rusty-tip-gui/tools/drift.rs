@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{SetupCx, Tool};
 use crate::run_view::RunView;
+use crate::widgets::Palette;
 
 pub struct DriftJob {
     z_name: String,
@@ -306,11 +307,7 @@ impl Tool for DriftTool {
                 .iter()
                 .map(|b| [b.burst as f64, b.drift_m_s / PM])
                 .collect();
-            let color = if ui.visuals().dark_mode {
-                egui::Color32::LIGHT_BLUE
-            } else {
-                egui::Color32::from_rgb(0, 84, 159)
-            };
+            let color = Palette::for_theme(ui.visuals().dark_mode).first;
             Plot::new("drift_bursts_plot")
                 .height(120.0)
                 .allow_drag(false)

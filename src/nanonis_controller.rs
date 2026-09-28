@@ -1228,6 +1228,11 @@ impl SpmController for NanonisController {
         stream_snapshot_from(&frames, &self.signal_to_data_position, Instant::now())
     }
 
+    fn stream_since(&mut self, since: Instant) -> Option<StreamSnapshot> {
+        let frames = self.tcp_reader.as_ref()?.get_data_since(since);
+        stream_snapshot_from(&frames, &self.signal_to_data_position, Instant::now())
+    }
+
     fn read_signal_samples(&mut self, index: SignalIndex, num_samples: usize) -> Result<Vec<f64>> {
         if num_samples == 0 {
             return Err(SpmError::Protocol(

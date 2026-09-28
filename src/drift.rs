@@ -48,17 +48,6 @@ pub enum DriftOp {
     Off,
 }
 
-impl DriftOp {
-    pub fn name(self) -> &'static str {
-        match self {
-            DriftOp::Status => "status",
-            DriftOp::Measure => "measure",
-            DriftOp::Compensate => "compensate",
-            DriftOp::Off => "off",
-        }
-    }
-}
-
 fn default_window_ms() -> u64 {
     5_000
 }
@@ -302,6 +291,7 @@ pub struct DriftRoutine {
 }
 
 impl DriftRoutine {
+    /// A drift routine doing `op` on the Z signal `z`.
     pub fn new(z: SignalIndex, params: DriftParams) -> Self {
         Self {
             z,
@@ -394,19 +384,14 @@ impl Routine for DriftRoutine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{EventBus, Observer};
+    use crate::event::{EventAccumulator, EventBus};
     use crate::mock_controller::MockController;
     use crate::routine::run_routine;
     use crate::shutdown::ShutdownFlag;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
-    #[derive(Clone, Default)]
-    struct Recorder(Arc<Mutex<Vec<Event>>>);
-
-    impl Observer for Recorder {
-        fn on_event(&self, event: &Event) {
-            self.0.lock().unwrap().push(event.clone());
-        }
+    fn recorder() -> Arc<EventAccumulator> {
+        Arc::new(EventAccumulator::new(usize::MAX))
     }
 
     fn kinds(events: &[Event]) -> Vec<String> {
@@ -425,7 +410,7 @@ mod tests {
     fn status_reads_and_leaves_the_tip_in_place() {
         let mut mock = MockController::builder().build();
         let obs = mock.observations();
-        let recorder = Recorder::default();
+        let recorder = recorder();
         let mut bus = EventBus::new();
         bus.add_observer(Box::new(recorder.clone()));
 
@@ -437,7 +422,7 @@ mod tests {
         assert!(!obs.called("set_z_home"));
         assert!(!obs.called("safe_tip_configure"));
         assert!(routine.report.before.is_some());
-        assert_eq!(kinds(&recorder.0.lock().unwrap()), vec!["drift/status"]);
+        assert_eq!(kinds(&recorder.all()), vec!["drift/status"]);
     }
 
     #[test]
@@ -502,7 +487,7 @@ mod tests {
     #[test]
     fn compensate_on_a_drifting_z_reports_the_residual_and_the_status_after() {
         let mut mock = MockController::builder().z_drift(Z, 2e-12, -1.0).build();
-        let recorder = Recorder::default();
+        let recorder = recorder();
         let mut bus = EventBus::new();
         bus.add_observer(Box::new(recorder.clone()));
 
@@ -518,7 +503,7 @@ mod tests {
         let result = routine.report.compensation.as_ref().unwrap();
         assert_eq!(result.bursts, 3);
         assert!(routine.report.after.unwrap().enabled);
-        let kinds = kinds(&recorder.0.lock().unwrap());
+        let kinds = kinds(&recorder.all());
         assert_eq!(kinds.first().map(String::as_str), Some("drift/status"));
         assert!(kinds.contains(&"drift/burst".to_string()));
         assert!(kinds.contains(&"drift/compensated".to_string()));

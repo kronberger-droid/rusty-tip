@@ -1,7 +1,7 @@
 //! Events the harness writes on behalf of whichever routine it runs.
 
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::experiment_log::{LogEvent, ToolSchema};
 use crate::spm_controller::StreamSnapshot;
@@ -45,7 +45,7 @@ impl LogEvent for StreamDumpEvent {
 
 /// A settings file was loaded into the controller during the run. The load
 /// outlives the run: whatever it set stays set for the rest of the session.
-#[derive(Serialize, JsonSchema, Clone, Debug)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct SettingsLoadedEvent {
     /// The path as the routine gave it.
     pub path: String,
@@ -56,7 +56,7 @@ impl LogEvent for SettingsLoadedEvent {
 }
 
 /// A layout file was loaded into the controller during the run.
-#[derive(Serialize, JsonSchema, Clone, Debug)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct LayoutLoadedEvent {
     /// The path as the routine gave it.
     pub path: String,
