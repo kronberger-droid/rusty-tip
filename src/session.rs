@@ -51,15 +51,17 @@ use crate::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSet
 use crate::routine::{LayoutLoadedEvent, Outcome, SettingsLoadedEvent, panic_message};
 use crate::shutdown::ShutdownFlag;
 use crate::signal_registry::{SignalIndex, SignalRegistry};
-use crate::spm_controller::{Capability, SpmController};
+use crate::spm_controller::{Capability, SpmController, StreamSnapshot};
 use crate::spm_error::SpmError;
 
 /// The signals the session polls while idle, by registry name. Fixed for
 /// now; a tool cannot yet say which readouts matter to it.
 const READOUT_NAMES: [&str; 4] = ["bias", "z", "current", "freq shift"];
 
-/// How often the session thread polls readouts while idle.
-const READOUT_PERIOD: Duration = Duration::from_millis(500);
+/// How often the session thread taps the stream while idle, and every
+/// how many taps it polls the readouts.
+const TAP_PERIOD: Duration = Duration::from_millis(100);
+const READOUT_EVERY: u32 = 5;
 
 /// A Nanonis controller to connect to.
 #[derive(Debug, Clone, PartialEq)]
@@ -276,6 +278,10 @@ impl Session {
                     // `max_std_dev`, so the stable-read statistics do real
                     // work without stalling in retries.
                     .sample_noise_hz(0.25)
+                    // Z and current come from a loop behind the
+                    // Z-controller, so the workbench has something to
+                    // chart; the tip model keeps the frequency shift.
+                    .loop_model(SignalIndex(3), SignalIndex(0), None)
                     .build();
                 let registry = build_registry(&mut mock, &[])?;
                 // The model answers for index 2; make sure the registry
@@ -422,6 +428,11 @@ impl Session {
     /// The last layout file loaded this session.
     pub fn layout_load(&self) -> Option<&PresetLoad> {
         self.conn.as_ref().and_then(|c| c.layout.as_ref())
+    }
+
+    /// The stream's samples since `since`, if the connection streams.
+    pub fn stream_since(&mut self, since: Instant) -> Option<StreamSnapshot> {
+        self.conn.as_mut()?.controller.stream_since(since)
     }
 
     /// Read the idle readouts once. A connection error poisons the session.
@@ -688,6 +699,9 @@ pub enum SessionUpdate {
     Capabilities(HashSet<Capability>),
     /// Idle only, about twice a second.
     Readouts(Vec<Readout>),
+    /// Idle only, about ten times a second: the stream's samples since the
+    /// last piece, for a live chart.
+    Samples(StreamSamples),
     /// The last loads, after a connect, a reload or a job that loaded one.
     PresetsLoaded {
         layout: Option<PresetLoad>,
@@ -695,6 +709,15 @@ pub enum SessionUpdate {
     },
     JobFinished(Result<Outcome, String>),
     Error(String),
+}
+
+/// A piece of the stream: `at_s` is when it was taken, in seconds since
+/// the session thread started, and the snapshot's times are relative to
+/// that, so a sample's time is `at_s + t_s[i]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StreamSamples {
+    pub at_s: f64,
+    pub snapshot: StreamSnapshot,
 }
 
 /// The GUI's end of a session thread. Dropping it asks the thread to quit.
@@ -763,12 +786,27 @@ fn run_loop(mut session: Session, commands: Receiver<SessionCmd>, updates: Sende
         let _ = updates.send(update);
     };
     report(SessionUpdate::State(session.state()));
+    let epoch = Instant::now();
+    let mut last_tap = epoch;
+    let mut tick: u32 = 0;
     loop {
-        match commands.recv_timeout(READOUT_PERIOD) {
+        match commands.recv_timeout(TAP_PERIOD) {
             Ok(SessionCmd::Quit) => break,
             Ok(cmd) => handle(&mut session, cmd, &report),
             Err(RecvTimeoutError::Timeout) => {
-                if session.state() == ConnState::Connected {
+                if session.state() != ConnState::Connected {
+                    continue;
+                }
+                let now = Instant::now();
+                if let Some(snapshot) = session.stream_since(last_tap) {
+                    report(SessionUpdate::Samples(StreamSamples {
+                        at_s: now.duration_since(epoch).as_secs_f64(),
+                        snapshot,
+                    }));
+                }
+                last_tap = now;
+                tick = tick.wrapping_add(1);
+                if tick.is_multiple_of(READOUT_EVERY) {
                     match session.read_readouts() {
                         Ok(readouts) => report(SessionUpdate::Readouts(readouts)),
                         Err(e) => {

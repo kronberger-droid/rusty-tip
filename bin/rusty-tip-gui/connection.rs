@@ -241,7 +241,7 @@ impl ConnectionPane {
                 self.settings_load = settings.clone();
             }
             SessionUpdate::Error(e) => self.error = Some(e.clone()),
-            SessionUpdate::JobFinished(_) => {}
+            SessionUpdate::JobFinished(_) | SessionUpdate::Samples(_) => {}
         }
     }
 
