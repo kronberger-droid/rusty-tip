@@ -44,22 +44,22 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use ndarray::{Array2, ArrayView2};
 use textplots::{Chart, Plot, Shape};
 
-use rusty_tip::action::drift::{
-    CompensateDrift, DriftBurstEvent, DriftCompensation, DriftEstimate, MeasureZDrift,
-};
+use rusty_tip::action::drift::DriftBurstEvent;
 use rusty_tip::action::multi_pass::ApplyMultiPass;
 use rusty_tip::action::{ActionContext, DataStore, run_action};
 use rusty_tip::analyzer::rolling_ellipsoid::{
     Border, GridSpacing, RollingEllipsoid, vertical_clearance,
 };
+use rusty_tip::drift::{DriftOp as DriftRoutineOp, DriftParams, DriftRoutine, PM};
 use rusty_tip::event::{Event, EventBus, EventEmitter, FileLogger, Observer};
 use rusty_tip::experiment_log::{ControllerFacts, LogEvent, RunHeader, ToolSchema};
 use rusty_tip::export::{gsf, write_table, write_xyz};
 use rusty_tip::multi_pass::MultiPassConfig;
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
+use rusty_tip::routine::{Outcome, run_routine};
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::{SignalIndex, SignalRegistry};
-use rusty_tip::spm_controller::{DriftComp, SpmController};
+use rusty_tip::spm_controller::SpmController;
 
 /// Nanometres to metres.
 const NM: f64 = 1e-9;
@@ -230,7 +230,7 @@ struct BaselineArgs {
 /// Every custom event kind const-distance can write: none of its own, plus
 /// the bursts the drift actions report.
 fn log_schema() -> ToolSchema {
-    ToolSchema::new("const_distance").including(rusty_tip::action::drift::log_schema())
+    ToolSchema::new("const_distance").including(rusty_tip::drift::log_schema())
 }
 
 /// Prints each drift burst as it lands, so a `compensate` that takes half a
@@ -437,7 +437,6 @@ fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
         start_z_stream(&args, z, &mut controller)?;
     }
 
-    let started = Instant::now();
     let events = open_run_log(
         &args.log_dir,
         &mut controller,
@@ -461,9 +460,8 @@ fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
             "port": args.port,
         }),
     )?;
-    let result = drift_op(&args, z, &events, &mut controller);
-    finish_run_log(&events, started, &result);
-    result
+    // The routine harness closes the log itself.
+    drift_op(&args, z, &events, &mut controller)
 }
 
 /// Bring the TCP logger up with Z in it, and check that what it streams is Z.
@@ -563,140 +561,78 @@ fn ctrl_c_flag() -> ShutdownFlag {
 }
 
 /// The drift operation itself, once the log is open.
+///
+/// A thin wrapper over [`DriftRoutine`], which the workbench runs too, so
+/// the two front ends cannot drift apart. The routine leaves the tip in
+/// place and touches no setting of the operator's.
 fn drift_op(
     args: &DriftArgs,
     z: SignalIndex,
     events: &EventBus,
     controller: &mut NanonisController,
 ) -> Result<(), Box<dyn Error>> {
-    let shutdown = ctrl_c_flag();
-    let mut store = DataStore::new();
-    let mut ctx = ActionContext {
-        controller,
-        store: &mut store,
-        events,
-        shutdown: &shutdown,
-        depth: 0,
+    let op = match args.op {
+        DriftOp::Status => DriftRoutineOp::Status,
+        DriftOp::Measure => DriftRoutineOp::Measure,
+        DriftOp::Compensate => DriftRoutineOp::Compensate,
+        DriftOp::Off => DriftRoutineOp::Off,
     };
-    let window_ms = (args.window * 1000.0) as u64;
+    match op {
+        DriftRoutineOp::Measure => println!(
+            "measuring one burst of {:.1} s (Z controller must be on, scan stopped)",
+            args.window
+        ),
+        DriftRoutineOp::Compensate => println!(
+            "compensating: {} bursts of {:.1} s (Z controller must be on, scan stopped)",
+            args.bursts, args.window
+        ),
+        _ => {}
+    }
 
-    let print_status = |comp: &DriftComp| {
-        println!(
-            "compensation {}: vx {:.3} pm/s, vy {:.3} pm/s, vz {:.3} pm/s",
-            if comp.enabled { "on" } else { "off" },
-            comp.vx / PM,
-            comp.vy / PM,
-            comp.vz / PM
-        );
-        let saturated: Vec<&str> = [
-            (comp.x_saturated, "x"),
-            (comp.y_saturated, "y"),
-            (comp.z_saturated, "z"),
-        ]
-        .into_iter()
-        .filter_map(|(s, axis)| s.then_some(axis))
-        .collect();
-        match saturated.is_empty() {
-            true => println!(
-                "no axis saturated (limit {}% of range)",
-                comp.saturation_limit_percent
+    let mut routine = DriftRoutine::new(
+        z,
+        DriftParams {
+            op,
+            window_ms: (args.window * 1000.0) as u64,
+            bursts: args.bursts,
+            trial_vz: args.trial,
+            response: args.response,
+            samples: args.samples,
+            // `--no-stream` asks for polling; otherwise the stream was
+            // started above and the routine checks that it carries Z.
+            require_stream: !args.no_stream,
+        },
+    );
+    let outcome = run_routine(controller, events, &ctrl_c_flag(), &mut routine)?;
+    let report = routine.report;
+    if let Some(before) = &report.before {
+        println!("{before}");
+    }
+    if let Some(estimate) = &report.estimate {
+        println!("{estimate}");
+    }
+    if let Some(result) = &report.compensation {
+        println!("{result}");
+        match (result.response, args.response) {
+            (Some(r), None) => println!(
+                "response {r:+.2}: a positive vz {} the measured drift. Pass --response {} \
+                 next time to skip the trial burst.",
+                if r > 0.0 { "adds to" } else { "subtracts from" },
+                if r > 0.0 { "1" } else { "-1" },
             ),
-            false => println!(
-                "SATURATED on {}: compensation on that axis has stopped and only \
-                 an off/on cycle restarts it",
-                saturated.join(", ")
-            ),
-        }
-    };
-
-    match args.op {
-        DriftOp::Status => {
-            print_status(&ctx.controller.drift_comp_get()?);
-        }
-        DriftOp::Measure => {
-            print_status(&ctx.controller.drift_comp_get()?);
-            println!(
-                "measuring one burst of {:.1} s (Z controller must be on, scan stopped)",
-                args.window
-            );
-            let output = run_action(
-                &mut ctx,
-                &MeasureZDrift {
-                    z,
-                    window_ms,
-                    samples: args.samples,
-                },
-            )?;
-            let estimate: DriftEstimate = output.into_data("measure_z_drift")?;
-            println!(
-                "Z drift: {:+.3} ± {:.3} pm/s ({} samples over {:.1} s){}",
-                estimate.rate_m_s / PM,
-                estimate.std_err_m_s / PM,
-                estimate.samples,
-                estimate.window_s,
-                match estimate.is_negligible(0.0) {
-                    true => ", consistent with zero",
-                    false => "",
-                }
-            );
-        }
-        DriftOp::Compensate => {
-            print_status(&ctx.controller.drift_comp_get()?);
-            println!(
-                "compensating: {} bursts of {:.1} s (Z controller must be on, scan stopped)",
-                args.bursts, args.window
-            );
-            let output = run_action(
-                &mut ctx,
-                &CompensateDrift {
-                    window_ms,
-                    samples: args.samples,
-                    bursts: args.bursts,
-                    trial_vz: args.trial,
-                    response: args.response,
-                    ..CompensateDrift::new(z)
-                },
-            )?;
-            let result: DriftCompensation = output.into_data("compensate_drift")?;
-            println!(
-                "residual Z drift: {:+.3} ± {:.3} pm/s after {} bursts, {}",
-                result.residual.rate_m_s / PM,
-                result.residual.std_err_m_s / PM,
-                result.bursts,
-                match result.converged {
-                    true => "inside its error bar",
-                    false => {
-                        "outside its error bar. One burst does that from noise now and then; \
-                         if it repeats, raise --window"
-                    }
-                }
-            );
-            match (result.response, args.response) {
-                (Some(r), None) => println!(
-                    "response {r:+.2}: a positive vz {} the measured drift. Pass --response {} \
-                     next time to skip the trial burst.",
-                    if r > 0.0 { "adds to" } else { "subtracts from" },
-                    if r > 0.0 { "1" } else { "-1" },
-                ),
-                (None, _) => println!("drift was negligible from the start; nothing was changed"),
-                _ => {}
-            }
-            print_status(&ctx.controller.drift_comp_get()?);
-        }
-        DriftOp::Off => {
-            let comp = ctx.controller.drift_comp_get()?;
-            ctx.controller.drift_comp_set(&DriftComp {
-                enabled: false,
-                ..comp
-            })?;
-            print_status(&ctx.controller.drift_comp_get()?);
+            (None, _) => println!("drift was negligible from the start; nothing was changed"),
+            _ => {}
         }
     }
-    Ok(())
-}
+    if let Some(after) = &report.after {
+        println!("{after}");
+    }
 
-/// Picometres to metres.
-const PM: f64 = 1e-12;
+    match outcome {
+        Outcome::Completed => Ok(()),
+        other => Err(format!("drift did not complete: {other:?}").into()),
+    }
+}
 
 /// Build the constant-lift multi-pass configuration and, unless `--dry-run`,
 /// load and activate it on the controller.

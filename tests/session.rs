@@ -563,3 +563,92 @@ fn the_session_thread_runs_a_job_and_reports_it() {
     );
     handle.join();
 }
+
+/// The handoff's step-2 acceptance, through the same commands the window
+/// sends: connect once, run tip prep twice, stop one mid-run, disconnect.
+/// The second run must not reconnect or rebuild the registry.
+#[test]
+fn connect_once_run_twice_stop_one_disconnect() {
+    let mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT)
+        .freq_shift(models::always(-40.0)) // blunt: the loop keeps pulsing
+        .build();
+    let obs = mock.observations();
+    let mut mock = mock;
+    let reg = registry(&mut mock);
+    let mut session = Session::new(None);
+    session
+        .connect_with(Box::new(mock), reg, PresetFiles::default())
+        .unwrap();
+    let handle = spawn_with(session);
+
+    let wait_for_finish = |handle: &rusty_tip::session::SessionHandle| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while std::time::Instant::now() < deadline {
+            match handle.updates().recv_timeout(Duration::from_millis(100)) {
+                Ok(SessionUpdate::JobFinished(r)) => return r,
+                Ok(_) | Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                Err(e) => panic!("session thread went away: {e}"),
+            }
+        }
+        panic!("the job did not finish in time");
+    };
+
+    // Run 1: a long run, stopped from the outside mid-cycle.
+    let mut slow = fast_config();
+    slow.tip_prep.max_cycles = Some(10_000);
+    slow.tip_prep.timing.post_pulse_settle_ms = 100;
+    let stop = ShutdownFlag::new();
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    handle
+        .send(SessionCmd::Run {
+            job: Box::new(TipPrepJob { config: slow }),
+            shutdown: stop.clone(),
+            events: tx,
+        })
+        .unwrap();
+    // Stop once the loop is pulsing, so the stop lands mid-run rather than
+    // during the initial approach.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while obs.lock().pulses.is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the first run never fired a pulse"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    stop.request();
+    let first = wait_for_finish(&handle);
+    assert!(matches!(first, Ok(Outcome::StoppedByUser)), "{first:?}");
+    let pulses_after_first = obs.lock().pulses.len();
+    assert!(pulses_after_first >= 1, "the first run got going");
+
+    // Run 2: to its cycle limit, on the same connection.
+    let mut short = fast_config();
+    short.tip_prep.max_cycles = Some(2);
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    handle
+        .send(SessionCmd::Run {
+            job: Box::new(TipPrepJob { config: short }),
+            shutdown: ShutdownFlag::new(),
+            events: tx,
+        })
+        .unwrap();
+    let second = wait_for_finish(&handle);
+    assert!(matches!(second, Ok(Outcome::CycleLimit(2))), "{second:?}");
+
+    handle.send(SessionCmd::Disconnect).unwrap();
+    handle.join();
+
+    let obs = obs.lock();
+    assert_eq!(obs.pulses.len(), pulses_after_first + 2);
+    assert_eq!(obs.count("prepare"), 2);
+    assert_eq!(obs.count("teardown"), 2);
+    assert_eq!(
+        obs.count("signal_names"),
+        1,
+        "no reconnect between the runs"
+    );
+    assert_eq!(obs.count("reconnect"), 0);
+    assert_eq!(obs.count("disconnect"), 1, "disconnected once, at the end");
+}

@@ -86,7 +86,7 @@ impl DriftEstimate {
 }
 
 /// What a burst inside [`CompensateDrift`] was for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BurstRole {
     /// The drift as found, before anything was changed.
@@ -99,7 +99,7 @@ pub enum BurstRole {
 
 /// One burst of [`CompensateDrift`]: the velocity in effect and the drift
 /// measured under it.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DriftBurstEvent {
     /// 1-based position in the run.
     pub burst: usize,

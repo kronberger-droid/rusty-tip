@@ -51,7 +51,7 @@ From source:
 ```bash
 cargo build --release                 # tip-prep, const-distance, rt-log
 cargo build --release --features cuox # + cuox-finder
-cargo build --release --features gui  # + tip-prep-gui
+cargo build --release --features gui  # + tip-prep-gui, rusty-tip-gui
 ```
 
 As a library: `cargo add rusty-tip`.
@@ -89,6 +89,12 @@ polarity = "positive"
 `tip-prep-gui` provides the same routine with live plots and an editable
 configuration, plus a simulation mode that runs against the mock controller
 without hardware.
+
+`rusty-tip-gui` is the workbench that will replace it: connect to the
+controller once, then pick a tool, run it, watch it live and open any past
+run from its log. Tip prep and drift compensation are the first tools; the
+Connection page shows the controller's state, signals and live readouts
+between runs, and a `Mock` backend runs everything without hardware.
 
 ## Documentation
 
