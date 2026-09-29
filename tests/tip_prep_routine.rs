@@ -19,6 +19,8 @@ use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
 
 const FREQ_SHIFT_INDEX: SignalIndex = SignalIndex(2);
+/// `Current (A)` in the mock's signal table.
+const CURRENT_INDEX: SignalIndex = SignalIndex(0);
 
 /// A config tuned for fast tests: zero settle times, a handful of samples,
 /// sharp-tip window of `[-2, 0]` Hz. Mutate the returned value per scenario.
@@ -101,6 +103,7 @@ fn already_sharp_completes_when_stability_disabled() {
             shutdown: &ShutdownFlag::new(),
             config: &fast_config(),
             freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
         },
     )
     .expect("routine should not error");
@@ -144,6 +147,7 @@ fn already_sharp_and_stable_completes_through_full_sweep() {
             shutdown: &ShutdownFlag::new(),
             config: &cfg,
             freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
         },
     )
     .expect("routine should not error");
@@ -182,6 +186,7 @@ fn tip_sharpens_after_pulses_then_completes() {
             shutdown: &ShutdownFlag::new(),
             config: &fast_config(),
             freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
         },
     )
     .expect("routine should not error");
@@ -220,6 +225,7 @@ fn blunt_tip_hits_cycle_limit() {
             shutdown: &ShutdownFlag::new(),
             config: &cfg,
             freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
         },
     )
     .expect("routine should not error");
@@ -271,6 +277,7 @@ fn snapshot_reports_the_signed_pulse_voltage() {
             shutdown: &ShutdownFlag::new(),
             config: &cfg,
             freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
         },
     )
     .expect("routine should not error");
@@ -323,6 +330,7 @@ fn shutdown_during_the_initial_approach_stops_promptly_and_cleans_up() {
             shutdown: &shutdown,
             config: &fast_config(),
             freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
         },
     )
     .expect("a stop is an outcome, not an error");
@@ -374,6 +382,7 @@ fn shutdown_before_loop_stops_by_user() {
             shutdown: &shutdown,
             config: &fast_config(),
             freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
         },
     )
     .expect("routine should not error");
@@ -428,6 +437,7 @@ fn io_fault_mid_run_propagates_but_still_cleans_up() {
             shutdown: &ShutdownFlag::new(),
             config: &fast_config(),
             freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
         },
     );
 
@@ -481,6 +491,7 @@ fn withdraw_fault_during_cleanup_is_swallowed() {
             shutdown: &ShutdownFlag::new(),
             config: &cfg,
             freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
         },
     )
     .expect("a failing cleanup withdraw must not turn into a routine error");
@@ -536,6 +547,7 @@ fn sharp_but_unstable_fires_max_pulse_then_cycle_limit() {
             shutdown: &ShutdownFlag::new(),
             config: &cfg,
             freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
         },
     )
     .expect("routine should not error");
@@ -644,6 +656,7 @@ fn realistic_model_completes_and_publishes_measurements() {
             shutdown: &ShutdownFlag::new(),
             config: &cfg,
             freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
         },
     )
     .expect("routine should not error");

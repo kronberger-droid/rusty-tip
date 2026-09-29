@@ -1808,7 +1808,7 @@ fn run_controller(
     event_tx: Sender<Event>,
     simulate: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (controller, freq_shift_index, facts) = if simulate {
+    let (controller, freq_shift_index, current_index, facts) = if simulate {
         build_mock_backend(&config)?
     } else {
         build_nanonis_backend(&config)?
@@ -1844,6 +1844,7 @@ fn run_controller(
             shutdown: &shutdown,
             config: &config,
             freq_shift: freq_shift_index,
+            current: current_index,
         },
     );
 
@@ -1863,7 +1864,14 @@ fn run_controller(
 }
 
 /// Boxed controller plus the resolved freq-shift signal index.
-type Backend = (Box<dyn SpmController>, SignalIndex, ControllerFacts);
+/// The controller, the frequency-shift and current signal indices, and
+/// the facts for the run header.
+type Backend = (
+    Box<dyn SpmController>,
+    SignalIndex,
+    SignalIndex,
+    ControllerFacts,
+);
 
 /// Index of `"freq shift"` in [`MockController`]'s fixed channel layout. Checked
 /// against the registry in [`build_mock_backend`] so a change to the mock's
@@ -1894,11 +1902,15 @@ fn build_nanonis_backend(
         .get_by_name("freq shift")
         .ok_or("Frequency shift signal not found in registry")?
         .signal_index();
+    let current_index = registry
+        .get_by_name("current")
+        .ok_or("Current signal not found in registry")?
+        .signal_index();
 
     setup_tcp_stream(&mut controller, &registry, config)?;
 
     let facts = ControllerFacts::gather(&mut controller, Some(&registry));
-    Ok((Box::new(controller), freq_shift_index, facts))
+    Ok((Box::new(controller), freq_shift_index, current_index, facts))
 }
 
 /// Drive the routine against the in-memory mock — no hardware, no TCP stream.
@@ -1935,7 +1947,17 @@ fn build_mock_backend(
         .into());
     }
 
-    Ok((Box::new(mock), resolved, ControllerFacts::default()))
+    let current = registry
+        .get_by_name("current")
+        .ok_or("Current signal not found in mock registry")?
+        .signal_index();
+
+    Ok((
+        Box::new(mock),
+        resolved,
+        current,
+        ControllerFacts::default(),
+    ))
 }
 
 fn build_signal_registry(

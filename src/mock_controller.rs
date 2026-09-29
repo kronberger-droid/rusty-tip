@@ -25,7 +25,9 @@
 //! use rusty_tip::config::AppConfig;
 //! use rusty_tip::tip_prep::{TipPrepParams, run_tip_prep};
 //!
-//! let freq_shift_index = rusty_tip::SignalIndex(0);
+//! // `freq shift` is index 2 in the mock's signal table; index 0 is the
+//! // current, which a landing is judged on.
+//! let freq_shift_index = rusty_tip::SignalIndex(2);
 //! // Tip is blunt (-40 Hz) until 3 pulses land, then sharp (-1 Hz). Conditioning
 //! // drives the shift *up* toward the sharp window; see [`models::realistic`]
 //! // for a model that follows real conditioning statistics.
@@ -42,6 +44,7 @@
 //!         shutdown: &ShutdownFlag::new(),
 //!         config: &AppConfig::default(),
 //!         freq_shift: freq_shift_index,
+//!         current: rusty_tip::SignalIndex(0),
 //!     },
 //! );
 //!
@@ -318,6 +321,9 @@ struct ScheduledFault {
 pub struct MockController {
     obs: Arc<Mutex<MockObservations>>,
     freq_shift_index: SignalIndex,
+    /// The current channel, `Current (A)` in the signal table, when no
+    /// loop model owns it.
+    current_index: SignalIndex,
     model: FreqShiftModel,
     /// Value returned for any non-freq-shift signal index.
     default_signal: f64,
@@ -501,6 +507,17 @@ impl MockController {
         {
             let sample = sim.model.step(1.0 / sim.rate_hz);
             return sim.value(index, sample, &mut self.noise_rng);
+        }
+        if index == self.current_index && index != self.freq_shift_index {
+            // No loop model: the current is on the setpoint whenever the
+            // loop is closed, and zero when it is open, which is what a
+            // landing gate needs to see.
+            let obs = self.obs.lock();
+            return if obs.z_controller_on {
+                obs.z_setpoint
+            } else {
+                0.0
+            };
         }
         if index != self.freq_shift_index {
             return self.default_signal;
@@ -745,7 +762,12 @@ impl SpmController for MockController {
 
     fn auto_approach(&mut self, _wait: bool, _timeout: Duration) -> Result<()> {
         self.enter("auto_approach")?;
-        self.obs.lock().approach_count += 1;
+        {
+            let mut obs = self.obs.lock();
+            obs.approach_count += 1;
+            // An approach closes the loop, as the module does.
+            obs.z_controller_on = true;
+        }
         self.approach_polls_left = self.approach_polls;
         if let Some(sim) = &mut self.loop_sim {
             sim.model.place(APPROACHED_Z_M);
@@ -874,15 +896,24 @@ impl SpmController for MockController {
 
     fn set_controller_enabled(&mut self, id: ControllerId, on: bool) -> Result<()> {
         self.enter("set_controller_enabled")?;
-        let l = self
-            .loops
-            .get_mut(&id)
-            .ok_or_else(|| SpmError::Workflow(format!("the mock has no controller {id}")))?;
-        l.enabled = on;
-        if id == ControllerId::Z {
-            self.sync_z_loop();
+        match self.loops.get_mut(&id) {
+            Some(l) => {
+                l.enabled = on;
+                if id == ControllerId::Z {
+                    self.sync_z_loop();
+                }
+                Ok(())
+            }
+            // The Z loop can always be switched, defined or not: a
+            // routine's second landing is made on it.
+            None if id == ControllerId::Z => {
+                self.obs.lock().z_controller_on = on;
+                Ok(())
+            }
+            None => Err(SpmError::Workflow(format!(
+                "the mock has no controller {id}"
+            ))),
         }
-        Ok(())
     }
 
     // -- Piezo Positioning --
@@ -1142,6 +1173,7 @@ impl SpmController for MockController {
 /// Builder for [`MockController`].
 pub struct MockControllerBuilder {
     freq_shift_index: SignalIndex,
+    current_index: SignalIndex,
     model: FreqShiftModel,
     default_signal: f64,
     sample_noise_hz: f64,
@@ -1159,6 +1191,8 @@ impl MockControllerBuilder {
     fn new() -> Self {
         Self {
             freq_shift_index: SignalIndex(0),
+            // `Current (A)` is first in the signal table.
+            current_index: SignalIndex(0),
             // Default: an obstinately blunt tip (+100 Hz, far outside any sane
             // sharp-tip bound) so a forgotten model yields CycleLimit, not a
             // spurious success.
@@ -1180,6 +1214,14 @@ impl MockControllerBuilder {
     /// freq-shift index you pass to `run_tip_prep`.
     pub fn freq_shift_index(mut self, index: SignalIndex) -> Self {
         self.freq_shift_index = index;
+        self
+    }
+
+    /// Which signal index is the current. Without a loop model it reads
+    /// the Z setpoint while the loop is closed and zero while it is open.
+    /// `Current (A)` is index 0 in the mock's signal table, the default.
+    pub fn current_index(mut self, index: SignalIndex) -> Self {
+        self.current_index = index;
         self
     }
 
@@ -1256,6 +1298,7 @@ impl MockControllerBuilder {
         MockController {
             obs: Arc::new(Mutex::new(obs)),
             freq_shift_index: self.freq_shift_index,
+            current_index: self.current_index,
             model: self.model,
             default_signal: self.default_signal,
             sample_noise_hz: self.sample_noise_hz,
@@ -1727,8 +1770,29 @@ mod tests {
             .sample_noise_hz(0.5)
             .build();
 
-        let samples = mock.read_signal_samples(SignalIndex(0), 32).unwrap();
+        // Index 1, the bias: index 0 is the current, which follows the
+        // Z setpoint rather than the default.
+        let samples = mock.read_signal_samples(SignalIndex(1), 32).unwrap();
         assert!(samples.iter().all(|&v| v == 7.0));
+    }
+
+    /// The current channel is the Z setpoint while the loop is closed and
+    /// zero while it is open, so a landing gate has something to wait on.
+    #[test]
+    fn the_current_follows_the_setpoint_while_the_loop_is_closed() {
+        let mut mock = MockController::builder()
+            .freq_shift_index(SignalIndex(2))
+            .build();
+        mock.set_z_setpoint(100e-12).unwrap();
+        assert_eq!(mock.read_signal(SignalIndex(0), true).unwrap(), 100e-12);
+        mock.set_controller_enabled(ControllerId::Z, false).unwrap();
+        assert_eq!(mock.read_signal(SignalIndex(0), true).unwrap(), 0.0);
+        mock.auto_approach(false, Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            mock.read_signal(SignalIndex(0), true).unwrap(),
+            100e-12,
+            "an approach closes the loop"
+        );
     }
 
     #[test]
