@@ -40,12 +40,60 @@ pub struct NanonisSetupConfig {
     /// workaround.  `None` skips the workaround entirely.  Default is
     /// `Some(3)`.  Pick an output that is not driving anything critical.
     pub tcp_refresh_output: Option<i32>,
+    /// Which coarse motor to drive, and which way along Z is toward the
+    /// sample.
+    pub motor: CoarseMotor,
 }
 
 impl Default for NanonisSetupConfig {
     fn default() -> Self {
         Self {
             tcp_refresh_output: Some(3),
+            motor: CoarseMotor::default(),
+        }
+    }
+}
+
+/// The coarse motor as this instrument has it wired: the group the Motor
+/// module drives, and which of its two Z directions moves the tip toward
+/// the sample. Every step count along Z in the library is signed against
+/// that: positive approaches, negative retracts.
+///
+/// The default is group 1 with `Z+` as approach, which is what every
+/// version so far assumed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoarseMotor {
+    pub group: MotorGroup,
+    pub z_approach: MotorDirection,
+}
+
+impl Default for CoarseMotor {
+    fn default() -> Self {
+        Self {
+            group: MotorGroup::Group1,
+            z_approach: MotorDirection::ZPlus,
+        }
+    }
+}
+
+impl CoarseMotor {
+    /// The group by the number the Motor module shows, 1 to 6.
+    pub fn group_from_number(n: u8) -> Option<MotorGroup> {
+        (1..=6)
+            .contains(&n)
+            .then(|| MotorGroup::try_from(u32::from(n - 1)).expect("1 to 6 are the six groups"))
+    }
+
+    /// The group as the Motor module numbers it, 1 to 6.
+    pub fn group_number(&self) -> u8 {
+        self.group as u8 + 1
+    }
+
+    /// The Z direction that moves the tip away from the sample.
+    pub fn z_retract(&self) -> MotorDirection {
+        match self.z_approach {
+            MotorDirection::ZMinus => MotorDirection::ZPlus,
+            _ => MotorDirection::ZMinus,
         }
     }
 }
@@ -961,10 +1009,13 @@ impl SpmController for NanonisController {
     fn move_motor(&mut self, direction: MotorDirection, steps: u16, wait: bool) -> Result<()> {
         Ok(self
             .client
-            .motor_start_move(direction, steps, MotorGroup::Group1, wait)?)
+            .motor_start_move(direction, steps, self.setup.motor.group, wait)?)
     }
 
+    /// Z is signed against the instrument's wiring: positive steps go the
+    /// motor's approach way, negative its retract way.
     fn move_motor_3d(&mut self, displacement: MotorDisplacement, wait: bool) -> Result<()> {
+        let motor = self.setup.motor;
         let axes: [(i16, MotorDirection, MotorDirection); 3] = [
             (
                 displacement.x,
@@ -976,21 +1027,13 @@ impl SpmController for NanonisController {
                 MotorDirection::YPlus,
                 MotorDirection::YMinus,
             ),
-            (
-                displacement.z,
-                MotorDirection::ZPlus,
-                MotorDirection::ZMinus,
-            ),
+            (displacement.z, motor.z_approach, motor.z_retract()),
         ];
         for (steps, positive, negative) in axes {
             if steps != 0 {
                 let dir = if steps > 0 { positive } else { negative };
-                self.client.motor_start_move(
-                    dir,
-                    steps.unsigned_abs(),
-                    MotorGroup::Group1,
-                    wait,
-                )?;
+                self.client
+                    .motor_start_move(dir, steps.unsigned_abs(), motor.group, wait)?;
             }
         }
         Ok(())
@@ -999,7 +1042,7 @@ impl SpmController for NanonisController {
     fn move_motor_closed_loop(&mut self, target: Position3D, mode: MovementMode) -> Result<()> {
         Ok(self
             .client
-            .motor_start_closed_loop(mode, target, true, MotorGroup::Group1)?)
+            .motor_start_closed_loop(mode, target, true, self.setup.motor.group)?)
     }
 
     fn stop_motor(&mut self) -> Result<()> {

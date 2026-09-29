@@ -64,7 +64,11 @@ fn init_logging(level: LevelFilter) -> Receiver<String> {
 }
 
 fn main() -> eframe::Result<()> {
-    let log_receiver = init_logging(LevelFilter::Info);
+    // env_logger's own filter is fixed at init, so it is opened all the way
+    // and the global max level does the gating: info until the app has
+    // read the pane's saved level, then whatever the pane says.
+    let log_receiver = init_logging(LevelFilter::Trace);
+    log::set_max_level(LevelFilter::Info);
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()

@@ -16,10 +16,13 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use eframe::egui;
+use log::LevelFilter;
+use nanonis_rs::motor::MotorDirection;
 use serde::{Deserialize, Serialize};
 
-use rusty_tip::config::TcpChannelMapping;
+use rusty_tip::config::{MotorZApproach, TcpChannelMapping};
 use rusty_tip::experiment_log::ControllerFacts;
+use rusty_tip::nanonis_controller::CoarseMotor;
 use rusty_tip::session::{Backend, ConnState, NanonisBackend, PresetLoad, Readout, SessionUpdate};
 use rusty_tip::spm_controller::Capability;
 
@@ -33,8 +36,56 @@ pub enum BackendKind {
     Mock,
 }
 
+/// How much the activity log says. The pane's setting, kept between
+/// starts; it is about this window, not the connection, so a config file
+/// neither carries it nor overrides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LogLevel {
+    Error,
+    Warn,
+    #[default]
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    pub const ALL: [LogLevel; 5] = [
+        LogLevel::Error,
+        LogLevel::Warn,
+        LogLevel::Info,
+        LogLevel::Debug,
+        LogLevel::Trace,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LogLevel::Error => "error",
+            LogLevel::Warn => "warn",
+            LogLevel::Info => "info",
+            LogLevel::Debug => "debug",
+            LogLevel::Trace => "trace",
+        }
+    }
+
+    pub fn filter(self) -> LevelFilter {
+        match self {
+            LogLevel::Error => LevelFilter::Error,
+            LogLevel::Warn => LevelFilter::Warn,
+            LogLevel::Info => LevelFilter::Info,
+            LogLevel::Debug => LevelFilter::Debug,
+            LogLevel::Trace => LevelFilter::Trace,
+        }
+    }
+}
+
+fn default_motor_group() -> String {
+    "1".into()
+}
+
 /// The form, as saved between starts. Strings where the operator types, so
-/// a half-typed port never fails to persist.
+/// a half-typed port never fails to persist. Fields added since the first
+/// release default, so a saved form from before them still loads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionForm {
     pub kind: BackendKind,
@@ -46,7 +97,15 @@ pub struct ConnectionForm {
     pub settings_file: String,
     /// `(signal index, TCP channel)` pairs beyond the standard map.
     pub tcp_channel_mapping: Vec<(String, String)>,
+    /// Coarse motor group, 1 to 6.
+    #[serde(default = "default_motor_group")]
+    pub motor_group: String,
+    /// Which coarse Z direction approaches the sample.
+    #[serde(default)]
+    pub motor_z_approach: MotorZApproach,
     pub log_dir: String,
+    #[serde(default)]
+    pub log_level: LogLevel,
 }
 
 impl Default for ConnectionForm {
@@ -60,7 +119,10 @@ impl Default for ConnectionForm {
             layout_file: String::new(),
             settings_file: String::new(),
             tcp_channel_mapping: Vec::new(),
+            motor_group: default_motor_group(),
+            motor_z_approach: MotorZApproach::default(),
             log_dir: "./experiments".into(),
+            log_level: LogLevel::default(),
         };
         form.apply_settings(&ConnectionSettings {
             backend: NanonisBackend::default(),
@@ -113,6 +175,20 @@ impl ConnectionForm {
                 tcp_channel,
             });
         }
+        let group = self
+            .motor_group
+            .trim()
+            .parse::<u8>()
+            .ok()
+            .and_then(CoarseMotor::group_from_number)
+            .ok_or_else(|| format!("coarse motor group {:?} is not 1 to 6", self.motor_group))?;
+        let motor = CoarseMotor {
+            group,
+            z_approach: match self.motor_z_approach {
+                MotorZApproach::Plus => MotorDirection::ZPlus,
+                MotorZApproach::Minus => MotorDirection::ZMinus,
+            },
+        };
         let optional = |s: &str| (!s.trim().is_empty()).then(|| PathBuf::from(s.trim()));
         Ok(NanonisBackend {
             host: self.host.trim().to_string(),
@@ -122,6 +198,7 @@ impl ConnectionForm {
             layout_file: optional(&self.layout_file),
             settings_file: optional(&self.settings_file),
             tcp_channel_mapping,
+            motor,
         })
     }
 
@@ -170,6 +247,11 @@ impl ConnectionForm {
             .iter()
             .map(|m| (m.nanonis_index.to_string(), m.tcp_channel.to_string()))
             .collect();
+        self.motor_group = b.motor.group_number().to_string();
+        self.motor_z_approach = match b.motor.z_approach {
+            MotorDirection::ZMinus => MotorZApproach::Minus,
+            _ => MotorZApproach::Plus,
+        };
         if let Some(dir) = &s.log_dir {
             self.log_dir = dir.display().to_string();
         }
@@ -193,6 +275,8 @@ pub enum PaneAction {
     ReloadPresets,
     /// The log directory changed.
     LogDir(Option<PathBuf>),
+    /// The log level changed.
+    LogLevel(LevelFilter),
 }
 
 pub struct ConnectionPane {
@@ -362,6 +446,23 @@ impl ConnectionPane {
             }
         });
 
+        ui.horizontal(|ui| {
+            ui.label("Log level");
+            let before = self.form.log_level;
+            egui::ComboBox::from_id_salt("log_level")
+                .selected_text(self.form.log_level.label())
+                .show_ui(ui, |ui| {
+                    for level in LogLevel::ALL {
+                        ui.selectable_value(&mut self.form.log_level, level, level.label());
+                    }
+                });
+            if self.form.log_level != before {
+                action = Some(PaneAction::LogLevel(self.form.log_level.filter()));
+            }
+        })
+        .response
+        .on_hover_text("How much the activity log and the terminal say. Takes effect at once.");
+
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             if let Some(a) = self.render_button(ui, running) {
@@ -482,6 +583,38 @@ impl ConnectionPane {
         })
         .response
         .on_hover_text("Signal index to TCP logger channel, beyond the standard map");
+        ui.end_row();
+
+        ui.label("Coarse motor");
+        ui.horizontal(|ui| {
+            ui.label("group");
+            egui::ComboBox::from_id_salt("motor_group")
+                .width(50.0)
+                .selected_text(self.form.motor_group.clone())
+                .show_ui(ui, |ui| {
+                    for n in 1..=6u8 {
+                        ui.selectable_value(
+                            &mut self.form.motor_group,
+                            n.to_string(),
+                            n.to_string(),
+                        );
+                    }
+                });
+            ui.label("approach");
+            egui::ComboBox::from_id_salt("motor_z_approach")
+                .width(50.0)
+                .selected_text(self.form.motor_z_approach.label())
+                .show_ui(ui, |ui| {
+                    for dir in [MotorZApproach::Plus, MotorZApproach::Minus] {
+                        ui.selectable_value(&mut self.form.motor_z_approach, dir, dir.label());
+                    }
+                });
+        })
+        .response
+        .on_hover_text(
+            "The Motor module's group to drive, and which of its Z buttons moves the tip \
+             toward the sample. Retracts go the other way.",
+        );
         ui.end_row();
     }
 
@@ -632,6 +765,15 @@ mod tests {
     }
 
     #[test]
+    fn a_bad_motor_group_is_named_in_the_error() {
+        let form = ConnectionForm {
+            motor_group: "7".into(),
+            ..Default::default()
+        };
+        assert!(form.backend().unwrap_err().contains("7"));
+    }
+
+    #[test]
     fn settings_round_trip_through_the_form() {
         let settings = ConnectionSettings {
             backend: NanonisBackend {
@@ -641,6 +783,10 @@ mod tests {
                     nanonis_index: 76,
                     tcp_channel: 3,
                 }],
+                motor: CoarseMotor {
+                    group: nanonis_rs::motor::MotorGroup::Group3,
+                    z_approach: MotorDirection::ZMinus,
+                },
                 ..NanonisBackend::default()
             },
             log_dir: Some(PathBuf::from("/tmp/logs")),
