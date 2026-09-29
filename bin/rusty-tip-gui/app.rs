@@ -117,7 +117,7 @@ impl WorkbenchApp {
             .position(|t| t.id() == prefs.page)
             .map_or(Page::Connection, Page::Tool);
         let pane = ConnectionPane::new(prefs.connection);
-        log::set_max_level(pane.form.log_level.filter());
+        log::set_max_level(pane.form.log_level);
         let session = session::spawn(pane.form.log_dir());
         Self {
             session,

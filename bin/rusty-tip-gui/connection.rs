@@ -35,51 +35,26 @@ pub enum BackendKind {
     Mock,
 }
 
-/// How much the activity log says. The pane's setting, kept between
-/// starts; it is about this window, not the connection, so a config file
-/// neither carries it nor overrides it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum LogLevel {
-    Error,
-    Warn,
-    #[default]
-    Info,
-    Debug,
-    Trace,
+fn default_log_level() -> LevelFilter {
+    LevelFilter::Info
 }
 
-impl LogLevel {
-    pub const ALL: [LogLevel; 5] = [
-        LogLevel::Error,
-        LogLevel::Warn,
-        LogLevel::Info,
-        LogLevel::Debug,
-        LogLevel::Trace,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            LogLevel::Error => "error",
-            LogLevel::Warn => "warn",
-            LogLevel::Info => "info",
-            LogLevel::Debug => "debug",
-            LogLevel::Trace => "trace",
-        }
-    }
-
-    pub fn filter(self) -> LevelFilter {
-        match self {
-            LogLevel::Error => LevelFilter::Error,
-            LogLevel::Warn => LevelFilter::Warn,
-            LogLevel::Info => LevelFilter::Info,
-            LogLevel::Debug => LevelFilter::Debug,
-            LogLevel::Trace => LevelFilter::Trace,
-        }
-    }
+fn default_motor_group() -> u8 {
+    1
 }
 
-fn default_motor_group() -> String {
-    "1".into()
+/// The group as a number, or as the text a form saved before it was one.
+fn group_number_or_text<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Group {
+        Number(u8),
+        Text(String),
+    }
+    match Group::deserialize(d)? {
+        Group::Number(n) => Ok(n),
+        Group::Text(s) => s.trim().parse().map_err(serde::de::Error::custom),
+    }
 }
 
 /// The form, as saved between starts. Strings where the operator types, so
@@ -97,14 +72,20 @@ pub struct ConnectionForm {
     /// `(signal index, TCP channel)` pairs beyond the standard map.
     pub tcp_channel_mapping: Vec<(String, String)>,
     /// Coarse motor group, 1 to 6.
-    #[serde(default = "default_motor_group")]
-    pub motor_group: String,
+    #[serde(
+        default = "default_motor_group",
+        deserialize_with = "group_number_or_text"
+    )]
+    pub motor_group: u8,
     /// Which coarse Z direction approaches the sample.
     #[serde(default)]
     pub motor_z_approach: MotorZApproach,
     pub log_dir: String,
-    #[serde(default)]
-    pub log_level: LogLevel,
+    /// How much the activity log says. The pane's setting, kept between
+    /// starts; it is about this window, not the connection, so a config
+    /// file neither carries it nor overrides it.
+    #[serde(default = "default_log_level")]
+    pub log_level: LevelFilter,
     /// The controller preset file; a saved form from before it had one
     /// gets the default.
     #[serde(default = "default_presets_file")]
@@ -130,7 +111,7 @@ impl Default for ConnectionForm {
             motor_group: default_motor_group(),
             motor_z_approach: MotorZApproach::default(),
             log_dir: "./experiments".into(),
-            log_level: LogLevel::default(),
+            log_level: default_log_level(),
             presets_file: default_presets_file(),
         };
         form.apply_settings(&ConnectionSettings {
@@ -188,13 +169,8 @@ impl ConnectionForm {
                 tcp_channel,
             });
         }
-        let group = self
-            .motor_group
-            .trim()
-            .parse::<u8>()
-            .ok()
-            .and_then(CoarseMotor::group_from_number)
-            .ok_or_else(|| format!("coarse motor group {:?} is not 1 to 6", self.motor_group))?;
+        let group = CoarseMotor::group_from_number(self.motor_group)
+            .ok_or_else(|| format!("coarse motor group {} is not 1 to 6", self.motor_group))?;
         let motor = CoarseMotor {
             group,
             z_approach: self.motor_z_approach,
@@ -268,7 +244,7 @@ impl ConnectionForm {
             .iter()
             .map(|m| (m.nanonis_index.to_string(), m.tcp_channel.to_string()))
             .collect();
-        self.motor_group = b.motor.group_number().to_string();
+        self.motor_group = b.motor.group_number();
         self.motor_z_approach = b.motor.z_approach;
         if let Some(dir) = &s.log_dir {
             self.log_dir = dir.display().to_string();
@@ -469,14 +445,20 @@ impl ConnectionPane {
             ui.label("Log level");
             let before = self.form.log_level;
             egui::ComboBox::from_id_salt("log_level")
-                .selected_text(self.form.log_level.label())
+                .selected_text(self.form.log_level.as_str().to_lowercase())
                 .show_ui(ui, |ui| {
-                    for level in LogLevel::ALL {
-                        ui.selectable_value(&mut self.form.log_level, level, level.label());
+                    // Everything but off: a window that logs nothing
+                    // cannot say why.
+                    for level in LevelFilter::iter().skip(1) {
+                        ui.selectable_value(
+                            &mut self.form.log_level,
+                            level,
+                            level.as_str().to_lowercase(),
+                        );
                     }
                 });
             if self.form.log_level != before {
-                action = Some(PaneAction::LogLevel(self.form.log_level.filter()));
+                action = Some(PaneAction::LogLevel(self.form.log_level));
             }
         })
         .response
@@ -624,14 +606,10 @@ impl ConnectionPane {
             ui.label("group");
             egui::ComboBox::from_id_salt("motor_group")
                 .width(50.0)
-                .selected_text(self.form.motor_group.clone())
+                .selected_text(self.form.motor_group.to_string())
                 .show_ui(ui, |ui| {
                     for n in 1..=6u8 {
-                        ui.selectable_value(
-                            &mut self.form.motor_group,
-                            n.to_string(),
-                            n.to_string(),
-                        );
+                        ui.selectable_value(&mut self.form.motor_group, n, n.to_string());
                     }
                 });
             ui.label("approach");
@@ -798,10 +776,44 @@ mod tests {
         assert!(form.settings().unwrap_err().contains("65a"));
     }
 
+    /// A form saved before the log level was a `LevelFilter` and the
+    /// group a number still loads, level and group kept. Prefs are RON,
+    /// where the old level was a bare `Debug` and the group a string, and a
+    /// field that fails to decode loses the whole form.
+    #[test]
+    fn a_form_saved_by_an_older_version_still_loads() {
+        #[derive(Default)]
+        struct Memory(std::collections::HashMap<String, String>);
+        impl eframe::Storage for Memory {
+            fn get_string(&self, key: &str) -> Option<String> {
+                self.0.get(key).cloned()
+            }
+            fn set_string(&mut self, key: &str, value: String) {
+                self.0.insert(key.into(), value);
+            }
+            fn flush(&mut self) {}
+        }
+        let mut storage = Memory::default();
+        eframe::set_value(&mut storage, "form", &ConnectionForm::default());
+        let now = storage.0["form"].clone();
+        let old = now
+            .replace("log_level:INFO", "log_level:Debug")
+            .replace("motor_group:1", "motor_group:\"3\"");
+        assert!(
+            old.contains("log_level:Debug") && old.contains("motor_group:\"3\""),
+            "the RON layout changed; update the replacements: {now}"
+        );
+        storage.0.insert("form".into(), old);
+
+        let form: ConnectionForm = eframe::get_value(&storage, "form").unwrap();
+        assert_eq!(form.log_level, LevelFilter::Debug);
+        assert_eq!(form.motor_group, 3);
+    }
+
     #[test]
     fn a_bad_motor_group_is_named_in_the_error() {
         let form = ConnectionForm {
-            motor_group: "7".into(),
+            motor_group: 7,
             ..Default::default()
         };
         assert!(form.backend().unwrap_err().contains("7"));
