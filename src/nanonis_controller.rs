@@ -615,6 +615,22 @@ impl SpmController for NanonisController {
 
     // -- Lifecycle --
 
+    /// Refuse a run on a stream that has died. The reader stops for good
+    /// when the TCP logger goes quiet, say after a channel-list change,
+    /// and nothing else notices until a read fails; a run that makes no
+    /// read would go through on a buffer hours old.
+    fn prepare(&mut self) -> Result<()> {
+        match &self.tcp_reader {
+            Some(reader) if !reader.is_buffering() => Err(SpmError::Workflow(format!(
+                "the data stream has stopped ({}); reconnect before starting a run",
+                reader
+                    .stream_error()
+                    .unwrap_or_else(|| "no error recorded".into())
+            ))),
+            _ => Ok(()),
+        }
+    }
+
     fn disconnect(&mut self) {
         if self.disconnected {
             return;
