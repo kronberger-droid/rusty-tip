@@ -56,10 +56,10 @@ safe_tip_threshold = 1e-9       # safe-tip current threshold (A)
 pulse_width_ms = 50
 post_approach_settle_ms = 2000
 post_reposition_settle_ms = 1000  # ends every reposition
-post_move_settle_ms = 500         # between motor move and re-approach
+post_move_settle_ms = 3000        # between the coarse steps and the re-approach
 post_pulse_settle_ms = 1000
 buffer_clear_wait_ms = 500
-reposition_steps = [3, 3]         # coarse motor steps (x, y) per reposition
+reposition_steps = [1, 1]         # coarse motor steps (x, y) per reposition
 status_interval = 10              # log a status line every N cycles
 approach_timeout_ms = 600000      # approaches from a full withdraw (first
                                   # approach, around each stability sweep)
@@ -71,6 +71,14 @@ An approach that overruns its budget is stopped, the run ends in an error,
 and the tip is withdrawn. The two budgets differ because a reposition only
 retracts three coarse steps before re-approaching, while the first approach
 of a run starts wherever the tip was left.
+
+`post_move_settle_ms` is seconds rather than the 500 ms of 0.2.3 because a
+stick-slip step leaves the stage creeping for a while. An approach that
+lands on that creep rings on contact: the current spikes to the preamp rail
+at the loop's frequency for a few hundred milliseconds, and safe-tip, armed
+right after the landing, trips on it. One coarse step in x and y is enough
+to leave the last pulse's debris behind; every further step is more creep
+to wait out.
 
 ## `[tip_prep.signal_stability]` — when is a reading trusted
 

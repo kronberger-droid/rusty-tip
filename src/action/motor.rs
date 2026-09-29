@@ -194,7 +194,9 @@ impl Action for StopMotor {
 /// Sequence:
 /// 1. Withdraw from surface
 /// 2. Move motor 3D (x, y steps + z retract)
-/// 3. Wait for settle
+/// 3. Wait for settle. A stick-slip step leaves the stage creeping, and an
+///    approach that lands on the creep rings on contact, so this is
+///    seconds rather than the 500 ms 0.2.3 had.
 /// 4. Calibrated approach (approach, small withdraw, center freq shift, re-approach)
 /// 5. Wait for post-approach settle
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,7 +205,7 @@ pub struct Reposition {
     pub y_steps: i16,
     #[serde(default = "default_z_retract")]
     pub z_retract: i16,
-    #[serde(default = "default_settle_ms")]
+    #[serde(default = "default_post_move_settle_ms")]
     pub post_move_settle_ms: u64,
     #[serde(default = "default_settle_ms")]
     pub post_approach_settle_ms: u64,
@@ -220,6 +222,10 @@ fn default_settle_ms() -> u64 {
     500
 }
 
+fn default_post_move_settle_ms() -> u64 {
+    3000
+}
+
 fn default_approach_timeout_ms() -> u64 {
     DEFAULT_APPROACH_TIMEOUT_MS
 }
@@ -229,9 +235,9 @@ impl Default for Reposition {
         Self {
             x_steps: 0,
             y_steps: 0,
-            z_retract: -3,
-            post_move_settle_ms: 500,
-            post_approach_settle_ms: 500,
+            z_retract: default_z_retract(),
+            post_move_settle_ms: default_post_move_settle_ms(),
+            post_approach_settle_ms: default_settle_ms(),
             approach_timeout_ms: default_approach_timeout_ms(),
         }
     }

@@ -123,6 +123,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A reposition takes one coarse step in x and y and waits three seconds
+  before re-approaching**, where it took three steps and waited 500 ms.
+  The lab logs of 2026-09-28 and 29 show why safe-tip kept tripping on a
+  phase where nothing should trip it: every landing that followed coarse
+  steps rang on contact, the current spiking to the preamp rail at the
+  loop's frequency for a few hundred milliseconds, while the 50 nm
+  piezo hop back from home never did. A stick-slip step leaves the stage
+  creeping, and an approach that lands on the creep gets the kick. One
+  step is enough to leave the last pulse's debris behind; the settle is
+  `post_move_settle_ms`, on the tip-prep Setup page like every other
+  timing.
 - **`NanonisSetupConfig` is down to `tcp_refresh_output`.** Layout and
   settings files are loaded by whoever owns the connection through
   `SpmController::load_layout`/`load_settings`, before the stream starts
