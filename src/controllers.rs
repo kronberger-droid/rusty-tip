@@ -475,6 +475,12 @@ impl Preset {
         Ok(())
     }
 
+    /// Whether this is the preset `name` means: names match ignoring case
+    /// and surrounding blanks, as they do everywhere presets are looked up.
+    pub fn is_named(&self, name: &str) -> bool {
+        name_key(&self.name) == name_key(name)
+    }
+
     /// What applying this preset writes over `current`: its parameters
     /// with `current`'s setpoint kept.
     pub fn params_over(&self, current: &ControllerParams) -> ControllerParams {
@@ -498,6 +504,10 @@ impl Preset {
     }
 }
 
+fn name_key(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
 /// A preset file: `[[presets]]` tables, names unique within it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PresetFile {
@@ -511,7 +521,7 @@ impl PresetFile {
         let mut seen = std::collections::HashSet::new();
         for preset in &self.presets {
             preset.validate()?;
-            if !seen.insert(preset.name.trim().to_lowercase()) {
+            if !seen.insert(name_key(&preset.name)) {
                 return Err(format!("preset {:?} is defined twice", preset.name));
             }
         }
@@ -520,10 +530,7 @@ impl PresetFile {
 
     /// By name, case-insensitively.
     pub fn find(&self, name: &str) -> Option<&Preset> {
-        let wanted = name.trim().to_lowercase();
-        self.presets
-            .iter()
-            .find(|p| p.name.trim().to_lowercase() == wanted)
+        self.presets.iter().find(|p| p.is_named(name))
     }
 }
 
@@ -536,11 +543,7 @@ pub trait PresetStore {
 
     /// One preset by name, if there is one.
     fn get(&self, name: &str) -> Result<Option<Preset>, String> {
-        let wanted = name.trim().to_lowercase();
-        Ok(self
-            .list()?
-            .into_iter()
-            .find(|p| p.name.trim().to_lowercase() == wanted))
+        Ok(self.list()?.into_iter().find(|p| p.is_named(name)))
     }
 
     /// Add a preset, or replace the one with its name.
@@ -593,12 +596,7 @@ impl PresetStore for TomlPresetStore {
     fn put(&mut self, preset: Preset) -> Result<(), String> {
         preset.validate()?;
         let mut file = self.read()?;
-        let wanted = preset.name.trim().to_lowercase();
-        match file
-            .presets
-            .iter_mut()
-            .find(|p| p.name.trim().to_lowercase() == wanted)
-        {
+        match file.presets.iter_mut().find(|p| p.is_named(&preset.name)) {
             Some(slot) => *slot = preset,
             None => file.presets.push(preset),
         }
@@ -607,9 +605,7 @@ impl PresetStore for TomlPresetStore {
 
     fn remove(&mut self, name: &str) -> Result<(), String> {
         let mut file = self.read()?;
-        let wanted = name.trim().to_lowercase();
-        file.presets
-            .retain(|p| p.name.trim().to_lowercase() != wanted);
+        file.presets.retain(|p| !p.is_named(name));
         self.write(&file)
     }
 }
@@ -650,16 +646,28 @@ impl ApplyPreset {
             )));
         }
         let params = preset.params_over(&current.params);
-        controller.write_controller(preset.id, &params)?;
-        let after = controller.read_controller(preset.id)?;
-        events.emit(Event::typed(&ControllerAppliedEvent {
-            id: preset.id,
-            before: current.params,
-            after: after.params.clone(),
-        }));
-        events.emit(Event::typed(&after));
-        Ok(after)
+        write_and_report(controller, events, preset.id, current.params, &params)
     }
+}
+
+/// Write `params`, read the loop back, and report both: the
+/// `controller/applied` event against `before`, then the reading.
+fn write_and_report(
+    controller: &mut dyn SpmController,
+    events: &dyn EventEmitter,
+    id: ControllerId,
+    before: ControllerParams,
+    params: &ControllerParams,
+) -> Result<ControllerReading, SpmError> {
+    controller.write_controller(id, params)?;
+    let after = controller.read_controller(id)?;
+    events.emit(Event::typed(&ControllerAppliedEvent {
+        id,
+        before,
+        after: after.params.clone(),
+    }));
+    events.emit(Event::typed(&after));
+    Ok(after)
 }
 
 impl Job for ApplyPreset {
@@ -744,14 +752,7 @@ impl Job for ApplyProfile {
                 return Ok(Outcome::StoppedByUser);
             }
             let before = cx.controller.read_controller(entry.id)?.params;
-            cx.controller.write_controller(entry.id, &entry.params)?;
-            let after = cx.controller.read_controller(entry.id)?;
-            cx.events.emit(Event::typed(&ControllerAppliedEvent {
-                id: entry.id,
-                before,
-                after: after.params.clone(),
-            }));
-            cx.events.emit(Event::typed(&after));
+            write_and_report(cx.controller, cx.events, entry.id, before, &entry.params)?;
             written.push(entry.id);
         }
         for id in cx.controller.controllers()? {
