@@ -63,7 +63,9 @@ safe_tip_threshold = 1e-9       # safe-tip current threshold (A)
 pulse_width_ms = 50
 post_approach_settle_ms = 2000
 post_reposition_settle_ms = 1000  # ends every reposition
-post_move_settle_ms = 3000        # between the coarse steps and the re-approach
+landing_tolerance = 0.5           # a landing counts once the current reads within
+                                  # this fraction of the setpoint, and holds still
+landing_timeout_ms = 30000        # stop waiting for that and carry on, with a warning
 post_pulse_settle_ms = 1000
 buffer_clear_wait_ms = 500
 reposition_steps = [1, 1]         # coarse motor steps (x, y) per reposition
@@ -79,13 +81,18 @@ and the tip is withdrawn. The two budgets differ because a reposition only
 retracts three coarse steps before re-approaching, while the first approach
 of a run starts wherever the tip was left.
 
-`post_move_settle_ms` is seconds rather than the 500 ms of 0.2.3 because a
-stick-slip step leaves the stage creeping for a while. An approach that
-lands on that creep rings on contact: the current spikes to the preamp rail
-at the loop's frequency for a few hundred milliseconds, and safe-tip, armed
-right after the landing, trips on it. One coarse step in x and y is enough
-to leave the last pulse's debris behind; every further step is more creep
-to wait out.
+There is no fixed settle between the coarse steps and the re-approach any
+more. A stick-slip step leaves the stage creeping for a while, and a
+landing on that creep, or any landing the loop is still ringing from,
+shows as a current well off the setpoint for a moment. The approach waits
+on that instead of on a clock: after each landing it reads batches of
+`stable_signal_samples` of the current until the mean sits within
+`landing_tolerance` of the setpoint and the batch's standard deviation and
+drift per second are within the same band. `landing_timeout_ms` bounds the
+wait; when it runs out the landing is taken as done with a warning, which
+is what a fixed wait would have done. Every batch is in the run log as a
+`landing` measurement. One coarse step in x and y is enough to leave the
+last pulse's debris behind; every further step is more creep to wait out.
 
 ## `[tip_prep.signal_stability]` — when is a reading trusted
 

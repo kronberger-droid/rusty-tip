@@ -14,6 +14,8 @@ use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::tip_prep::{Outcome, TipPrepParams, log_schema, run_tip_prep};
 
 const FREQ_SHIFT_INDEX: SignalIndex = SignalIndex(2);
+/// `Current (A)` in the mock's signal table.
+const CURRENT_INDEX: SignalIndex = SignalIndex(0);
 
 fn scratch_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -38,7 +40,6 @@ fn write_cycle_limit_log(path: &Path) {
     t.pulse_width_ms = 0;
     t.post_approach_settle_ms = 0;
     t.post_reposition_settle_ms = 0;
-    t.post_move_settle_ms = 0;
     t.buffer_clear_wait_ms = 0;
     t.post_pulse_settle_ms = 0;
     cfg.data_acquisition.stable_signal_samples = 8;
@@ -64,6 +65,7 @@ fn write_cycle_limit_log(path: &Path) {
             shutdown: &ShutdownFlag::new(),
             config: &cfg,
             freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
         },
     )
     .unwrap();

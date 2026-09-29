@@ -70,7 +70,9 @@ pub use events::{
 };
 pub(crate) use rt::require;
 pub use rt::{Cycles, Rt};
-pub use subsystems::{Bias, Motor, Presets, RepositionSpec, Scan, Signals, StableReadSpec, ZCtrl};
+pub use subsystems::{
+    Bias, LandingGate, Motor, Presets, RepositionSpec, Scan, Signals, StableReadSpec, ZCtrl,
+};
 
 use std::panic::{self, AssertUnwindSafe};
 use std::time::{Duration, Instant};

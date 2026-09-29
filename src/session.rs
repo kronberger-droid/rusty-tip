@@ -235,7 +235,10 @@ pub struct Readout {
 ///         let fs = cx.registry.get_by_name("freq shift")
 ///             .ok_or_else(|| SpmError::Workflow("no freq shift signal".into()))?
 ///             .signal_index();
-///         let mut routine = TipPrep::new(&self.config, fs);
+///         let current = cx.registry.get_by_name("current")
+///             .ok_or_else(|| SpmError::Workflow("no current signal".into()))?
+///             .signal_index();
+///         let mut routine = TipPrep::new(&self.config, fs, current);
 ///         run_routine(cx.controller, cx.events, cx.shutdown, &mut routine)
 ///     }
 ///     // ...

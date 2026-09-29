@@ -25,6 +25,8 @@ use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::{Outcome, TipPrepParams, log_schema, run_tip_prep};
 
 const FREQ_SHIFT_INDEX: SignalIndex = SignalIndex(2);
+/// `Current (A)` in the mock's signal table.
+const CURRENT_INDEX: SignalIndex = SignalIndex(0);
 
 #[derive(Clone, Default)]
 struct Recorder {
@@ -112,8 +114,9 @@ fn composite_actions_log_their_steps_one_level_deeper_with_params() {
             "one_approach"
         }
         fn run(&mut self, rt: &mut Rt) -> Result<Outcome, SpmError> {
+            // No landing gate: the fallback with two auto-approaches.
             rt.z()?
-                .calibrated_approach_within(std::time::Duration::from_secs(7))?;
+                .calibrated_approach_within(std::time::Duration::from_secs(7), None)?;
             Ok(Outcome::Completed)
         }
     }
@@ -177,7 +180,6 @@ fn a_run_ends_with_run_finished_carrying_the_outcome() {
     t.pulse_width_ms = 0;
     t.post_approach_settle_ms = 0;
     t.post_reposition_settle_ms = 0;
-    t.post_move_settle_ms = 0;
     t.buffer_clear_wait_ms = 0;
     t.post_pulse_settle_ms = 0;
     cfg.data_acquisition.stable_signal_samples = 8;
@@ -195,6 +197,7 @@ fn a_run_ends_with_run_finished_carrying_the_outcome() {
             shutdown: &ShutdownFlag::new(),
             config: &cfg,
             freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
         },
     )
     .unwrap();

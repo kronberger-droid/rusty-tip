@@ -29,7 +29,6 @@ fn fast_config() -> AppConfig {
     t.pulse_width_ms = 0;
     t.post_approach_settle_ms = 0;
     t.post_reposition_settle_ms = 0;
-    t.post_move_settle_ms = 0;
     t.buffer_clear_wait_ms = 0;
     t.post_pulse_settle_ms = 0;
     cfg.data_acquisition.stable_signal_samples = 8;
@@ -61,7 +60,12 @@ impl Job for TipPrepJob {
             .get_by_name("freq shift")
             .ok_or_else(|| SpmError::Workflow("no freq shift signal".into()))?
             .signal_index();
-        let mut routine = TipPrep::new(&self.config, fs);
+        let current = cx
+            .registry
+            .get_by_name("current")
+            .ok_or_else(|| SpmError::Workflow("no current signal".into()))?
+            .signal_index();
+        let mut routine = TipPrep::new(&self.config, fs, current);
         run_routine(cx.controller, cx.events, cx.shutdown, &mut routine)
     }
 }

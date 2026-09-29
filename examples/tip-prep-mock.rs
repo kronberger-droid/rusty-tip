@@ -132,6 +132,7 @@ fn main() {
             shutdown: &shutdown,
             config: &plan.config,
             freq_shift: FREQ_SHIFT_INDEX,
+            current: SignalIndex(0), // `Current (A)` in the mock's table
         },
     );
 

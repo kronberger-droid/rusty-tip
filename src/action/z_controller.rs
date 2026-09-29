@@ -3,8 +3,11 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::action::pll::CenterFreqShift;
+use crate::action::signals::{compute_stability_metrics, emit_measurement};
 use crate::action::util::Wait;
 use crate::action::{Action, ActionContext, ActionOutput};
+use crate::controllers::ControllerId;
+use crate::signal_registry::SignalIndex;
 use crate::spm_controller::{Capability, ZControllerStatus};
 use crate::spm_error::SpmError;
 
@@ -259,22 +262,174 @@ impl Action for SafeTipSet {
     }
 }
 
+/// Switch the Z-controller loop on or off, leaving Z where it is.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ZControllerSet {
+    pub on: bool,
+}
+
+impl Action for ZControllerSet {
+    fn name(&self) -> &str {
+        "z_controller_set"
+    }
+    fn description(&self) -> &str {
+        "Switch the Z-controller loop on or off"
+    }
+    fn requires(&self) -> Vec<Capability> {
+        vec![Capability::ZController]
+    }
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+        ctx.controller
+            .set_controller_enabled(ControllerId::Z, self.on)?;
+        Ok(ActionOutput::Unit)
+    }
+}
+
+/// What "landed" means: the Z loop's input sitting near its setpoint and
+/// holding still, judged on the stream.
+///
+/// The auto-approach flag drops the moment the setpoint is first crossed,
+/// not when the loop has settled. After coarse steps the stage keeps
+/// creeping for a while and the loop rides a current well above the
+/// setpoint until it stops; after any landing the loop's own step response
+/// has to die out. Both show as a batch that is off the setpoint, noisy or
+/// drifting, so one gate covers them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LandingGate {
+    /// The loop's input signal, the current for a current loop.
+    pub index: SignalIndex,
+    /// The setpoint the loop was given, in the signal's unit.
+    pub setpoint: f64,
+    /// Fraction of the setpoint within which the batch mean has to sit, and
+    /// the bound on its standard deviation and its drift per second. Half
+    /// is loose on purpose: the loop being *near* is what matters, not on.
+    pub tolerance: f64,
+    /// Samples per batch.
+    pub num_samples: usize,
+    /// Stop waiting after this long and take the landing as done, with a
+    /// warning. The batches are in the log either way.
+    pub timeout_ms: u64,
+    /// Rate the samples arrive at when the controller has not measured its
+    /// own; turns the per-sample slope into a drift per second.
+    pub sample_rate_hz: f64,
+}
+
+/// Wait until the Z loop's input reads stable near the setpoint, or the
+/// budget runs out, after which the landing is taken as done with a
+/// warning. The batch statistics are the same ones `read_stable_signal`
+/// uses and every batch goes to the log as a `landing` measurement, so a
+/// slow settle, or one that never came, can be read back afterwards.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SettleOnSetpoint {
+    #[serde(flatten)]
+    pub gate: LandingGate,
+}
+
+/// Between two batches of the settle.
+const SETTLE_POLL_MS: u64 = 100;
+
+impl Action for SettleOnSetpoint {
+    fn name(&self) -> &str {
+        "settle_on_setpoint"
+    }
+    fn description(&self) -> &str {
+        "Wait until the Z loop's input reads stable near its setpoint"
+    }
+    fn requires(&self) -> Vec<Capability> {
+        vec![Capability::Signals]
+    }
+
+    fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
+        let g = &self.gate;
+        let band = g.tolerance * g.setpoint.abs();
+        if band <= 0.0 || band.is_nan() || g.num_samples == 0 {
+            return Err(SpmError::Workflow(format!(
+                "settle_on_setpoint needs a non-zero setpoint, tolerance and batch; got \
+                 setpoint {:.3e}, tolerance {}, {} samples",
+                g.setpoint, g.tolerance, g.num_samples
+            )));
+        }
+        let rate = ctx
+            .controller
+            .stream_rate_hz()
+            .filter(|&hz| hz > 0.0)
+            .unwrap_or(g.sample_rate_hz);
+        let start = Instant::now();
+        let timeout = Duration::from_millis(g.timeout_ms);
+        loop {
+            // Fresh samples only: what the loop is doing now, not what the
+            // buffer holds from the landing.
+            ctx.controller.clear_data_buffer();
+            let samples = ctx.controller.read_signal_samples(g.index, g.num_samples)?;
+            let (mean, std_dev, slope_per_sample) = compute_stability_metrics(&samples);
+            let drift = slope_per_sample * rate;
+            let settled =
+                (mean - g.setpoint).abs() <= band && std_dev <= band && drift.abs() <= band;
+            emit_measurement(
+                ctx,
+                "landing",
+                g.index,
+                samples.len(),
+                mean,
+                std_dev,
+                drift,
+                slope_per_sample,
+                settled,
+            );
+            if settled {
+                log::info!(
+                    "Z loop settled: {mean:.3e} against {:.3e} ± {band:.1e} after {:.1} s",
+                    g.setpoint,
+                    start.elapsed().as_secs_f64()
+                );
+                return Ok(ActionOutput::Value(mean));
+            }
+            if start.elapsed() >= timeout {
+                // Taken as landed anyway: a fixed wait, which is what this
+                // replaced, would have carried on too, and the batches are
+                // in the log for anyone asking why a cycle went wrong.
+                log::warn!(
+                    "Z loop not settled after {:.0} s, carrying on: mean {mean:.3e} against \
+                     {:.3e} ± {band:.1e}, std_dev {std_dev:.3e}, drift {drift:.3e}/s",
+                    timeout.as_secs_f64(),
+                    g.setpoint
+                );
+                return Ok(ActionOutput::Value(mean));
+            }
+            log::debug!(
+                "Z loop not settled yet: mean {mean:.3e} against {:.3e} ± {band:.1e}, \
+                 std_dev {std_dev:.3e}, drift {drift:.3e}/s",
+                g.setpoint
+            );
+            ctx.settle(SETTLE_POLL_MS)?;
+        }
+    }
+}
+
 /// Composite action: approach and calibrate frequency shift for a valid reading.
 ///
 /// Sequence:
-/// 1. Auto-approach to surface
-/// 2. Wait 200ms
+/// 1. Auto-approach to surface, safe-tip off. The landing after coarse
+///    steps carries the stage's creep and the loop's step response; both
+///    are harmless with nothing armed and nothing read.
+/// 2. Wait until the loop sits near its setpoint ([`LandingGate`]), or a
+///    fixed 200 ms when the caller gave no gate.
 /// 3. Enable safe-tip protection
 /// 4. Z-home (small withdraw ~50nm from surface)
 /// 5. Wait 500ms
 /// 6. Center frequency shift (while slightly withdrawn)
-/// 7. Auto-approach again (final approach with calibrated freq shift)
-/// 8. Restore safe-tip to previous state
+/// 7. Restore safe-tip to previous state
+/// 8. Second landing. With a gate, switch the Z loop on from home and
+///    wait for the gate again: the loop walks the 50 nm in on its own
+///    integrator and lands softly, which the auto-approach's ramp does not.
+///    Without one, auto-approach again and wait 200 ms.
 ///
-/// Between steps 3 and 7 the Z-controller status is checked, and the action
-/// aborts if safe-tip protection has fired. Safe-tip retracts the tip on its
-/// own, so the trip itself is handled; what must not happen is step 7 driving
-/// the tip straight back at whatever caused it.
+/// Safe-tip is armed only while the tip is parked at home, steps 3 to 7,
+/// since that is the one stretch where the loop is off and nothing else
+/// would notice a contact. Between those steps the Z-controller status is
+/// checked and the action aborts if safe-tip has fired: the hardware
+/// retracts on its own, what must not happen is step 8 driving the tip
+/// straight back at whatever caused it.
 ///
 /// Step 4 relies on the controller's Z-home mode being *relative*: it has to
 /// mean "back off from here", not "go to a coordinate". `NanonisSetupConfig`
@@ -285,6 +440,10 @@ pub struct CalibratedApproach {
     pub wait: bool,
     #[serde(default = "default_approach_timeout_ms")]
     pub timeout_ms: u64,
+    /// What "landed" means. `None` falls back to fixed waits and a second
+    /// auto-approach.
+    #[serde(default)]
+    pub landing: Option<LandingGate>,
 }
 
 impl Default for CalibratedApproach {
@@ -292,7 +451,19 @@ impl Default for CalibratedApproach {
         Self {
             wait: true,
             timeout_ms: DEFAULT_APPROACH_TIMEOUT_MS,
+            landing: None,
         }
+    }
+}
+
+impl CalibratedApproach {
+    /// After a landing: the gate when there is one, a fixed settle otherwise.
+    fn settle_after_landing(&self, ctx: &mut ActionContext) -> super::Result<()> {
+        match &self.landing {
+            Some(gate) => ctx.run(&SettleOnSetpoint { gate: gate.clone() })?,
+            None => ctx.run(&Wait { duration_ms: 200 })?,
+        };
+        Ok(())
     }
 }
 
@@ -314,8 +485,8 @@ impl Action for CalibratedApproach {
             timeout_ms: self.timeout_ms,
         })?;
 
-        // 2. Settle
-        ctx.run(&Wait { duration_ms: 200 })?;
+        // 2. Let the landing die out before anything is armed.
+        self.settle_after_landing(ctx)?;
 
         // 3. Enable safe-tip
         let was_enabled = ctx.controller.safe_tip_enabled().unwrap_or(false);
@@ -323,7 +494,7 @@ impl Action for CalibratedApproach {
             ctx.run(&SafeTipSet { enabled: true })?;
         }
 
-        // Steps 4-7 wrapped so safe-tip is always restored on exit
+        // Steps 4-6 wrapped so safe-tip is always restored on exit
         let result = (|| -> super::Result<()> {
             abort_if_safe_tip_tripped(ctx, "after enabling safe-tip")?;
 
@@ -341,22 +512,24 @@ impl Action for CalibratedApproach {
             }
             abort_if_safe_tip_tripped(ctx, "after centring the frequency shift")?;
 
-            // 7. Final approach with centered freq shift
-            ctx.run(&AutoApproach {
-                wait: self.wait,
-                timeout_ms: self.timeout_ms,
-            })?;
-            abort_if_safe_tip_tripped(ctx, "after the final approach")?;
-
             Ok(())
         })();
 
-        // 8. Always restore safe-tip state before propagating errors
+        // 7. Always restore safe-tip state before propagating errors
         if !was_enabled && let Err(e) = ctx.run(&SafeTipSet { enabled: false }) {
             log::error!("Failed to restore safe-tip state: {}", e);
         }
-
         result?;
+
+        // 8. Second landing, with safe-tip as the caller had it.
+        match &self.landing {
+            Some(_) => ctx.run(&ZControllerSet { on: true })?,
+            None => ctx.run(&AutoApproach {
+                wait: self.wait,
+                timeout_ms: self.timeout_ms,
+            })?,
+        };
+        self.settle_after_landing(ctx)?;
         Ok(ActionOutput::Unit)
     }
 }
@@ -411,6 +584,94 @@ mod tests {
         assert!(
             !obs.safe_tip_enabled,
             "safe-tip is restored to its previous state even on abort"
+        );
+    }
+
+    fn gate(setpoint: f64, timeout_ms: u64) -> LandingGate {
+        LandingGate {
+            index: SignalIndex(0),
+            setpoint,
+            tolerance: 0.5,
+            num_samples: 8,
+            timeout_ms,
+            sample_rate_hz: 1000.0,
+        }
+    }
+
+    /// With a gate the second landing is the loop's own, not the
+    /// auto-approach's ramp, and safe-tip is off for both landings: it is
+    /// armed after the first has settled and disarmed before the second.
+    #[test]
+    fn with_a_gate_the_second_landing_is_made_on_the_loop() {
+        // Index 0 is the mock's current; the tip model must sit elsewhere.
+        let mut controller = MockController::builder()
+            .freq_shift_index(SignalIndex(2))
+            .build();
+        let obs = controller.observations();
+        let mut store = DataStore::new();
+        let events = EventBus::new();
+        let shutdown = ShutdownFlag::new();
+        let mut ctx = ActionContext {
+            controller: &mut controller,
+            store: &mut store,
+            events: &events,
+            shutdown: &shutdown,
+            depth: 0,
+        };
+        ctx.controller.set_z_setpoint(100e-12).unwrap();
+
+        CalibratedApproach {
+            landing: Some(gate(100e-12, 1_000)),
+            ..Default::default()
+        }
+        .execute(&mut ctx)
+        .expect("a loop sitting on its setpoint lands");
+
+        let obs = obs.lock();
+        assert_eq!(obs.approach_count, 1, "the auto-approach runs once");
+        assert!(
+            obs.called("set_controller_enabled"),
+            "the second landing switches the loop on"
+        );
+        assert!(obs.z_controller_on);
+        assert!(!obs.safe_tip_enabled, "safe-tip is back off at the end");
+    }
+
+    /// A loop that never reads near the setpoint holds the gate for its
+    /// budget and no longer: after that the landing is taken as done, the
+    /// way a fixed wait would have.
+    #[test]
+    fn a_gate_that_never_sees_the_setpoint_gives_up_after_its_budget() {
+        let mut controller = MockController::builder()
+            .freq_shift_index(SignalIndex(2))
+            .build();
+        let mut store = DataStore::new();
+        let events = EventBus::new();
+        let shutdown = ShutdownFlag::new();
+        let mut ctx = ActionContext {
+            controller: &mut controller,
+            store: &mut store,
+            events: &events,
+            shutdown: &shutdown,
+            depth: 0,
+        };
+        // The mock's current follows its own setpoint, 100 pA; the gate
+        // expects 1 nA within half.
+        ctx.controller.set_z_setpoint(100e-12).unwrap();
+
+        let start = Instant::now();
+        let out = SettleOnSetpoint {
+            gate: gate(1e-9, 250),
+        }
+        .execute(&mut ctx)
+        .expect("the budget running out is not an error");
+        assert!(
+            start.elapsed() >= Duration::from_millis(250),
+            "the whole budget is spent before giving up"
+        );
+        assert!(
+            matches!(out, ActionOutput::Value(v) if (v - 100e-12).abs() < 1e-15),
+            "what the loop read is what comes back: {out:?}"
         );
     }
 

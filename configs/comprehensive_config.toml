@@ -153,11 +153,15 @@ max_duration_secs = 12000
 # reposition_steps = [1, 1]
 # # reposition_steps = [3, 3]  # Alternative: Larger repositioning
 #
-# # Settle (ms) between the coarse steps and the re-approach. A stick-slip
-# # step leaves the stage creeping, and an approach that lands on the creep
-# # rings on contact and trips safe-tip. 0.2.3 had 500 here.
-# post_move_settle_ms = 3000
-# # post_move_settle_ms = 5000  # Alternative: A stage that creeps longer
+# # A landing counts once the current reads within this fraction of the
+# # setpoint and holds still (same band on the batch's std dev and drift).
+# # A creeping stage or a ringing loop fails it until they stop.
+# landing_tolerance = 0.5
+# # landing_tolerance = 0.2  # Alternative: Stricter, for a quiet loop
+#
+# # Stop waiting for a landing after this (ms) and carry on with a warning.
+# landing_timeout_ms = 30000
+# # landing_timeout_ms = 60000  # Alternative: A stage that creeps longer
 #
 # # Report progress every N cycles
 # status_interval = 10

@@ -123,6 +123,10 @@ fn run() -> Result<(), RunError> {
             .unwrap_or_default()
     );
     let freq_shift_index = freq_shift_signal.signal_index();
+    let current_index = registry
+        .get_by_name("current")
+        .ok_or("Current signal not found in registry")?
+        .signal_index();
 
     // Setup TCP data stream for stable signal reading
     setup_tcp_stream(&mut controller, &registry, &config)?;
@@ -152,6 +156,7 @@ fn run() -> Result<(), RunError> {
             shutdown: &shutdown,
             config: &config,
             freq_shift: freq_shift_index,
+            current: current_index,
         },
     );
 

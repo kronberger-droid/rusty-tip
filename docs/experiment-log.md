@@ -44,13 +44,18 @@ its `voltage`, `duration_ms`, `z_hold`, `absolute`), `output` is what it
 returned, `duration` is milliseconds, `error` is the failure text.
 `depth` is the nesting: 0 for an action the routine ran directly, 1 for a
 step run by that action. A `calibrated_approach` at depth 0 is followed by
-its `auto_approach`, `wait`, `z_home`, `center_freq_shift` and second
-`auto_approach` at depth 1, then its own `action_completed`. Reconstruct
-the tree by stacking on depth.
+its `auto_approach`, `settle_on_setpoint`, `safe_tip_set`, `z_home`,
+`wait`, `center_freq_shift`, `safe_tip_set`, `z_controller_set` and second
+`settle_on_setpoint` at depth 1, then its own `action_completed`.
+Reconstruct the tree by stacking on depth.
 
 **`data_collected`**: a measurement, with a `label` and a `value` object.
 A stable read is `label: "stable_read"` with the mean as `value.value`,
 plus `std_dev`, `slope` (Hz/s), `n` and whether the batch passed the gates.
+A landing gate's batches have the same fields under `label: "landing"`,
+one per batch until the loop's input sat near its setpoint or the wait ran
+out; `stable` says which. They are waits, not measurements, hence the
+separate label.
 
 **`custom`**: a tool's own event. `kind` is `tool/name`, and `data` has
 the shape the header's schema declares for that kind.
