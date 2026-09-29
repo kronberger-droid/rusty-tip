@@ -17,7 +17,6 @@ use std::time::SystemTime;
 
 use eframe::egui;
 use log::LevelFilter;
-use nanonis_rs::motor::MotorDirection;
 use serde::{Deserialize, Serialize};
 
 use rusty_tip::config::{MotorZApproach, TcpChannelMapping};
@@ -184,10 +183,7 @@ impl ConnectionForm {
             .ok_or_else(|| format!("coarse motor group {:?} is not 1 to 6", self.motor_group))?;
         let motor = CoarseMotor {
             group,
-            z_approach: match self.motor_z_approach {
-                MotorZApproach::Plus => MotorDirection::ZPlus,
-                MotorZApproach::Minus => MotorDirection::ZMinus,
-            },
+            z_approach: self.motor_z_approach,
         };
         let optional = |s: &str| (!s.trim().is_empty()).then(|| PathBuf::from(s.trim()));
         Ok(NanonisBackend {
@@ -248,10 +244,7 @@ impl ConnectionForm {
             .map(|m| (m.nanonis_index.to_string(), m.tcp_channel.to_string()))
             .collect();
         self.motor_group = b.motor.group_number().to_string();
-        self.motor_z_approach = match b.motor.z_approach {
-            MotorDirection::ZMinus => MotorZApproach::Minus,
-            _ => MotorZApproach::Plus,
-        };
+        self.motor_z_approach = b.motor.z_approach;
         if let Some(dir) = &s.log_dir {
             self.log_dir = dir.display().to_string();
         }
@@ -785,7 +778,7 @@ mod tests {
                 }],
                 motor: CoarseMotor {
                     group: nanonis_rs::motor::MotorGroup::Group3,
-                    z_approach: MotorDirection::ZMinus,
+                    z_approach: MotorZApproach::Minus,
                 },
                 ..NanonisBackend::default()
             },
