@@ -359,6 +359,13 @@ impl<'a> TipPrep<'a> {
 
             self.reposition(rt)?;
 
+            // The reset put the voltage back to its floor with no reading
+            // behind it, and the next pulse fires at this new site: read
+            // it, so that pulse is chosen the way every other one is.
+            let fs = self.read_stable(rt)?;
+            self.pulse
+                .update_voltage(&self.config.pulse_method, Some(fs));
+
             Ok(StabilityOutcome::Unstable)
         }
     }
@@ -576,6 +583,11 @@ impl Routine for TipPrep<'_> {
             if self.handle_stability(rt)? {
                 return Ok(Outcome::Completed);
             }
+        } else {
+            // The first pulse fires at this site, so it is chosen from this
+            // reading like every later one is from the reading before it.
+            self.pulse
+                .update_voltage(&cfg.pulse_method, Some(initial_fs));
         }
 
         // Main loop: pulse -> settle -> reposition -> measure -> check sharp

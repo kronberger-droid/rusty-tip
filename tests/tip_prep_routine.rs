@@ -706,6 +706,49 @@ impl<T: Observer> Observer for ArcObserver<T> {
     }
 }
 
+/// The first pulse of a run is chosen from the reading taken after the
+/// first approach, not fired at the method's floor. With the linear method
+/// a shift of −2 Hz inside a clamp of [−3, −1] Hz maps to the middle of
+/// [3, 8] V, so the first pulse is 5.5 V and not 3 V.
+#[test]
+fn the_first_pulse_is_chosen_from_the_initial_reading() {
+    let mut cfg = fast_config();
+    cfg.tip_prep.max_cycles = Some(1);
+    // −2 Hz has to count as blunt, or nothing is pulsed at all.
+    cfg.tip_prep.sharp_tip_bounds = [-1.0, 0.0];
+    cfg.pulse_method = PulseMethod::Linear {
+        voltage_bounds: (3.0, 8.0),
+        linear_clamp: (-3.0, -1.0),
+        polarity: PolaritySign::Positive,
+        random_polarity_switch: None,
+    };
+    let mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT_INDEX)
+        .freq_shift(models::always(-2.0))
+        .build();
+    let obs = mock.observations();
+
+    let _ = run_tip_prep(
+        Box::new(mock),
+        TipPrepParams {
+            events: &EventBus::new(),
+            shutdown: &ShutdownFlag::new(),
+            config: &cfg,
+            freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
+        },
+    )
+    .expect("routine should not error");
+
+    let pulses = &obs.lock().pulses;
+    assert_eq!(pulses.len(), 1);
+    assert!(
+        (pulses[0] - 5.5).abs() < 1e-9,
+        "the first pulse follows the −2 Hz reading, got {} V",
+        pulses[0]
+    );
+}
+
 // Tiny helper so panic messages name the outcome (Outcome has no Debug).
 fn outcome_name(o: &Outcome) -> &'static str {
     match o {
