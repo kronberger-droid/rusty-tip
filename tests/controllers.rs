@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use rusty_tip::ShutdownFlag;
 use rusty_tip::controllers::{
-    ApplyProfile, ControllerAppliedEvent, ControllerId, ControllerParams, ControllerProfile,
-    ControllerReading, ProfileEntry, ReadControllers, SetControllerEnabled, ZControllerParams,
+    ApplyPreset, ApplyProfile, ControllerAppliedEvent, ControllerId, ControllerParams,
+    ControllerProfile, ControllerReading, Preset, ProfileEntry, ReadControllers,
+    SetControllerEnabled, TunedAt, ZControllerParams,
 };
 use rusty_tip::event::EventAccumulator;
 use rusty_tip::mock_controller::{MockController, models};
@@ -158,4 +159,69 @@ fn switching_a_loop_is_its_own_job_and_reads_the_loop_back() {
     assert!(!reads[0].enabled);
     assert_eq!(reads[0].status, "off");
     assert!(!obs.lock().z_controller_on);
+}
+
+/// A preset writes its gains and leaves the setpoint where the loop has
+/// it; one naming a Z-controller the module has not defined is refused
+/// before anything is written.
+#[test]
+fn applying_a_preset_keeps_the_loops_setpoint_and_refuses_an_unknown_loop() {
+    let (mut session, obs) = session();
+    let preset = Preset {
+        name: "tip prep".into(),
+        id: ControllerId::Z,
+        params: ControllerParams::Z(ZControllerParams {
+            active: "log Current".into(),
+            setpoint: 100e-12,
+            p_gain_m: 1.5e-12,
+            time_constant_s: 50e-6,
+            ..Default::default()
+        }),
+        tuned_at: TunedAt {
+            setpoint: Some(100e-12),
+            bias_v: Some(1.0),
+            ..Default::default()
+        },
+    };
+    let events = run(&mut session, &mut ApplyPreset { preset });
+    let applied = events.custom::<ControllerAppliedEvent>();
+    assert_eq!(applied.len(), 1);
+    match (&applied[0].before, &applied[0].after) {
+        (ControllerParams::Z(before), ControllerParams::Z(after)) => {
+            assert_eq!(
+                after.setpoint, before.setpoint,
+                "the setpoint stays the loop's"
+            );
+            assert_eq!(after.p_gain_m, 1.5e-12, "the gains are the preset's");
+            assert_eq!(after.time_constant_s, 50e-6);
+        }
+        other => panic!("not Z parameters: {other:?}"),
+    }
+    assert_eq!(events.custom::<ControllerReading>().len(), 1);
+
+    let writes_before = obs.lock().call_counts.get("write_controller").copied();
+    let mut job = ApplyPreset {
+        preset: Preset {
+            name: "elsewhere".into(),
+            id: ControllerId::Z,
+            params: ControllerParams::Z(ZControllerParams {
+                active: "No such loop".into(),
+                ..Default::default()
+            }),
+            tuned_at: TunedAt::default(),
+        },
+    };
+    let err = session
+        .run(&mut job, &ShutdownFlag::new(), Vec::new())
+        .unwrap_err();
+    assert!(err.to_string().contains("No such loop"), "{err}");
+    assert!(
+        err.to_string().contains("elsewhere"),
+        "the preset is named: {err}"
+    );
+    assert_eq!(
+        obs.lock().call_counts.get("write_controller").copied(),
+        writes_before,
+        "nothing was written"
+    );
 }

@@ -308,6 +308,31 @@ impl ControllerParams {
         inner.unwrap_or(serde_json::Value::Null)
     }
 
+    /// The loop's setpoint, where the kind has one: the Z-controller's, in
+    /// its input's unit, and the amplitude loop's in metres. The phase
+    /// loop has none.
+    pub fn setpoint(&self) -> Option<f64> {
+        match self {
+            ControllerParams::Z(p) => Some(p.setpoint),
+            ControllerParams::PllAmplitude(p) => Some(p.setpoint_m),
+            ControllerParams::PllPhase(_) => None,
+        }
+    }
+
+    /// These parameters with `other`'s setpoint in place of their own,
+    /// when both are of one kind. What applying a preset writes: its gains
+    /// over the operating point whoever owns the run has set.
+    pub fn with_setpoint_of(mut self, other: &ControllerParams) -> Self {
+        match (&mut self, other) {
+            (ControllerParams::Z(p), ControllerParams::Z(o)) => p.setpoint = o.setpoint,
+            (ControllerParams::PllAmplitude(p), ControllerParams::PllAmplitude(o)) => {
+                p.setpoint_m = o.setpoint_m;
+            }
+            _ => {}
+        }
+        self
+    }
+
     /// The reverse of [`to_fields`](Self::to_fields).
     pub fn from_fields(id: ControllerId, fields: serde_json::Value) -> Result<Self, String> {
         let params = match id {
@@ -400,6 +425,259 @@ impl ControllerProfile {
             }
         }
         Ok(())
+    }
+}
+
+/// The operating point a preset's gains were tuned at. A preset never
+/// writes any of these; the run that applies it owns them. They are here
+/// so a reader can tell whether the gains transfer: a log current loop's
+/// do not depend on the setpoint or the bias, a linear or a
+/// frequency-shift loop's do.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct TunedAt {
+    /// The loop's setpoint, in its input's unit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setpoint: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bias_v: Option<f64>,
+    /// The oscillation amplitude, for a loop on the frequency shift.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amplitude_m: Option<f64>,
+    /// Anything else worth knowing: the sample, the tip's state.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub note: String,
+}
+
+/// One controller's parameters under a name, with where they were tuned:
+/// what a lab keeps and recalls, and what a routine names in its config.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Preset {
+    pub name: String,
+    pub id: ControllerId,
+    pub params: ControllerParams,
+    #[serde(default)]
+    pub tuned_at: TunedAt,
+}
+
+impl Preset {
+    /// The name is not empty and the parameters are of the id's kind.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("a preset needs a name".into());
+        }
+        if !self.params.fits(self.id) {
+            return Err(format!(
+                "preset {:?}: the parameters given for {} are of another kind",
+                self.name, self.id
+            ));
+        }
+        Ok(())
+    }
+
+    /// What applying this preset writes over `current`: its parameters
+    /// with `current`'s setpoint kept.
+    pub fn params_over(&self, current: &ControllerParams) -> ControllerParams {
+        self.params.clone().with_setpoint_of(current)
+    }
+
+    /// Whether the gains depend on the operating point they were tuned
+    /// at. A log loop on the current is the one case where they do not:
+    /// its plant is decades per ångström, set by the barrier and not by
+    /// the setpoint or the bias. Everything else, a linear loop whose
+    /// gain scales with the setpoint or a frequency loop whose slope
+    /// changes with distance, bias and amplitude, does.
+    pub fn depends_on_operating_point(&self) -> bool {
+        match &self.params {
+            ControllerParams::Z(p) => {
+                let input = p.input();
+                !(input.law == ZLaw::Log && input.quantity == ZQuantity::Current)
+            }
+            _ => true,
+        }
+    }
+}
+
+/// A preset file: `[[presets]]` tables, names unique within it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PresetFile {
+    #[serde(default)]
+    pub presets: Vec<Preset>,
+}
+
+impl PresetFile {
+    /// Every preset valid and no name twice.
+    pub fn validate(&self) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        for preset in &self.presets {
+            preset.validate()?;
+            if !seen.insert(preset.name.trim().to_lowercase()) {
+                return Err(format!("preset {:?} is defined twice", preset.name));
+            }
+        }
+        Ok(())
+    }
+
+    /// By name, case-insensitively.
+    pub fn find(&self, name: &str) -> Option<&Preset> {
+        let wanted = name.trim().to_lowercase();
+        self.presets
+            .iter()
+            .find(|p| p.name.trim().to_lowercase() == wanted)
+    }
+}
+
+/// Where presets are kept. One implementation reads and writes a TOML
+/// file; a database can stand behind the same calls later without the
+/// pane or a routine noticing.
+pub trait PresetStore {
+    /// Every preset, in the store's order.
+    fn list(&self) -> Result<Vec<Preset>, String>;
+
+    /// One preset by name, if there is one.
+    fn get(&self, name: &str) -> Result<Option<Preset>, String> {
+        let wanted = name.trim().to_lowercase();
+        Ok(self
+            .list()?
+            .into_iter()
+            .find(|p| p.name.trim().to_lowercase() == wanted))
+    }
+
+    /// Add a preset, or replace the one with its name.
+    fn put(&mut self, preset: Preset) -> Result<(), String>;
+
+    /// Remove the preset with this name; nothing happens when there is none.
+    fn remove(&mut self, name: &str) -> Result<(), String>;
+}
+
+/// Presets in one TOML file. A missing file is an empty store, so the
+/// first save creates it; every call reads the file, since the pane and
+/// a routine may share it.
+#[derive(Debug, Clone)]
+pub struct TomlPresetStore {
+    pub path: PathBuf,
+}
+
+impl TomlPresetStore {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    /// The file as it stands, validated; empty when there is no file.
+    pub fn read(&self) -> Result<PresetFile, String> {
+        let text = match std::fs::read_to_string(&self.path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(PresetFile::default()),
+            Err(e) => return Err(format!("Cannot read {}: {e}", self.path.display())),
+        };
+        let file: PresetFile =
+            toml::from_str(&text).map_err(|e| format!("{}: {e}", self.path.display()))?;
+        file.validate()
+            .map_err(|e| format!("{}: {e}", self.path.display()))?;
+        Ok(file)
+    }
+
+    fn write(&self, file: &PresetFile) -> Result<(), String> {
+        file.validate()?;
+        let text = toml::to_string_pretty(file).map_err(|e| e.to_string())?;
+        std::fs::write(&self.path, text)
+            .map_err(|e| format!("Cannot write {}: {e}", self.path.display()))
+    }
+}
+
+impl PresetStore for TomlPresetStore {
+    fn list(&self) -> Result<Vec<Preset>, String> {
+        Ok(self.read()?.presets)
+    }
+
+    fn put(&mut self, preset: Preset) -> Result<(), String> {
+        preset.validate()?;
+        let mut file = self.read()?;
+        let wanted = preset.name.trim().to_lowercase();
+        match file
+            .presets
+            .iter_mut()
+            .find(|p| p.name.trim().to_lowercase() == wanted)
+        {
+            Some(slot) => *slot = preset,
+            None => file.presets.push(preset),
+        }
+        self.write(&file)
+    }
+
+    fn remove(&mut self, name: &str) -> Result<(), String> {
+        let mut file = self.read()?;
+        let wanted = name.trim().to_lowercase();
+        file.presets
+            .retain(|p| p.name.trim().to_lowercase() != wanted);
+        self.write(&file)
+    }
+}
+
+/// Write one preset's parameters to its controller, keeping the setpoint
+/// the controller holds, and read it back: a `controller/applied` event
+/// and a `controller/read` of the result. The loop is not switched.
+///
+/// For the Z-controller the preset's `active` has to be one of the loops
+/// the module has defined; a name it does not know is refused before
+/// anything is written.
+#[derive(Debug, Clone)]
+pub struct ApplyPreset {
+    pub preset: Preset,
+}
+
+impl ApplyPreset {
+    /// The shared body: also what a routine calls to apply a preset it was
+    /// configured with, since a routine is not a job of its own.
+    pub fn apply(
+        preset: &Preset,
+        controller: &mut dyn SpmController,
+        events: &dyn EventEmitter,
+    ) -> Result<ControllerReading, SpmError> {
+        preset.validate().map_err(SpmError::Workflow)?;
+        require(controller, Capability::Controllers)?;
+        let current = controller.read_controller(preset.id)?;
+        if let ControllerParams::Z(p) = &preset.params
+            && !p.active.is_empty()
+            && !current.available.is_empty()
+            && !current.available.iter().any(|a| a == &p.active)
+        {
+            return Err(SpmError::Workflow(format!(
+                "preset {:?} names a Z-controller called {:?}; the module has {}",
+                preset.name,
+                p.active,
+                current.available.join(", ")
+            )));
+        }
+        let params = preset.params_over(&current.params);
+        controller.write_controller(preset.id, &params)?;
+        let after = controller.read_controller(preset.id)?;
+        events.emit(Event::typed(&ControllerAppliedEvent {
+            id: preset.id,
+            before: current.params,
+            after: after.params.clone(),
+        }));
+        events.emit(Event::typed(&after));
+        Ok(after)
+    }
+}
+
+impl Job for ApplyPreset {
+    fn name(&self) -> &str {
+        "controllers_apply_preset"
+    }
+
+    fn log_schema(&self) -> ToolSchema {
+        log_schema()
+    }
+
+    fn header_config(&self) -> serde_json::Value {
+        serde_json::to_value(&self.preset).unwrap_or(serde_json::Value::Null)
+    }
+
+    fn run(&mut self, cx: JobCx<'_>) -> Result<Outcome, SpmError> {
+        Self::apply(&self.preset, cx.controller, cx.events)?;
+        Ok(Outcome::Completed)
     }
 }
 
@@ -527,6 +805,117 @@ fn read_all(controller: &mut dyn SpmController, events: &dyn EventEmitter) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tip_prep_preset() -> Preset {
+        Preset {
+            name: "tip prep".into(),
+            id: ControllerId::Z,
+            params: ControllerParams::Z(ZControllerParams {
+                active: "log Current".into(),
+                setpoint: 100e-12,
+                p_gain_m: 1.5e-12,
+                time_constant_s: 50e-6,
+                ..Default::default()
+            }),
+            tuned_at: TunedAt {
+                setpoint: Some(100e-12),
+                bias_v: Some(1.0),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn a_preset_file_is_toml_with_names_unique() {
+        let mut file = PresetFile {
+            presets: vec![tip_prep_preset()],
+        };
+        let text = toml::to_string_pretty(&file).unwrap();
+        assert!(text.contains("[[presets]]"), "{text}");
+        assert!(text.contains("bias_v = 1.0"), "{text}");
+        assert!(
+            !text.contains("amplitude_m"),
+            "unset points are left out: {text}"
+        );
+        let back: PresetFile = toml::from_str(&text).unwrap();
+        assert_eq!(back, file);
+        assert!(
+            file.find("Tip Prep").is_some(),
+            "names match case-insensitively"
+        );
+
+        file.presets.push(tip_prep_preset());
+        assert!(file.validate().unwrap_err().contains("twice"));
+    }
+
+    #[test]
+    fn applying_a_preset_keeps_the_setpoint_the_loop_holds() {
+        let preset = tip_prep_preset();
+        let current = ControllerParams::Z(ZControllerParams {
+            setpoint: 50e-12,
+            p_gain_m: 200e-12,
+            ..Default::default()
+        });
+        match preset.params_over(&current) {
+            ControllerParams::Z(p) => {
+                assert_eq!(
+                    p.setpoint, 50e-12,
+                    "the setpoint is the run's, not the preset's"
+                );
+                assert_eq!(p.p_gain_m, 1.5e-12, "the gains are the preset's");
+                assert_eq!(p.active, "log Current");
+            }
+            other => panic!("not Z parameters: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn only_a_log_current_loop_transfers_across_operating_points() {
+        assert!(!tip_prep_preset().depends_on_operating_point());
+        let mut imaging = tip_prep_preset();
+        imaging.params = ControllerParams::Z(ZControllerParams {
+            active: "Frequency (neg)".into(),
+            ..Default::default()
+        });
+        assert!(imaging.depends_on_operating_point());
+        let mut amplitude = tip_prep_preset();
+        amplitude.id = ControllerId::PllAmplitude { modulator: 1 };
+        amplitude.params = ControllerParams::PllAmplitude(PllAmplitudeParams::default());
+        assert!(amplitude.depends_on_operating_point());
+    }
+
+    #[test]
+    fn the_toml_store_creates_replaces_and_removes() {
+        let dir = std::env::temp_dir().join(format!(
+            "rusty-tip-presets-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut store = TomlPresetStore::new(dir.join("controllers.toml"));
+        assert!(
+            store.list().unwrap().is_empty(),
+            "no file is an empty store"
+        );
+
+        store.put(tip_prep_preset()).unwrap();
+        let mut faster = tip_prep_preset();
+        if let ControllerParams::Z(p) = &mut faster.params {
+            p.time_constant_s = 25e-6;
+        }
+        store.put(faster.clone()).unwrap();
+        let listed = store.list().unwrap();
+        assert_eq!(listed.len(), 1, "a put by an existing name replaces");
+        assert_eq!(listed[0], faster);
+        assert_eq!(store.get("TIP PREP").unwrap(), Some(faster));
+
+        store.remove("tip prep").unwrap();
+        assert!(store.list().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn ids_have_names() {

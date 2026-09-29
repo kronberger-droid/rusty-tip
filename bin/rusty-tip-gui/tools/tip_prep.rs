@@ -417,6 +417,7 @@ fn connection_of(config: &AppConfig) -> ConnectionSettings {
             .experiment_logging
             .enabled
             .then(|| PathBuf::from(&config.experiment_logging.output_path)),
+        presets_file: PathBuf::from(&config.controllers.presets_file),
     }
 }
 
@@ -430,6 +431,7 @@ fn set_connection(config: &mut AppConfig, s: &ConnectionSettings) {
         }
         None => config.experiment_logging.enabled = false,
     }
+    config.controllers.presets_file = s.presets_file.display().to_string();
 }
 
 /// Every pulse fired: the cycle pulses and the max pulses, each already in
