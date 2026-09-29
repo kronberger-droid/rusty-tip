@@ -82,10 +82,13 @@ pub struct TipPrep<'a> {
     landing: LandingGate,
 }
 
+/// How a stability check ended. The two that carry on pulsing carry the
+/// reading at the site the tip now sits over, since the check moved it and
+/// the next pulse fires there.
 enum StabilityOutcome {
     Stable,
-    NotSharp,
-    Unstable,
+    NotSharp(f64),
+    Unstable(f64),
 }
 
 struct SweepPlan {
@@ -152,20 +155,22 @@ impl<'a> TipPrep<'a> {
         })
     }
 
-    fn handle_stability(&mut self, rt: &mut Rt) -> Result<bool, SpmError> {
+    /// `None` once the tip is confirmed stable, otherwise the reading the
+    /// next pulse is to be chosen from.
+    fn handle_stability(&mut self, rt: &mut Rt) -> Result<Option<f64>, SpmError> {
         match self.check_stability(rt)? {
             StabilityOutcome::Stable => {
                 log::info!("Tip confirmed stable!");
-                Ok(true)
+                Ok(None)
             }
-            StabilityOutcome::NotSharp => {
+            StabilityOutcome::NotSharp(fs) => {
                 log::info!("Tip not confirmed sharp - continuing");
-                Ok(false)
+                Ok(Some(fs))
             }
-            StabilityOutcome::Unstable => {
+            StabilityOutcome::Unstable(fs) => {
                 log::info!("Stability check failed - reset to blunt, continuing");
                 self.pulse.reset(&self.config.pulse_method);
-                Ok(false)
+                Ok(Some(fs))
             }
         }
     }
@@ -174,9 +179,11 @@ impl<'a> TipPrep<'a> {
     // Confirm sharpness
     // ------------------------------------------------------------------
 
-    fn confirm_sharp(&self, rt: &mut Rt) -> Result<(bool, Option<f64>), SpmError> {
+    /// Whether every read held sharp, and the last reading taken, which is
+    /// the one at the site the tip now sits over.
+    fn confirm_sharp(&self, rt: &mut Rt) -> Result<(bool, f64), SpmError> {
         const CONFIRMATION_READS: usize = 3;
-        let mut last_freq_shift = None;
+        let mut last_freq_shift = f64::NAN;
 
         for i in 0..CONFIRMATION_READS {
             rt.check_shutdown()?;
@@ -193,9 +200,9 @@ impl<'a> TipPrep<'a> {
                 in_bounds
             );
             if !in_bounds {
-                return Ok((false, None));
+                return Ok((false, fs));
             }
-            last_freq_shift = Some(fs);
+            last_freq_shift = fs;
         }
 
         Ok((true, last_freq_shift))
@@ -213,7 +220,7 @@ impl<'a> TipPrep<'a> {
 
         if !confirmed {
             log::info!("Tip not confirmed sharp during pre-check");
-            return Ok(StabilityOutcome::NotSharp);
+            return Ok(StabilityOutcome::NotSharp(baseline));
         }
 
         let stability = &self.config.tip_prep.stability;
@@ -221,14 +228,6 @@ impl<'a> TipPrep<'a> {
             log::info!("Stability checking disabled - accepting sharp tip");
             return Ok(StabilityOutcome::Stable);
         }
-
-        let baseline = match baseline {
-            Some(v) => v,
-            None => {
-                log::error!("No baseline freq_shift available");
-                return Ok(StabilityOutcome::NotSharp);
-            }
-        };
 
         log::info!("Baseline freq_shift: {:.3} Hz", baseline);
 
@@ -358,15 +357,7 @@ impl<'a> TipPrep<'a> {
             }));
 
             self.reposition(rt)?;
-
-            // The reset put the voltage back to its floor with no reading
-            // behind it, and the next pulse fires at this new site: read
-            // it, so that pulse is chosen the way every other one is.
-            let fs = self.read_stable(rt)?;
-            self.pulse
-                .update_voltage(&self.config.pulse_method, Some(fs));
-
-            Ok(StabilityOutcome::Unstable)
+            Ok(StabilityOutcome::Unstable(self.read_stable(rt)?))
         }
     }
 
@@ -578,17 +569,17 @@ impl Routine for TipPrep<'_> {
             initial_sharp
         );
 
+        let mut site_fs = initial_fs;
         if initial_sharp {
             log::info!("Tip already sharp after approach - running stability check");
-            if self.handle_stability(rt)? {
-                return Ok(Outcome::Completed);
+            match self.handle_stability(rt)? {
+                None => return Ok(Outcome::Completed),
+                Some(fs) => site_fs = fs,
             }
-        } else {
-            // The first pulse fires at this site, so it is chosen from this
-            // reading like every later one is from the reading before it.
-            self.pulse
-                .update_voltage(&cfg.pulse_method, Some(initial_fs));
         }
+        // The first pulse fires at this site, so it is chosen from this
+        // reading like every later one is from the reading before it.
+        self.pulse.update_voltage(&cfg.pulse_method, Some(site_fs));
 
         // Main loop: pulse -> settle -> reposition -> measure -> check sharp
         // Matches V1 ordering: minimize time at pulsed position to avoid
@@ -624,7 +615,7 @@ impl Routine for TipPrep<'_> {
             self.reposition(rt)?;
 
             // Measure at new position (after reposition)
-            let freq_shift = self.read_stable(rt)?;
+            let mut freq_shift = self.read_stable(rt)?;
             let is_sharp = self.is_sharp(freq_shift);
 
             rt.emit(Event::typed(&CycleEvent {
@@ -644,8 +635,11 @@ impl Routine for TipPrep<'_> {
                     cycle,
                     freq_shift
                 );
-                if self.handle_stability(rt)? {
-                    return Ok(Outcome::Completed);
+                match self.handle_stability(rt)? {
+                    None => return Ok(Outcome::Completed),
+                    // The check moved the tip, and the next pulse fires
+                    // where it left it.
+                    Some(fs) => freq_shift = fs,
                 }
             }
 
