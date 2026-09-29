@@ -48,6 +48,13 @@ control_ports = [6501, 6502, 6503, 6504]
 # - The second parameter (load_session_settings/load_session_layout) is set to true,
 #   which means session-specific settings will be loaded from the files
 
+# Coarse motor: which group the Motor module drives (1 to 6), and which of
+# its Z directions moves the tip toward the sample. Every Z step count in
+# the routine is signed against it: positive approaches, negative retracts.
+# motor_group = 1
+# motor_z_approach = "plus"   # Z+ approaches, Z- retracts
+# # motor_z_approach = "minus"  # Alternative: Z- approaches, Z+ retracts
+
 # =============================================================================
 # DATA ACQUISITION SETTINGS
 # =============================================================================

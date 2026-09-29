@@ -13,7 +13,14 @@ host_ip = "127.0.0.1"                 # required
 control_ports = [6501, 6502, 6503, 6504]  # required; the first port is used
 layout_file = "./layout.lyt"          # optional, loaded on connect, before the stream starts
 settings_file = "./settings.ini"      # optional, loaded on connect, before the stream starts
+motor_group = 1                       # coarse motor group, 1 to 6 as the Motor module numbers them
+motor_z_approach = "plus"             # which coarse Z direction moves the tip toward the sample:
+                                      # "plus" (Z+ approaches, Z- retracts) or "minus"
 ```
+
+Every Z step count in the routine is signed against `motor_z_approach`:
+positive approaches, negative retracts. The workbench edits these two on
+its Connection page, next to the TCP channel mapping.
 
 ## `[data_acquisition]` — TCP data stream
 

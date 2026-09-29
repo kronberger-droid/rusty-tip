@@ -46,6 +46,13 @@ impl AppConfig {
             ));
         }
 
+        if !(1..=6).contains(&self.nanonis.motor_group) {
+            return Err(ConfigError::Message(format!(
+                "nanonis.motor_group must be 1 to 6, not {}",
+                self.nanonis.motor_group
+            )));
+        }
+
         Ok(())
     }
 }
@@ -61,6 +68,39 @@ pub struct NanonisConfig {
     pub layout_file: Option<String>,
     /// Nanonis settings file, loaded on connect.
     pub settings_file: Option<String>,
+    /// Coarse motor group to drive, 1 to 6 as the Motor module numbers them.
+    #[serde(default = "default_motor_group")]
+    pub motor_group: u8,
+    /// Which of the coarse motor's Z directions moves the tip toward the
+    /// sample. Retracts go the other way.
+    #[serde(default)]
+    pub motor_z_approach: MotorZApproach,
+}
+
+fn default_motor_group() -> u8 {
+    1
+}
+
+/// The coarse motor's Z direction that approaches the sample, as the Motor
+/// module labels its buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MotorZApproach {
+    /// `Z+` approaches, `Z-` retracts.
+    #[default]
+    Plus,
+    /// `Z-` approaches, `Z+` retracts.
+    Minus,
+}
+
+impl MotorZApproach {
+    /// The button label of the approach direction.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Plus => "Z+",
+            Self::Minus => "Z-",
+        }
+    }
 }
 
 fn default_stable_signal_samples() -> usize {
@@ -165,9 +205,11 @@ pub struct TimingConfig {
     #[serde(default = "default_post_reposition_settle_ms")]
     #[schemars(extend("x-unit" = "ms"))]
     pub post_reposition_settle_ms: u64,
-    /// Settle time between the motor move and the approach during a
-    /// reposition. Was hard-coded at 500 ms (V1 parity) before it became
-    /// configurable.
+    /// Settle between the coarse steps and the approach during a
+    /// reposition. A stick-slip step leaves the stage creeping for a while,
+    /// and an approach that lands on that creep rings on contact: the
+    /// current spikes to the preamp rail for a few hundred milliseconds,
+    /// which is what trips safe-tip. 0.2.3 had 500 ms here.
     #[serde(default = "default_post_move_settle_ms")]
     #[schemars(extend("x-unit" = "ms"))]
     pub post_move_settle_ms: u64,
@@ -329,6 +371,8 @@ impl Default for NanonisConfig {
             control_ports: vec![6501, 6502, 6503, 6504],
             layout_file: None,
             settings_file: None,
+            motor_group: default_motor_group(),
+            motor_z_approach: MotorZApproach::default(),
         }
     }
 }
