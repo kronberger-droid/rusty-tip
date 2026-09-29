@@ -13,6 +13,7 @@ use nanonis_rs::{
 use std::collections::HashSet;
 
 use crate::buffered_tcp_reader::BufferedTCPReader;
+use crate::config::MotorZApproach;
 use crate::controllers::{
     ControllerId, ControllerParams, ControllerReading, PllAmplitudeParams, PllPhaseParams,
     ZControllerParams,
@@ -64,14 +65,14 @@ impl Default for NanonisSetupConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CoarseMotor {
     pub group: MotorGroup,
-    pub z_approach: MotorDirection,
+    pub z_approach: MotorZApproach,
 }
 
 impl Default for CoarseMotor {
     fn default() -> Self {
         Self {
             group: MotorGroup::Group1,
-            z_approach: MotorDirection::ZPlus,
+            z_approach: MotorZApproach::Plus,
         }
     }
 }
@@ -89,11 +90,11 @@ impl CoarseMotor {
         self.group as u8 + 1
     }
 
-    /// The Z direction that moves the tip away from the sample.
-    pub fn z_retract(&self) -> MotorDirection {
+    /// The Z directions that move the tip toward and away from the sample.
+    fn z_directions(&self) -> (MotorDirection, MotorDirection) {
         match self.z_approach {
-            MotorDirection::ZMinus => MotorDirection::ZPlus,
-            _ => MotorDirection::ZMinus,
+            MotorZApproach::Plus => (MotorDirection::ZPlus, MotorDirection::ZMinus),
+            MotorZApproach::Minus => (MotorDirection::ZMinus, MotorDirection::ZPlus),
         }
     }
 }
@@ -1027,7 +1028,10 @@ impl SpmController for NanonisController {
                 MotorDirection::YPlus,
                 MotorDirection::YMinus,
             ),
-            (displacement.z, motor.z_approach, motor.z_retract()),
+            {
+                let (approach, retract) = motor.z_directions();
+                (displacement.z, approach, retract)
+            },
         ];
         for (steps, positive, negative) in axes {
             if steps != 0 {

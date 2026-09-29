@@ -250,7 +250,11 @@ impl Action for Reposition {
         "Withdraw, move motor, and do a calibrated approach at the new position"
     }
     fn requires(&self) -> Vec<Capability> {
-        vec![Capability::ZController, Capability::Motor, Capability::Pll]
+        let mut caps = vec![Capability::ZController, Capability::Motor, Capability::Pll];
+        if self.landing.is_some() {
+            caps.extend(LandingGate::REQUIRES);
+        }
+        caps
     }
 
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {

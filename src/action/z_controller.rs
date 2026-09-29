@@ -276,7 +276,7 @@ impl Action for ZControllerSet {
         "Switch the Z-controller loop on or off"
     }
     fn requires(&self) -> Vec<Capability> {
-        vec![Capability::ZController]
+        vec![Capability::Controllers]
     }
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         ctx.controller
@@ -312,6 +312,13 @@ pub struct LandingGate {
     /// Rate the samples arrive at when the controller has not measured its
     /// own; turns the per-sample slope into a drift per second.
     pub sample_rate_hz: f64,
+}
+
+impl LandingGate {
+    /// What an action landing through a gate needs on top of its own: the
+    /// stream to judge the landing on, and the loop switch for the second
+    /// landing.
+    pub const REQUIRES: [Capability; 2] = [Capability::Signals, Capability::Controllers];
 }
 
 /// Wait until the Z loop's input reads stable near the setpoint, or the
@@ -363,8 +370,13 @@ impl Action for SettleOnSetpoint {
             let samples = ctx.controller.read_signal_samples(g.index, g.num_samples)?;
             let (mean, std_dev, slope_per_sample) = compute_stability_metrics(&samples);
             let drift = slope_per_sample * rate;
-            let settled =
-                (mean - g.setpoint).abs() <= band && std_dev <= band && drift.abs() <= band;
+            // Magnitudes, since the current's sign follows the bias while a
+            // log-current setpoint is given positive. A short batch is never
+            // settled: a handful of samples has no spread to judge.
+            let settled = samples.len() >= g.num_samples / 2
+                && (mean.abs() - g.setpoint.abs()).abs() <= band
+                && std_dev <= band
+                && drift.abs() <= band;
             emit_measurement(
                 ctx,
                 "landing",
@@ -475,7 +487,11 @@ impl Action for CalibratedApproach {
         "Approach, small withdraw, center freq shift, re-approach for a valid reading"
     }
     fn requires(&self) -> Vec<Capability> {
-        vec![Capability::ZController, Capability::Pll]
+        let mut caps = vec![Capability::ZController, Capability::Pll];
+        if self.landing.is_some() {
+            caps.extend(LandingGate::REQUIRES);
+        }
+        caps
     }
 
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
@@ -672,6 +688,39 @@ mod tests {
         assert!(
             matches!(out, ActionOutput::Value(v) if (v - 100e-12).abs() < 1e-15),
             "what the loop read is what comes back: {out:?}"
+        );
+    }
+
+    /// At negative bias the current reads negative against the positive
+    /// setpoint a log-current loop is given; that is a landing, not a
+    /// budget to burn.
+    #[test]
+    fn a_gate_lands_on_a_current_of_either_sign() {
+        let mut controller = MockController::builder()
+            .freq_shift_index(SignalIndex(2))
+            .build();
+        let mut store = DataStore::new();
+        let events = EventBus::new();
+        let shutdown = ShutdownFlag::new();
+        let mut ctx = ActionContext {
+            controller: &mut controller,
+            store: &mut store,
+            events: &events,
+            shutdown: &shutdown,
+            depth: 0,
+        };
+        ctx.controller.set_z_setpoint(-100e-12).unwrap();
+
+        let start = Instant::now();
+        SettleOnSetpoint {
+            gate: gate(100e-12, 10_000),
+        }
+        .execute(&mut ctx)
+        .unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "settled on the first batches, took {:?}",
+            start.elapsed()
         );
     }
 

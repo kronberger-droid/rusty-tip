@@ -43,9 +43,9 @@ use std::time::{Duration, Instant, SystemTime};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use parking_lot::Mutex;
 
-use nanonis_rs::motor::{MotorDirection, MotorGroup};
+use nanonis_rs::motor::MotorGroup;
 
-use crate::config::{AppConfig, MotorZApproach, NanonisConfig, TcpChannelMapping};
+use crate::config::{AppConfig, NanonisConfig, TcpChannelMapping};
 use crate::event::{ChannelForwarder, Event, EventBus, EventEmitter, FileLogger, Observer};
 use crate::experiment_log::{ControllerFacts, LogEvent, RunHeader, ToolSchema};
 use crate::mock_controller::{MockController, models};
@@ -135,10 +135,7 @@ impl NanonisBackend {
         config.tcp_channel_mapping =
             (!self.tcp_channel_mapping.is_empty()).then(|| self.tcp_channel_mapping.clone());
         config.nanonis.motor_group = self.motor.group_number();
-        config.nanonis.motor_z_approach = match self.motor.z_approach {
-            MotorDirection::ZMinus => MotorZApproach::Minus,
-            _ => MotorZApproach::Plus,
-        };
+        config.nanonis.motor_z_approach = self.motor.z_approach;
     }
 }
 
@@ -154,10 +151,7 @@ pub fn motor_of(nanonis: &NanonisConfig) -> CoarseMotor {
             );
             MotorGroup::Group1
         }),
-        z_approach: match nanonis.motor_z_approach {
-            MotorZApproach::Plus => MotorDirection::ZPlus,
-            MotorZApproach::Minus => MotorDirection::ZMinus,
-        },
+        z_approach: nanonis.motor_z_approach,
     }
 }
 
