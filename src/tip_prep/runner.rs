@@ -163,25 +163,36 @@ impl<'a> TipPrep<'a> {
                 preset.id
             )));
         }
+        let (controller, events) = rt.controller_with_events();
         if preset.depends_on_operating_point() {
-            let differs = |tuned: Option<f64>, run: f64| {
-                tuned.is_some_and(|t| (t - run).abs() > 0.1 * t.abs().max(run.abs()))
+            let differs = |tuned: Option<f64>, run: Option<f64>| match (tuned, run) {
+                (Some(t), Some(r)) => (t - r).abs() > 0.1 * t.abs().max(r.abs()),
+                _ => false,
             };
-            if differs(preset.tuned_at.setpoint, tp.initial_z_setpoint_a)
-                || differs(preset.tuned_at.bias_v, tp.initial_bias_v)
+            // The run sets no amplitude, so the one to compare is the
+            // amplitude loop's, as the pane records it when saving.
+            let amplitude_m = controller
+                .read_controller(ControllerId::PllAmplitude { modulator: 1 })
+                .ok()
+                .and_then(|r| r.params.setpoint());
+            if differs(preset.tuned_at.setpoint, Some(tp.initial_z_setpoint_a))
+                || differs(preset.tuned_at.bias_v, Some(tp.initial_bias_v))
+                || differs(preset.tuned_at.amplitude_m, amplitude_m)
             {
                 log::warn!(
-                    "preset {name:?} was tuned at setpoint {:?}, bias {:?} V; this run uses \
-                     {:.3e} and {:.3} V, and this loop's gains depend on that",
+                    "preset {name:?} was tuned at setpoint {:?}, bias {:?} V, amplitude {:?} m; \
+                     this run uses {:.3e}, {:.3} V and {:?} m, and this loop's gains depend \
+                     on that",
                     preset.tuned_at.setpoint,
                     preset.tuned_at.bias_v,
+                    preset.tuned_at.amplitude_m,
                     tp.initial_z_setpoint_a,
-                    tp.initial_bias_v
+                    tp.initial_bias_v,
+                    amplitude_m
                 );
             }
         }
         log::info!("Applying Z-controller preset {name:?} from {path}");
-        let (controller, events) = rt.controller_with_events();
         ApplyPreset::apply(&preset, controller, events)?;
         Ok(())
     }
