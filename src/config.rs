@@ -20,10 +20,36 @@ pub struct AppConfig {
     pub data_acquisition: DataAcquisitionConfig,
     pub experiment_logging: ExperimentLoggingConfig,
     pub console: ConsoleConfig,
+    #[serde(default)]
+    pub controllers: ControllersConfig,
     pub tip_prep: TipPrepConfig,
     pub pulse_method: PulseMethod,
     #[serde(default)]
     pub tcp_channel_mapping: Option<Vec<TcpChannelMapping>>,
+}
+
+/// Where controller presets are kept: one TOML file of `[[presets]]`,
+/// each a named set of one controller's parameters (see
+/// [`crate::controllers::Preset`]). The workbench edits the path on its
+/// Connection page next to the log directory, and its Controllers page
+/// lists, saves and applies the presets in it.
+#[derive(Debug, Deserialize, Serialize, Clone, JsonSchema)]
+pub struct ControllersConfig {
+    /// The preset file, relative to the working directory unless absolute.
+    #[serde(default = "default_presets_file")]
+    pub presets_file: String,
+}
+
+fn default_presets_file() -> String {
+    "./controllers.toml".to_string()
+}
+
+impl Default for ControllersConfig {
+    fn default() -> Self {
+        Self {
+            presets_file: default_presets_file(),
+        }
+    }
 }
 
 impl AppConfig {
@@ -377,6 +403,13 @@ pub struct TipPrepConfig {
     #[serde(default = "default_safe_tip_threshold")]
     #[schemars(extend("x-unit" = "A", "x-display-unit" = "pA"))]
     pub safe_tip_threshold: f64,
+    /// A Z-controller preset from `[controllers].presets_file` to write
+    /// before the first approach: its gains, with `initial_z_setpoint_a`
+    /// as the setpoint. Unset writes nothing and runs on whatever the
+    /// loop holds. A name the file does not have fails the run before
+    /// the tip moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z_controller_preset: Option<String>,
     #[serde(default)]
     pub timing: TimingConfig,
     /// Signal-read stability thresholds (frequency-shift noise/drift gates)
@@ -434,6 +467,7 @@ impl Default for TipPrepConfig {
             initial_bias_v: default_initial_bias_v(),
             initial_z_setpoint_a: default_initial_z_setpoint_a(),
             safe_tip_threshold: default_safe_tip_threshold(),
+            z_controller_preset: None,
             timing: TimingConfig::default(),
             signal_stability: SignalStabilityConfig::default(),
         }

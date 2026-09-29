@@ -1,0 +1,50 @@
+# Controller presets: one controller's parameters under a name, with the
+# operating point they were tuned at. The workbench's Controllers page
+# lists, saves and applies these; a tip-prep config names one under
+# [tip_prep] as z_controller_preset. Applying a preset writes its gains and
+# keeps the setpoint the loop holds, so `setpoint` here is what it was
+# tuned at, not what gets written.
+#
+# The two below are from the qPlus CuOx setup on 2026-09-29. A log current
+# loop's gains do not depend on the setpoint or the bias, so the tip-prep
+# one transfers; a frequency loop's do, so the imaging one is only good near
+# its tuned_at.
+
+[[presets]]
+name = "tip-prep"
+id = { kind = "z" }
+
+[presets.params]
+kind = "z"
+active = "log Current"
+setpoint = 100e-12
+p_gain_m = 1.5e-12
+time_constant_s = 50e-6      # I = P / T = 30 nm/s
+tip_lift_m = 0.0
+switch_off_delay_s = 10e-3
+limits_enabled = false
+limits_m = [0.0, 0.0]
+
+[presets.tuned_at]
+setpoint = 100e-12
+bias_v = 1.0
+note = "CuOx, landings without a peak; the first approach after coarse steps rings until the stage stops creeping"
+
+[[presets]]
+name = "imaging-df"
+id = { kind = "z" }
+
+[presets.params]
+kind = "z"
+active = "Frequency (neg)"
+setpoint = -1.1
+p_gain_m = 70e-12
+time_constant_s = 350e-6     # I = P / T = 200 nm/s
+tip_lift_m = 0.0
+switch_off_delay_s = 0.0
+limits_enabled = false
+limits_m = [0.0, 0.0]
+
+[presets.tuned_at]
+setpoint = -1.1
+note = "topography over an oxide row at -1.1 Hz; retune when the setpoint, bias or amplitude move"

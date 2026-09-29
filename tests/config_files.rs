@@ -82,3 +82,25 @@ voltage = 5.0
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The shipped preset file parses, validates, and holds the two presets
+/// the docs promise.
+#[test]
+fn shipped_presets_parse_and_validate() {
+    use rusty_tip::controllers::{ControllerId, PresetStore, TomlPresetStore};
+
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("configs/presets/controllers.toml");
+    let store = TomlPresetStore::new(&path);
+    let presets = store
+        .list()
+        .unwrap_or_else(|e| panic!("{} failed to load: {e}", path.display()));
+    let names: Vec<&str> = presets.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, ["tip-prep", "imaging-df"]);
+    assert!(presets.iter().all(|p| p.id == ControllerId::Z));
+    assert!(
+        !presets[0].depends_on_operating_point(),
+        "the tip-prep preset is a log current loop"
+    );
+    assert!(presets[1].depends_on_operating_point());
+}

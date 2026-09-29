@@ -9,6 +9,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::controllers::{ControllerAppliedEvent, ControllerReading};
 use crate::experiment_log::{LogEvent, ToolSchema};
 
 /// One pulse cycle: what was fired, what was measured afterwards.
@@ -78,5 +79,7 @@ pub fn log_schema() -> ToolSchema {
         .with::<CycleEvent>()
         .with::<PhaseEvent>()
         .with::<MaxPulseEvent>()
+        .with::<ControllerAppliedEvent>()
+        .with::<ControllerReading>()
         .including(crate::routine::log_schema())
 }

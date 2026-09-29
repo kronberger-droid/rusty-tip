@@ -9,24 +9,24 @@
 //! them back.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use serde_json::Value;
 
 use rusty_tip::controllers::{
-    ApplyProfile, ControllerAppliedEvent, ControllerId, ControllerParams, ControllerProfile,
-    ControllerReading, ProfileEntry, ReadControllers, SetControllerEnabled, ZLaw, ZLoopInput,
-    ZQuantity,
+    ApplyPreset, ApplyProfile, ControllerAppliedEvent, ControllerId, ControllerParams,
+    ControllerProfile, ControllerReading, Preset, PresetStore, ProfileEntry, ReadControllers,
+    SetControllerEnabled, TomlPresetStore, TunedAt, ZLaw, ZLoopInput, ZQuantity,
 };
 use rusty_tip::experiment_log::LogEvent;
 use rusty_tip::routine::SettingsLoadedEvent;
-use rusty_tip::session::Job;
+use rusty_tip::session::{Job, Readout};
 
 use super::{SetupCx, Tool, load_toml, save_toml};
 use crate::form::{SchemaForm, number_field};
 use crate::run_view::RunView;
-use crate::units::{display_unit_for, format_si, prefix_scale};
+use crate::units::{display_unit_for, format_si, number, prefix_scale};
 use crate::widgets::{Note, Palette, StripChart, note, path_field};
 
 /// The controllers a profile can be composed for before anything is read.
@@ -52,6 +52,14 @@ pub struct ControllersTool {
     /// Which run's `controller/read` events have been taken into the
     /// forms: the run's start time and how many rows.
     seen: (Option<f64>, usize),
+    /// The presets on file, and which file that was.
+    presets: Vec<Preset>,
+    presets_path: Option<PathBuf>,
+    /// The preset picked in the drop-down, by name.
+    selected_preset: Option<String>,
+    /// The name and note for "Save form as".
+    preset_name: String,
+    preset_note: String,
 }
 
 impl Default for ControllersTool {
@@ -74,8 +82,232 @@ impl Default for ControllersTool {
             forms,
             message: None,
             seen: (None, 0),
+            presets: Vec::new(),
+            presets_path: None,
+            selected_preset: None,
+            preset_name: String::new(),
+            preset_note: String::new(),
         }
     }
+}
+
+impl ControllersTool {
+    /// Read the preset file again, remembering which file it was.
+    fn refresh_presets(&mut self, path: &Path) {
+        match TomlPresetStore::new(path).list() {
+            Ok(presets) => self.presets = presets,
+            Err(e) => {
+                self.presets.clear();
+                self.message = Some(Note::err(e));
+            }
+        }
+        self.presets_path = Some(path.to_path_buf());
+    }
+
+    /// The picked preset, when it is one of this controller's.
+    fn picked_preset(&self, id: ControllerId) -> Option<Preset> {
+        let name = self.selected_preset.as_deref()?;
+        self.presets
+            .iter()
+            .find(|p| p.id == id && p.name.eq_ignore_ascii_case(name))
+            .cloned()
+    }
+
+    /// This controller's form as a preset under `preset_name`, tuned at
+    /// the form's setpoint, the live bias, and the amplitude loop's
+    /// setpoint as last read.
+    fn save_preset(&mut self, path: &Path, id: ControllerId, readouts: &[Readout]) {
+        let fields = self
+            .edits
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| ControllerParams::default_for(id).to_fields());
+        let params = match ControllerParams::from_fields(id, fields) {
+            Ok(p) => p,
+            Err(e) => {
+                self.message = Some(Note::err(format!("{id}: {e}")));
+                return;
+            }
+        };
+        let tuned_at = TunedAt {
+            setpoint: params.setpoint(),
+            bias_v: readouts.iter().find(|r| r.key == "bias").map(|r| r.value),
+            amplitude_m: self
+                .readings
+                .get(&ControllerId::PllAmplitude { modulator: 1 })
+                .and_then(|r| r.params.setpoint()),
+            note: self.preset_note.trim().to_string(),
+        };
+        let preset = Preset {
+            name: self.preset_name.trim().to_string(),
+            id,
+            params,
+            tuned_at,
+        };
+        let mut store = TomlPresetStore::new(path);
+        match store.put(preset.clone()) {
+            Ok(()) => {
+                self.message = Some(Note::ok(format!(
+                    "Saved preset {:?} to {}",
+                    preset.name,
+                    path.display()
+                )));
+                self.selected_preset = Some(preset.name);
+                self.refresh_presets(path);
+            }
+            Err(e) => self.message = Some(Note::err(e)),
+        }
+    }
+
+    /// The preset row for the selected controller: pick one, load it into
+    /// the form, apply it, delete it; and save the form as one.
+    fn render_presets(&mut self, ui: &mut egui::Ui, cx: &mut SetupCx<'_>, id: ControllerId) {
+        let path = match &cx.connection {
+            Ok(s) => s.presets_file.clone(),
+            Err(_) => PathBuf::from("./controllers.toml"),
+        };
+        if self.presets_path.as_deref() != Some(path.as_path()) {
+            self.refresh_presets(&path);
+        }
+        let names: Vec<String> = self
+            .presets
+            .iter()
+            .filter(|p| p.id == id)
+            .map(|p| p.name.clone())
+            .collect();
+        let chosen = self.picked_preset(id);
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Preset")
+                .on_hover_text(format!("From {}", path.display()));
+            let shown = match &chosen {
+                Some(p) => p.name.clone(),
+                None if names.is_empty() => "none saved".to_string(),
+                None => "pick one".to_string(),
+            };
+            egui::ComboBox::from_id_salt(format!("preset_{id}"))
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    for name in &names {
+                        let picked = chosen.as_ref().is_some_and(|p| &p.name == name);
+                        if ui.selectable_label(picked, name).clicked() {
+                            self.selected_preset = Some(name.clone());
+                        }
+                    }
+                });
+            if ui
+                .add_enabled(chosen.is_some(), egui::Button::new("Load into form"))
+                .on_hover_text("This form takes the preset's parameters; nothing is written")
+                .clicked()
+                && let Some(p) = &chosen
+            {
+                self.edits.insert(id, p.params.to_fields());
+                self.message = Some(Note::ok(format!("Preset {:?} is in the form", p.name)));
+            }
+            if ui
+                .add_enabled(
+                    chosen.is_some() && cx.can_run,
+                    egui::Button::new("Apply preset"),
+                )
+                .on_hover_text(
+                    "Write the preset's gains, keeping the setpoint the loop holds, and read \
+                     it back. Switches nothing on or off.",
+                )
+                .on_disabled_hover_text("Pick a preset, connect, and let any run finish")
+                .clicked()
+                && let Some(p) = chosen.clone()
+            {
+                cx.run = Some(Box::new(ApplyPreset { preset: p }));
+            }
+            if ui
+                .add_enabled(chosen.is_some(), egui::Button::new("Delete"))
+                .on_hover_text("Remove it from the preset file")
+                .clicked()
+                && let Some(p) = &chosen
+            {
+                match TomlPresetStore::new(&path).remove(&p.name) {
+                    Ok(()) => {
+                        self.message = Some(Note::ok(format!("Deleted preset {:?}", p.name)));
+                        self.selected_preset = None;
+                    }
+                    Err(e) => self.message = Some(Note::err(e)),
+                }
+                self.refresh_presets(&path);
+            }
+            if ui
+                .small_button("Reload")
+                .on_hover_text("Read the preset file again")
+                .clicked()
+            {
+                self.refresh_presets(&path);
+            }
+        });
+        if let Some(p) = &chosen {
+            ui.label(egui::RichText::new(tuned_at_line(p)).weak());
+        }
+        ui.horizontal(|ui| {
+            ui.label("Save form as");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.preset_name)
+                    .desired_width(140.0)
+                    .hint_text("name"),
+            );
+            ui.add(
+                egui::TextEdit::singleline(&mut self.preset_note)
+                    .desired_width(220.0)
+                    .hint_text("note: sample, tip state"),
+            );
+            if ui
+                .add_enabled(
+                    !self.preset_name.trim().is_empty(),
+                    egui::Button::new("Save preset"),
+                )
+                .on_hover_text(
+                    "This form's parameters under that name, with the setpoint, bias and \
+                     amplitude they were tuned at. A preset of that name is replaced.",
+                )
+                .clicked()
+            {
+                self.save_preset(&path, id, cx.readouts);
+            }
+        });
+    }
+}
+
+/// One line on where a preset was tuned, and whether that matters.
+fn tuned_at_line(p: &Preset) -> String {
+    let t = &p.tuned_at;
+    let mut parts = Vec::new();
+    if let Some(sp) = t.setpoint {
+        let unit = match &p.params {
+            ControllerParams::Z(z) => z.input().unit(),
+            ControllerParams::PllAmplitude(_) => Some("m"),
+            ControllerParams::PllPhase(_) => None,
+        };
+        let shown = unit.map_or_else(|| number(sp), |u| format_si(sp, u));
+        parts.push(format!("setpoint {shown}"));
+    }
+    if let Some(b) = t.bias_v {
+        parts.push(format!("bias {}", format_si(b, "V")));
+    }
+    if let Some(a) = t.amplitude_m {
+        parts.push(format!("amplitude {}", format_si(a, "m")));
+    }
+    let mut line = if parts.is_empty() {
+        "tuned at: not recorded".to_string()
+    } else {
+        format!("tuned at {}", parts.join(", "))
+    };
+    if !t.note.is_empty() {
+        line.push_str(" · ");
+        line.push_str(&t.note);
+    }
+    line.push_str(if p.depends_on_operating_point() {
+        " (the gains depend on this)"
+    } else {
+        " (a log current loop: the gains transfer)"
+    });
+    line
 }
 
 /// The form a controller's kind uses.
@@ -438,6 +670,8 @@ impl Tool for ControllersTool {
         let Some(id) = self.selected else {
             return;
         };
+        self.render_presets(ui, cx, id);
+        ui.add_space(4.0);
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.horizontal(|ui| match self.readings.get(&id) {
@@ -587,6 +821,7 @@ impl Tool for ControllersTool {
             "settings_file": self.settings_file,
             "edits": edits,
             "selected": self.selected,
+            "selected_preset": self.selected_preset,
         })
     }
 
@@ -613,6 +848,9 @@ impl Tool for ControllersTool {
             .and_then(|s| serde_json::from_value(s.clone()).ok())
         {
             self.selected = selected;
+        }
+        if let Some(name) = prefs.get("selected_preset").and_then(Value::as_str) {
+            self.selected_preset = Some(name.to_string());
         }
     }
 }

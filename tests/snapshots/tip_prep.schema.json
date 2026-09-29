@@ -154,6 +154,582 @@
       }
     },
     {
+      "kind": "controller/applied",
+      "schema": {
+        "$defs": {
+          "ControllerId": {
+            "description": "One controller on the machine.",
+            "oneOf": [
+              {
+                "description": "The Z feedback loop. Nanonis defines several and runs one; which\none is the `active` parameter.",
+                "properties": {
+                  "kind": {
+                    "const": "z",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "The PLL's oscillation amplitude loop, per modulator (1 or 2).",
+                "properties": {
+                  "kind": {
+                    "const": "pll_amplitude",
+                    "type": "string"
+                  },
+                  "modulator": {
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "modulator"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "The PLL's phase loop, which tracks the resonance, per modulator.",
+                "properties": {
+                  "kind": {
+                    "const": "pll_phase",
+                    "type": "string"
+                  },
+                  "modulator": {
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "modulator"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "ControllerParams": {
+            "description": "The parameters of one controller, whichever kind it is.",
+            "oneOf": [
+              {
+                "$ref": "#/$defs/ZControllerParams",
+                "properties": {
+                  "kind": {
+                    "const": "z",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "$ref": "#/$defs/PllAmplitudeParams",
+                "properties": {
+                  "kind": {
+                    "const": "pll_amplitude",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "$ref": "#/$defs/PllPhaseParams",
+                "properties": {
+                  "kind": {
+                    "const": "pll_phase",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "PllAmplitudeParams": {
+            "description": "The PLL amplitude loop: keeps the oscillation amplitude at a setpoint\nby driving the excitation.",
+            "properties": {
+              "bandwidth_hz": {
+                "default": 100.0,
+                "description": "Demodulator bandwidth of the amplitude signal.",
+                "format": "double",
+                "type": "number",
+                "x-unit": "Hz"
+              },
+              "p_gain_v_m": {
+                "default": 100000.0,
+                "description": "Proportional gain, excitation volts per metre of amplitude error.",
+                "format": "double",
+                "type": "number",
+                "x-unit": "V/m"
+              },
+              "setpoint_m": {
+                "default": 1e-10,
+                "description": "Oscillation amplitude to hold.",
+                "format": "double",
+                "type": "number",
+                "x-display-unit": "pm",
+                "x-unit": "m"
+              },
+              "time_constant_s": {
+                "default": 0.001,
+                "description": "Time constant; the integral gain is P over this.",
+                "format": "double",
+                "type": "number",
+                "x-display-unit": "ms",
+                "x-unit": "s"
+              }
+            },
+            "type": "object"
+          },
+          "PllPhaseParams": {
+            "description": "The PLL phase loop: keeps the phase at its reference by shifting the\nexcitation frequency, which is what makes the frequency shift a signal.",
+            "properties": {
+              "bandwidth_hz": {
+                "default": 100.0,
+                "description": "Demodulator bandwidth of the phase signal.",
+                "format": "double",
+                "type": "number",
+                "x-unit": "Hz"
+              },
+              "p_gain_hz_deg": {
+                "default": 1.0,
+                "description": "Proportional gain, hertz of frequency shift per degree of phase error.",
+                "format": "double",
+                "type": "number",
+                "x-unit": "Hz/°"
+              },
+              "time_constant_s": {
+                "default": 0.001,
+                "description": "Time constant; the integral gain is P over this.",
+                "format": "double",
+                "type": "number",
+                "x-display-unit": "ms",
+                "x-unit": "s"
+              }
+            },
+            "type": "object"
+          },
+          "ZControllerParams": {
+            "description": "The Z-controller's settable parameters. The setpoint is in the unit of\nthe active controller's input signal, amperes for a current loop and\nhertz for a frequency-shift loop, which is why it carries no unit here;\n[`input`](Self::input) says which from the active controller's name.",
+            "properties": {
+              "active": {
+                "default": "",
+                "description": "Which of the defined controllers runs, by name from the list the\nreading carries. Empty leaves the active one as it is.",
+                "type": "string"
+              },
+              "limits_enabled": {
+                "default": false,
+                "description": "Whether the Z position limits below apply.",
+                "type": "boolean"
+              },
+              "limits_m": {
+                "default": [
+                  0.0,
+                  0.0
+                ],
+                "description": "Z position limits, high then low. Without `limits_enabled` these\nread as the piezo range and a write is ignored.",
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "format": "double",
+                    "type": "number"
+                  }
+                ],
+                "type": "array",
+                "x-display-unit": "nm",
+                "x-enabled-by": "limits_enabled",
+                "x-unit": "m"
+              },
+              "p_gain_m": {
+                "default": 2e-10,
+                "description": "Proportional gain: how far Z moves per unit of error.",
+                "format": "double",
+                "type": "number",
+                "x-display-unit": "pm",
+                "x-unit": "m"
+              },
+              "setpoint": {
+                "default": 5e-11,
+                "description": "Setpoint, in the input signal's own unit.",
+                "format": "double",
+                "type": "number"
+              },
+              "switch_off_delay_s": {
+                "default": 0.0,
+                "description": "Z is averaged over this before the loop switches off, so the\nparked position is reproducible.",
+                "format": "double",
+                "type": "number",
+                "x-display-unit": "ms",
+                "x-unit": "s"
+              },
+              "time_constant_s": {
+                "default": 0.001,
+                "description": "Time constant; the integral gain is P over this.",
+                "format": "double",
+                "type": "number",
+                "x-display-unit": "ms",
+                "x-unit": "s"
+              },
+              "tip_lift_m": {
+                "default": 0.0,
+                "description": "Retract by this much when the loop is switched off.",
+                "format": "double",
+                "type": "number",
+                "x-display-unit": "nm",
+                "x-unit": "m"
+              },
+              "withdraw_rate_m_s": {
+                "default": null,
+                "description": "Slew rate of a withdraw. Unset is unlimited, which the module\nshows as `Inf`; a JSON number cannot be infinite, so it is an\noption here.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "x-display-unit": "nm/s",
+                "x-unit": "m/s"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "One controller written: what it held before and what it holds now,\nread back after the write, so a clamped or refused value shows.",
+        "properties": {
+          "after": {
+            "$ref": "#/$defs/ControllerParams"
+          },
+          "before": {
+            "$ref": "#/$defs/ControllerParams"
+          },
+          "id": {
+            "$ref": "#/$defs/ControllerId"
+          }
+        },
+        "required": [
+          "id",
+          "before",
+          "after"
+        ],
+        "title": "ControllerAppliedEvent",
+        "type": "object"
+      }
+    },
+    {
+      "kind": "controller/read",
+      "schema": {
+        "$defs": {
+          "ControllerId": {
+            "description": "One controller on the machine.",
+            "oneOf": [
+              {
+                "description": "The Z feedback loop. Nanonis defines several and runs one; which\none is the `active` parameter.",
+                "properties": {
+                  "kind": {
+                    "const": "z",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "The PLL's oscillation amplitude loop, per modulator (1 or 2).",
+                "properties": {
+                  "kind": {
+                    "const": "pll_amplitude",
+                    "type": "string"
+                  },
+                  "modulator": {
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "modulator"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "The PLL's phase loop, which tracks the resonance, per modulator.",
+                "properties": {
+                  "kind": {
+                    "const": "pll_phase",
+                    "type": "string"
+                  },
+                  "modulator": {
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "modulator"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "ControllerParams": {
+            "description": "The parameters of one controller, whichever kind it is.",
+            "oneOf": [
+              {
+                "$ref": "#/$defs/ZControllerParams",
+                "properties": {
+                  "kind": {
+                    "const": "z",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "$ref": "#/$defs/PllAmplitudeParams",
+                "properties": {
+                  "kind": {
+                    "const": "pll_amplitude",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "$ref": "#/$defs/PllPhaseParams",
+                "properties": {
+                  "kind": {
+                    "const": "pll_phase",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "PllAmplitudeParams": {
+            "description": "The PLL amplitude loop: keeps the oscillation amplitude at a setpoint\nby driving the excitation.",
+            "properties": {
+              "bandwidth_hz": {
+                "default": 100.0,
+                "description": "Demodulator bandwidth of the amplitude signal.",
+                "format": "double",
+                "type": "number",
+                "x-unit": "Hz"
+              },
+              "p_gain_v_m": {
+                "default": 100000.0,
+                "description": "Proportional gain, excitation volts per metre of amplitude error.",
+                "format": "double",
+                "type": "number",
+                "x-unit": "V/m"
+              },
+              "setpoint_m": {
+                "default": 1e-10,
+                "description": "Oscillation amplitude to hold.",
+                "format": "double",
+                "type": "number",
+                "x-display-unit": "pm",
+                "x-unit": "m"
+              },
+              "time_constant_s": {
+                "default": 0.001,
+                "description": "Time constant; the integral gain is P over this.",
+                "format": "double",
+                "type": "number",
+                "x-display-unit": "ms",
+                "x-unit": "s"
+              }
+            },
+            "type": "object"
+          },
+          "PllPhaseParams": {
+            "description": "The PLL phase loop: keeps the phase at its reference by shifting the\nexcitation frequency, which is what makes the frequency shift a signal.",
+            "properties": {
+              "bandwidth_hz": {
+                "default": 100.0,
+                "description": "Demodulator bandwidth of the phase signal.",
+                "format": "double",
+                "type": "number",
+                "x-unit": "Hz"
+              },
+              "p_gain_hz_deg": {
+                "default": 1.0,
+                "description": "Proportional gain, hertz of frequency shift per degree of phase error.",
+                "format": "double",
+                "type": "number",
+                "x-unit": "Hz/°"
+              },
+              "time_constant_s": {
+                "default": 0.001,
+                "description": "Time constant; the integral gain is P over this.",
+                "format": "double",
+                "type": "number",
+                "x-display-unit": "ms",
+                "x-unit": "s"
+              }
+            },
+            "type": "object"
+          },
+          "ZControllerParams": {
+            "description": "The Z-controller's settable parameters. The setpoint is in the unit of\nthe active controller's input signal, amperes for a current loop and\nhertz for a frequency-shift loop, which is why it carries no unit here;\n[`input`](Self::input) says which from the active controller's name.",
+            "properties": {
+              "active": {
+                "default": "",
+                "description": "Which of the defined controllers runs, by name from the list the\nreading carries. Empty leaves the active one as it is.",
+                "type": "string"
+              },
+              "limits_enabled": {
+                "default": false,
+                "description": "Whether the Z position limits below apply.",
+                "type": "boolean"
+              },
+              "limits_m": {
+                "default": [
+                  0.0,
+                  0.0
+                ],
+                "description": "Z position limits, high then low. Without `limits_enabled` these\nread as the piezo range and a write is ignored.",
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "format": "double",
+                    "type": "number"
+                  }
+                ],
+                "type": "array",
+                "x-display-unit": "nm",
+                "x-enabled-by": "limits_enabled",
+                "x-unit": "m"
+              },
+              "p_gain_m": {
+                "default": 2e-10,
+                "description": "Proportional gain: how far Z moves per unit of error.",
+                "format": "double",
+                "type": "number",
+                "x-display-unit": "pm",
+                "x-unit": "m"
+              },
+              "setpoint": {
+                "default": 5e-11,
+                "description": "Setpoint, in the input signal's own unit.",
+                "format": "double",
+                "type": "number"
+              },
+              "switch_off_delay_s": {
+                "default": 0.0,
+                "description": "Z is averaged over this before the loop switches off, so the\nparked position is reproducible.",
+                "format": "double",
+                "type": "number",
+                "x-display-unit": "ms",
+                "x-unit": "s"
+              },
+              "time_constant_s": {
+                "default": 0.001,
+                "description": "Time constant; the integral gain is P over this.",
+                "format": "double",
+                "type": "number",
+                "x-display-unit": "ms",
+                "x-unit": "s"
+              },
+              "tip_lift_m": {
+                "default": 0.0,
+                "description": "Retract by this much when the loop is switched off.",
+                "format": "double",
+                "type": "number",
+                "x-display-unit": "nm",
+                "x-unit": "m"
+              },
+              "withdraw_rate_m_s": {
+                "default": null,
+                "description": "Slew rate of a withdraw. Unset is unlimited, which the module\nshows as `Inf`; a JSON number cannot be infinite, so it is an\noption here.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "x-display-unit": "nm/s",
+                "x-unit": "m/s"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "What a read gives back: the parameters and what cannot be written.",
+        "properties": {
+          "available": {
+            "default": [],
+            "description": "For the Z-controller, the controllers Nanonis has defined, in the\norder the module lists them.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "enabled": {
+            "description": "Whether the loop is on.",
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/$defs/ControllerId"
+          },
+          "params": {
+            "$ref": "#/$defs/ControllerParams"
+          },
+          "status": {
+            "default": "",
+            "description": "The module's status word where it has one (`on`, `off`, `hold`,\n`safe tip`, `withdrawing`); empty otherwise.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "params",
+          "enabled"
+        ],
+        "title": "ControllerReading",
+        "type": "object"
+      }
+    },
+    {
       "kind": "routine/cleanup_failed",
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

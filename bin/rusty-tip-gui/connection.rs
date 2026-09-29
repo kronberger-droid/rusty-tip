@@ -105,6 +105,15 @@ pub struct ConnectionForm {
     pub log_dir: String,
     #[serde(default)]
     pub log_level: LogLevel,
+    /// The controller preset file; a saved form from before it had one
+    /// gets the default.
+    #[serde(default = "default_presets_file")]
+    pub presets_file: String,
+}
+
+/// Next to the config and the log directory, where the app is launched.
+fn default_presets_file() -> String {
+    "./controllers.toml".into()
 }
 
 impl Default for ConnectionForm {
@@ -122,22 +131,27 @@ impl Default for ConnectionForm {
             motor_z_approach: MotorZApproach::default(),
             log_dir: "./experiments".into(),
             log_level: LogLevel::default(),
+            presets_file: default_presets_file(),
         };
         form.apply_settings(&ConnectionSettings {
             backend: NanonisBackend::default(),
             log_dir: None,
+            presets_file: PathBuf::from(default_presets_file()),
         });
         form
     }
 }
 
-/// The connection as a config file carries it: where the Nanonis is, and
-/// where logs go. What the Connection page edits and a tip-prep file
-/// stores, so the CLI and the workbench read the same file.
+/// The connection as a config file carries it: where the Nanonis is,
+/// where logs go, and where the controller presets are. What the
+/// Connection page edits and a tip-prep file stores, so the CLI and the
+/// workbench read the same file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectionSettings {
     pub backend: NanonisBackend,
     pub log_dir: Option<PathBuf>,
+    /// The controller preset file (`[controllers].presets_file`).
+    pub presets_file: PathBuf,
 }
 
 impl ConnectionForm {
@@ -218,7 +232,18 @@ impl ConnectionForm {
         Ok(ConnectionSettings {
             backend: self.nanonis()?,
             log_dir: self.log_dir(),
+            presets_file: self.presets_file(),
         })
+    }
+
+    /// The preset file, the default when the field was emptied.
+    pub fn presets_file(&self) -> PathBuf {
+        let path = self.presets_file.trim();
+        if path.is_empty() {
+            PathBuf::from(default_presets_file())
+        } else {
+            PathBuf::from(path)
+        }
     }
 
     /// Take a file's settings into the form. The backend kind stays.
@@ -248,6 +273,7 @@ impl ConnectionForm {
         if let Some(dir) = &s.log_dir {
             self.log_dir = dir.display().to_string();
         }
+        self.presets_file = s.presets_file.display().to_string();
     }
 
     /// One line saying what the form points at.
@@ -455,6 +481,21 @@ impl ConnectionPane {
         })
         .response
         .on_hover_text("How much the activity log and the terminal say. Takes effect at once.");
+
+        ui.horizontal(|ui| {
+            ui.label("Preset file");
+            path_field(ui, &mut self.form.presets_file, 320.0, || {
+                rfd::FileDialog::new()
+                    .add_filter("TOML", &["toml"])
+                    .pick_file()
+            });
+        })
+        .response
+        .on_hover_text(
+            "The controller presets, one TOML file. The Controllers page lists, saves and \
+             applies them, and a tip-prep config names one by name. Created on the first \
+             save.",
+        );
 
         ui.add_space(8.0);
         ui.horizontal(|ui| {
@@ -783,6 +824,7 @@ mod tests {
                 ..NanonisBackend::default()
             },
             log_dir: Some(PathBuf::from("/tmp/logs")),
+            presets_file: PathBuf::from("/lab/presets.toml"),
         };
         let mut form = ConnectionForm {
             kind: BackendKind::Mock,

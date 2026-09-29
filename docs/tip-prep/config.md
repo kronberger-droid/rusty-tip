@@ -44,6 +44,47 @@ it, since that is exact where the measurement carries packet-timing
 jitter. A request that had to be rounded costs nothing but a warning at
 startup.
 
+## `[controllers]` — presets
+
+```toml
+[controllers]
+presets_file = "./controllers.toml"  # the preset file, relative to the working directory
+```
+
+A preset is one controller's parameters under a name, with the operating
+point they were tuned at. The file is `[[presets]]` tables; `configs/presets/controllers.toml`
+ships two, a log-current loop for tip prep and a frequency loop for imaging:
+
+```toml
+[[presets]]
+name = "tip-prep"
+id = { kind = "z" }
+
+[presets.params]
+kind = "z"
+active = "log Current"   # which of the Z-controllers Nanonis has defined
+setpoint = 100e-12
+p_gain_m = 1.5e-12
+time_constant_s = 50e-6  # I = P / T
+
+[presets.tuned_at]       # informative; a preset never writes these
+setpoint = 100e-12
+bias_v = 1.0
+note = "CuOx, landings without a peak"
+```
+
+Applying a preset writes its parameters and keeps the setpoint the loop
+holds, so `setpoint` under `params` is what the gains were tuned at, not
+what gets written. That matters by loop law: a log loop on the current has
+gains that do not depend on the setpoint or the bias, so its preset
+transfers; a linear loop's gain scales with the setpoint and a frequency
+loop's slope changes with distance, bias and amplitude, so those presets
+are only good near their `tuned_at`. The workbench's Controllers page
+lists the file's presets for the selected controller, loads one into the
+form, applies it, deletes it, and saves the form as one with the live
+setpoint, bias and amplitude recorded. The path is on its Connection page
+next to the log directory.
+
 ## `[tip_prep]` — the routine
 
 ```toml
@@ -54,6 +95,8 @@ max_duration_secs = 12000       # optional; omit for unlimited
 initial_bias_v = -0.5           # bias set before the first approach (V)
 initial_z_setpoint_a = 100e-12  # z-controller setpoint before the first approach (A)
 safe_tip_threshold = 1e-9       # safe-tip current threshold (A)
+z_controller_preset = "tip-prep"  # optional; a Z preset from [controllers].presets_file,
+                                  # written before the first approach with initial_z_setpoint_a
 ```
 
 ## `[tip_prep.timing]` — settle times and repositioning
