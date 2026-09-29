@@ -117,6 +117,7 @@ impl WorkbenchApp {
             .position(|t| t.id() == prefs.page)
             .map_or(Page::Connection, Page::Tool);
         let pane = ConnectionPane::new(prefs.connection);
+        log::set_max_level(pane.form.log_level.filter());
         let session = session::spawn(pane.form.log_dir());
         Self {
             session,
@@ -295,6 +296,7 @@ impl WorkbenchApp {
             Some(PaneAction::Reconnect) => self.send(SessionCmd::Reconnect),
             Some(PaneAction::ReloadPresets) => self.send(SessionCmd::ReloadPresets),
             Some(PaneAction::LogDir(dir)) => self.send(SessionCmd::SetLogDir(dir)),
+            Some(PaneAction::LogLevel(level)) => log::set_max_level(level),
             None => {}
         }
     }

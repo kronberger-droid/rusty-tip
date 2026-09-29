@@ -100,7 +100,11 @@ fn run() -> Result<(), RunError> {
         .address(&config.nanonis.host_ip)
         .port(config.nanonis.control_ports[0])
         .build()?;
-    let mut controller = NanonisController::new(client, NanonisSetupConfig::default());
+    let setup = NanonisSetupConfig {
+        motor: rusty_tip::session::motor_of(&config.nanonis),
+        ..Default::default()
+    };
+    let mut controller = NanonisController::new(client, setup);
     info!("Connected to Nanonis system");
 
     rusty_tip::tip_prep::load_presets(&mut controller, &config)?;

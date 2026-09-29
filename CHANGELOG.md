@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The coarse motor is declared, not assumed.** `[nanonis]` has
+  `motor_group` (1 to 6, as the Motor module numbers them) and
+  `motor_z_approach` (`"plus"` or `"minus"`: which of the group's Z
+  directions moves the tip toward the sample). Every Z step count in the
+  library is signed against that, positive approaches and negative
+  retracts, where it used to hard-code group 1 and `Z+`. The defaults are
+  those two, so no existing file changes behaviour. `NanonisSetupConfig`
+  carries it as `CoarseMotor`, `NanonisBackend` as `motor`, and the
+  workbench edits it on the Connection page next to the TCP channel
+  mapping.
+- **A log level on the workbench's Connection page.** Error to trace,
+  applied at once and kept between starts. It is the window's setting,
+  not the connection's, so a config file's `[console]` neither carries
+  it nor overrides it.
 - **`rusty-tip-gui`**, the workbench: one window, one controller
   connection, several tools. The connection pane connects once (backend,
   host, ports, layout and settings files, TCP channel mapping) and shows

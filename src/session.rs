@@ -43,11 +43,13 @@ use std::time::{Duration, Instant, SystemTime};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use parking_lot::Mutex;
 
-use crate::config::{AppConfig, TcpChannelMapping};
+use nanonis_rs::motor::{MotorDirection, MotorGroup};
+
+use crate::config::{AppConfig, MotorZApproach, NanonisConfig, TcpChannelMapping};
 use crate::event::{ChannelForwarder, Event, EventBus, EventEmitter, FileLogger, Observer};
 use crate::experiment_log::{ControllerFacts, LogEvent, RunHeader, ToolSchema};
 use crate::mock_controller::{MockController, models};
-use crate::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
+use crate::nanonis_controller::{CoarseMotor, NanonisController, NanonisSetupConfig, StreamSetup};
 use crate::routine::{LayoutLoadedEvent, Outcome, SettingsLoadedEvent, panic_message};
 use crate::shutdown::ShutdownFlag;
 use crate::signal_registry::{SignalIndex, SignalRegistry};
@@ -78,6 +80,8 @@ pub struct NanonisBackend {
     pub settings_file: Option<PathBuf>,
     /// Signal index to TCP channel assignments beyond the standard map.
     pub tcp_channel_mapping: Vec<TcpChannelMapping>,
+    /// Which coarse motor to drive, and which way along Z approaches.
+    pub motor: CoarseMotor,
 }
 
 impl Default for NanonisBackend {
@@ -90,6 +94,7 @@ impl Default for NanonisBackend {
             layout_file: None,
             settings_file: None,
             tcp_channel_mapping: Vec::new(),
+            motor: CoarseMotor::default(),
         }
     }
 }
@@ -111,6 +116,7 @@ impl NanonisBackend {
             layout_file: config.nanonis.layout_file.as_ref().map(PathBuf::from),
             settings_file: config.nanonis.settings_file.as_ref().map(PathBuf::from),
             tcp_channel_mapping: config.tcp_channel_mapping.clone().unwrap_or_default(),
+            motor: motor_of(&config.nanonis),
         }
     }
 
@@ -128,6 +134,30 @@ impl NanonisBackend {
         config.data_acquisition.sample_rate = self.sample_rate_hz.round() as u32;
         config.tcp_channel_mapping =
             (!self.tcp_channel_mapping.is_empty()).then(|| self.tcp_channel_mapping.clone());
+        config.nanonis.motor_group = self.motor.group_number();
+        config.nanonis.motor_z_approach = match self.motor.z_approach {
+            MotorDirection::ZMinus => MotorZApproach::Minus,
+            _ => MotorZApproach::Plus,
+        };
+    }
+}
+
+/// The coarse motor a config's `[nanonis]` table describes. A group number
+/// outside 1 to 6 falls back to group 1 with a warning: `validate` rejects
+/// it, and this is not the place to fail.
+pub fn motor_of(nanonis: &NanonisConfig) -> CoarseMotor {
+    CoarseMotor {
+        group: CoarseMotor::group_from_number(nanonis.motor_group).unwrap_or_else(|| {
+            log::warn!(
+                "nanonis.motor_group {} is not 1 to 6; driving group 1",
+                nanonis.motor_group
+            );
+            MotorGroup::Group1
+        }),
+        z_approach: match nanonis.motor_z_approach {
+            MotorZApproach::Plus => MotorDirection::ZPlus,
+            MotorZApproach::Minus => MotorDirection::ZMinus,
+        },
     }
 }
 
@@ -322,8 +352,18 @@ impl Session {
             .address(&backend.host)
             .port(backend.port)
             .build()?;
-        let mut controller = NanonisController::new(client, NanonisSetupConfig::default());
-        log::info!("Connected to Nanonis at {}:{}", backend.host, backend.port);
+        let setup = NanonisSetupConfig {
+            motor: backend.motor,
+            ..Default::default()
+        };
+        let mut controller = NanonisController::new(client, setup);
+        log::info!(
+            "Connected to Nanonis at {}:{}; coarse motor group {}, {:?} approaches",
+            backend.host,
+            backend.port,
+            backend.motor.group_number(),
+            backend.motor.z_approach
+        );
 
         // Files first, stream second: a settings file can change the TCP
         // logger's channel list, and Nanonis stops a live stream on that.
