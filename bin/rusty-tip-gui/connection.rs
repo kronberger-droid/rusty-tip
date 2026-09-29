@@ -113,7 +113,7 @@ pub struct ConnectionForm {
 
 /// Next to the config and the log directory, where the app is launched.
 fn default_presets_file() -> String {
-    "./controllers.toml".into()
+    rusty_tip::config::DEFAULT_PRESETS_FILE.into()
 }
 
 impl Default for ConnectionForm {
