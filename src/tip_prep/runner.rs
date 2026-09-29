@@ -10,7 +10,7 @@ use crate::routine::{
     ZHome, run_routine,
 };
 use crate::shutdown::ShutdownFlag;
-use crate::signal_registry::SignalIndex;
+use crate::signal_registry::{SignalIndex, SignalRegistry};
 use crate::spm_controller::{SpmController, ZHomeMode};
 use crate::spm_error::SpmError;
 
@@ -36,6 +36,30 @@ pub struct TipPrepParams<'a> {
     pub freq_shift: SignalIndex,
     /// The Z loop's input, the current, which a landing is judged on.
     pub current: SignalIndex,
+}
+
+/// The two signals tip prep reads, found by the names the registry gives
+/// them: the frequency shift it judges the tip on, and the current its
+/// landings wait on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TipPrepSignals {
+    pub freq_shift: SignalIndex,
+    pub current: SignalIndex,
+}
+
+impl TipPrepSignals {
+    pub fn resolve(registry: &SignalRegistry) -> Result<Self, SpmError> {
+        let find = |name: &str| {
+            registry
+                .get_by_name(name)
+                .map(|s| s.signal_index())
+                .ok_or_else(|| SpmError::Workflow(format!("the controller has no {name} signal")))
+        };
+        Ok(Self {
+            freq_shift: find("freq shift")?,
+            current: find("current")?,
+        })
+    }
 }
 
 /// Run the full tip preparation algorithm on a controller of its own.

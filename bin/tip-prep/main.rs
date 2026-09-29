@@ -12,7 +12,7 @@ use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::SignalRegistry;
 use rusty_tip::spm_controller::SpmController;
 use rusty_tip::spm_error::SpmError;
-use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
+use rusty_tip::tip_prep::{Outcome, TipPrepParams, TipPrepSignals, run_tip_prep};
 
 /// Rusty Tip Preparation Tool
 #[derive(Parser, Debug)]
@@ -111,22 +111,11 @@ fn run() -> Result<(), RunError> {
 
     // Build signal registry
     let registry = build_signal_registry(&mut controller, &config)?;
-    let freq_shift_signal = registry
-        .get_by_name("freq shift")
-        .ok_or("Frequency shift signal not found in registry")?;
+    let signals = TipPrepSignals::resolve(&registry)?;
     info!(
-        "Frequency shift signal: index {}{}",
-        freq_shift_signal.index,
-        freq_shift_signal
-            .tcp_channel
-            .map(|ch| format!(", TCP channel {}", ch))
-            .unwrap_or_default()
+        "Frequency shift signal: index {}, current: index {}",
+        signals.freq_shift, signals.current
     );
-    let freq_shift_index = freq_shift_signal.signal_index();
-    let current_index = registry
-        .get_by_name("current")
-        .ok_or("Current signal not found in registry")?
-        .signal_index();
 
     // Setup TCP data stream for stable signal reading
     setup_tcp_stream(&mut controller, &registry, &config)?;
@@ -155,8 +144,8 @@ fn run() -> Result<(), RunError> {
             events: &events,
             shutdown: &shutdown,
             config: &config,
-            freq_shift: freq_shift_index,
-            current: current_index,
+            freq_shift: signals.freq_shift,
+            current: signals.current,
         },
     );
 

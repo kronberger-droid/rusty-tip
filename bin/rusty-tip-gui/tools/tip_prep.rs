@@ -17,7 +17,7 @@ use rusty_tip::experiment_log::{LogEvent, ToolSchema};
 use rusty_tip::routine::{Outcome, run_routine};
 use rusty_tip::session::{Job, JobCx, NanonisBackend};
 use rusty_tip::spm_error::SpmError;
-use rusty_tip::tip_prep::{CycleEvent, MaxPulseEvent, TipPrep};
+use rusty_tip::tip_prep::{CycleEvent, MaxPulseEvent, TipPrep, TipPrepSignals};
 use serde::Deserialize;
 
 use super::{SetupCx, Tool, load_toml, save_toml};
@@ -46,19 +46,8 @@ impl Job for TipPrepJob {
     }
 
     fn run(&mut self, cx: JobCx<'_>) -> Result<Outcome, SpmError> {
-        let fs = cx
-            .registry
-            .get_by_name("freq shift")
-            .ok_or_else(|| {
-                SpmError::Workflow("the controller has no frequency-shift signal".into())
-            })?
-            .signal_index();
-        let current = cx
-            .registry
-            .get_by_name("current")
-            .ok_or_else(|| SpmError::Workflow("the controller has no current signal".into()))?
-            .signal_index();
-        let mut routine = TipPrep::new(&self.config, fs, current);
+        let signals = TipPrepSignals::resolve(cx.registry)?;
+        let mut routine = TipPrep::new(&self.config, signals.freq_shift, signals.current);
         run_routine(cx.controller, cx.events, cx.shutdown, &mut routine)
     }
 }
