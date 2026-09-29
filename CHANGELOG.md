@@ -191,6 +191,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ZCtrl::calibrated_approach_within` takes the gate. The mock's current
   channel now follows its Z setpoint while the loop is closed
   (`MockControllerBuilder::current_index`, index 0 by default).
+- **The tip-prep plots run over cycles and can be navigated.** The
+  frequency-shift and pulse plots used the run clock for x and had every
+  interaction switched off, and their y strip was sized to its widest tick
+  label, which on a short run started too thin to draw any. Both now take
+  the cycle number as x from the `tip_prep/cycle` events, one point per
+  cycle, with max pulses drawn as diamonds half a cycle after the cycle
+  they followed; the y strip has a fixed minimum width and tick labels in
+  the unit; and drag, wheel zoom, box zoom and double-click reset are on,
+  with the two plots sharing one x range and one cursor. The hover label
+  names the cycle and the value in its unit.
 - **`NanonisSetupConfig` is down to `tcp_refresh_output`.** Layout and
   settings files are loaded by whoever owns the connection through
   `SpmController::load_layout`/`load_settings`, before the stream starts

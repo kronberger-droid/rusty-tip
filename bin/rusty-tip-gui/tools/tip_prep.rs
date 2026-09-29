@@ -9,14 +9,15 @@
 use std::path::PathBuf;
 
 use eframe::egui;
-use egui_plot::{HLine, Line, Plot, PlotPoints, Points};
+use egui_plot::{AxisHints, HLine, Line, Plot, PlotPoints, Points};
 
 use rusty_tip::config::AppConfig;
-use rusty_tip::experiment_log::ToolSchema;
+use rusty_tip::experiment_log::{LogEvent, ToolSchema};
 use rusty_tip::routine::{Outcome, run_routine};
 use rusty_tip::session::{Job, JobCx, NanonisBackend};
 use rusty_tip::spm_error::SpmError;
-use rusty_tip::tip_prep::TipPrep;
+use rusty_tip::tip_prep::{CycleEvent, MaxPulseEvent, TipPrep};
+use serde::Deserialize;
 
 use super::{SetupCx, Tool, load_toml, save_toml};
 use crate::connection::ConnectionSettings;
@@ -65,9 +66,7 @@ impl Job for TipPrepJob {
 const FREQ_SHIFT_SERIES: &str = "stable_read.value";
 const CYCLE: &str = "tip_prep/cycle.cycle";
 const CYCLE_FREQ_SHIFT: &str = "tip_prep/cycle.freq_shift";
-const CYCLE_PULSE: &str = "tip_prep/cycle.pulse_voltage";
 const CYCLE_SHARP: &str = "tip_prep/cycle.is_sharp";
-const MAX_PULSE: &str = "tip_prep/max_pulse.pulse_voltage";
 
 /// Radius of the per-measurement markers. Both series are discrete
 /// measurements, so they are drawn as points with a connecting line; a bare
@@ -294,7 +293,7 @@ impl Tool for TipPrepTool {
         } else {
             "-"
         };
-        let pulses = pulse_history(view);
+        let run = by_cycle(view);
 
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::Grid::new("tip_prep_status")
@@ -324,9 +323,8 @@ impl Tool for TipPrepTool {
 
                     ui.label("Pulse voltage:");
                     ui.label(
-                        pulses
-                            .last()
-                            .map(|p| format_si(p[1], "V"))
+                        run.last_pulse()
+                            .map(|v| format_si(v, "V"))
                             .unwrap_or_else(|| "-".into()),
                     );
                     ui.label("Sharp band:");
@@ -342,53 +340,54 @@ impl Tool for TipPrepTool {
         let colors = Palette::for_theme(ui.visuals().dark_mode);
 
         ui.add_space(6.0);
-        ui.label("Freq shift, one point per stable read");
-        let fs = view.points(FREQ_SHIFT_SERIES);
+        ui.label("Freq shift measured after each cycle");
         let fs_line =
-            Line::new("Freq shift (Hz)", PlotPoints::from(fs.to_vec())).color(colors.first);
-        let fs_marks = Points::new("Measurements", PlotPoints::from(fs.to_vec()))
+            Line::new("Freq shift", PlotPoints::from(run.freq_shift.clone())).color(colors.first);
+        let fs_marks = Points::new("Freq shift", PlotPoints::from(run.freq_shift))
             .color(colors.first)
             .radius(MARKER_RADIUS);
         let bounds = self.sharp_bounds();
-        Plot::new("tip_prep_freq_shift")
-            .height(160.0)
-            .allow_drag(false)
-            .allow_zoom(false)
-            .allow_scroll(false)
-            .x_axis_label("Time (s)")
-            .y_axis_label("Hz")
-            .show(ui, |plot_ui| {
-                plot_ui.line(fs_line);
-                plot_ui.points(fs_marks);
-                if let Some((lower, upper)) = bounds {
-                    for (name, y) in [("Lower bound", lower), ("Upper bound", upper)] {
-                        plot_ui.hline(
-                            HLine::new(name, y)
-                                .color(colors.bounds)
-                                .style(egui_plot::LineStyle::Dashed { length: 5.0 }),
-                        );
-                    }
+        let mut plot = cycle_plot("tip_prep_freq_shift", 160.0, "Hz");
+        if let Some((lower, upper)) = bounds {
+            plot = plot.include_y(lower).include_y(upper);
+        }
+        plot.show(ui, |plot_ui| {
+            plot_ui.line(fs_line);
+            plot_ui.points(fs_marks);
+            if let Some((lower, upper)) = bounds {
+                for (name, y) in [("Lower bound", lower), ("Upper bound", upper)] {
+                    plot_ui.hline(
+                        HLine::new(name, y)
+                            .color(colors.bounds)
+                            .style(egui_plot::LineStyle::Dashed { length: 5.0 }),
+                    );
                 }
-            });
+            }
+        });
 
         ui.add_space(6.0);
-        ui.label("Pulse voltage, as fired");
-        let v_line =
-            Line::new("Pulse voltage (V)", PlotPoints::from(pulses.clone())).color(colors.second);
-        let v_marks = Points::new("Pulses", PlotPoints::from(pulses))
+        ui.label("Pulse fired at the start of each cycle; max pulses between");
+        let v_line = Line::new("Pulse", PlotPoints::from(run.pulses.clone())).color(colors.second);
+        let v_marks = Points::new("Pulse", PlotPoints::from(run.pulses))
             .color(colors.second)
             .radius(MARKER_RADIUS);
-        Plot::new("tip_prep_pulses")
-            .height(120.0)
-            .allow_drag(false)
-            .allow_zoom(false)
-            .allow_scroll(false)
-            .x_axis_label("Time (s)")
-            .y_axis_label("V")
-            .show(ui, |plot_ui| {
-                plot_ui.line(v_line);
-                plot_ui.points(v_marks);
-            });
+        let max_marks = Points::new("Max pulse", PlotPoints::from(run.max_pulses))
+            .color(colors.bounds)
+            .shape(egui_plot::MarkerShape::Diamond)
+            .radius(MARKER_RADIUS + 1.5);
+        cycle_plot("tip_prep_pulses", 120.0, "V").show(ui, |plot_ui| {
+            plot_ui.line(v_line);
+            plot_ui.points(v_marks);
+            plot_ui.points(max_marks);
+        });
+        ui.label(
+            egui::RichText::new(
+                "Drag to pan, scroll to zoom, right-drag a box to zoom into it, double-click \
+                 to fit. The two plots pan together.",
+            )
+            .weak()
+            .small(),
+        );
     }
 
     fn prefs(&self) -> serde_json::Value {
@@ -434,38 +433,103 @@ fn set_connection(config: &mut AppConfig, s: &ConnectionSettings) {
     config.controllers.presets_file = s.presets_file.display().to_string();
 }
 
-/// Every pulse fired: the cycle pulses and the max pulses, each already in
-/// time order, merged.
-fn pulse_history(view: &RunView) -> Vec<[f64; 2]> {
-    let (a, b) = (view.points(CYCLE_PULSE), view.points(MAX_PULSE));
-    let mut merged = Vec::with_capacity(a.len() + b.len());
-    let (mut i, mut j) = (0, 0);
-    while i < a.len() || j < b.len() {
-        let take_a = j >= b.len() || (i < a.len() && a[i][0] <= b[j][0]);
-        if take_a {
-            merged.push(a[i]);
-            i += 1;
-        } else {
-            merged.push(b[j]);
-            j += 1;
+/// The run by cycle: what each cycle fired and then measured, and the max
+/// pulses fired during a stability check, placed half a cycle after the
+/// cycle they followed so they sit between the regular ones.
+#[derive(Debug, Default, PartialEq)]
+struct ByCycle {
+    freq_shift: Vec<[f64; 2]>,
+    pulses: Vec<[f64; 2]>,
+    max_pulses: Vec<[f64; 2]>,
+}
+
+impl ByCycle {
+    /// The voltage of the pulse fired last, cycle or max. A max pulse sits
+    /// half a cycle after its cycle, so the later x is the later pulse.
+    fn last_pulse(&self) -> Option<f64> {
+        match (self.pulses.last(), self.max_pulses.last()) {
+            (Some(p), Some(m)) => Some(if m[0] > p[0] { m[1] } else { p[1] }),
+            (p, m) => p.or(m).map(|p| p[1]),
         }
     }
-    merged
+}
+
+fn by_cycle(view: &RunView) -> ByCycle {
+    // Both kinds arrive in time order, so one pass over the cycles places
+    // every max pulse after the last cycle that came before it.
+    let cycles: Vec<(f64, CycleEvent)> = view
+        .custom(CycleEvent::KIND)
+        .iter()
+        .filter_map(|(at, data)| Some((*at, CycleEvent::deserialize(data).ok()?)))
+        .collect();
+    let mut run = ByCycle::default();
+    for (_, c) in &cycles {
+        run.freq_shift.push([c.cycle as f64, c.freq_shift]);
+        run.pulses.push([c.cycle as f64, c.pulse_voltage]);
+    }
+    let mut before = 0;
+    for (at, data) in view.custom(MaxPulseEvent::KIND) {
+        let Ok(max) = MaxPulseEvent::deserialize(data) else {
+            continue;
+        };
+        while before < cycles.len() && cycles[before].0 <= *at {
+            before += 1;
+        }
+        let after = before.checked_sub(1).map_or(0, |i| cycles[i].1.cycle);
+        run.max_pulses.push([after as f64 + 0.5, max.pulse_voltage]);
+    }
+    run
+}
+
+/// A plot over cycles: integer ticks on x, a fixed-width y axis with
+/// tick labels in the unit, and navigation on. Both tip-prep plots share
+/// one x range and one cursor, so panning one pans the other.
+fn cycle_plot<'a>(id: &str, height: f32, unit: &'static str) -> Plot<'a> {
+    const LINK: &str = "tip_prep_cycles";
+    Plot::new(id)
+        .height(height)
+        .allow_drag([true, true])
+        .allow_zoom([true, true])
+        .allow_scroll(true)
+        .allow_boxed_zoom(true)
+        .allow_double_click_reset(true)
+        .link_axis(LINK, [true, false])
+        .link_cursor(LINK, [true, false])
+        .custom_x_axes(vec![AxisHints::new_x().label("Cycle").formatter(
+            |mark, _| {
+                let whole = mark.value.round();
+                if (mark.value - whole).abs() < 1e-6 && whole >= 0.0 {
+                    format!("{whole:.0}")
+                } else {
+                    String::new()
+                }
+            },
+        )])
+        // The y strip is sized to its widest tick label by default, which
+        // on a narrow run starts too thin to draw any; a fixed minimum
+        // keeps the labels there from the first point on.
+        .custom_y_axes(vec![
+            AxisHints::new_y()
+                .label(unit)
+                .min_thickness(64.0)
+                .formatter(move |mark, _| format_si(mark.value, unit)),
+        ])
+        .label_formatter(move |name, point| {
+            let what = if name.is_empty() { "" } else { name };
+            format!("{what}\ncycle {:.1}: {}", point.x, format_si(point.y, unit))
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rusty_tip::config::TcpChannelMapping;
-    use rusty_tip::experiment_log::LogEvent;
-    use rusty_tip::tip_prep::{CycleEvent, MaxPulseEvent};
 
     #[test]
     fn the_series_keys_follow_the_event_kinds() {
-        for key in [CYCLE, CYCLE_FREQ_SHIFT, CYCLE_PULSE, CYCLE_SHARP] {
+        for key in [CYCLE, CYCLE_FREQ_SHIFT, CYCLE_SHARP] {
             assert!(key.starts_with(&format!("{}.", CycleEvent::KIND)), "{key}");
         }
-        assert!(MAX_PULSE.starts_with(&format!("{}.", MaxPulseEvent::KIND)));
     }
 
     /// A file's connection tables go into the Connection page and come back
@@ -506,23 +570,35 @@ mod tests {
         assert_eq!(connection_of(&written).log_dir, None);
     }
 
+    /// The plots run over cycles: each cycle's shift and pulse sit at its
+    /// number, and a max pulse fired during a stability check sits half a
+    /// cycle after the cycle it followed.
     #[test]
-    fn pulses_merge_in_time_order() {
+    fn the_plots_run_over_cycles_with_max_pulses_between() {
         let mut view = RunView::default();
-        for (kind, v) in [
-            ("tip_prep/cycle", 3.0),
-            ("tip_prep/max_pulse", 6.0),
-            ("tip_prep/cycle", 3.5),
+        let cycle = |n: usize, fs: f64, v: f64| {
+            rusty_tip::event::Event::typed(&CycleEvent {
+                cycle: n,
+                elapsed_secs: 0.0,
+                freq_shift: fs,
+                pulse_voltage: v,
+                is_sharp: false,
+            })
+        };
+        let max = |v: f64| rusty_tip::event::Event::typed(&MaxPulseEvent { pulse_voltage: v });
+        for event in [
+            cycle(1, -3.0, 4.0),
+            cycle(2, -1.5, 5.0),
+            max(8.0),
+            cycle(3, -2.5, 4.5),
         ] {
-            view.apply_event(rusty_tip::event::Event::custom(
-                kind,
-                serde_json::json!({ "pulse_voltage": v }),
-            ));
+            view.apply_event(event);
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        let pulses = pulse_history(&view);
-        let volts: Vec<f64> = pulses.iter().map(|p| p[1]).collect();
-        assert_eq!(volts, vec![3.0, 6.0, 3.5]);
-        assert!(pulses.windows(2).all(|w| w[0][0] <= w[1][0]));
+        let run = by_cycle(&view);
+        assert_eq!(run.freq_shift, vec![[1.0, -3.0], [2.0, -1.5], [3.0, -2.5]]);
+        assert_eq!(run.pulses, vec![[1.0, 4.0], [2.0, 5.0], [3.0, 4.5]]);
+        assert_eq!(run.max_pulses, vec![[2.5, 8.0]]);
+        assert_eq!(run.last_pulse(), Some(4.5));
     }
 }
