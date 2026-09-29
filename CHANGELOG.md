@@ -217,9 +217,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the reading at the end of the previous cycle, so the first pulse of
   a run fired at the method's floor whatever the initial reading said, and
   so did the first pulse after a stability reset. The initial reading now
-  feeds the method before the first pulse, and a reset reads the fresh
-  site it repositioned to before the next one, so every pulse follows a
-  reading taken where it fires. With the linear method a blunt initial
+  feeds the method before the first pulse, and a stability check, which
+  repositions, hands on the reading at the site it left the tip on, read
+  after any reset, so every pulse follows a reading taken where it fires. With the linear method a blunt initial
   reading now gets the voltage its shift maps to instead of the minimum.
 - **The drift gate trusted the configured sample rate.** The stable read
   converts a per-sample slope into Hz/s using `data_acquisition.sample_rate`,
