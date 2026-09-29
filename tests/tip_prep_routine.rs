@@ -749,6 +749,48 @@ fn the_first_pulse_is_chosen_from_the_initial_reading() {
     );
 }
 
+#[test]
+fn after_an_unstable_check_the_next_pulse_follows_the_new_site() {
+    let mut cfg = fast_config();
+    cfg.tip_prep.max_cycles = Some(1);
+    cfg.tip_prep.sharp_tip_bounds = [-1.0, 0.0];
+    cfg.tip_prep.stability.check_stability = true;
+    cfg.tip_prep.stability.polarity_mode = BiasSweepPolarity::Positive;
+    cfg.pulse_method = PulseMethod::Linear {
+        voltage_bounds: (3.0, 8.0),
+        linear_clamp: (-3.0, -1.0),
+        polarity: PolaritySign::Positive,
+        random_polarity_switch: None,
+    };
+    // [0] initial, sharp: straight into the stability check
+    // [1..3] confirm reads, sharp; baseline = read[3]
+    // [4] final after the sweep, drifted 0.4 Hz: unstable, max pulse
+    // [5] the site the max pulse moved on to, −2 Hz
+    // [6] after the cycle's pulse, blunt
+    let scripted = models::scripted(vec![-0.5, -0.5, -0.5, -0.5, -0.9, -2.0, -40.0]);
+    let mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT_INDEX)
+        .freq_shift(scripted)
+        .build();
+    let obs = mock.observations();
+
+    let _ = run_tip_prep(
+        Box::new(mock),
+        TipPrepParams {
+            events: &EventBus::new(),
+            shutdown: &ShutdownFlag::new(),
+            config: &cfg,
+            freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
+        },
+    )
+    .expect("routine should not error");
+
+    // The reset drops the voltage to its 3 V floor; the reading at the new
+    // site has to lift it again, not be lost to the reset.
+    assert_eq!(obs.lock().pulses, vec![8.0, 5.5]);
+}
+
 // Tiny helper so panic messages name the outcome (Outcome has no Debug).
 fn outcome_name(o: &Outcome) -> &'static str {
     match o {
