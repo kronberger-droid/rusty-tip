@@ -89,8 +89,8 @@ voltage = 5.0
 fn shipped_presets_parse_and_validate() {
     use rusty_tip::controllers::{ControllerId, PresetStore, TomlPresetStore};
 
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("configs/presets/controllers.toml");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(rusty_tip::config::DEFAULT_PRESETS_FILE);
     let store = TomlPresetStore::new(&path);
     let presets = store
         .list()

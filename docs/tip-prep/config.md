@@ -52,7 +52,8 @@ presets_file = "./controllers.toml"  # the preset file, relative to the working 
 ```
 
 A preset is one controller's parameters under a name, with the operating
-point they were tuned at. The file is `[[presets]]` tables; `configs/presets/controllers.toml`
+point they were tuned at. The file is `[[presets]]` tables; the repo root's `controllers.toml`,
+where the default path finds it when the tools run from the checkout,
 ships two, a log-current loop for tip prep and a frequency loop for imaging:
 
 ```toml
