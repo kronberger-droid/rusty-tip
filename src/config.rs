@@ -416,6 +416,7 @@ pub struct TipPrepConfig {
     /// loop holds. A name the file does not have fails the run before
     /// the tip moves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-hidden" = true))]
     pub z_controller_preset: Option<String>,
     #[serde(default)]
     pub timing: TimingConfig,

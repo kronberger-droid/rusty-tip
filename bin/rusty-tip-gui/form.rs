@@ -663,9 +663,14 @@ fn ensure_array(value: &mut Value, n: usize, default: impl Fn(usize) -> Value) -
     array
 }
 
-/// Whether a field is drawn: one annotated `x-enabled-by` only while the
-/// sibling boolean it names is `true`. A missing sibling hides nothing.
+/// Whether a field is drawn: never one annotated `x-hidden`, which a page
+/// draws with a widget of its own, and one annotated `x-enabled-by` only
+/// while the sibling boolean it names is `true`. A missing sibling hides
+/// nothing.
 fn is_shown(schema: &Value, siblings: &Map<String, Value>) -> bool {
+    if schema.get("x-hidden").and_then(Value::as_bool) == Some(true) {
+        return false;
+    }
     match schema.get("x-enabled-by").and_then(Value::as_str) {
         Some(gate) => siblings.get(gate).and_then(Value::as_bool).unwrap_or(true),
         None => true,
@@ -936,6 +941,16 @@ mod tests {
             classify(&form.root["properties"]["tcp_channel_mapping"]),
             Kind::Optional(_)
         ));
+    }
+
+    /// The tip-prep page draws the Z preset as a pick of the preset file,
+    /// so the form must not draw it a second time as free text.
+    #[test]
+    fn a_field_a_page_draws_itself_is_hidden_from_the_form() {
+        let form = form();
+        let tip_prep = &form.root["properties"]["tip_prep"]["properties"];
+        assert!(!is_shown(&tip_prep["z_controller_preset"], &Map::new()));
+        assert!(is_shown(&tip_prep["initial_bias_v"], &Map::new()));
     }
 
     #[test]

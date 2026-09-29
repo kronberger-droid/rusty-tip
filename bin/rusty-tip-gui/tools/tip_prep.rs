@@ -12,6 +12,7 @@ use eframe::egui;
 use egui_plot::{AxisHints, HLine, Line, Plot, PlotPoints, Points};
 
 use rusty_tip::config::AppConfig;
+use rusty_tip::controllers::{ControllerId, Preset, PresetStore, TomlPresetStore};
 use rusty_tip::experiment_log::{LogEvent, ToolSchema};
 use rusty_tip::routine::{Outcome, run_routine};
 use rusty_tip::session::{Job, JobCx, NanonisBackend};
@@ -107,6 +108,10 @@ pub struct TipPrepTool {
     value: serde_json::Value,
     form: SchemaForm,
     message: Option<Note>,
+    /// The Z presets in the connection's preset file, by name, and which
+    /// file at which modification time they were read from.
+    z_presets: Vec<Preset>,
+    presets_read: Option<(PathBuf, Option<std::time::SystemTime>)>,
 }
 
 impl Default for TipPrepTool {
@@ -118,6 +123,8 @@ impl Default for TipPrepTool {
             value: serde_json::to_value(AppConfig::default()).unwrap_or(serde_json::Value::Null),
             form: SchemaForm::new(schema),
             message: None,
+            z_presets: Vec::new(),
+            presets_read: None,
         }
     }
 }
@@ -178,6 +185,75 @@ impl TipPrepTool {
     fn sharp_bounds(&self) -> Option<(f64, f64)> {
         let b = self.value.get("tip_prep")?.get("sharp_tip_bounds")?;
         Some((b.get(0)?.as_f64()?, b.get(1)?.as_f64()?))
+    }
+}
+
+impl TipPrepTool {
+    /// The Z presets in the connection's preset file, re-read whenever the
+    /// file changes, so one saved on the Controllers page shows up here.
+    fn refresh_z_presets(&mut self, connection: &Result<ConnectionSettings, String>) {
+        let path = match connection {
+            Ok(s) => s.presets_file.clone(),
+            Err(_) => PathBuf::from(rusty_tip::config::DEFAULT_PRESETS_FILE),
+        };
+        let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if self.presets_read.as_ref() == Some(&(path.clone(), modified)) {
+            return;
+        }
+        self.z_presets = TomlPresetStore::new(&path)
+            .list()
+            .map(|presets| {
+                presets
+                    .into_iter()
+                    .filter(|p| p.id == ControllerId::Z)
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.presets_read = Some((path, modified));
+    }
+
+    /// `tip_prep.z_controller_preset` as a pick of the file's Z presets,
+    /// one row of the featured grid. Returns whether it changed.
+    fn render_z_preset(
+        &mut self,
+        ui: &mut egui::Ui,
+        connection: &Result<ConnectionSettings, String>,
+    ) -> bool {
+        self.refresh_z_presets(connection);
+        let current = self.value["tip_prep"]["z_controller_preset"]
+            .as_str()
+            .map(str::to_string);
+        let mut picked = current.clone();
+        ui.label("Z preset").on_hover_text(
+            "Written to the Z-controller before the first approach, with the run's setpoint. \
+             None runs on whatever the loop holds.",
+        );
+        let shown = match &current {
+            None => "none, the loop as it is".to_string(),
+            Some(name) if !self.z_presets.iter().any(|p| p.is_named(name)) => {
+                format!("{name} (not in the preset file)")
+            }
+            Some(name) => name.clone(),
+        };
+        egui::ComboBox::from_id_salt("tip_prep_z_preset")
+            .selected_text(shown)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut picked, None, "none, the loop as it is");
+                for preset in &self.z_presets {
+                    ui.selectable_value(&mut picked, Some(preset.name.clone()), &preset.name);
+                }
+            });
+        ui.end_row();
+        if picked == current {
+            return false;
+        }
+        if let Some(tip_prep) = self.value["tip_prep"].as_object_mut() {
+            match picked {
+                Some(name) => tip_prep.insert("z_controller_preset".into(), name.into()),
+                None => tip_prep.remove("z_controller_preset"),
+            };
+        }
+        true
     }
 }
 
@@ -256,6 +332,7 @@ impl Tool for TipPrepTool {
                         for path in FEATURED {
                             changed |= self.form.render_path(ui, &mut self.value, path);
                         }
+                        changed |= self.render_z_preset(ui, &cx.connection);
                     });
             });
             ui.add_space(8.0);
