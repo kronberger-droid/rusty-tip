@@ -160,6 +160,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **No fixed settle on top of the landing gate.** `post_approach_settle_ms`
+  and `post_reposition_settle_ms` default to 0, since the gate already
+  waits for the loop; they stay as an extra wait for a frequency shift
+  that needs longer. A config that sets them keeps its values.
+- **The lab presets ship as `controllers.toml` at the repo root**, where
+  `[controllers].presets_file` looks by default, instead of under
+  `configs/presets/`.
+- **Tip prep's Z preset is picked from the preset file** in the workbench's
+  key settings, not typed; the form hides a field annotated `x-hidden`.
+- **The freq-shift plot shows the readings between cycles again**, hollow:
+  the initial read and a stability check's confirmations and final read.
+- **`TipPrepSignals::resolve`** finds the frequency-shift and current
+  signals by name, for every caller of `TipPrep::new`.
 - **A landing is judged on the loop, and safe-tip is armed only while the
   tip is parked.** The lab logs of 2026-09-28 and 29 ended in safe-tip
   trips on phases where nothing should trip. After a landing the current
@@ -246,6 +259,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A mapped TCP channel took two signals.** `tcp_channel_mapping`
+  added its pairs over the standard map without removing the index that
+  already held the channel, so the lab's `76 -> 19` left `77 -> 19` in
+  place: the excitation read the frequency shift under its own name, in
+  stable reads and in the stream dump. A mapped channel now leaves the
+  index that held it; one that should stream too needs a mapping of its
+  own.
+- **A dead data stream went unnoticed between runs.** The TCP reader stops
+  for good once the logger goes quiet, and a run that made no stream read
+  went through and dumped a buffer hours old. `NanonisController::prepare`
+  now refuses the run with the stream's error, and the end-of-run dump
+  holds only the run's own frames.
+- **A preset tuned at another amplitude went on without a word.** The
+  operating-point warning compares the amplitude loop's setpoint too.
 - **The first pulse ignored the tip.** The pulse method chose each voltage
   from the reading at the end of the previous cycle, so the first pulse of
   a run fired at the method's floor whatever the initial reading said, and
