@@ -177,6 +177,7 @@ fn a_run_ends_with_run_finished_carrying_the_outcome() {
     t.pulse_width_ms = 0;
     t.post_approach_settle_ms = 0;
     t.post_reposition_settle_ms = 0;
+    t.post_move_settle_ms = 0;
     t.buffer_clear_wait_ms = 0;
     t.post_pulse_settle_ms = 0;
     cfg.data_acquisition.stable_signal_samples = 8;
