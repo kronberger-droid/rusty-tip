@@ -23,6 +23,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   applied at once and kept between starts. It is the window's setting,
   not the connection's, so a config file's `[console]` neither carries
   it nor overrides it.
+- **Controller presets.** A `Preset` is one controller's parameters under
+  a name with a `tuned_at` block, the setpoint, bias and amplitude the
+  gains were tuned at; a `PresetFile` is `[[presets]]` tables, and
+  `PresetStore` with its `TomlPresetStore` is how they are listed, saved
+  and removed, so a database can stand behind the same calls later.
+  `ApplyPreset` writes one, keeping the setpoint the loop holds and
+  refusing a Z-controller name the module has not defined, and reads it
+  back as `controller/applied` and `controller/read`. The operating point
+  is recorded and never written since the gains' dependence on it goes by
+  loop law: a log current loop's do not depend on the setpoint or the
+  bias, a linear or a frequency loop's do (`Preset::depends_on_operating_point`).
+  The config has `[controllers].presets_file` (`./controllers.toml`) and
+  `[tip_prep].z_controller_preset`, which tip prep writes before its first
+  approach with `initial_z_setpoint_a`, warning when a preset whose gains
+  depend on the operating point was tuned elsewhere than the run's bias
+  and setpoint, and failing before the tip moves on a name the file does
+  not have. The workbench's Connection page has the file's path next to
+  the log directory; the Controllers page lists the presets for the
+  selected controller, loads one into the form, applies it, deletes it,
+  and saves the form as one with the live setpoint, bias and amplitude
+  recorded. `configs/presets/controllers.toml` ships the lab's log current
+  loop for tip prep and its frequency loop for imaging. `TipPrep`'s log
+  schema declares the two controller events.
 - **`rusty-tip-gui`**, the workbench: one window, one controller
   connection, several tools. The connection pane connects once (backend,
   host, ports, layout and settings files, TCP channel mapping) and shows

@@ -105,6 +105,13 @@ impl<'a> Rt<'a> {
         self.controller
     }
 
+    /// The bare controller and the event bus together, for a library call
+    /// that writes the controller and reports what it did itself, such as
+    /// applying a controller preset.
+    pub fn controller_with_events(&mut self) -> (&mut dyn SpmController, &EventBus) {
+        (self.controller, self.events)
+    }
+
     // -- Cross-cutting --
 
     /// Wait for `ms` milliseconds, waking early on a shutdown request

@@ -13,7 +13,11 @@ use rusty_tip::config::AppConfig;
 use rusty_tip::controller_types::{
     BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch,
 };
-use rusty_tip::event::{Event, EventBus, Observer};
+use rusty_tip::controllers::{
+    ControllerAppliedEvent, ControllerId, ControllerParams, Preset, PresetStore, TomlPresetStore,
+    TunedAt, ZControllerParams,
+};
+use rusty_tip::event::{Event, EventAccumulator, EventBus, Observer};
 use rusty_tip::mock_controller::{FaultKind, MockController, models};
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
@@ -799,4 +803,119 @@ fn outcome_name(o: &Outcome) -> &'static str {
         Outcome::CycleLimit(_) => "CycleLimit",
         Outcome::TimedOut(_) => "TimedOut",
     }
+}
+
+/// A preset file with one Z preset, in a directory of its own.
+fn preset_file(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!(
+        "rusty-tip-routine-presets-{}-{}",
+        std::process::id(),
+        Instant::now().elapsed().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("controllers.toml");
+    let mut store = TomlPresetStore::new(&path);
+    store
+        .put(Preset {
+            name: name.into(),
+            id: ControllerId::Z,
+            params: ControllerParams::Z(ZControllerParams {
+                active: "log Current".into(),
+                setpoint: 50e-12,
+                p_gain_m: 1.5e-12,
+                time_constant_s: 50e-6,
+                ..Default::default()
+            }),
+            tuned_at: TunedAt::default(),
+        })
+        .unwrap();
+    (dir, path)
+}
+
+/// A configured preset is written before the first approach, with the
+/// run's setpoint rather than the preset's, and the write is in the log.
+#[test]
+fn a_configured_z_preset_is_written_before_the_first_approach() {
+    let (dir, path) = preset_file("tip-prep");
+    let mut cfg = fast_config();
+    cfg.controllers.presets_file = path.display().to_string();
+    cfg.tip_prep.z_controller_preset = Some("Tip-Prep".into());
+    cfg.tip_prep.initial_z_setpoint_a = 100e-12;
+
+    let mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT_INDEX)
+        .freq_shift(models::sharpens_after(1, -40.0, -1.0))
+        .build();
+    let obs = mock.observations();
+    let recorder = Arc::new(EventAccumulator::new(usize::MAX));
+    let mut events = EventBus::new();
+    events.add_observer(Box::new(recorder.clone()));
+
+    let outcome = run_tip_prep(
+        Box::new(mock),
+        TipPrepParams {
+            events: &events,
+            shutdown: &ShutdownFlag::new(),
+            config: &cfg,
+            freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
+        },
+    )
+    .expect("routine should not error");
+    assert!(
+        matches!(outcome, Outcome::Completed),
+        "{}",
+        outcome_name(&outcome)
+    );
+
+    let calls = &obs.lock().calls;
+    let write = calls.iter().position(|c| *c == "write_controller");
+    let approach = calls.iter().position(|c| *c == "auto_approach");
+    assert!(
+        matches!((write, approach), (Some(w), Some(a)) if w < a),
+        "the preset is written before the first approach: {write:?} vs {approach:?}"
+    );
+    let applied = recorder.custom::<ControllerAppliedEvent>();
+    assert_eq!(applied.len(), 1, "one write, in the log");
+    match &applied[0].after {
+        ControllerParams::Z(p) => {
+            assert_eq!(
+                p.setpoint, 100e-12,
+                "the run's setpoint, not the preset's 50 pA"
+            );
+            assert_eq!(p.p_gain_m, 1.5e-12);
+        }
+        other => panic!("not Z parameters: {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A preset the file does not have ends the run before the tip moves.
+#[test]
+fn a_missing_z_preset_fails_before_the_tip_moves() {
+    let (dir, path) = preset_file("tip-prep");
+    let mut cfg = fast_config();
+    cfg.controllers.presets_file = path.display().to_string();
+    cfg.tip_prep.z_controller_preset = Some("imaging".into());
+
+    let mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT_INDEX)
+        .build();
+    let obs = mock.observations();
+    let err = run_tip_prep(
+        Box::new(mock),
+        TipPrepParams {
+            events: &EventBus::new(),
+            shutdown: &ShutdownFlag::new(),
+            config: &cfg,
+            freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
+        },
+    )
+    .expect_err("an unknown preset is an error");
+    assert!(err.to_string().contains("imaging"), "{err}");
+    let obs = obs.lock();
+    assert_eq!(obs.approach_count, 0, "no approach was started");
+    assert!(!obs.calls.contains(&"write_controller"));
+    let _ = std::fs::remove_dir_all(dir);
 }

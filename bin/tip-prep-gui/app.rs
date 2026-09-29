@@ -632,8 +632,11 @@ impl EditableConfig {
             console: ConsoleConfig {
                 verbosity: self.verbosity.clone(),
             },
+            // No preset editor here; the workbench has one.
+            controllers: Default::default(),
             tip_prep: TipPrepConfig {
                 sharp_tip_bounds: [sharp_tip_lower, sharp_tip_upper],
+                z_controller_preset: None,
                 max_cycles,
                 max_duration_secs,
                 stability: StabilityConfig {

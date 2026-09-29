@@ -3,6 +3,7 @@ use std::time::Duration;
 use crate::action::scan::ScanDirectionParam;
 use crate::config::{AppConfig, TipPrepConfig};
 use crate::controller_types::{BiasSweepPolarity, PolaritySign};
+use crate::controllers::{ApplyPreset, ControllerId, PresetStore, TomlPresetStore};
 use crate::event::{Event, EventBus};
 use crate::routine::{
     ExitPolicy, LandingGate, RepositionSpec, Routine, Rt, RunSetup, SafeTipSetup, StableReadSpec,
@@ -136,6 +137,53 @@ impl<'a> TipPrep<'a> {
 
     fn read_stable(&self, rt: &mut Rt) -> Result<f64, SpmError> {
         rt.signals()?.read_stable(self.freq_shift, &self.read_spec)
+    }
+
+    /// Write the configured Z-controller preset, if there is one, with
+    /// the run's setpoint kept. Before the first approach, and after the
+    /// setpoint is set, so the loop lands on the gains it will run on.
+    /// A preset tuned elsewhere than this run's bias and setpoint gets a
+    /// warning when its gains depend on that, and none when they do not.
+    fn apply_z_preset(&self, rt: &mut Rt) -> Result<(), SpmError> {
+        let tp = &self.config.tip_prep;
+        let Some(name) = tp.z_controller_preset.as_deref() else {
+            return Ok(());
+        };
+        let path = &self.config.controllers.presets_file;
+        let store = TomlPresetStore::new(path);
+        let preset = store
+            .get(name)
+            .map_err(SpmError::Workflow)?
+            .ok_or_else(|| {
+                SpmError::Workflow(format!("no controller preset called {name:?} in {path}"))
+            })?;
+        if preset.id != ControllerId::Z {
+            return Err(SpmError::Workflow(format!(
+                "preset {name:?} is for the {}, not the Z-controller",
+                preset.id
+            )));
+        }
+        if preset.depends_on_operating_point() {
+            let differs = |tuned: Option<f64>, run: f64| {
+                tuned.is_some_and(|t| (t - run).abs() > 0.1 * t.abs().max(run.abs()))
+            };
+            if differs(preset.tuned_at.setpoint, tp.initial_z_setpoint_a)
+                || differs(preset.tuned_at.bias_v, tp.initial_bias_v)
+            {
+                log::warn!(
+                    "preset {name:?} was tuned at setpoint {:?}, bias {:?} V; this run uses \
+                     {:.3e} and {:.3} V, and this loop's gains depend on that",
+                    preset.tuned_at.setpoint,
+                    preset.tuned_at.bias_v,
+                    tp.initial_z_setpoint_a,
+                    tp.initial_bias_v
+                );
+            }
+        }
+        log::info!("Applying Z-controller preset {name:?} from {path}");
+        let (controller, events) = rt.controller_with_events();
+        ApplyPreset::apply(&preset, controller, events)?;
+        Ok(())
     }
 
     /// Move to a fresh surface spot: withdraw, step the motors, re-approach.
@@ -545,6 +593,7 @@ impl Routine for TipPrep<'_> {
         log::info!("Initializing...");
         rt.bias()?.set(cfg.tip_prep.initial_bias_v)?;
         rt.z()?.set_setpoint(cfg.tip_prep.initial_z_setpoint_a)?;
+        self.apply_z_preset(rt)?;
         rt.z()?
             .calibrated_approach_within(self.approach_timeout(), Some(self.landing.clone()))?;
 
