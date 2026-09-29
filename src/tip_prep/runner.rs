@@ -188,9 +188,9 @@ impl<'a> TipPrep<'a> {
 
     /// Move to a fresh surface spot: withdraw, step the motors, re-approach.
     ///
-    /// The landing gate stands where 0.2.3 had a fixed settle between the
-    /// motor move and the approach; `post_reposition_settle_ms` ends the
-    /// whole reposition.
+    /// The landing gate stands where 0.2.3 had fixed settles; what is left
+    /// of them, `post_reposition_settle_ms`, is an extra wait after the
+    /// gate and none by default.
     fn reposition(&self, rt: &mut Rt) -> Result<(), SpmError> {
         let t = &self.config.tip_prep.timing;
         rt.motor()?.reposition(&RepositionSpec {

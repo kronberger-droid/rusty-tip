@@ -189,10 +189,10 @@ fn default_pulse_width_ms() -> u64 {
     50
 }
 fn default_post_approach_settle_ms() -> u64 {
-    2000
+    0
 }
 fn default_post_reposition_settle_ms() -> u64 {
-    1000
+    0
 }
 /// Half the setpoint either way. Loose on purpose: "near" is what the
 /// landing needs, and a loop that reads 1.5 times its setpoint through a
@@ -241,11 +241,14 @@ pub struct TimingConfig {
     #[serde(default = "default_pulse_width_ms")]
     #[schemars(extend("x-unit" = "ms"))]
     pub pulse_width_ms: u64,
-    /// Settle after an approach.
+    /// Extra wait after an approach has landed. The landing gate already
+    /// waits for the Z loop to hold its setpoint, so this is none by
+    /// default; raise it only if the frequency shift needs longer.
     #[serde(default = "default_post_approach_settle_ms")]
     #[schemars(extend("x-unit" = "ms"))]
     pub post_approach_settle_ms: u64,
-    /// Settle at the end of a reposition.
+    /// Extra wait at the end of a reposition, after its landing gate;
+    /// none by default, as for `post_approach_settle_ms`.
     #[serde(default = "default_post_reposition_settle_ms")]
     #[schemars(extend("x-unit" = "ms"))]
     pub post_reposition_settle_ms: u64,

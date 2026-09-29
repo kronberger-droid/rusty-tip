@@ -104,8 +104,8 @@ z_controller_preset = "tip-prep"  # optional; a Z preset from [controllers].pres
 ```toml
 [tip_prep.timing]
 pulse_width_ms = 50
-post_approach_settle_ms = 2000
-post_reposition_settle_ms = 1000  # ends every reposition
+post_approach_settle_ms = 0       # extra wait after a landing; the landing gate
+post_reposition_settle_ms = 0     # already waits for the loop, so none by default
 landing_tolerance = 0.5           # a landing counts once the current reads within
                                   # this fraction of the setpoint, and holds still
 landing_timeout_ms = 30000        # stop waiting for that and carry on, with a warning
