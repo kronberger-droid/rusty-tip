@@ -7,6 +7,7 @@ use std::path::Path;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use rusty_tip::action::signals::Measurement;
 use rusty_tip::config::{
     AppConfig, ConsoleConfig, DataAcquisitionConfig, ExperimentLoggingConfig, NanonisConfig,
     SignalStabilityConfig, TcpChannelMapping, TimingConfig, TipPrepConfig,
@@ -920,7 +921,9 @@ impl TipPrepApp {
                             self.tip_state.phase = phase.to_string();
                         }
                     }
-                    Event::DataCollected { label, value, .. } if label == "stable_read" => {
+                    Event::DataCollected { label, value, .. }
+                        if label == Measurement::StableRead.label() =>
+                    {
                         // One point per measurement: a stable read *is* a single
                         // measurement of the frequency shift, averaged from a
                         // sample batch. Every stable read in the tip-prep routine

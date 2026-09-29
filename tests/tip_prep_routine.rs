@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use rusty_tip::SignalIndex;
+use rusty_tip::action::signals::Measurement;
 use rusty_tip::config::AppConfig;
 use rusty_tip::controller_types::{
     BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch,
@@ -637,7 +638,7 @@ fn realistic_model_completes_and_publishes_measurements() {
     impl Observer for Reads {
         fn on_event(&self, event: &Event) {
             if let Event::DataCollected { label, value, .. } = event
-                && label == "stable_read"
+                && label == Measurement::StableRead.label()
                 && let (Some(v), Some(sd), Some(n)) = (
                     value.get("value").and_then(|v| v.as_f64()),
                     value.get("std_dev").and_then(|v| v.as_f64()),
