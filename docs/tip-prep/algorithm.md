@@ -72,13 +72,28 @@ mid-sweep never leaves the tip engaged on the surface.
 
 ## Approaching
 
-Every approach in the routine is a *calibrated* approach: approach, back off
-50 nm (a relative Z-home), centre the frequency shift there, approach again.
-Safe-tip protection is switched on for the backed-off part, and the Z
-controller's status is checked after each step. If safe-tip has fired, the
-approach aborts and so does the run, rather than approaching again into
-whatever tripped it. The hardware retracts the tip on a trip by itself; the
-check is there so the software never undoes that.
+Every approach in the routine is a *calibrated* approach: auto-approach,
+wait for the landing, back off 50 nm (a relative Z-home), centre the
+frequency shift there, then land again by switching the Z loop on and
+waiting for that landing too.
+
+A landing is judged on the loop's input, not on a clock. The auto-approach
+reports done the moment the setpoint is first crossed, while the loop is
+still riding its own step response and, after coarse steps, the stage's
+creep; the current sits well off the setpoint for a moment either way. So
+the routine reads batches of the current until the mean is within
+`landing_tolerance` of the setpoint and the batch holds still, or
+`landing_timeout_ms` runs out, after which it carries on with a warning.
+The second landing is made on the loop itself rather than the
+auto-approach's ramp, since the integrator walks the 50 nm in on its own
+and lands softly.
+
+Safe-tip protection is switched on only for the backed-off part, after the
+first landing has settled and before the second begins, and the Z
+controller's status is checked after each step there. If safe-tip has
+fired, the approach aborts and so does the run, rather than approaching
+again into whatever tripped it. The hardware retracts the tip on a trip by
+itself; the check is there so the software never undoes that.
 
 An approach can be stopped while it runs: Ctrl+C or the GUI's stop button
 lands within a poll interval (100 ms), switches the auto-approach off so

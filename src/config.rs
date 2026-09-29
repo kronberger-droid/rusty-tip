@@ -46,6 +46,13 @@ impl AppConfig {
             ));
         }
 
+        let tolerance = self.tip_prep.timing.landing_tolerance;
+        if tolerance <= 0.0 || !tolerance.is_finite() {
+            return Err(ConfigError::Message(format!(
+                "tip_prep.timing.landing_tolerance must be a positive fraction, not {tolerance}"
+            )));
+        }
+
         if !(1..=6).contains(&self.nanonis.motor_group) {
             return Err(ConfigError::Message(format!(
                 "nanonis.motor_group must be 1 to 6, not {}",
@@ -157,10 +164,17 @@ fn default_post_approach_settle_ms() -> u64 {
 fn default_post_reposition_settle_ms() -> u64 {
     1000
 }
-/// Long enough for the creep after a coarse step to die out before the
-/// approach lands; 500 ms was not, and the tip rang on contact.
-fn default_post_move_settle_ms() -> u64 {
-    3000
+/// Half the setpoint either way. Loose on purpose: "near" is what the
+/// landing needs, and a loop that reads 1.5 times its setpoint through a
+/// stale calibration should still land.
+fn default_landing_tolerance() -> f64 {
+    0.5
+}
+/// A creeping stage takes seconds to stop; a loop that has not settled in
+/// half a minute is not going to, and the run carries on as it would have
+/// after a fixed wait.
+fn default_landing_timeout_ms() -> u64 {
+    30_000
 }
 fn default_buffer_clear_wait_ms() -> u64 {
     500
@@ -205,14 +219,19 @@ pub struct TimingConfig {
     #[serde(default = "default_post_reposition_settle_ms")]
     #[schemars(extend("x-unit" = "ms"))]
     pub post_reposition_settle_ms: u64,
-    /// Settle between the coarse steps and the approach during a
-    /// reposition. A stick-slip step leaves the stage creeping for a while,
-    /// and an approach that lands on that creep rings on contact: the
-    /// current spikes to the preamp rail for a few hundred milliseconds,
-    /// which is what trips safe-tip. 0.2.3 had 500 ms here.
-    #[serde(default = "default_post_move_settle_ms")]
+    /// How near the setpoint the Z loop's input has to read, as a fraction
+    /// of the setpoint, before a landing counts. The same fraction bounds
+    /// the batch's standard deviation and its drift per second. A stage
+    /// still creeping after a coarse step, or a loop still ringing from
+    /// the landing, fails it until they stop; that wait replaced the fixed
+    /// settle between the coarse steps and the approach.
+    #[serde(default = "default_landing_tolerance")]
+    pub landing_tolerance: f64,
+    /// Stop waiting on a landing after this and take it as done, with a
+    /// warning in the log; the run never fails on a slow settle.
+    #[serde(default = "default_landing_timeout_ms")]
     #[schemars(extend("x-unit" = "ms"))]
-    pub post_move_settle_ms: u64,
+    pub landing_timeout_ms: u64,
     /// Wait after clearing the stream buffer before the first read.
     #[serde(default = "default_buffer_clear_wait_ms")]
     #[schemars(extend("x-unit" = "ms"))]
@@ -255,7 +274,8 @@ impl Default for TimingConfig {
             pulse_width_ms: default_pulse_width_ms(),
             post_approach_settle_ms: default_post_approach_settle_ms(),
             post_reposition_settle_ms: default_post_reposition_settle_ms(),
-            post_move_settle_ms: default_post_move_settle_ms(),
+            landing_tolerance: default_landing_tolerance(),
+            landing_timeout_ms: default_landing_timeout_ms(),
             buffer_clear_wait_ms: default_buffer_clear_wait_ms(),
             post_pulse_settle_ms: default_post_pulse_settle_ms(),
             reposition_steps: default_reposition_steps(),

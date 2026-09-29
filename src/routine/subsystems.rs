@@ -24,6 +24,7 @@ use crate::action::motor::{MoveMotor3D, Reposition};
 use crate::action::multi_pass::{ActivateMultiPass, ApplyMultiPass, LoadMultiPass, SaveMultiPass};
 use crate::action::scan::{ScanActionParam, ScanControl, ScanDirectionParam};
 use crate::action::signals::{ReadSignal, ReadStableSignal};
+pub use crate::action::z_controller::LandingGate;
 use crate::action::z_controller::{AutoApproach, CalibratedApproach, SetZSetpoint, Withdraw};
 use crate::signal_registry::SignalIndex;
 use crate::spm_error::SpmError;
@@ -106,12 +107,21 @@ impl ZCtrl<'_, '_> {
     }
 
     /// [`calibrated_approach`](Self::calibrated_approach) with an explicit
-    /// budget for each of its two approaches. For the approaches that start
-    /// from a full withdraw, which can take longer than the default allows.
-    pub fn calibrated_approach_within(&mut self, timeout: Duration) -> Result<()> {
+    /// budget for the auto-approach, for the ones that start from a full
+    /// withdraw and can take longer than the default allows, and what
+    /// "landed" means. With a [`LandingGate`] the sequence waits on the
+    /// loop's input after each landing and makes the second landing on the
+    /// loop itself; without one it falls back to fixed waits and a second
+    /// auto-approach.
+    pub fn calibrated_approach_within(
+        &mut self,
+        timeout: Duration,
+        landing: Option<LandingGate>,
+    ) -> Result<()> {
         self.rt.exec(&CalibratedApproach {
             wait: true,
             timeout_ms: timeout.as_millis() as u64,
+            landing,
         })?;
         Ok(())
     }
@@ -182,7 +192,7 @@ impl Signals<'_, '_> {
 // ============================================================================
 
 /// Parameters for [`Motor::reposition`]: withdraw, step the coarse motors,
-/// settle, re-approach (calibrated), settle again.
+/// re-approach (calibrated), settle.
 #[derive(Debug, Clone)]
 pub struct RepositionSpec {
     /// Coarse motor steps in x.
@@ -191,12 +201,13 @@ pub struct RepositionSpec {
     pub y_steps: i16,
     /// Z retraction steps before the lateral move.
     pub z_retract: i16,
-    /// Settle between the motor move and the re-approach (ms).
-    pub post_move_settle_ms: u64,
     /// Settle after the re-approach (ms).
     pub post_approach_settle_ms: u64,
-    /// Budget for each of the two approaches in the re-approach (ms).
+    /// Budget for the auto-approach in the re-approach (ms).
     pub approach_timeout_ms: u64,
+    /// What "landed" means for the re-approach. `None` falls back to fixed
+    /// waits and a second auto-approach.
+    pub landing: Option<LandingGate>,
 }
 
 impl Default for RepositionSpec {
@@ -205,9 +216,9 @@ impl Default for RepositionSpec {
             x_steps: 0,
             y_steps: 0,
             z_retract: -3,
-            post_move_settle_ms: 500,
             post_approach_settle_ms: 500,
             approach_timeout_ms: crate::action::z_controller::DEFAULT_APPROACH_TIMEOUT_MS,
+            landing: None,
         }
     }
 }
@@ -225,9 +236,9 @@ impl Motor<'_, '_> {
             x_steps: spec.x_steps,
             y_steps: spec.y_steps,
             z_retract: spec.z_retract,
-            post_move_settle_ms: spec.post_move_settle_ms,
             post_approach_settle_ms: spec.post_approach_settle_ms,
             approach_timeout_ms: spec.approach_timeout_ms,
+            landing: spec.landing.clone(),
         })?;
         Ok(())
     }

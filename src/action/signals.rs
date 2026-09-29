@@ -231,6 +231,7 @@ impl Action for ReadStableSignal {
                 );
                 emit_measurement(
                     ctx,
+                    "stable_read",
                     self.index,
                     samples.len(),
                     mean,
@@ -268,6 +269,7 @@ impl Action for ReadStableSignal {
                 );
                 emit_measurement(
                     ctx,
+                    "stable_read",
                     self.index,
                     samples.len(),
                     mean,
@@ -294,9 +296,14 @@ impl Action for ReadStableSignal {
 ///
 /// `ActionCompleted` also carries the mean, but only as a bare value; this event
 /// is self-describing and stable to parse.
+///
+/// `label` is `stable_read` for a measurement; a landing gate's batches go
+/// out as `landing`, so a reader counting measurements does not count the
+/// waits.
 #[allow(clippy::too_many_arguments)]
-fn emit_measurement(
+pub(crate) fn emit_measurement(
     ctx: &ActionContext,
+    label: &'static str,
     index: SignalIndex,
     n: usize,
     mean: f64,
@@ -306,7 +313,7 @@ fn emit_measurement(
     stable: bool,
 ) {
     ctx.events.emit(Event::data_collected(
-        "stable_read",
+        label,
         serde_json::json!({
             "index": index,
             "value": mean,

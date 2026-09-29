@@ -137,17 +137,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **A reposition takes one coarse step in x and y and waits three seconds
-  before re-approaching**, where it took three steps and waited 500 ms.
-  The lab logs of 2026-09-28 and 29 show why safe-tip kept tripping on a
-  phase where nothing should trip it: every landing that followed coarse
-  steps rang on contact, the current spiking to the preamp rail at the
-  loop's frequency for a few hundred milliseconds, while the 50 nm
-  piezo hop back from home never did. A stick-slip step leaves the stage
-  creeping, and an approach that lands on the creep gets the kick. One
-  step is enough to leave the last pulse's debris behind; the settle is
-  `post_move_settle_ms`, on the tip-prep Setup page like every other
-  timing.
+- **A landing is judged on the loop, and safe-tip is armed only while the
+  tip is parked.** The lab logs of 2026-09-28 and 29 ended in safe-tip
+  trips on phases where nothing should trip. After a landing the current
+  was not on the setpoint but a spike train to the preamp rail, dying out
+  over a few hundred milliseconds: the loop's own step response to the
+  Auto Approach ramp, and after coarse steps the stage's creep on top,
+  growing with the number of steps. The calibrated approach armed
+  safe-tip 200 ms after the first landing and kept it armed through the
+  second, so either landing could trip it. Now the first landing is
+  followed by `settle_on_setpoint`, a wait on the Z loop's input rather
+  than on a clock: batches of `stable_signal_samples` of the current until
+  the mean is within `landing_tolerance` of `initial_z_setpoint_a` and the
+  batch holds still, bounded by `landing_timeout_ms`, after which the
+  landing is taken as done with a warning. Safe-tip is armed after that,
+  only for the home, settle and centre steps, and disarmed before the
+  second landing, which is made by switching the Z loop on from 50 nm
+  off (`z_controller_set`) and waiting on the same gate: the loop walks in
+  on its integrator and lands softly where the Auto Approach ramp does
+  not. Every batch is in the log as a `landing` measurement. The fixed
+  settle between the coarse steps and the approach (`post_move_settle_ms`,
+  500 ms since 0.2.3) is gone, since the gate covers the creep it was
+  for, and a reposition takes one coarse step in x and y instead of three:
+  one puts the last pulse's debris behind the tip, every further step is
+  more creep to wait out. z retract stays at three, since steps and
+  unlevel samples need the height. `TipPrepParams` and `TipPrep::new`
+  take the current signal's index; `CalibratedApproach`, `Reposition` and
+  `RepositionSpec` carry an optional `LandingGate`, without which the
+  sequence falls back to fixed waits and a second auto-approach;
+  `ZCtrl::calibrated_approach_within` takes the gate. The mock's current
+  channel now follows its Z setpoint while the loop is closed
+  (`MockControllerBuilder::current_index`, index 0 by default).
 - **`NanonisSetupConfig` is down to `tcp_refresh_output`.** Layout and
   settings files are loaded by whoever owns the connection through
   `SpmController::load_layout`/`load_settings`, before the stream starts

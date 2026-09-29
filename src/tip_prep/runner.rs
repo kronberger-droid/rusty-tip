@@ -5,8 +5,8 @@ use crate::config::{AppConfig, TipPrepConfig};
 use crate::controller_types::{BiasSweepPolarity, PolaritySign};
 use crate::event::{Event, EventBus};
 use crate::routine::{
-    ExitPolicy, RepositionSpec, Routine, Rt, RunSetup, SafeTipSetup, StableReadSpec, ZHome,
-    run_routine,
+    ExitPolicy, LandingGate, RepositionSpec, Routine, Rt, RunSetup, SafeTipSetup, StableReadSpec,
+    ZHome, run_routine,
 };
 use crate::shutdown::ShutdownFlag;
 use crate::signal_registry::SignalIndex;
@@ -33,6 +33,8 @@ pub struct TipPrepParams<'a> {
     pub config: &'a AppConfig,
     /// The frequency-shift signal driving sharpness decisions.
     pub freq_shift: SignalIndex,
+    /// The Z loop's input, the current, which a landing is judged on.
+    pub current: SignalIndex,
 }
 
 /// Run the full tip preparation algorithm on a controller of its own.
@@ -55,8 +57,9 @@ pub fn run_tip_prep(
         shutdown,
         config,
         freq_shift,
+        current,
     } = params;
-    let mut routine = TipPrep::new(config, freq_shift);
+    let mut routine = TipPrep::new(config, freq_shift, current);
     run_routine(&mut *controller, events, shutdown, &mut routine)
 }
 
@@ -75,6 +78,8 @@ pub struct TipPrep<'a> {
     pulse: PulseState,
     bounds: (f64, f64),
     read_spec: StableReadSpec,
+    /// What "landed" means for every approach of the run.
+    landing: LandingGate,
 }
 
 enum StabilityOutcome {
@@ -91,8 +96,11 @@ struct SweepPlan {
 }
 
 impl<'a> TipPrep<'a> {
-    pub fn new(config: &'a AppConfig, freq_shift: SignalIndex) -> Self {
+    /// `current` is the Z loop's input, which every landing of the run is
+    /// judged on against `tip_prep.initial_z_setpoint_a`.
+    pub fn new(config: &'a AppConfig, freq_shift: SignalIndex, current: SignalIndex) -> Self {
         let gates = &config.tip_prep.signal_stability;
+        let timing = &config.tip_prep.timing;
         Self {
             config,
             freq_shift,
@@ -108,6 +116,14 @@ impl<'a> TipPrep<'a> {
                 max_retries: gates.read_retry_count as usize,
                 sample_rate_hz: config.data_acquisition.sample_rate as f64,
             },
+            landing: LandingGate {
+                index: current,
+                setpoint: config.tip_prep.initial_z_setpoint_a,
+                tolerance: timing.landing_tolerance,
+                num_samples: config.data_acquisition.stable_signal_samples,
+                timeout_ms: timing.landing_timeout_ms,
+                sample_rate_hz: config.data_acquisition.sample_rate as f64,
+            },
         }
     }
 
@@ -121,16 +137,17 @@ impl<'a> TipPrep<'a> {
 
     /// Move to a fresh surface spot: withdraw, step the motors, re-approach.
     ///
-    /// V1 parity: `post_move_settle_ms` sits between the motor move and the
-    /// approach; `post_reposition_settle_ms` ends the whole reposition.
+    /// The landing gate stands where 0.2.3 had a fixed settle between the
+    /// motor move and the approach; `post_reposition_settle_ms` ends the
+    /// whole reposition.
     fn reposition(&self, rt: &mut Rt) -> Result<(), SpmError> {
         let t = &self.config.tip_prep.timing;
         rt.motor()?.reposition(&RepositionSpec {
             x_steps: t.reposition_steps[0],
             y_steps: t.reposition_steps[1],
-            post_move_settle_ms: t.post_move_settle_ms,
             post_approach_settle_ms: t.post_reposition_settle_ms,
             approach_timeout_ms: t.reposition_approach_timeout_ms,
+            landing: Some(self.landing.clone()),
             ..Default::default()
         })
     }
@@ -359,7 +376,7 @@ impl<'a> TipPrep<'a> {
         rt.settle(200)?;
         rt.bias()?.set(plan.starting_bias)?;
         rt.z()?
-            .calibrated_approach_within(self.approach_timeout())?;
+            .calibrated_approach_within(self.approach_timeout(), Some(self.landing.clone()))?;
         rt.settle(t.post_approach_settle_ms)?;
 
         Ok(())
@@ -468,7 +485,7 @@ impl<'a> TipPrep<'a> {
         rt.settle(200)?;
         rt.bias()?.set(self.config.tip_prep.initial_bias_v)?;
         rt.z()?
-            .calibrated_approach_within(self.approach_timeout())?;
+            .calibrated_approach_within(self.approach_timeout(), Some(self.landing.clone()))?;
         rt.settle(self.config.tip_prep.timing.post_approach_settle_ms)?;
 
         self.read_stable(rt)
@@ -531,7 +548,7 @@ impl Routine for TipPrep<'_> {
         rt.bias()?.set(cfg.tip_prep.initial_bias_v)?;
         rt.z()?.set_setpoint(cfg.tip_prep.initial_z_setpoint_a)?;
         rt.z()?
-            .calibrated_approach_within(self.approach_timeout())?;
+            .calibrated_approach_within(self.approach_timeout(), Some(self.landing.clone()))?;
 
         // Clear the stream buffer to discard stale pre-approach data
         rt.signals()?.clear_buffer();

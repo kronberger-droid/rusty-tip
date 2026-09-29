@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use nanonis_rs::motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D};
 
 use crate::action::util::Wait;
-use crate::action::z_controller::{CalibratedApproach, DEFAULT_APPROACH_TIMEOUT_MS, Withdraw};
+use crate::action::z_controller::{
+    CalibratedApproach, DEFAULT_APPROACH_TIMEOUT_MS, LandingGate, Withdraw,
+};
 use crate::action::{Action, ActionContext, ActionOutput};
 use crate::spm_controller::Capability;
 
@@ -189,29 +191,30 @@ impl Action for StopMotor {
     }
 }
 
-/// Composite action: withdraw, move motor, settle, and do a calibrated approach.
+/// Composite action: withdraw, move motor, and do a calibrated approach.
 ///
 /// Sequence:
 /// 1. Withdraw from surface
 /// 2. Move motor 3D (x, y steps + z retract)
-/// 3. Wait for settle. A stick-slip step leaves the stage creeping, and an
-///    approach that lands on the creep rings on contact, so this is
-///    seconds rather than the 500 ms 0.2.3 had.
-/// 4. Calibrated approach (approach, small withdraw, center freq shift, re-approach)
-/// 5. Wait for post-approach settle
+/// 3. Calibrated approach (approach, small withdraw, center freq shift,
+///    re-approach). There is no settle between the steps and the approach:
+///    the stage's creep after a stick-slip step is what the approach's
+///    landing gate waits out, on the signal rather than on a clock.
+/// 4. Wait for post-approach settle
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Reposition {
     pub x_steps: i16,
     pub y_steps: i16,
     #[serde(default = "default_z_retract")]
     pub z_retract: i16,
-    #[serde(default = "default_post_move_settle_ms")]
-    pub post_move_settle_ms: u64,
     #[serde(default = "default_settle_ms")]
     pub post_approach_settle_ms: u64,
     /// Budget for each approach inside the calibrated re-approach.
     #[serde(default = "default_approach_timeout_ms")]
     pub approach_timeout_ms: u64,
+    /// What "landed" means for the re-approach; see [`CalibratedApproach`].
+    #[serde(default)]
+    pub landing: Option<LandingGate>,
 }
 
 fn default_z_retract() -> i16 {
@@ -220,10 +223,6 @@ fn default_z_retract() -> i16 {
 
 fn default_settle_ms() -> u64 {
     500
-}
-
-fn default_post_move_settle_ms() -> u64 {
-    3000
 }
 
 fn default_approach_timeout_ms() -> u64 {
@@ -236,9 +235,9 @@ impl Default for Reposition {
             x_steps: 0,
             y_steps: 0,
             z_retract: default_z_retract(),
-            post_move_settle_ms: default_post_move_settle_ms(),
             post_approach_settle_ms: default_settle_ms(),
             approach_timeout_ms: default_approach_timeout_ms(),
+            landing: None,
         }
     }
 }
@@ -264,13 +263,10 @@ impl Action for Reposition {
             wait: true,
         })?;
 
-        ctx.run(&Wait {
-            duration_ms: self.post_move_settle_ms,
-        })?;
-
         ctx.run(&CalibratedApproach {
             wait: true,
             timeout_ms: self.approach_timeout_ms,
+            landing: self.landing.clone(),
         })?;
 
         ctx.run(&Wait {
