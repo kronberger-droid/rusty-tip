@@ -117,8 +117,10 @@ fn default_post_approach_settle_ms() -> u64 {
 fn default_post_reposition_settle_ms() -> u64 {
     1000
 }
+/// Long enough for the creep after a coarse step to die out before the
+/// approach lands; 500 ms was not, and the tip rang on contact.
 fn default_post_move_settle_ms() -> u64 {
-    500
+    3000
 }
 fn default_buffer_clear_wait_ms() -> u64 {
     500
@@ -126,8 +128,10 @@ fn default_buffer_clear_wait_ms() -> u64 {
 fn default_post_pulse_settle_ms() -> u64 {
     1000
 }
+/// One step is enough to leave the debris of the last pulse behind, and
+/// every step adds creep for the approach to land on.
 fn default_reposition_steps() -> [i16; 2] {
-    [3, 3]
+    [1, 1]
 }
 fn default_status_interval() -> usize {
     10
