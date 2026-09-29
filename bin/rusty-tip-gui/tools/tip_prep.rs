@@ -64,6 +64,7 @@ impl Job for TipPrepJob {
 
 /// Series the panel reads off the [`RunView`], by the names the log uses.
 const FREQ_SHIFT_SERIES: &str = "stable_read.value";
+const FREQ_SHIFT_STABLE: &str = "stable_read.stable";
 const CYCLE: &str = "tip_prep/cycle.cycle";
 const CYCLE_FREQ_SHIFT: &str = "tip_prep/cycle.freq_shift";
 const CYCLE_SHARP: &str = "tip_prep/cycle.is_sharp";
@@ -340,12 +341,16 @@ impl Tool for TipPrepTool {
         let colors = Palette::for_theme(ui.visuals().dark_mode);
 
         ui.add_space(6.0);
-        ui.label("Freq shift measured after each cycle");
+        ui.label("Freq shift measured after each cycle; hollow, the readings between cycles");
         let fs_line =
             Line::new("Freq shift", PlotPoints::from(run.freq_shift.clone())).color(colors.first);
         let fs_marks = Points::new("Freq shift", PlotPoints::from(run.freq_shift))
             .color(colors.first)
             .radius(MARKER_RADIUS);
+        let other_marks = Points::new("Between cycles", PlotPoints::from(run.other_reads))
+            .color(colors.first)
+            .filled(false)
+            .radius(MARKER_RADIUS + 1.0);
         let bounds = self.sharp_bounds();
         let mut plot = cycle_plot("tip_prep_freq_shift", 160.0, "Hz");
         if let Some((lower, upper)) = bounds {
@@ -354,6 +359,7 @@ impl Tool for TipPrepTool {
         plot.show(ui, |plot_ui| {
             plot_ui.line(fs_line);
             plot_ui.points(fs_marks);
+            plot_ui.points(other_marks);
             if let Some((lower, upper)) = bounds {
                 for (name, y) in [("Lower bound", lower), ("Upper bound", upper)] {
                     plot_ui.hline(
@@ -433,12 +439,15 @@ fn set_connection(config: &mut AppConfig, s: &ConnectionSettings) {
     config.controllers.presets_file = s.presets_file.display().to_string();
 }
 
-/// The run by cycle: what each cycle fired and then measured, and the max
-/// pulses fired during a stability check, placed half a cycle after the
-/// cycle they followed so they sit between the regular ones.
+/// The run by cycle: what each cycle fired and then measured, and what
+/// happened between cycles, the max pulses of a stability check and the
+/// readings that are not a cycle's own (the initial one, a check's
+/// confirmations and final read), spread across the gap after the cycle
+/// they followed.
 #[derive(Debug, Default, PartialEq)]
 struct ByCycle {
     freq_shift: Vec<[f64; 2]>,
+    other_reads: Vec<[f64; 2]>,
     pulses: Vec<[f64; 2]>,
     max_pulses: Vec<[f64; 2]>,
 }
@@ -477,6 +486,40 @@ fn by_cycle(view: &RunView) -> ByCycle {
         }
         let after = before.checked_sub(1).map_or(0, |i| cycles[i].1.cycle);
         run.max_pulses.push([after as f64 + 0.5, max.pulse_voltage]);
+    }
+
+    // A cycle's own reading is the last one before its event; every other
+    // reading since the cycle before goes between the two. A read that was
+    // retried is not a reading, so only the batches that held count.
+    let (values, stable) = (
+        view.points(FREQ_SHIFT_SERIES),
+        view.points(FREQ_SHIFT_STABLE),
+    );
+    let reads: Vec<[f64; 2]> = if values.len() == stable.len() {
+        values
+            .iter()
+            .zip(stable)
+            .filter(|(_, s)| s[1] == 1.0)
+            .map(|(v, _)| *v)
+            .collect()
+    } else {
+        values.to_vec()
+    };
+    let mut next = 0;
+    for gap in 0..=cycles.len() {
+        let end = cycles.get(gap).map_or(f64::INFINITY, |(at, _)| *at);
+        let start = next;
+        while next < reads.len() && reads[next][0] <= end {
+            next += 1;
+        }
+        let own = usize::from(gap < cycles.len() && next > start);
+        let between = &reads[start..next - own];
+        let base = gap.checked_sub(1).map_or(0, |g| cycles[g].1.cycle) as f64;
+        let spacing = 1.0 / (between.len() + 1) as f64;
+        for (j, read) in between.iter().enumerate() {
+            run.other_reads
+                .push([base + (j + 1) as f64 * spacing, read[1]]);
+        }
     }
     run
 }
@@ -600,5 +643,55 @@ mod tests {
         assert_eq!(run.pulses, vec![[1.0, 4.0], [2.0, 5.0], [3.0, 4.5]]);
         assert_eq!(run.max_pulses, vec![[2.5, 8.0]]);
         assert_eq!(run.last_pulse(), Some(4.5));
+    }
+
+    /// The readings that are not a cycle's own sit between the cycles: the
+    /// initial one before cycle 1, a stability check's after the cycle it
+    /// followed. A batch that was retried is left out.
+    #[test]
+    fn readings_between_cycles_sit_between_them() {
+        let mut view = RunView::default();
+        let read = |fs: f64, stable: bool| {
+            rusty_tip::event::Event::data_collected(
+                "stable_read",
+                serde_json::json!({ "value": fs, "stable": stable }),
+            )
+        };
+        let cycle = |n: usize, fs: f64| {
+            rusty_tip::event::Event::typed(&CycleEvent {
+                cycle: n,
+                elapsed_secs: 0.0,
+                freq_shift: fs,
+                pulse_voltage: 4.0,
+                is_sharp: false,
+            })
+        };
+        for event in [
+            read(-1.0, true), // initial
+            read(-9.0, false),
+            read(-3.0, true),
+            cycle(1, -3.0),
+            read(-0.5, true),
+            cycle(2, -0.5),
+            read(-0.6, true), // confirmations
+            read(-0.7, true),
+            read(-0.8, true),
+            read(-1.2, true), // final read
+            read(-2.5, true), // the site the max pulse moved on to
+            read(-2.4, true),
+            cycle(3, -2.4),
+        ] {
+            view.apply_event(event);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let run = by_cycle(&view);
+        let values: Vec<f64> = run.other_reads.iter().map(|p| p[1]).collect();
+        assert_eq!(values, vec![-1.0, -0.6, -0.7, -0.8, -1.2, -2.5]);
+        assert!(run.other_reads[0][0] > 0.0 && run.other_reads[0][0] < 1.0);
+        assert!(
+            run.other_reads[1..]
+                .iter()
+                .all(|p| p[0] > 2.0 && p[0] < 3.0)
+        );
     }
 }
