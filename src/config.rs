@@ -40,8 +40,12 @@ pub struct ControllersConfig {
     pub presets_file: String,
 }
 
+/// Where presets are kept unless configured otherwise: beside the working
+/// directory, like the experiment logs.
+pub const DEFAULT_PRESETS_FILE: &str = "./controllers.toml";
+
 fn default_presets_file() -> String {
-    "./controllers.toml".to_string()
+    DEFAULT_PRESETS_FILE.to_string()
 }
 
 impl Default for ControllersConfig {

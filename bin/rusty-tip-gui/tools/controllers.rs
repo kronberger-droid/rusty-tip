@@ -104,12 +104,32 @@ impl ControllersTool {
         self.presets_path = Some(path.to_path_buf());
     }
 
+    /// Put a preset's gains into its controller's form. Gains only, as
+    /// Apply writes them: the setpoint in the form is the run's, not the
+    /// preset's.
+    fn load_preset(&mut self, preset: &Preset) {
+        let id = preset.id;
+        let form = self
+            .edits
+            .get(&id)
+            .and_then(|f| ControllerParams::from_fields(id, f.clone()).ok());
+        let params = match &form {
+            Some(form) => preset.params_over(form),
+            None => preset.params.clone(),
+        };
+        self.edits.insert(id, params.to_fields());
+        self.message = Some(Note::ok(format!(
+            "Preset {:?} is in the form, setpoint kept",
+            preset.name
+        )));
+    }
+
     /// The picked preset, when it is one of this controller's.
     fn picked_preset(&self, id: ControllerId) -> Option<Preset> {
         let name = self.selected_preset.as_deref()?;
         self.presets
             .iter()
-            .find(|p| p.id == id && p.name.eq_ignore_ascii_case(name))
+            .find(|p| p.id == id && p.is_named(name))
             .cloned()
     }
 
@@ -164,7 +184,7 @@ impl ControllersTool {
     fn render_presets(&mut self, ui: &mut egui::Ui, cx: &mut SetupCx<'_>, id: ControllerId) {
         let path = match &cx.connection {
             Ok(s) => s.presets_file.clone(),
-            Err(_) => PathBuf::from("./controllers.toml"),
+            Err(_) => PathBuf::from(rusty_tip::config::DEFAULT_PRESETS_FILE),
         };
         if self.presets_path.as_deref() != Some(path.as_path()) {
             self.refresh_presets(&path);
@@ -197,12 +217,14 @@ impl ControllersTool {
                 });
             if ui
                 .add_enabled(chosen.is_some(), egui::Button::new("Load into form"))
-                .on_hover_text("This form takes the preset's parameters; nothing is written")
+                .on_hover_text(
+                    "The form takes the preset's gains and keeps the setpoint it has; \
+                     nothing is written",
+                )
                 .clicked()
                 && let Some(p) = &chosen
             {
-                self.edits.insert(id, p.params.to_fields());
-                self.message = Some(Note::ok(format!("Preset {:?} is in the form", p.name)));
+                self.load_preset(p);
             }
             if ui
                 .add_enabled(
@@ -891,6 +913,39 @@ mod tests {
             status: "on".into(),
             available: vec!["log Current".into(), "Frequency (neg)".into()],
         })
+    }
+
+    #[test]
+    fn loading_a_preset_keeps_the_forms_setpoint() {
+        let mut tool = ControllersTool::default();
+        let mut view = RunView::default();
+        view.apply_event(reading(
+            ControllerId::Z,
+            ControllerParams::Z(ZControllerParams {
+                setpoint: 80e-12,
+                ..Default::default()
+            }),
+        ));
+        tool.take_readings(&view);
+        let preset = Preset {
+            name: "tip-prep".into(),
+            id: ControllerId::Z,
+            params: ControllerParams::Z(ZControllerParams {
+                setpoint: 1e-9,
+                p_gain_m: 1.5e-12,
+                ..Default::default()
+            }),
+            tuned_at: TunedAt {
+                setpoint: Some(1e-9),
+                bias_v: None,
+                amplitude_m: None,
+                note: String::new(),
+            },
+        };
+
+        tool.load_preset(&preset);
+        assert_eq!(tool.edits[&ControllerId::Z]["setpoint"], 80e-12);
+        assert_eq!(tool.edits[&ControllerId::Z]["p_gain_m"], 1.5e-12);
     }
 
     #[test]
