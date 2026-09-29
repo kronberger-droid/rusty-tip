@@ -29,9 +29,11 @@ flowchart TB
 
 Each cycle, in order:
 
-1. **Pulse** with the voltage the pulse method chose (see the
-   [configuration reference](config.md) for the three strategies), with the
-   z-controller held.
+1. **Pulse** with the voltage the pulse method chose from the last reading
+   (see the [configuration reference](config.md) for the three strategies),
+   with the z-controller held. The reading behind the first pulse is the
+   one taken after the initial approach; behind the first pulse after a
+   stability reset, one taken at the fresh site the reset repositioned to.
 2. **Settle**, then **reposition immediately**: withdraw, step the coarse
    motors, re-approach. The tip leaves the pulse site as fast as possible,
    since continued interaction with the pulsed spot can change the apex
