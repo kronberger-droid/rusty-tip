@@ -407,7 +407,12 @@ impl Tool for TipPrepTool {
         let colors = Palette::for_theme(ui.visuals().dark_mode);
 
         ui.add_space(6.0);
-        ui.label("Freq shift measured after each cycle; hollow, the readings between cycles");
+        plot_header(
+            ui,
+            "Frequency shift",
+            "Measured after each cycle. Hollow points are the readings between cycles: \
+             the initial read, and a stability check's confirmations and final read.",
+        );
         let fs_line =
             Line::new("Freq shift", PlotPoints::from(run.freq_shift.clone())).color(colors.first);
         let fs_marks = Points::new("Freq shift", PlotPoints::from(run.freq_shift))
@@ -418,7 +423,7 @@ impl Tool for TipPrepTool {
             .filled(false)
             .radius(MARKER_RADIUS + 1.0);
         let bounds = self.sharp_bounds();
-        let mut plot = cycle_plot("tip_prep_freq_shift", 160.0, "Hz");
+        let mut plot = cycle_plot("tip_prep_freq_shift", "Hz");
         if let Some((lower, upper)) = bounds {
             plot = plot.include_y(lower).include_y(upper);
         }
@@ -437,8 +442,13 @@ impl Tool for TipPrepTool {
             }
         });
 
-        ui.add_space(6.0);
-        ui.label("Pulse fired at the start of each cycle; max pulses between");
+        ui.add_space(10.0);
+        plot_header(
+            ui,
+            "Pulse voltage",
+            "The pulse fired at the start of each cycle. Diamonds are the max pulses of a \
+             failed stability check, between the cycles they came after.",
+        );
         let v_line = Line::new("Pulse", PlotPoints::from(run.pulses.clone())).color(colors.second);
         let v_marks = Points::new("Pulse", PlotPoints::from(run.pulses))
             .color(colors.second)
@@ -447,19 +457,15 @@ impl Tool for TipPrepTool {
             .color(colors.bounds)
             .shape(egui_plot::MarkerShape::Diamond)
             .radius(MARKER_RADIUS + 1.5);
-        cycle_plot("tip_prep_pulses", 120.0, "V").show(ui, |plot_ui| {
-            plot_ui.line(v_line);
-            plot_ui.points(v_marks);
-            plot_ui.points(max_marks);
-        });
-        ui.label(
-            egui::RichText::new(
-                "Drag to pan, scroll to zoom, right-drag a box to zoom into it, double-click \
-                 to fit. The two plots pan together.",
-            )
-            .weak()
-            .small(),
-        );
+        cycle_plot("tip_prep_pulses", "V")
+            // Pulses run over about ±10 V: a line every volt, heavier every
+            // five and ten.
+            .y_grid_spacer(egui_plot::uniform_grid_spacer(|_| [1.0, 5.0, 10.0]))
+            .show(ui, |plot_ui| {
+                plot_ui.line(v_line);
+                plot_ui.points(v_marks);
+                plot_ui.points(max_marks);
+            });
     }
 
     fn prefs(&self) -> serde_json::Value {
@@ -590,13 +596,27 @@ fn by_cycle(view: &RunView) -> ByCycle {
     run
 }
 
+/// Height of each tip-prep plot, one for both so they line up.
+const PLOT_HEIGHT: f32 = 180.0;
+
+/// How to move around a plot, said on every plot's header.
+const PLOT_NAVIGATION: &str = "Drag to pan, scroll to zoom, right-drag a box to zoom into \
+     it, double-click to fit. The two plots pan together.";
+
+/// A plot's title, with what it shows and how to navigate it on hover.
+fn plot_header(ui: &mut egui::Ui, title: &str, about: &str) {
+    ui.heading(title)
+        .on_hover_text(format!("{about}\n\n{PLOT_NAVIGATION}"));
+}
+
 /// A plot over cycles: integer ticks on x, a fixed-width y axis with
-/// tick labels in the unit, and navigation on. Both tip-prep plots share
-/// one x range and one cursor, so panning one pans the other.
-fn cycle_plot<'a>(id: &str, height: f32, unit: &'static str) -> Plot<'a> {
+/// tick labels in the unit, a legend, and navigation on. Both tip-prep
+/// plots share one x range and one cursor, so panning one pans the other.
+fn cycle_plot<'a>(id: &str, unit: &'static str) -> Plot<'a> {
     const LINK: &str = "tip_prep_cycles";
     Plot::new(id)
-        .height(height)
+        .height(PLOT_HEIGHT)
+        .legend(egui_plot::Legend::default().position(egui_plot::Corner::LeftTop))
         .allow_drag([true, true])
         .allow_zoom([true, true])
         .allow_scroll(true)
