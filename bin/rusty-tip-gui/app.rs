@@ -25,7 +25,7 @@ use crate::connection::{ConnectionForm, ConnectionPane, ConnectionSettings, Pane
 use crate::run_view::RunView;
 use crate::samples::Samples;
 use crate::tools::{self, SetupCx, Tool};
-use crate::widgets::{Note, note, status_dot};
+use crate::widgets::{Note, note};
 
 /// Which of a tool's tabs is shown. Not saved: a start opens on Run,
 /// where the Start button and the last run are.
@@ -303,15 +303,14 @@ impl WorkbenchApp {
 
     fn render_sidebar(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            status_dot(ui, self.pane.state_color());
-            if ui
-                .selectable_label(self.page == Page::Connection, "Connection")
-                .clicked()
-            {
-                self.page = Page::Connection;
-            }
-        });
+        // The connection's state shows on the top bar, so the tab needs no
+        // dot of its own.
+        if ui
+            .selectable_label(self.page == Page::Connection, "Connection")
+            .clicked()
+        {
+            self.page = Page::Connection;
+        }
         ui.add_space(8.0);
         ui.label(egui::RichText::new("Tools").strong());
         let running_id = self.run.as_ref().map(|r| r.tool_id);
