@@ -160,6 +160,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Drift compensation waits out creep first.** `compensate` takes baseline
+  bursts until three in a row agree, then corrects; a drift still changing
+  after `settle_max_ms` (180 s, `--settle`) fails with nothing touched. Only
+  the trial's sign is used, corrections average but never apply less than
+  half a reading, and a burst reads the stream without gaps through the new
+  `SpmController::read_signal_samples_after`.
+- **The tip-prep plots** are one height under plain headings, explained on
+  hover and in a legend, with a line every volt on the pulse plot. The
+  Connection tab lost its status dot, which the top bar already shows.
 - **No fixed settle on top of the landing gate.** `post_approach_settle_ms`
   and `post_reposition_settle_ms` default to 0, since the gate already
   waits for the loop; they stay as an extra wait for a frequency shift
@@ -259,6 +268,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The phase stuck after a stability check.** Phases were only emitted on
+  the way into a check, so one that did not end the run left the GUI on its
+  last step. `PhaseEvent::Pulsing` marks every return to the pulse cycles.
 - **A mapped TCP channel took two signals.** `tcp_channel_mapping`
   added its pairs over the standard map without removing the index that
   already held the channel, so the lab's `76 -> 19` left `77 -> 19` in
