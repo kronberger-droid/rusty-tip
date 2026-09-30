@@ -190,22 +190,22 @@ impl NanonisController {
         &mut self.client
     }
 
-    /// Collect `num_samples` data points from the TCP stream for a given data position.
+    /// Collect `num_samples` data points from the TCP stream for a given
+    /// data position, from the frames stamped at or after `cursor`.
     ///
-    /// Uses timestamp tracking to avoid re-reading already-seen frames.
-    /// Timeout scales with sample count (minimum 5s, +1s per 100 samples).
+    /// Returns them with the cursor just past the last frame taken, where a
+    /// following call picks up without a gap. Timeout scales with sample
+    /// count (minimum 5s, +1s per 100 samples).
     fn collect_tcp_samples(
         reader: &BufferedTCPReader,
         data_position: usize,
         num_samples: usize,
-    ) -> Result<Vec<f32>> {
+        mut cursor: Instant,
+    ) -> Result<(Vec<f32>, Instant)> {
         let timeout_secs = 5 + (num_samples as u64 / 100);
         let timeout = Duration::from_secs(timeout_secs);
         let start = std::time::Instant::now();
         let mut collected: Vec<f32> = Vec::with_capacity(num_samples);
-
-        // Track the timestamp of the last consumed frame to avoid duplicates.
-        let mut cursor = std::time::Instant::now();
         // Tracked so an empty result can say whether frames were missing
         // entirely or merely too narrow for the requested channel position.
         let mut frames_seen = 0usize;
@@ -228,6 +228,8 @@ impl NanonisController {
 
             let new_frames = reader.get_data_since(cursor);
             for frame in &new_frames {
+                // Moved per frame, not per batch: a batch the read stops
+                // inside is where the next call carries on.
                 cursor = frame.timestamp + Duration::from_nanos(1);
                 frames_seen += 1;
                 frame_width = Some(frame.signal_frame.data.len());
@@ -268,7 +270,7 @@ impl NanonisController {
             );
         }
 
-        Ok(collected)
+        Ok((collected, cursor))
     }
 
     /// Configure and start the TCP logger data stream for every signal in
@@ -1297,6 +1299,15 @@ impl SpmController for NanonisController {
     }
 
     fn read_signal_samples(&mut self, index: SignalIndex, num_samples: usize) -> Result<Vec<f64>> {
+        Ok(self.read_signal_samples_after(index, num_samples, None)?.0)
+    }
+
+    fn read_signal_samples_after(
+        &mut self,
+        index: SignalIndex,
+        num_samples: usize,
+        after: Option<Instant>,
+    ) -> Result<(Vec<f64>, Option<Instant>)> {
         if num_samples == 0 {
             return Err(SpmError::Protocol(
                 "read_signal_samples: num_samples must be > 0".into(),
@@ -1311,7 +1322,7 @@ impl SpmController for NanonisController {
                 for _ in 0..num_samples {
                     samples.push(self.read_signal(index, true)?);
                 }
-                return Ok(samples);
+                return Ok((samples, None));
             }
         };
 
@@ -1323,8 +1334,13 @@ impl SpmController for NanonisController {
             ))
         })?;
 
-        let collected = Self::collect_tcp_samples(reader, data_position, num_samples)?;
-        Ok(collected.into_iter().map(|v| v as f64).collect())
+        let start = after.unwrap_or_else(Instant::now);
+        let (collected, cursor) =
+            Self::collect_tcp_samples(reader, data_position, num_samples, start)?;
+        Ok((
+            collected.into_iter().map(|v| v as f64).collect(),
+            Some(cursor),
+        ))
     }
 }
 

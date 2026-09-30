@@ -60,6 +60,9 @@ fn default_trial_vz() -> f64 {
 fn default_samples() -> usize {
     16
 }
+fn default_settle_max_ms() -> u64 {
+    180_000
+}
 fn default_true() -> bool {
     true
 }
@@ -71,9 +74,14 @@ pub struct DriftParams {
     /// Length of one measurement burst, in milliseconds.
     #[serde(default = "default_window_ms")]
     pub window_ms: u64,
-    /// Bursts `Compensate` spends, the baseline and the trial included.
+    /// Bursts `Compensate` spends, the baseline and the trial included;
+    /// the bursts spent waiting for the drift to settle come on top.
     #[serde(default = "default_bursts")]
     pub bursts: usize,
+    /// Longest `Compensate` waits for creep to die out before correcting,
+    /// in milliseconds; 0 corrects from the first burst.
+    #[serde(default = "default_settle_max_ms")]
+    pub settle_max_ms: u64,
     /// Velocity step `Compensate` uses to learn which way the controller's
     /// `vz` runs, in m/s.
     #[serde(default = "default_trial_vz")]
@@ -97,6 +105,7 @@ impl Default for DriftParams {
             op: DriftOp::Status,
             window_ms: default_window_ms(),
             bursts: default_bursts(),
+            settle_max_ms: default_settle_max_ms(),
             trial_vz: default_trial_vz(),
             response: None,
             samples: default_samples(),
@@ -354,6 +363,7 @@ impl Routine for DriftRoutine {
                     window_ms: p.window_ms,
                     samples: p.samples,
                     bursts: p.bursts,
+                    settle_max_ms: p.settle_max_ms,
                     trial_vz: p.trial_vz,
                     response: p.response,
                     ..CompensateDrift::new(self.z)
@@ -501,7 +511,10 @@ mod tests {
         run_routine(&mut mock, &bus, &ShutdownFlag::new(), &mut routine).unwrap();
 
         let result = routine.report.compensation.as_ref().unwrap();
-        assert_eq!(result.bursts, 3);
+        // Three baseline bursts to see the drift hold still, the last of
+        // them the one of the budget of three, then the trial and one
+        // correction.
+        assert_eq!(result.bursts, 5);
         assert!(routine.report.after.unwrap().enabled);
         let kinds = kinds(&recorder.all());
         assert_eq!(kinds.first().map(String::as_str), Some("drift/status"));

@@ -112,9 +112,16 @@ struct DriftArgs {
     window: f64,
 
     /// Bursts `compensate` spends, the baseline and the trial included. Each
-    /// one after those averages another estimate into the velocity.
+    /// one after those corrects the velocity again. The bursts spent waiting
+    /// for the drift to settle come on top.
     #[arg(long, default_value_t = 5)]
     bursts: usize,
+
+    /// Longest `compensate` waits for creep to die out before correcting, in
+    /// seconds: bursts with nothing changed until three in a row agree. 0
+    /// corrects from the first burst.
+    #[arg(long, default_value_t = 180.0)]
+    settle: f64,
 
     /// Velocity step `compensate` uses to learn which way the controller's
     /// `vz` runs, in m/s. Large on purpose: with the loop closed it only
@@ -451,6 +458,7 @@ fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
             "z_signal": z.0,
             "window_s": args.window,
             "bursts": args.bursts,
+            "settle_max_s": args.settle,
             "trial_vz_m_s": args.trial,
             "response": args.response,
             "sample_rate_hz": args.sample_rate,
@@ -595,6 +603,7 @@ fn drift_op(
             op,
             window_ms: (args.window * 1000.0) as u64,
             bursts: args.bursts,
+            settle_max_ms: (args.settle * 1000.0) as u64,
             trial_vz: args.trial,
             response: args.response,
             samples: args.samples,
