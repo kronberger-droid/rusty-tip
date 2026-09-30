@@ -12,11 +12,12 @@ use eframe::egui;
 use egui_plot::{AxisHints, HLine, Line, Plot, PlotPoints, Points};
 
 use rusty_tip::config::AppConfig;
+use rusty_tip::controllers::{ControllerId, Preset, PresetStore, TomlPresetStore};
 use rusty_tip::experiment_log::{LogEvent, ToolSchema};
 use rusty_tip::routine::{Outcome, run_routine};
 use rusty_tip::session::{Job, JobCx, NanonisBackend};
 use rusty_tip::spm_error::SpmError;
-use rusty_tip::tip_prep::{CycleEvent, MaxPulseEvent, TipPrep};
+use rusty_tip::tip_prep::{CycleEvent, MaxPulseEvent, TipPrep, TipPrepSignals};
 use serde::Deserialize;
 
 use super::{SetupCx, Tool, load_toml, save_toml};
@@ -45,25 +46,15 @@ impl Job for TipPrepJob {
     }
 
     fn run(&mut self, cx: JobCx<'_>) -> Result<Outcome, SpmError> {
-        let fs = cx
-            .registry
-            .get_by_name("freq shift")
-            .ok_or_else(|| {
-                SpmError::Workflow("the controller has no frequency-shift signal".into())
-            })?
-            .signal_index();
-        let current = cx
-            .registry
-            .get_by_name("current")
-            .ok_or_else(|| SpmError::Workflow("the controller has no current signal".into()))?
-            .signal_index();
-        let mut routine = TipPrep::new(&self.config, fs, current);
+        let signals = TipPrepSignals::resolve(cx.registry)?;
+        let mut routine = TipPrep::new(&self.config, signals.freq_shift, signals.current);
         run_routine(cx.controller, cx.events, cx.shutdown, &mut routine)
     }
 }
 
 /// Series the panel reads off the [`RunView`], by the names the log uses.
 const FREQ_SHIFT_SERIES: &str = "stable_read.value";
+const FREQ_SHIFT_STABLE: &str = "stable_read.stable";
 const CYCLE: &str = "tip_prep/cycle.cycle";
 const CYCLE_FREQ_SHIFT: &str = "tip_prep/cycle.freq_shift";
 const CYCLE_SHARP: &str = "tip_prep/cycle.is_sharp";
@@ -106,6 +97,10 @@ pub struct TipPrepTool {
     value: serde_json::Value,
     form: SchemaForm,
     message: Option<Note>,
+    /// The Z presets in the connection's preset file, by name, and which
+    /// file at which modification time they were read from.
+    z_presets: Vec<Preset>,
+    presets_read: Option<(PathBuf, Option<std::time::SystemTime>)>,
 }
 
 impl Default for TipPrepTool {
@@ -117,6 +112,8 @@ impl Default for TipPrepTool {
             value: serde_json::to_value(AppConfig::default()).unwrap_or(serde_json::Value::Null),
             form: SchemaForm::new(schema),
             message: None,
+            z_presets: Vec::new(),
+            presets_read: None,
         }
     }
 }
@@ -177,6 +174,75 @@ impl TipPrepTool {
     fn sharp_bounds(&self) -> Option<(f64, f64)> {
         let b = self.value.get("tip_prep")?.get("sharp_tip_bounds")?;
         Some((b.get(0)?.as_f64()?, b.get(1)?.as_f64()?))
+    }
+}
+
+impl TipPrepTool {
+    /// The Z presets in the connection's preset file, re-read whenever the
+    /// file changes, so one saved on the Controllers page shows up here.
+    fn refresh_z_presets(&mut self, connection: &Result<ConnectionSettings, String>) {
+        let path = match connection {
+            Ok(s) => s.presets_file.clone(),
+            Err(_) => PathBuf::from(rusty_tip::config::DEFAULT_PRESETS_FILE),
+        };
+        let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if self.presets_read.as_ref() == Some(&(path.clone(), modified)) {
+            return;
+        }
+        self.z_presets = TomlPresetStore::new(&path)
+            .list()
+            .map(|presets| {
+                presets
+                    .into_iter()
+                    .filter(|p| p.id == ControllerId::Z)
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.presets_read = Some((path, modified));
+    }
+
+    /// `tip_prep.z_controller_preset` as a pick of the file's Z presets,
+    /// one row of the featured grid. Returns whether it changed.
+    fn render_z_preset(
+        &mut self,
+        ui: &mut egui::Ui,
+        connection: &Result<ConnectionSettings, String>,
+    ) -> bool {
+        self.refresh_z_presets(connection);
+        let current = self.value["tip_prep"]["z_controller_preset"]
+            .as_str()
+            .map(str::to_string);
+        let mut picked = current.clone();
+        ui.label("Z preset").on_hover_text(
+            "Written to the Z-controller before the first approach, with the run's setpoint. \
+             None runs on whatever the loop holds.",
+        );
+        let shown = match &current {
+            None => "none, the loop as it is".to_string(),
+            Some(name) if !self.z_presets.iter().any(|p| p.is_named(name)) => {
+                format!("{name} (not in the preset file)")
+            }
+            Some(name) => name.clone(),
+        };
+        egui::ComboBox::from_id_salt("tip_prep_z_preset")
+            .selected_text(shown)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut picked, None, "none, the loop as it is");
+                for preset in &self.z_presets {
+                    ui.selectable_value(&mut picked, Some(preset.name.clone()), &preset.name);
+                }
+            });
+        ui.end_row();
+        if picked == current {
+            return false;
+        }
+        if let Some(tip_prep) = self.value["tip_prep"].as_object_mut() {
+            match picked {
+                Some(name) => tip_prep.insert("z_controller_preset".into(), name.into()),
+                None => tip_prep.remove("z_controller_preset"),
+            };
+        }
+        true
     }
 }
 
@@ -255,6 +321,7 @@ impl Tool for TipPrepTool {
                         for path in FEATURED {
                             changed |= self.form.render_path(ui, &mut self.value, path);
                         }
+                        changed |= self.render_z_preset(ui, &cx.connection);
                     });
             });
             ui.add_space(8.0);
@@ -340,20 +407,30 @@ impl Tool for TipPrepTool {
         let colors = Palette::for_theme(ui.visuals().dark_mode);
 
         ui.add_space(6.0);
-        ui.label("Freq shift measured after each cycle");
+        plot_header(
+            ui,
+            "Frequency shift",
+            "Measured after each cycle. Hollow points are the readings between cycles: \
+             the initial read, and a stability check's confirmations and final read.",
+        );
         let fs_line =
             Line::new("Freq shift", PlotPoints::from(run.freq_shift.clone())).color(colors.first);
         let fs_marks = Points::new("Freq shift", PlotPoints::from(run.freq_shift))
             .color(colors.first)
             .radius(MARKER_RADIUS);
+        let other_marks = Points::new("Between cycles", PlotPoints::from(run.other_reads))
+            .color(colors.first)
+            .filled(false)
+            .radius(MARKER_RADIUS + 1.0);
         let bounds = self.sharp_bounds();
-        let mut plot = cycle_plot("tip_prep_freq_shift", 160.0, "Hz");
+        let mut plot = cycle_plot("tip_prep_freq_shift", "Hz");
         if let Some((lower, upper)) = bounds {
             plot = plot.include_y(lower).include_y(upper);
         }
         plot.show(ui, |plot_ui| {
             plot_ui.line(fs_line);
             plot_ui.points(fs_marks);
+            plot_ui.points(other_marks);
             if let Some((lower, upper)) = bounds {
                 for (name, y) in [("Lower bound", lower), ("Upper bound", upper)] {
                     plot_ui.hline(
@@ -365,8 +442,13 @@ impl Tool for TipPrepTool {
             }
         });
 
-        ui.add_space(6.0);
-        ui.label("Pulse fired at the start of each cycle; max pulses between");
+        ui.add_space(10.0);
+        plot_header(
+            ui,
+            "Pulse voltage",
+            "The pulse fired at the start of each cycle. Diamonds are the max pulses of a \
+             failed stability check, between the cycles they came after.",
+        );
         let v_line = Line::new("Pulse", PlotPoints::from(run.pulses.clone())).color(colors.second);
         let v_marks = Points::new("Pulse", PlotPoints::from(run.pulses))
             .color(colors.second)
@@ -375,19 +457,15 @@ impl Tool for TipPrepTool {
             .color(colors.bounds)
             .shape(egui_plot::MarkerShape::Diamond)
             .radius(MARKER_RADIUS + 1.5);
-        cycle_plot("tip_prep_pulses", 120.0, "V").show(ui, |plot_ui| {
-            plot_ui.line(v_line);
-            plot_ui.points(v_marks);
-            plot_ui.points(max_marks);
-        });
-        ui.label(
-            egui::RichText::new(
-                "Drag to pan, scroll to zoom, right-drag a box to zoom into it, double-click \
-                 to fit. The two plots pan together.",
-            )
-            .weak()
-            .small(),
-        );
+        cycle_plot("tip_prep_pulses", "V")
+            // Pulses run over about ±10 V: a line every volt, heavier every
+            // five and ten.
+            .y_grid_spacer(egui_plot::uniform_grid_spacer(|_| [1.0, 5.0, 10.0]))
+            .show(ui, |plot_ui| {
+                plot_ui.line(v_line);
+                plot_ui.points(v_marks);
+                plot_ui.points(max_marks);
+            });
     }
 
     fn prefs(&self) -> serde_json::Value {
@@ -433,12 +511,15 @@ fn set_connection(config: &mut AppConfig, s: &ConnectionSettings) {
     config.controllers.presets_file = s.presets_file.display().to_string();
 }
 
-/// The run by cycle: what each cycle fired and then measured, and the max
-/// pulses fired during a stability check, placed half a cycle after the
-/// cycle they followed so they sit between the regular ones.
+/// The run by cycle: what each cycle fired and then measured, and what
+/// happened between cycles, the max pulses of a stability check and the
+/// readings that are not a cycle's own (the initial one, a check's
+/// confirmations and final read), spread across the gap after the cycle
+/// they followed.
 #[derive(Debug, Default, PartialEq)]
 struct ByCycle {
     freq_shift: Vec<[f64; 2]>,
+    other_reads: Vec<[f64; 2]>,
     pulses: Vec<[f64; 2]>,
     max_pulses: Vec<[f64; 2]>,
 }
@@ -478,16 +559,64 @@ fn by_cycle(view: &RunView) -> ByCycle {
         let after = before.checked_sub(1).map_or(0, |i| cycles[i].1.cycle);
         run.max_pulses.push([after as f64 + 0.5, max.pulse_voltage]);
     }
+
+    // A cycle's own reading is the last one before its event; every other
+    // reading since the cycle before goes between the two. A read that was
+    // retried is not a reading, so only the batches that held count.
+    let (values, stable) = (
+        view.points(FREQ_SHIFT_SERIES),
+        view.points(FREQ_SHIFT_STABLE),
+    );
+    let reads: Vec<[f64; 2]> = if values.len() == stable.len() {
+        values
+            .iter()
+            .zip(stable)
+            .filter(|(_, s)| s[1] == 1.0)
+            .map(|(v, _)| *v)
+            .collect()
+    } else {
+        values.to_vec()
+    };
+    let mut next = 0;
+    for gap in 0..=cycles.len() {
+        let end = cycles.get(gap).map_or(f64::INFINITY, |(at, _)| *at);
+        let start = next;
+        while next < reads.len() && reads[next][0] <= end {
+            next += 1;
+        }
+        let own = usize::from(gap < cycles.len() && next > start);
+        let between = &reads[start..next - own];
+        let base = gap.checked_sub(1).map_or(0, |g| cycles[g].1.cycle) as f64;
+        let spacing = 1.0 / (between.len() + 1) as f64;
+        for (j, read) in between.iter().enumerate() {
+            run.other_reads
+                .push([base + (j + 1) as f64 * spacing, read[1]]);
+        }
+    }
     run
 }
 
+/// Height of each tip-prep plot, one for both so they line up.
+const PLOT_HEIGHT: f32 = 180.0;
+
+/// How to move around a plot, said on every plot's header.
+const PLOT_NAVIGATION: &str = "Drag to pan, scroll to zoom, right-drag a box to zoom into \
+     it, double-click to fit. The two plots pan together.";
+
+/// A plot's title, with what it shows and how to navigate it on hover.
+fn plot_header(ui: &mut egui::Ui, title: &str, about: &str) {
+    ui.heading(title)
+        .on_hover_text(format!("{about}\n\n{PLOT_NAVIGATION}"));
+}
+
 /// A plot over cycles: integer ticks on x, a fixed-width y axis with
-/// tick labels in the unit, and navigation on. Both tip-prep plots share
-/// one x range and one cursor, so panning one pans the other.
-fn cycle_plot<'a>(id: &str, height: f32, unit: &'static str) -> Plot<'a> {
+/// tick labels in the unit, a legend, and navigation on. Both tip-prep
+/// plots share one x range and one cursor, so panning one pans the other.
+fn cycle_plot<'a>(id: &str, unit: &'static str) -> Plot<'a> {
     const LINK: &str = "tip_prep_cycles";
     Plot::new(id)
-        .height(height)
+        .height(PLOT_HEIGHT)
+        .legend(egui_plot::Legend::default().position(egui_plot::Corner::LeftTop))
         .allow_drag([true, true])
         .allow_zoom([true, true])
         .allow_scroll(true)
@@ -600,5 +729,55 @@ mod tests {
         assert_eq!(run.pulses, vec![[1.0, 4.0], [2.0, 5.0], [3.0, 4.5]]);
         assert_eq!(run.max_pulses, vec![[2.5, 8.0]]);
         assert_eq!(run.last_pulse(), Some(4.5));
+    }
+
+    /// The readings that are not a cycle's own sit between the cycles: the
+    /// initial one before cycle 1, a stability check's after the cycle it
+    /// followed. A batch that was retried is left out.
+    #[test]
+    fn readings_between_cycles_sit_between_them() {
+        let mut view = RunView::default();
+        let read = |fs: f64, stable: bool| {
+            rusty_tip::event::Event::data_collected(
+                "stable_read",
+                serde_json::json!({ "value": fs, "stable": stable }),
+            )
+        };
+        let cycle = |n: usize, fs: f64| {
+            rusty_tip::event::Event::typed(&CycleEvent {
+                cycle: n,
+                elapsed_secs: 0.0,
+                freq_shift: fs,
+                pulse_voltage: 4.0,
+                is_sharp: false,
+            })
+        };
+        for event in [
+            read(-1.0, true), // initial
+            read(-9.0, false),
+            read(-3.0, true),
+            cycle(1, -3.0),
+            read(-0.5, true),
+            cycle(2, -0.5),
+            read(-0.6, true), // confirmations
+            read(-0.7, true),
+            read(-0.8, true),
+            read(-1.2, true), // final read
+            read(-2.5, true), // the site the max pulse moved on to
+            read(-2.4, true),
+            cycle(3, -2.4),
+        ] {
+            view.apply_event(event);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let run = by_cycle(&view);
+        let values: Vec<f64> = run.other_reads.iter().map(|p| p[1]).collect();
+        assert_eq!(values, vec![-1.0, -0.6, -0.7, -0.8, -1.2, -2.5]);
+        assert!(run.other_reads[0][0] > 0.0 && run.other_reads[0][0] < 1.0);
+        assert!(
+            run.other_reads[1..]
+                .iter()
+                .all(|p| p[0] > 2.0 && p[0] < 3.0)
+        );
     }
 }

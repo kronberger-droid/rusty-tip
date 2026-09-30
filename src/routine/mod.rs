@@ -313,7 +313,9 @@ pub fn run_routine(
         }
         ExitPolicy::LeaveInPlace => log::info!("Leaving the tip in place"),
     }
-    if let Some(stream) = rt.controller().stream_snapshot() {
+    // This run's frames only: a buffer that stopped filling still holds
+    // whatever it last saw, and that is not this run's stream.
+    if let Some(stream) = rt.controller().stream_since(started) {
         events.emit(Event::typed(&StreamDumpEvent { stream }));
     }
     restore_safe_tip(&mut rt, safe_tip_before.take());

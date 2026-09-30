@@ -371,11 +371,14 @@ fn compensation_converges_whichever_way_the_velocity_sign_runs() {
             "response {response}: {left} m/s left"
         );
         assert!(obs.lock().drift_comp.enabled);
-        // Baseline, a trial to learn the sign, and the rest of the budget in
-        // corrections, spent in full even though the first one lands.
+        // Three baselines to see the drift hold still, a trial to learn the
+        // sign, and the rest of the budget in corrections, spent in full
+        // even though the first one lands. Settling comes on top of the five.
         assert_eq!(
             *roles.0.lock().unwrap(),
             [
+                "baseline",
+                "baseline",
                 "baseline",
                 "trial",
                 "correction",
@@ -383,7 +386,7 @@ fn compensation_converges_whichever_way_the_velocity_sign_runs() {
                 "correction"
             ]
         );
-        assert_eq!(result.bursts, 5);
+        assert_eq!(result.bursts, 7);
     }
 }
 
@@ -448,7 +451,8 @@ fn compensation_converges_through_measurement_noise() {
         .expect("compensates");
 
     assert!(result.converged, "{result:?}");
-    assert!(result.bursts <= 5);
+    // The budget of five, and two more baselines to see the drift settle.
+    assert!(result.bursts <= 7);
     let left = drift + response * obs.lock().drift_comp.vz;
     assert!(left.abs() < 0.2e-12, "{left} m/s left, {result:?}");
 }
@@ -498,7 +502,8 @@ fn a_negligible_drift_changes_nothing() {
 
     assert!(result.converged);
     assert_eq!(result.response, None, "no trial, so nothing was learned");
-    assert_eq!(result.bursts, 1);
+    // Only the baselines it takes to see the drift hold still.
+    assert_eq!(result.bursts, 3);
     assert!(obs.lock().drift_comp_writes.is_empty());
 }
 
@@ -547,7 +552,8 @@ fn a_residual_outside_its_error_bar_is_reported_not_hidden() {
         .expect("a residual left over is a result, not an error");
 
     assert!(!result.converged);
-    assert_eq!(result.bursts, 3);
+    // Two more baselines to settle, then the budget of three.
+    assert_eq!(result.bursts, 5);
     // The k-th correction takes a k-th of its reading: 4 / 2, then 2 / (2 * 2).
     let written: Vec<f64> = obs.lock().drift_comp_writes.iter().map(|c| c.vz).collect();
     assert_eq!(written.len(), 2);

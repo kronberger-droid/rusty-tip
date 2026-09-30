@@ -131,13 +131,13 @@ max_duration_secs = 12000
 # pulse_width_ms = 50
 # # pulse_width_ms = 100  # Alternative: Longer pulses
 #
-# # Wait time (ms) after approach for signal to stabilize before first measurement
-# post_approach_settle_ms = 2000
-# # post_approach_settle_ms = 3000  # Alternative: Longer settle
+# # Extra wait (ms) after an approach has landed. The landing gate already
+# # waits for the Z loop to hold its setpoint, so none by default
+# post_approach_settle_ms = 0
+# # post_approach_settle_ms = 1000  # Alternative: give the frequency shift longer
 #
-# # Wait time (ms) after reposition for signal to stabilize
-# post_reposition_settle_ms = 1000
-# # post_reposition_settle_ms = 2000  # Alternative: Longer settle
+# # Extra wait (ms) at the end of a reposition, after its landing gate
+# post_reposition_settle_ms = 0
 #
 # # Wait time (ms) after clearing TCP buffer to accumulate fresh data
 # buffer_clear_wait_ms = 500

@@ -148,8 +148,31 @@ impl Tool for DriftTool {
                 )
                 .on_hover_text(
                     "Bursts to spend, the baseline and the trial included: at least 3 \
-                     when the response has to be learned.",
+                     when the response has to be learned. The bursts spent waiting for \
+                     the drift to settle come on top.",
                 );
+                ui.end_row();
+
+                ui.add_enabled(compensates, egui::Label::new("Settle for at most"));
+                let mut settle = p.settle_max_ms as f64 / 1000.0;
+                if ui
+                    .add_enabled(
+                        compensates,
+                        egui::DragValue::new(&mut settle)
+                            .range(0.0..=1800.0)
+                            .speed(1.0)
+                            .suffix(" s"),
+                    )
+                    .on_hover_text(
+                        "Before correcting, bursts are taken with nothing changed until \
+                         three in a row agree, so creep from the last approach or Z move \
+                         has died out. A drift still changing after this long stops the \
+                         run with nothing touched. 0 corrects from the first burst.",
+                    )
+                    .changed()
+                {
+                    p.settle_max_ms = (settle * 1000.0).round() as u64;
+                }
                 ui.end_row();
 
                 ui.add_enabled(compensates, egui::Label::new("Response"));

@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use rusty_tip::SignalIndex;
+use rusty_tip::action::signals::Measurement;
 use rusty_tip::config::AppConfig;
 use rusty_tip::controller_types::{
     BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch,
@@ -637,7 +638,7 @@ fn realistic_model_completes_and_publishes_measurements() {
     impl Observer for Reads {
         fn on_event(&self, event: &Event) {
             if let Event::DataCollected { label, value, .. } = event
-                && label == "stable_read"
+                && label == Measurement::StableRead.label()
                 && let (Some(v), Some(sd), Some(n)) = (
                     value.get("value").and_then(|v| v.as_f64()),
                     value.get("std_dev").and_then(|v| v.as_f64()),
@@ -777,11 +778,15 @@ fn after_an_unstable_check_the_next_pulse_follows_the_new_site() {
         .freq_shift(scripted)
         .build();
     let obs = mock.observations();
+    let recorder = RecordingObserver::default();
+    let events = Arc::clone(&recorder.events);
+    let mut bus = EventBus::new();
+    bus.add_observer(Box::new(recorder));
 
     let _ = run_tip_prep(
         Box::new(mock),
         TipPrepParams {
-            events: &EventBus::new(),
+            events: &bus,
             shutdown: &ShutdownFlag::new(),
             config: &cfg,
             freq_shift: FREQ_SHIFT_INDEX,
@@ -793,6 +798,23 @@ fn after_an_unstable_check_the_next_pulse_follows_the_new_site() {
     // The reset drops the voltage to its 3 V floor; the reading at the new
     // site has to lift it again, not be lost to the reset.
     assert_eq!(obs.lock().pulses, vec![8.0, 5.5]);
+
+    // And the run says it is pulsing again, not stuck on "unstable".
+    let phases: Vec<String> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            Event::Custom { kind, data, .. } if kind == "tip_prep/phase" => {
+                data["phase"].as_str().map(str::to_string)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        phases,
+        vec!["confirming", "stability_check", "unstable", "pulsing"]
+    );
 }
 
 // Tiny helper so panic messages name the outcome (Outcome has no Debug).

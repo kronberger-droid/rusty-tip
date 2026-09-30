@@ -15,7 +15,7 @@ use rusty_tip::session::{
 };
 use rusty_tip::signal_registry::{SignalIndex, SignalRegistry};
 use rusty_tip::spm_error::SpmError;
-use rusty_tip::tip_prep::TipPrep;
+use rusty_tip::tip_prep::{TipPrep, TipPrepSignals};
 use rusty_tip::{ShutdownFlag, SignalRegistry as _Registry};
 
 const FREQ_SHIFT: SignalIndex = SignalIndex(2);
@@ -55,17 +55,8 @@ impl Job for TipPrepJob {
     }
 
     fn run(&mut self, cx: JobCx<'_>) -> Result<Outcome, SpmError> {
-        let fs = cx
-            .registry
-            .get_by_name("freq shift")
-            .ok_or_else(|| SpmError::Workflow("no freq shift signal".into()))?
-            .signal_index();
-        let current = cx
-            .registry
-            .get_by_name("current")
-            .ok_or_else(|| SpmError::Workflow("no current signal".into()))?
-            .signal_index();
-        let mut routine = TipPrep::new(&self.config, fs, current);
+        let signals = TipPrepSignals::resolve(cx.registry)?;
+        let mut routine = TipPrep::new(&self.config, signals.freq_shift, signals.current);
         run_routine(cx.controller, cx.events, cx.shutdown, &mut routine)
     }
 }

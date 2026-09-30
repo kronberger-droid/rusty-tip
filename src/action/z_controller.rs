@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::action::pll::CenterFreqShift;
-use crate::action::signals::{compute_stability_metrics, emit_measurement};
+use crate::action::signals::{Measurement, compute_stability_metrics, emit_measurement};
 use crate::action::util::Wait;
 use crate::action::{Action, ActionContext, ActionOutput};
 use crate::controllers::ControllerId;
@@ -379,7 +379,7 @@ impl Action for SettleOnSetpoint {
                 && drift.abs() <= band;
             emit_measurement(
                 ctx,
-                "landing",
+                Measurement::Landing,
                 g.index,
                 samples.len(),
                 mean,

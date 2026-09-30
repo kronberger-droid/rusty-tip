@@ -231,7 +231,7 @@ impl Action for ReadStableSignal {
                 );
                 emit_measurement(
                     ctx,
-                    "stable_read",
+                    Measurement::StableRead,
                     self.index,
                     samples.len(),
                     mean,
@@ -269,7 +269,7 @@ impl Action for ReadStableSignal {
                 );
                 emit_measurement(
                     ctx,
-                    "stable_read",
+                    Measurement::StableRead,
                     self.index,
                     samples.len(),
                     mean,
@@ -286,6 +286,25 @@ impl Action for ReadStableSignal {
     }
 }
 
+/// What a batch of stream samples was read for: the label of the
+/// `data_collected` event it goes out as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Measurement {
+    /// A reading, from `read_stable_signal`.
+    StableRead,
+    /// One of a landing gate's batches, waiting for the loop to settle.
+    Landing,
+}
+
+impl Measurement {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Measurement::StableRead => "stable_read",
+            Measurement::Landing => "landing",
+        }
+    }
+}
+
 /// Publish the outcome of a [`ReadStableSignal`] as one measurement: the value
 /// plus the batch statistics it was derived from.
 ///
@@ -297,13 +316,12 @@ impl Action for ReadStableSignal {
 /// `ActionCompleted` also carries the mean, but only as a bare value; this event
 /// is self-describing and stable to parse.
 ///
-/// `label` is `stable_read` for a measurement; a landing gate's batches go
-/// out as `landing`, so a reader counting measurements does not count the
-/// waits.
+/// `kind` sets the label, so a reader counting measurements does not count
+/// a landing gate's waits.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_measurement(
     ctx: &ActionContext,
-    label: &'static str,
+    kind: Measurement,
     index: SignalIndex,
     n: usize,
     mean: f64,
@@ -313,7 +331,7 @@ pub(crate) fn emit_measurement(
     stable: bool,
 ) {
     ctx.events.emit(Event::data_collected(
-        label,
+        kind.label(),
         serde_json::json!({
             "index": index,
             "value": mean,

@@ -63,6 +63,17 @@ fn default_max_vz() -> f64 {
     2e-9
 }
 
+fn default_settle_max_ms() -> u64 {
+    180_000
+}
+
+/// The least share of a burst's reading a correction applies. The k-th
+/// correction applies a k-th, which averages the estimates, until that
+/// falls to this floor; from there on each reading still counts for half,
+/// so a slow tail of creep left after settling is followed instead of
+/// being averaged against readings it has outlived.
+const MIN_CORRECTION_GAIN: f64 = 0.5;
+
 /// A drift rate and what it is worth.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DriftEstimate {
@@ -199,18 +210,22 @@ impl MeasureZDrift {
     /// Everything the stream delivers for the window, in chunks short enough
     /// that a stop request lands inside the burst.
     ///
-    /// The time base is the sample index over the stream rate. The few frames
-    /// that pass between two chunk reads are lost, which shortens the real
-    /// spacing by well under a percent; against the noise on the slope that
-    /// is nothing, and it keeps link latency out of the time axis entirely.
+    /// The time base is the sample index over the stream rate, which keeps
+    /// link latency out of the time axis. Each chunk carries on at the frame
+    /// after the last one taken: read fresh, every chunk lost the rest of the
+    /// frame batch it stopped in, a few percent of the samples, and the
+    /// shortened time axis read the drift that much too fast.
     fn burst(&self, ctx: &mut ActionContext, hz: f64) -> Result<(Vec<f64>, Vec<f64>), SpmError> {
         let wanted = (hz * self.window_ms as f64 / 1000.0).round() as usize;
         let chunk = ((hz * CHUNK.as_secs_f64()).ceil() as usize).max(1);
         let mut values = Vec::with_capacity(wanted);
+        let mut after = None;
         while values.len() < wanted {
             ctx.check_shutdown()?;
             let n = chunk.min(wanted - values.len());
-            values.extend(ctx.controller.read_signal_samples(self.z, n)?);
+            let (piece, next) = ctx.controller.read_signal_samples_after(self.z, n, after)?;
+            values.extend(piece);
+            after = next;
         }
         let times = (0..values.len()).map(|k| k as f64 / hz).collect();
         Ok((times, values))
@@ -327,13 +342,22 @@ pub struct DriftCompensation {
 
 /// Measure the Z drift and leave the controller compensating for it.
 ///
-/// A burst measures the drift, the velocity is corrected, and the next burst
-/// measures what is left, for `bursts` bursts. The reported residual always
-/// belongs to the velocity left on the controller, since the loop ends on a
-/// measurement, never on a correction.
+/// First the drift is left to settle, then a burst measures it, the velocity
+/// is corrected, and the next burst measures what is left, for `bursts`
+/// bursts. The reported residual always belongs to the velocity left on the
+/// controller, since the loop ends on a measurement, never on a correction.
 ///
 /// Things this handles that a bare `drift_comp_set` does not:
 ///
+/// - **Creep is waited out first.** After an approach or any large Z move
+///   the piezo creeps, a drift that decays over tens of seconds. A rate
+///   measured during it is stale by the time it is applied, and the velocity
+///   ends up above where the drift is heading. Bursts are taken with nothing
+///   changed until three in a row agree within their noise, the first and
+///   last ten seconds apart, and the last is the baseline. A drift still
+///   changing after `settle_max_ms` fails the run with nothing touched.
+///   Changing the compensation itself creeps too, but its ramp is a few
+///   hundred picometres, too little to see.
 /// - **A latched axis is re-armed first.** Compensation stops for good at the
 ///   saturation limit, so measuring against a stopped axis would fit a drift
 ///   nothing is correcting and then write into a channel that ignores it.
@@ -342,18 +366,20 @@ pub struct DriftCompensation {
 ///   guessing wrong does not leave the drift uncorrected, it doubles it. The
 ///   trial is deliberately large, `trial_vz`, many times the measurement
 ///   noise: with the loop closed the feedback holds the gap, so the only cost
-///   is a Z output that ramps by `trial_vz * window` for one burst, and the
-///   response comes out clean. A trial the size of the drift itself, as this
-///   used to do, divides noise by noise.
-/// - **Corrections average, they do not chase.** The k-th one moves the
-///   velocity by a k-th of what its burst says is missing, which leaves the
-///   velocity at the mean of every estimate so far, and its error falling
-///   with the square root of the bursts spent. Every burst corrects, however
-///   small its reading: correcting only the readings that clear their error
-///   bar picks out the bursts whose noise ran the same way as the residual,
-///   and those overshoot. For the same reason the budget is spent in full
-///   rather than ending on the first reading that looks like zero. Only a
-///   baseline inside its error bar ends the run early, with nothing changed.
+///   is a Z output that ramps by `trial_vz * window` for one burst. Only the
+///   sign of the response is used: the velocity is in the drift's own units,
+///   so its size is one, and a measured size off one is drift that changed
+///   between the two bursts, not the channel.
+/// - **Corrections average, down to a floor.** The first takes all of what
+///   its burst says is missing, which on a settled drift is the answer; the
+///   k-th takes a k-th, averaging the noise out, but never less than
+///   [`MIN_CORRECTION_GAIN`], so a drift still changing slowly is followed.
+///   Every burst corrects, however small its reading: correcting only the
+///   readings that clear their error bar picks out the bursts whose noise
+///   ran the same way as the residual, and those overshoot. For the same
+///   reason the budget is spent in full rather than ending on the first
+///   reading that looks like zero. Only a settled baseline inside its error
+///   bar ends the run early, with nothing changed.
 /// - **Positioning is the caller's problem**, as with [`MeasureZDrift`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompensateDrift {
@@ -385,6 +411,11 @@ pub struct CompensateDrift {
     /// magnitude below it, so getting here means the measurement is broken.
     #[serde(default = "default_max_vz")]
     pub max_vz: f64,
+    /// Longest to wait for the drift to settle before compensating, in
+    /// milliseconds. 0 skips the wait and takes the first burst as the
+    /// baseline.
+    #[serde(default = "default_settle_max_ms")]
+    pub settle_max_ms: u64,
 }
 
 impl CompensateDrift {
@@ -399,6 +430,7 @@ impl CompensateDrift {
             response: None,
             tolerance_m_s: default_tolerance(),
             max_vz: default_max_vz(),
+            settle_max_ms: default_settle_max_ms(),
         }
     }
 
@@ -479,7 +511,29 @@ impl CompensateDrift {
             Ok::<_, SpmError>((estimate, bursts))
         };
 
-        let (mut estimate, mut taken) = burst(ctx, BurstRole::Baseline, vz)?;
+        // Baseline bursts, nothing changed, until the drift holds still.
+        let settle_by = Instant::now() + Duration::from_millis(self.settle_max_ms);
+        let mut found: Vec<DriftEstimate> = Vec::new();
+        let (mut estimate, mut taken) = loop {
+            let (e, n) = burst(ctx, BurstRole::Baseline, vz)?;
+            found.push(e);
+            if self.settle_max_ms == 0 || settled(&found, self.tolerance_m_s) {
+                break (e, n);
+            }
+            if Instant::now() >= settle_by {
+                let first = found[found.len().saturating_sub(3)].rate_m_s;
+                return Err(SpmError::Workflow(format!(
+                    "compensate_drift: the drift is still changing after {} s, {:.2} to \
+                     {:.2} pm/s over the last bursts. Creep from the last approach or Z \
+                     move has not died out; nothing was changed, run again in a minute.",
+                    self.settle_max_ms / 1000,
+                    first * 1e12,
+                    e.rate_m_s * 1e12
+                )));
+            }
+        };
+        // Settling bursts are not the correction's to spend.
+        let budget = self.bursts + taken - 1;
         if estimate.is_negligible(self.tolerance_m_s) {
             return Ok(DriftCompensation {
                 converged: true,
@@ -521,16 +575,14 @@ impl CompensateDrift {
                     )));
                 }
                 (vz, estimate, taken) = (trial, at_trial, n);
-                measured
+                measured.signum()
             }
         };
 
-        // The k-th correction takes a k-th of its burst's reading, which
-        // leaves `vz` at the mean of the k estimates made so far.
-        let mut k = 0.0;
-        while taken < self.bursts {
+        let mut k: f64 = 0.0;
+        while taken < budget {
             k += 1.0;
-            vz -= estimate.rate_m_s / (k * response);
+            vz -= (1.0 / k).max(MIN_CORRECTION_GAIN) * estimate.rate_m_s / response;
             set(ctx, vz)?;
             (estimate, taken) = burst(ctx, BurstRole::Correction, vz)?;
         }
@@ -562,6 +614,20 @@ impl Action for CompensateDrift {
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         ActionOutput::data(self.name(), &self.compensate(ctx)?)
     }
+}
+
+/// Whether the drift has stopped changing: the newest baseline burst reads
+/// within the joint noise of the one two before it, ten seconds apart at
+/// the default window. Neighbours alone are too close in time: a creep
+/// dying out over tens of seconds changes less between two of them than
+/// their noise.
+fn settled(found: &[DriftEstimate], tolerance_m_s: f64) -> bool {
+    if found.len() < 3 {
+        return false;
+    }
+    let (first, last) = (found[found.len() - 3], found[found.len() - 1]);
+    let noise = 2.0 * first.std_err_m_s.hypot(last.std_err_m_s);
+    (last.rate_m_s - first.rate_m_s).abs() <= noise.max(tolerance_m_s)
 }
 
 #[cfg(test)]
@@ -624,5 +690,29 @@ mod tests {
         assert!(e(1e-12, 1e-12).is_negligible(0.0));
         assert!(!e(3e-12, 1e-12).is_negligible(0.0));
         assert!(e(0.04e-12, 0.0).is_negligible(0.05e-12));
+    }
+
+    /// The lab's first run on 2026-09-29, 50 s after an approach: 28.1,
+    /// 24.6, 20.4 pm/s at 0.1 to 0.45 pm/s of noise is creep, not settled.
+    /// The run a minute later, 7.45, 7.49, 7.00, is.
+    #[test]
+    fn a_drift_is_settled_once_three_bursts_agree_end_to_end() {
+        let e = |pm_s: f64| DriftEstimate {
+            rate_m_s: pm_s * 1e-12,
+            std_err_m_s: 0.3e-12,
+            samples: 5000,
+            window_s: 5.0,
+        };
+        let tol = default_tolerance();
+        assert!(!settled(&[e(28.1), e(24.6), e(20.4)], tol));
+        assert!(settled(&[e(7.45), e(7.49), e(7.00)], tol));
+        assert!(
+            !settled(&[e(7.45), e(7.49)], tol),
+            "two bursts are too close in time to tell"
+        );
+        assert!(
+            settled(&[e(28.1), e(7.45), e(7.49), e(7.00)], tol),
+            "only the last three count"
+        );
     }
 }

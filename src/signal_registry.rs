@@ -196,18 +196,21 @@ pub struct SignalRegistryBuilder {
 }
 
 impl SignalRegistryBuilder {
+    /// Stream `nanonis_index` on `tcp_channel`. A channel carries one
+    /// signal, so whichever index held it before, say from the standard
+    /// map, loses it: two indices on one channel would read the same data
+    /// under two names.
     pub fn add_tcp_mapping(mut self, nanonis_index: u8, tcp_channel: u8) -> Self {
+        self.nanonis_to_tcp.retain(|_, ch| *ch != tcp_channel);
         self.nanonis_to_tcp.insert(nanonis_index, tcp_channel);
 
         self
     }
 
-    pub fn add_tcp_map(mut self, nanonis_to_tcp: &[(u8, u8)]) -> Self {
-        nanonis_to_tcp.iter().for_each(|(n, t)| {
-            self.nanonis_to_tcp.insert(*n, *t);
-        });
-
-        self
+    pub fn add_tcp_map(self, nanonis_to_tcp: &[(u8, u8)]) -> Self {
+        nanonis_to_tcp
+            .iter()
+            .fold(self, |b, &(n, t)| b.add_tcp_mapping(n, t))
     }
 
     pub fn with_standard_map(mut self) -> Self {
@@ -396,5 +399,26 @@ impl SignalRegistry {
     /// Get signal by Nanonis index, returning the new Signal type
     pub fn get_by_index(&self, index: u8) -> Option<&Signal> {
         self.0.values().find(|signal| signal.index == index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The lab streams the frequency shift (76) on channel 19, which the
+    /// standard map gives to the excitation (77). The excitation must lose
+    /// the channel, or it reads the frequency shift under its own name.
+    #[test]
+    fn a_mapped_channel_leaves_the_index_that_held_it() {
+        let names: Vec<String> = (0..=80).map(|i| format!("signal {i}")).collect();
+        let registry = SignalRegistry::builder()
+            .with_standard_map()
+            .add_tcp_map(&[(76, 19)])
+            .from_signal_names(&names)
+            .build();
+        assert_eq!(registry.get_by_index(76).unwrap().tcp_channel, Some(19));
+        assert_eq!(registry.get_by_index(77).unwrap().tcp_channel, None);
+        assert_eq!(registry.get_by_index(75).unwrap().tcp_channel, Some(17));
     }
 }
