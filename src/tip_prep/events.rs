@@ -33,10 +33,14 @@ impl LogEvent for CycleEvent {
     const KIND: &'static str = "tip_prep/cycle";
 }
 
-/// A change of phase within the sharpness confirmation and stability check.
+/// A change of phase: pulsing, or a step of the sharpness confirmation and
+/// stability check.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum PhaseEvent {
+    /// The pulse cycles are running: at the start, and again after a
+    /// confirmation or stability check that did not end the run.
+    Pulsing,
     /// Three reposition-and-read confirmations are starting.
     Confirming,
     /// Confirmed sharp; the bias sweeps are starting.

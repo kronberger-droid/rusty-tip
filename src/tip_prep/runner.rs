@@ -241,21 +241,25 @@ impl<'a> TipPrep<'a> {
     /// `None` once the tip is confirmed stable, otherwise the reading the
     /// next pulse is to be chosen from.
     fn handle_stability(&mut self, rt: &mut Rt) -> Result<Option<f64>, SpmError> {
-        match self.check_stability(rt)? {
+        let fs = match self.check_stability(rt)? {
             StabilityOutcome::Stable => {
                 log::info!("Tip confirmed stable!");
-                Ok(None)
+                return Ok(None);
             }
             StabilityOutcome::NotSharp(fs) => {
                 log::info!("Tip not confirmed sharp - continuing");
-                Ok(Some(fs))
+                fs
             }
             StabilityOutcome::Unstable(fs) => {
                 log::info!("Stability check failed - reset to blunt, continuing");
                 self.pulse.reset(&self.config.pulse_method);
-                Ok(Some(fs))
+                fs
             }
-        }
+        };
+        // Back to pulsing, or whoever shows the phase keeps showing the
+        // check's last step for the rest of the run.
+        rt.emit(Event::typed(&PhaseEvent::Pulsing));
+        Ok(Some(fs))
     }
 
     // ------------------------------------------------------------------
@@ -664,6 +668,9 @@ impl Routine for TipPrep<'_> {
         // The first pulse fires at this site, so it is chosen from this
         // reading like every later one is from the reading before it.
         self.pulse.update_voltage(&cfg.pulse_method, Some(site_fs));
+        if !initial_sharp {
+            rt.emit(Event::typed(&PhaseEvent::Pulsing));
+        }
 
         // Main loop: pulse -> settle -> reposition -> measure -> check sharp
         // Matches V1 ordering: minimize time at pulsed position to avoid
