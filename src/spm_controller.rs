@@ -500,6 +500,21 @@ pub trait SpmController: Send {
         Ok(samples)
     }
 
+    /// `read_signal_samples` for one long read taken in pieces: each call
+    /// continues at the frame after the last one the previous call took, so
+    /// no sample between two calls is lost and the pieces join into one
+    /// evenly spaced series. Pass `None` to start with the next frame, then
+    /// the cursor each call returns. The default has no stream to continue
+    /// in and reads fresh each time.
+    fn read_signal_samples_after(
+        &mut self,
+        index: SignalIndex,
+        num_samples: usize,
+        _after: Option<Instant>,
+    ) -> Result<(Vec<f64>, Option<Instant>)> {
+        Ok((self.read_signal_samples(index, num_samples)?, None))
+    }
+
     /// Read a noise-reduced signal value by averaging multiple samples.
     ///
     /// Convenience wrapper around `read_signal_samples` that returns the mean.

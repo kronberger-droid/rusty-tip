@@ -10,7 +10,7 @@ use crate::routine::{
     ZHome, run_routine,
 };
 use crate::shutdown::ShutdownFlag;
-use crate::signal_registry::SignalIndex;
+use crate::signal_registry::{SignalIndex, SignalRegistry};
 use crate::spm_controller::{SpmController, ZHomeMode};
 use crate::spm_error::SpmError;
 
@@ -36,6 +36,30 @@ pub struct TipPrepParams<'a> {
     pub freq_shift: SignalIndex,
     /// The Z loop's input, the current, which a landing is judged on.
     pub current: SignalIndex,
+}
+
+/// The two signals tip prep reads, found by the names the registry gives
+/// them: the frequency shift it judges the tip on, and the current its
+/// landings wait on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TipPrepSignals {
+    pub freq_shift: SignalIndex,
+    pub current: SignalIndex,
+}
+
+impl TipPrepSignals {
+    pub fn resolve(registry: &SignalRegistry) -> Result<Self, SpmError> {
+        let find = |name: &str| {
+            registry
+                .get_by_name(name)
+                .map(|s| s.signal_index())
+                .ok_or_else(|| SpmError::Workflow(format!("the controller has no {name} signal")))
+        };
+        Ok(Self {
+            freq_shift: find("freq shift")?,
+            current: find("current")?,
+        })
+    }
 }
 
 /// Run the full tip preparation algorithm on a controller of its own.
@@ -163,34 +187,45 @@ impl<'a> TipPrep<'a> {
                 preset.id
             )));
         }
+        let (controller, events) = rt.controller_with_events();
         if preset.depends_on_operating_point() {
-            let differs = |tuned: Option<f64>, run: f64| {
-                tuned.is_some_and(|t| (t - run).abs() > 0.1 * t.abs().max(run.abs()))
+            let differs = |tuned: Option<f64>, run: Option<f64>| match (tuned, run) {
+                (Some(t), Some(r)) => (t - r).abs() > 0.1 * t.abs().max(r.abs()),
+                _ => false,
             };
-            if differs(preset.tuned_at.setpoint, tp.initial_z_setpoint_a)
-                || differs(preset.tuned_at.bias_v, tp.initial_bias_v)
+            // The run sets no amplitude, so the one to compare is the
+            // amplitude loop's, as the pane records it when saving.
+            let amplitude_m = controller
+                .read_controller(ControllerId::PllAmplitude { modulator: 1 })
+                .ok()
+                .and_then(|r| r.params.setpoint());
+            if differs(preset.tuned_at.setpoint, Some(tp.initial_z_setpoint_a))
+                || differs(preset.tuned_at.bias_v, Some(tp.initial_bias_v))
+                || differs(preset.tuned_at.amplitude_m, amplitude_m)
             {
                 log::warn!(
-                    "preset {name:?} was tuned at setpoint {:?}, bias {:?} V; this run uses \
-                     {:.3e} and {:.3} V, and this loop's gains depend on that",
+                    "preset {name:?} was tuned at setpoint {:?}, bias {:?} V, amplitude {:?} m; \
+                     this run uses {:.3e}, {:.3} V and {:?} m, and this loop's gains depend \
+                     on that",
                     preset.tuned_at.setpoint,
                     preset.tuned_at.bias_v,
+                    preset.tuned_at.amplitude_m,
                     tp.initial_z_setpoint_a,
-                    tp.initial_bias_v
+                    tp.initial_bias_v,
+                    amplitude_m
                 );
             }
         }
         log::info!("Applying Z-controller preset {name:?} from {path}");
-        let (controller, events) = rt.controller_with_events();
         ApplyPreset::apply(&preset, controller, events)?;
         Ok(())
     }
 
     /// Move to a fresh surface spot: withdraw, step the motors, re-approach.
     ///
-    /// The landing gate stands where 0.2.3 had a fixed settle between the
-    /// motor move and the approach; `post_reposition_settle_ms` ends the
-    /// whole reposition.
+    /// The landing gate stands where 0.2.3 had fixed settles; what is left
+    /// of them, `post_reposition_settle_ms`, is an extra wait after the
+    /// gate and none by default.
     fn reposition(&self, rt: &mut Rt) -> Result<(), SpmError> {
         let t = &self.config.tip_prep.timing;
         rt.motor()?.reposition(&RepositionSpec {
@@ -206,21 +241,25 @@ impl<'a> TipPrep<'a> {
     /// `None` once the tip is confirmed stable, otherwise the reading the
     /// next pulse is to be chosen from.
     fn handle_stability(&mut self, rt: &mut Rt) -> Result<Option<f64>, SpmError> {
-        match self.check_stability(rt)? {
+        let fs = match self.check_stability(rt)? {
             StabilityOutcome::Stable => {
                 log::info!("Tip confirmed stable!");
-                Ok(None)
+                return Ok(None);
             }
             StabilityOutcome::NotSharp(fs) => {
                 log::info!("Tip not confirmed sharp - continuing");
-                Ok(Some(fs))
+                fs
             }
             StabilityOutcome::Unstable(fs) => {
                 log::info!("Stability check failed - reset to blunt, continuing");
                 self.pulse.reset(&self.config.pulse_method);
-                Ok(Some(fs))
+                fs
             }
-        }
+        };
+        // Back to pulsing, or whoever shows the phase keeps showing the
+        // check's last step for the rest of the run.
+        rt.emit(Event::typed(&PhaseEvent::Pulsing));
+        Ok(Some(fs))
     }
 
     // ------------------------------------------------------------------
@@ -629,6 +668,9 @@ impl Routine for TipPrep<'_> {
         // The first pulse fires at this site, so it is chosen from this
         // reading like every later one is from the reading before it.
         self.pulse.update_voltage(&cfg.pulse_method, Some(site_fs));
+        if !initial_sharp {
+            rt.emit(Event::typed(&PhaseEvent::Pulsing));
+        }
 
         // Main loop: pulse -> settle -> reposition -> measure -> check sharp
         // Matches V1 ordering: minimize time at pulsed position to avoid

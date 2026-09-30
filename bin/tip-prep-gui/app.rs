@@ -7,6 +7,7 @@ use std::path::Path;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use rusty_tip::action::signals::Measurement;
 use rusty_tip::config::{
     AppConfig, ConsoleConfig, DataAcquisitionConfig, ExperimentLoggingConfig, NanonisConfig,
     SignalStabilityConfig, TcpChannelMapping, TimingConfig, TipPrepConfig,
@@ -24,7 +25,7 @@ use rusty_tip::signal_registry::SignalRegistry;
 use rusty_tip::spm_controller::SpmController;
 use rusty_tip::spm_error::SpmError;
 use rusty_tip::tip_prep::{
-    CycleEvent, MaxPulseEvent, Outcome, PhaseEvent, TipPrepParams, run_tip_prep,
+    CycleEvent, MaxPulseEvent, Outcome, PhaseEvent, TipPrepParams, TipPrepSignals, run_tip_prep,
 };
 use rusty_tip::{
     BiasSweepPolarity, PolaritySign, PulseMethod, RandomPolaritySwitch, SignalIndex,
@@ -920,7 +921,9 @@ impl TipPrepApp {
                             self.tip_state.phase = phase.to_string();
                         }
                     }
-                    Event::DataCollected { label, value, .. } if label == "stable_read" => {
+                    Event::DataCollected { label, value, .. }
+                        if label == Measurement::StableRead.label() =>
+                    {
                         // One point per measurement: a stable read *is* a single
                         // measurement of the frequency shift, averaged from a
                         // sample batch. Every stable read in the tip-prep routine
@@ -1811,7 +1814,7 @@ fn run_controller(
     event_tx: Sender<Event>,
     simulate: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (controller, freq_shift_index, current_index, facts) = if simulate {
+    let (controller, signals, facts) = if simulate {
         build_mock_backend(&config)?
     } else {
         build_nanonis_backend(&config)?
@@ -1846,8 +1849,8 @@ fn run_controller(
             events: &events,
             shutdown: &shutdown,
             config: &config,
-            freq_shift: freq_shift_index,
-            current: current_index,
+            freq_shift: signals.freq_shift,
+            current: signals.current,
         },
     );
 
@@ -1866,15 +1869,9 @@ fn run_controller(
     Ok(())
 }
 
-/// Boxed controller plus the resolved freq-shift signal index.
-/// The controller, the frequency-shift and current signal indices, and
-/// the facts for the run header.
-type Backend = (
-    Box<dyn SpmController>,
-    SignalIndex,
-    SignalIndex,
-    ControllerFacts,
-);
+/// The controller, the signals tip prep reads, and the facts for the run
+/// header.
+type Backend = (Box<dyn SpmController>, TipPrepSignals, ControllerFacts);
 
 /// Index of `"freq shift"` in [`MockController`]'s fixed channel layout. Checked
 /// against the registry in [`build_mock_backend`] so a change to the mock's
@@ -1901,19 +1898,12 @@ fn build_nanonis_backend(
     rusty_tip::tip_prep::load_presets(&mut controller, config)?;
 
     let registry = build_signal_registry(&mut controller, config)?;
-    let freq_shift_index = registry
-        .get_by_name("freq shift")
-        .ok_or("Frequency shift signal not found in registry")?
-        .signal_index();
-    let current_index = registry
-        .get_by_name("current")
-        .ok_or("Current signal not found in registry")?
-        .signal_index();
+    let signals = TipPrepSignals::resolve(&registry)?;
 
     setup_tcp_stream(&mut controller, &registry, config)?;
 
     let facts = ControllerFacts::gather(&mut controller, Some(&registry));
-    Ok((Box::new(controller), freq_shift_index, current_index, facts))
+    Ok((Box::new(controller), signals, facts))
 }
 
 /// Drive the routine against the in-memory mock — no hardware, no TCP stream.
@@ -1937,10 +1927,8 @@ fn build_mock_backend(
     // Resolve the index through the same registry path the real backend uses,
     // so simulation exercises the lookup instead of bypassing it.
     let registry = build_signal_registry(&mut mock, config)?;
-    let resolved = registry
-        .get_by_name("freq shift")
-        .ok_or("Frequency shift signal not found in mock registry")?
-        .signal_index();
+    let signals = TipPrepSignals::resolve(&registry)?;
+    let resolved = signals.freq_shift;
 
     if resolved != MOCK_FREQ_SHIFT_INDEX {
         return Err(format!(
@@ -1950,17 +1938,7 @@ fn build_mock_backend(
         .into());
     }
 
-    let current = registry
-        .get_by_name("current")
-        .ok_or("Current signal not found in mock registry")?
-        .signal_index();
-
-    Ok((
-        Box::new(mock),
-        resolved,
-        current,
-        ControllerFacts::default(),
-    ))
+    Ok((Box::new(mock), signals, ControllerFacts::default()))
 }
 
 fn build_signal_registry(

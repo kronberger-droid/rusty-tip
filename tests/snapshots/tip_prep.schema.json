@@ -48,8 +48,21 @@
       "kind": "tip_prep/phase",
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "A change of phase within the sharpness confirmation and stability check.",
+        "description": "A change of phase: pulsing, or a step of the sharpness confirmation and\nstability check.",
         "oneOf": [
+          {
+            "description": "The pulse cycles are running: at the start, and again after a\nconfirmation or stability check that did not end the run.",
+            "properties": {
+              "phase": {
+                "const": "pulsing",
+                "type": "string"
+              }
+            },
+            "required": [
+              "phase"
+            ],
+            "type": "object"
+          },
           {
             "description": "Three reposition-and-read confirmations are starting.",
             "properties": {

@@ -188,7 +188,6 @@ impl RunView {
         self.series.get(key)?.latest()
     }
 
-    #[cfg(test)]
     pub fn points(&self, key: &str) -> &[[f64; 2]] {
         self.series
             .get(key)
