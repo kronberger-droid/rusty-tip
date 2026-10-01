@@ -72,7 +72,8 @@ pub struct ScanBuffer {
 /// Actions declare which capabilities they require via `Action::requires()`.
 /// The execution layer can check `SpmController::capabilities()` before
 /// running an action to give a clear error instead of a runtime failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Capability {
     /// Signal reading (read_signal, read_signals, signal_names)
     Signals,
