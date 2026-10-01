@@ -12,6 +12,10 @@ name = "rusty_tip"
 path = "src/lib.rs"
 
 [[bin]]
+name = "rusty-tip"
+path = "bin/rusty-tip/main.rs"
+
+[[bin]]
 name = "tip-prep"
 path = "bin/tip-prep/main.rs"
 
