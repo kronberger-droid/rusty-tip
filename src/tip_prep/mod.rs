@@ -1,9 +1,11 @@
 pub mod events;
 pub mod pulse_state;
+pub mod reload;
 pub mod runner;
 
-pub use events::{CycleEvent, MaxPulseEvent, PhaseEvent, log_schema};
+pub use events::{ConfigReloadedEvent, CycleEvent, MaxPulseEvent, PhaseEvent, log_schema};
 pub use pulse_state::PulseState;
+pub use reload::ConfigReload;
 pub use runner::{Outcome, TipPrep, TipPrepParams, TipPrepSignals, run_tip_prep};
 
 use std::path::Path;

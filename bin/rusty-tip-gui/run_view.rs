@@ -61,6 +61,8 @@ pub struct RunView {
     last_at: Option<f64>,
     /// The innermost action that has started and not finished, with its depth.
     pub current_action: Option<(String, usize)>,
+    /// The last start of each action, by name, as `(time_s, params)`.
+    pub last_started: BTreeMap<String, (f64, serde_json::Value)>,
     pub series: BTreeMap<String, Series>,
     /// Every custom event by kind, as `(time_s, data)` rows, for panels that
     /// want the record rather than a number out of it.
@@ -105,7 +107,12 @@ impl RunView {
                 });
                 self.current_action = None;
             }
-            Body::ActionStarted { action, depth, .. } => {
+            Body::ActionStarted {
+                action,
+                params,
+                depth,
+            } => {
+                self.last_started.insert(action.clone(), (t, params));
                 self.current_action = Some((action, depth));
             }
             Body::ActionCompleted { action, depth, .. }

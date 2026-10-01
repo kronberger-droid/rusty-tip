@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::time::Duration;
 
 use crate::action::scan::ScanDirectionParam;
@@ -6,8 +7,8 @@ use crate::controller_types::{BiasSweepPolarity, PolaritySign};
 use crate::controllers::{ApplyPreset, ControllerId, PresetStore, TomlPresetStore};
 use crate::event::{Event, EventBus};
 use crate::routine::{
-    ExitPolicy, LandingGate, RepositionSpec, Routine, Rt, RunSetup, SafeTipSetup, StableReadSpec,
-    ZHome, run_routine,
+    Cycles, ExitPolicy, LandingGate, RepositionSpec, Routine, Rt, RunSetup, SafeTipSetup,
+    StableReadSpec, ZHome, run_routine,
 };
 use crate::shutdown::ShutdownFlag;
 use crate::signal_registry::{SignalIndex, SignalRegistry};
@@ -17,7 +18,8 @@ use crate::spm_error::SpmError;
 use nanonis_rs::scan::ScanPropsBuilder;
 
 use super::PulseState;
-use super::events::{CycleEvent, MaxPulseEvent, PhaseEvent};
+use super::events::{ConfigReloadedEvent, CycleEvent, MaxPulseEvent, PhaseEvent};
+use super::reload::{ConfigReload, differs, keep_frozen};
 
 pub use crate::routine::Outcome;
 
@@ -98,13 +100,17 @@ pub fn run_tip_prep(
 /// The reference implementation of [`Routine`]; see
 /// `docs/tip-prep/algorithm.md` for the cycle-by-cycle description.
 pub struct TipPrep<'a> {
-    config: &'a AppConfig,
+    /// Borrowed from the caller until a reload hands the run its own.
+    config: Cow<'a, AppConfig>,
     freq_shift: SignalIndex,
     pulse: PulseState,
     bounds: (f64, f64),
     read_spec: StableReadSpec,
     /// What "landed" means for every approach of the run.
     landing: LandingGate,
+    /// Where a new config for the running loop arrives, if anyone can send
+    /// one.
+    reload: Option<ConfigReload>,
 }
 
 /// How a stability check ended. The two that carry on pulsing carry the
@@ -127,32 +133,58 @@ impl<'a> TipPrep<'a> {
     /// `current` is the Z loop's input, which every landing of the run is
     /// judged on against `tip_prep.initial_z_setpoint_a`.
     pub fn new(config: &'a AppConfig, freq_shift: SignalIndex, current: SignalIndex) -> Self {
-        let gates = &config.tip_prep.signal_stability;
-        let timing = &config.tip_prep.timing;
+        let (bounds, read_spec, landing) = gates(config, current);
         Self {
-            config,
+            config: Cow::Borrowed(config),
             freq_shift,
             pulse: PulseState::new(&config.pulse_method),
-            bounds: (
-                config.tip_prep.sharp_tip_bounds[0],
-                config.tip_prep.sharp_tip_bounds[1],
-            ),
-            read_spec: StableReadSpec {
-                num_samples: config.data_acquisition.stable_signal_samples,
-                max_std_dev: gates.max_std_dev_hz,
-                max_slope: gates.max_slope_hz_per_s,
-                max_retries: gates.read_retry_count as usize,
-                sample_rate_hz: config.data_acquisition.sample_rate as f64,
-            },
-            landing: LandingGate {
-                index: current,
-                setpoint: config.tip_prep.initial_z_setpoint_a,
-                tolerance: timing.landing_tolerance,
-                num_samples: config.data_acquisition.stable_signal_samples,
-                timeout_ms: timing.landing_timeout_ms,
-                sample_rate_hz: config.data_acquisition.sample_rate as f64,
-            },
+            bounds,
+            read_spec,
+            landing,
+            reload: None,
         }
+    }
+
+    /// Take a new config from `reload` at the top of every cycle. See
+    /// [`crate::tip_prep::reload`] for what changes and what the run keeps.
+    pub fn with_reload(mut self, reload: ConfigReload) -> Self {
+        self.reload = Some(reload);
+        self
+    }
+
+    /// Switch to the config waiting in the mailbox, if there is one, between
+    /// cycles, before the budgets are checked for the next. Writes nothing
+    /// to the controller.
+    fn take_reload(&mut self, rt: &mut Rt, after_cycle: usize, cycles: &mut Cycles) {
+        let Some(incoming) = self.reload.as_ref().and_then(ConfigReload::take) else {
+            return;
+        };
+        let (config, kept) = keep_frozen(&self.config, incoming);
+        if !kept.is_empty() {
+            log::warn!(
+                "Config reload: kept the run's {} until the next run",
+                kept.join(", ")
+            );
+        }
+        if differs(&self.config.pulse_method, &config.pulse_method) {
+            // A new method starts from its own first voltage; the count
+            // carries on, since the random polarity switch counts pulses.
+            let count = self.pulse.pulse_count;
+            self.pulse = PulseState::new(&config.pulse_method);
+            self.pulse.pulse_count = count;
+        }
+        (self.bounds, self.read_spec, self.landing) = gates(&config, self.landing.index);
+        cycles.set_limits(
+            config.tip_prep.max_cycles,
+            config.tip_prep.max_duration_secs.map(Duration::from_secs),
+        );
+        log::info!("Config reloaded after cycle {after_cycle}");
+        rt.emit(Event::typed(&ConfigReloadedEvent {
+            after_cycle,
+            config: serde_json::to_value(&config).unwrap_or(serde_json::Value::Null),
+            kept,
+        }));
+        self.config = Cow::Owned(config);
     }
 
     fn is_sharp(&self, freq_shift: f64) -> bool {
@@ -608,8 +640,8 @@ impl Routine for TipPrep<'_> {
     }
 
     fn run(&mut self, rt: &mut Rt) -> Result<Outcome, SpmError> {
-        let cfg = self.config;
-        let timing = &cfg.tip_prep.timing;
+        // Read off `self.config` where used, never held: a reload replaces
+        // it between cycles.
 
         // The stable read judges drift at the rate the controller measured
         // on its stream and falls back to the config value; say which.
@@ -630,22 +662,29 @@ impl Routine for TipPrep<'_> {
         }
 
         log::info!("Initializing...");
-        rt.bias()?.set(cfg.tip_prep.initial_bias_v)?;
-        rt.z()?.set_setpoint(cfg.tip_prep.initial_z_setpoint_a)?;
+        rt.bias()?.set(self.config.tip_prep.initial_bias_v)?;
+        rt.z()?
+            .set_setpoint(self.config.tip_prep.initial_z_setpoint_a)?;
         self.apply_z_preset(rt)?;
         rt.z()?
             .calibrated_approach_within(self.approach_timeout(), Some(self.landing.clone()))?;
 
         // Clear the stream buffer to discard stale pre-approach data
+        let timing = &self.config.tip_prep.timing;
+        let waits = [timing.buffer_clear_wait_ms, timing.post_approach_settle_ms];
         rt.signals()?.clear_buffer();
-        rt.settle(timing.buffer_clear_wait_ms)?;
-        rt.settle(timing.post_approach_settle_ms)?;
+        for ms in waits {
+            rt.settle(ms)?;
+        }
 
         // The budget clock starts here, before the initial measurement, so
         // an initial stability check already counts against max_duration.
         let mut cycles = rt.cycles(
-            cfg.tip_prep.max_cycles,
-            cfg.tip_prep.max_duration_secs.map(Duration::from_secs),
+            self.config.tip_prep.max_cycles,
+            self.config
+                .tip_prep
+                .max_duration_secs
+                .map(Duration::from_secs),
         );
 
         // Check if tip is already sharp after initial approach
@@ -667,7 +706,8 @@ impl Routine for TipPrep<'_> {
         }
         // The first pulse fires at this site, so it is chosen from this
         // reading like every later one is from the reading before it.
-        self.pulse.update_voltage(&cfg.pulse_method, Some(site_fs));
+        self.pulse
+            .update_voltage(&self.config.pulse_method, Some(site_fs));
         if !initial_sharp {
             rt.emit(Event::typed(&PhaseEvent::Pulsing));
         }
@@ -675,7 +715,15 @@ impl Routine for TipPrep<'_> {
         // Main loop: pulse -> settle -> reposition -> measure -> check sharp
         // Matches V1 ordering: minimize time at pulsed position to avoid
         // unintended tip changes from continued surface interaction.
-        while let Some(cycle) = cycles.next() {
+        let mut last_cycle = 0;
+        loop {
+            // A config sent while running lands here, between cycles and
+            // before the budgets are checked, so a lowered limit holds.
+            self.take_reload(rt, last_cycle, &mut cycles);
+            let Some(cycle) = cycles.next() else { break };
+            last_cycle = cycle;
+            let timing = self.config.tip_prep.timing.clone();
+
             if cycle % timing.status_interval == 0 {
                 log::info!(
                     "Status: cycle={}, pulse_v={:.2}V, elapsed={:.1}s",
@@ -691,7 +739,7 @@ impl Routine for TipPrep<'_> {
                 "Executing pulse #{}: {:.3}V ({} method, {:?}{})",
                 self.pulse.pulse_count,
                 pulse_voltage,
-                cfg.pulse_method.method_name(),
+                self.config.pulse_method.method_name(),
                 self.pulse.base_polarity,
                 if self.pulse.should_use_opposite_polarity() {
                     " - SWITCHED"
@@ -736,11 +784,37 @@ impl Routine for TipPrep<'_> {
 
             // Update voltage strategy for next cycle (uses post-reposition measurement)
             self.pulse
-                .update_voltage(&cfg.pulse_method, Some(freq_shift));
+                .update_voltage(&self.config.pulse_method, Some(freq_shift));
         }
 
         Ok(cycles.outcome())
     }
+}
+
+/// The sharp window, the stable-read gate and the landing gate a config
+/// asks for, landings judged on `current`.
+fn gates(config: &AppConfig, current: SignalIndex) -> ((f64, f64), StableReadSpec, LandingGate) {
+    let tp = &config.tip_prep;
+    let samples = config.data_acquisition.stable_signal_samples;
+    let rate = config.data_acquisition.sample_rate as f64;
+    (
+        (tp.sharp_tip_bounds[0], tp.sharp_tip_bounds[1]),
+        StableReadSpec {
+            num_samples: samples,
+            max_std_dev: tp.signal_stability.max_std_dev_hz,
+            max_slope: tp.signal_stability.max_slope_hz_per_s,
+            max_retries: tp.signal_stability.read_retry_count as usize,
+            sample_rate_hz: rate,
+        },
+        LandingGate {
+            index: current,
+            setpoint: tp.initial_z_setpoint_a,
+            tolerance: tp.timing.landing_tolerance,
+            num_samples: samples,
+            timeout_ms: tp.timing.landing_timeout_ms,
+            sample_rate_hz: rate,
+        },
+    )
 }
 
 // ============================================================================
