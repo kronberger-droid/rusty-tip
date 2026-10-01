@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`rusty-tip`, a command line for scripts and agents.** Every command
+  prints one JSON reply and exits with a code per outcome; `describe` lists
+  the commands, the request schema and the exit codes. Commands go to the
+  workbench's agent socket by default, to `rusty-tip serve` when it runs
+  headless, or connect for one command with `--one-shot`. A server started
+  read-only refuses every command that acts; the workbench's socket is
+  read-only unless switched. This version reads only: `status` and `read`.
+  `control` holds the protocol, the TCP server and `Limits`, and
+  `SessionCmd::Call` and `SessionHandle::remote` let a server share a session
+  thread with the window. See `docs/agent-cli.md`.
 - **The coarse motor is declared, not assumed.** `[nanonis]` has
   `motor_group` (1 to 6, as the Motor module numbers them) and
   `motor_z_approach` (`"plus"` or `"minus"`: which of the group's Z

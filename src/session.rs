@@ -45,6 +45,7 @@ use parking_lot::Mutex;
 
 use nanonis_rs::motor::MotorGroup;
 
+use crate::action::signals::compute_stability_metrics;
 use crate::config::{AppConfig, NanonisConfig, TcpChannelMapping};
 use crate::event::{ChannelForwarder, Event, EventBus, EventEmitter, FileLogger, Observer};
 use crate::experiment_log::{ControllerFacts, LogEvent, RunHeader, ToolSchema};
@@ -193,8 +194,10 @@ impl PresetLoad {
 }
 
 /// Where the session stands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ConnState {
+    #[default]
     Disconnected,
     /// A connect is under way on the session thread.
     Connecting,
@@ -207,7 +210,7 @@ pub enum ConnState {
 }
 
 /// One live value from the idle poll.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Readout {
     /// The registry name it was asked for: `"current"`, `"freq shift"`.
     pub key: &'static str,
@@ -215,6 +218,84 @@ pub struct Readout {
     pub name: String,
     pub index: SignalIndex,
     pub value: f64,
+}
+
+/// A signal read by name, from [`Session::read_named`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SignalReading {
+    /// The name it was asked for.
+    pub asked: String,
+    /// The signal's name as the controller reports it.
+    pub name: String,
+    pub index: u8,
+    /// The value, or the mean of the samples, in `unit`.
+    pub value: f64,
+    /// The unit the controller names the signal with, `"A"` for
+    /// `"Current (A)"`; `None` when the name carries none.
+    pub unit: Option<String>,
+    /// The samples' standard deviation, when more than one was read.
+    pub std_dev: Option<f64>,
+    pub samples: usize,
+}
+
+/// The unit in a controller's signal name, `"A"` from `"Current (A)"`.
+fn unit_of(name: &str) -> Option<String> {
+    let inner = name.trim_end().strip_suffix(')')?;
+    let (_, unit) = inner.rsplit_once('(')?;
+    (!unit.trim().is_empty()).then(|| unit.trim().to_string())
+}
+
+/// What a session last reported: kept by the session thread for whoever
+/// asks without waiting for it, so it answers while a job runs, and by a
+/// window mirroring the same updates.
+#[derive(Debug, Clone, Default)]
+pub struct SessionStatus {
+    pub state: ConnState,
+    pub facts: Option<ControllerFacts>,
+    pub capabilities: HashSet<Capability>,
+    pub readouts: Vec<Readout>,
+    pub layout: Option<PresetLoad>,
+    pub settings: Option<PresetLoad>,
+    /// The last error the thread reported, cleared by the next state.
+    pub error: Option<String>,
+}
+
+impl SessionStatus {
+    /// The status of a session at hand, for a caller without a thread.
+    pub fn of(session: &Session) -> Self {
+        Self {
+            state: session.state(),
+            facts: session.facts().cloned(),
+            capabilities: session.capabilities(),
+            readouts: Vec::new(),
+            layout: session.layout_load().cloned(),
+            settings: session.settings_load().cloned(),
+            error: None,
+        }
+    }
+
+    /// Take in one update. A disconnect forgets the connection, all but
+    /// the last error, which says why.
+    pub fn apply(&mut self, update: &SessionUpdate) {
+        match update {
+            SessionUpdate::State(ConnState::Disconnected) => {
+                *self = Self {
+                    error: self.error.take(),
+                    ..Self::default()
+                };
+            }
+            SessionUpdate::State(state) => self.state = *state,
+            SessionUpdate::Facts(facts) => self.facts = Some(facts.clone()),
+            SessionUpdate::Capabilities(caps) => self.capabilities = caps.clone(),
+            SessionUpdate::Readouts(readouts) => self.readouts = readouts.clone(),
+            SessionUpdate::PresetsLoaded { layout, settings } => {
+                self.layout = layout.clone();
+                self.settings = settings.clone();
+            }
+            SessionUpdate::Error(e) => self.error = Some(e.clone()),
+            SessionUpdate::Samples(_) | SessionUpdate::JobFinished(_) => {}
+        }
+    }
 }
 
 /// What the session runs.
@@ -459,6 +540,11 @@ impl Session {
         Ok(())
     }
 
+    /// The connection's signal registry; `None` while disconnected.
+    pub fn registry(&self) -> Option<&SignalRegistry> {
+        self.conn.as_ref().map(|c| &c.registry)
+    }
+
     /// What was learned about the controller on connect.
     pub fn facts(&self) -> Option<&ControllerFacts> {
         self.conn.as_ref().map(|c| &c.facts)
@@ -514,6 +600,74 @@ impl Session {
                 value,
             })
             .collect())
+    }
+
+    /// Read signals by registry name: each once, or with `samples` set, as
+    /// the mean and spread of that many stream samples. An unknown name is
+    /// an error naming it; a connection error poisons the session.
+    pub fn read_named(
+        &mut self,
+        names: &[String],
+        samples: Option<usize>,
+    ) -> Result<Vec<SignalReading>, SpmError> {
+        let conn = self.connected_mut()?;
+        let signals = names
+            .iter()
+            .map(|name| {
+                conn.registry
+                    .get_by_name(name)
+                    .cloned()
+                    .ok_or_else(|| SpmError::Workflow(format!("no signal called {name:?}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let read = |controller: &mut dyn SpmController| -> Result<Vec<SignalReading>, SpmError> {
+            match samples {
+                None => {
+                    let indices: Vec<SignalIndex> =
+                        signals.iter().map(|s| s.signal_index()).collect();
+                    let values = controller.read_signals(&indices, true)?;
+                    Ok(names
+                        .iter()
+                        .zip(&signals)
+                        .zip(values)
+                        .map(|((asked, signal), value)| SignalReading {
+                            asked: asked.clone(),
+                            name: signal.name.clone(),
+                            index: signal.index,
+                            value,
+                            unit: unit_of(&signal.name),
+                            std_dev: None,
+                            samples: 1,
+                        })
+                        .collect())
+                }
+                Some(n) => names
+                    .iter()
+                    .zip(&signals)
+                    .map(|(asked, signal)| {
+                        let values = controller.read_signal_samples(signal.signal_index(), n)?;
+                        // The same statistics the stable read judges by.
+                        let (mean, std_dev, _) = compute_stability_metrics(&values);
+                        Ok(SignalReading {
+                            asked: asked.clone(),
+                            name: signal.name.clone(),
+                            index: signal.index,
+                            value: mean,
+                            unit: unit_of(&signal.name),
+                            std_dev: Some(std_dev),
+                            samples: values.len(),
+                        })
+                    })
+                    .collect(),
+            }
+        };
+        let result = read(&mut *conn.controller);
+        if let Err(e) = &result
+            && e.is_connection_error()
+        {
+            self.poisoned = true;
+        }
+        result
     }
 
     /// Run one job on the connection.
@@ -729,6 +883,9 @@ pub enum SessionCmd {
         shutdown: ShutdownFlag,
         events: Sender<Event>,
     },
+    /// Run a closure on the session thread, with the session. How a
+    /// control server reads the controller without a command per request.
+    Call(Box<dyn FnOnce(&mut Session) + Send>),
     /// End the thread, disconnecting first.
     Quit,
 }
@@ -765,17 +922,43 @@ pub struct StreamSamples {
 
 /// The GUI's end of a session thread. Dropping it asks the thread to quit.
 pub struct SessionHandle {
-    commands: Sender<SessionCmd>,
+    remote: SessionRemote,
     updates: Receiver<SessionUpdate>,
     thread: Option<JoinHandle<()>>,
 }
 
-impl SessionHandle {
+/// A second way into a session thread, for a server beside the GUI: sends
+/// commands and reads the last status, but does not own the thread or its
+/// updates. Cheap to clone.
+#[derive(Clone)]
+pub struct SessionRemote {
+    commands: Sender<SessionCmd>,
+    status: Arc<Mutex<SessionStatus>>,
+}
+
+impl SessionRemote {
     /// Send a command. Fails only if the thread is gone.
     pub fn send(&self, cmd: SessionCmd) -> Result<(), SpmError> {
         self.commands
             .send(cmd)
             .map_err(|_| SpmError::Workflow("the session thread has ended".into()))
+    }
+
+    /// What the thread last reported. Never waits for the thread.
+    pub fn status(&self) -> SessionStatus {
+        self.status.lock().clone()
+    }
+}
+
+impl SessionHandle {
+    /// A remote on this thread, for a server.
+    pub fn remote(&self) -> SessionRemote {
+        self.remote.clone()
+    }
+
+    /// Send a command. Fails only if the thread is gone.
+    pub fn send(&self, cmd: SessionCmd) -> Result<(), SpmError> {
+        self.remote.send(cmd)
     }
 
     /// Updates since the last call, oldest first. Never blocks.
@@ -791,7 +974,7 @@ impl SessionHandle {
     /// Ask the thread to quit and wait for it. Blocks until a running job
     /// ends, so request its shutdown first.
     pub fn join(mut self) {
-        let _ = self.commands.send(SessionCmd::Quit);
+        let _ = self.remote.send(SessionCmd::Quit);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -800,7 +983,7 @@ impl SessionHandle {
 
 impl Drop for SessionHandle {
     fn drop(&mut self) {
-        let _ = self.commands.send(SessionCmd::Quit);
+        let _ = self.remote.send(SessionCmd::Quit);
     }
 }
 
@@ -813,22 +996,35 @@ pub fn spawn(log_dir: Option<PathBuf>) -> SessionHandle {
 pub fn spawn_with(session: Session) -> SessionHandle {
     let (commands, command_rx) = crossbeam_channel::unbounded();
     let (update_tx, updates) = crossbeam_channel::unbounded();
+    let status = Arc::new(Mutex::new(SessionStatus::default()));
+    let shared = Arc::clone(&status);
     let thread = thread::Builder::new()
         .name("session".into())
-        .spawn(move || run_loop(session, command_rx, update_tx))
+        .spawn(move || run_loop(session, command_rx, update_tx, shared))
         .expect("spawning the session thread");
     SessionHandle {
-        commands,
+        remote: SessionRemote { commands, status },
         updates,
         thread: Some(thread),
     }
 }
 
-fn run_loop(mut session: Session, commands: Receiver<SessionCmd>, updates: Sender<SessionUpdate>) {
+fn run_loop(
+    mut session: Session,
+    commands: Receiver<SessionCmd>,
+    updates: Sender<SessionUpdate>,
+    status: Arc<Mutex<SessionStatus>>,
+) {
     let report = |update: SessionUpdate| {
+        status.lock().apply(&update);
         let _ = updates.send(update);
     };
     report(SessionUpdate::State(session.state()));
+    // A session handed over connected has had no connect on this thread to
+    // report what it is connected to.
+    if session.state() == ConnState::Connected {
+        describe_connection(&session, &report);
+    }
     let epoch = Instant::now();
     let mut last_tap = epoch;
     let mut tick: u32 = 0;
@@ -866,17 +1062,20 @@ fn run_loop(mut session: Session, commands: Receiver<SessionCmd>, updates: Sende
     report(SessionUpdate::State(ConnState::Disconnected));
 }
 
+/// What the session is connected to: its facts, capabilities and files.
+fn describe_connection(session: &Session, report: &dyn Fn(SessionUpdate)) {
+    if let Some(facts) = session.facts() {
+        report(SessionUpdate::Facts(facts.clone()));
+    }
+    report(SessionUpdate::Capabilities(session.capabilities()));
+    report(SessionUpdate::PresetsLoaded {
+        layout: session.layout_load().cloned(),
+        settings: session.settings_load().cloned(),
+    });
+}
+
 fn handle(session: &mut Session, cmd: SessionCmd, report: &dyn Fn(SessionUpdate)) {
-    let describe = |session: &Session| {
-        if let Some(facts) = session.facts() {
-            report(SessionUpdate::Facts(facts.clone()));
-        }
-        report(SessionUpdate::Capabilities(session.capabilities()));
-        report(SessionUpdate::PresetsLoaded {
-            layout: session.layout_load().cloned(),
-            settings: session.settings_load().cloned(),
-        });
-    };
+    let describe = |session: &Session| describe_connection(session, report);
     match cmd {
         SessionCmd::Connect(backend) => {
             report(SessionUpdate::State(ConnState::Connecting));
@@ -919,6 +1118,12 @@ fn handle(session: &mut Session, cmd: SessionCmd, report: &dyn Fn(SessionUpdate)
                 layout: session.layout_load().cloned(),
                 settings: session.settings_load().cloned(),
             });
+            report(SessionUpdate::State(session.state()));
+        }
+        SessionCmd::Call(call) => {
+            call(session);
+            // A call that broke the link poisoned the session; the idle
+            // loop skips a poisoned session, so say so here.
             report(SessionUpdate::State(session.state()));
         }
         SessionCmd::Quit => unreachable!("Quit is handled by the loop"),
