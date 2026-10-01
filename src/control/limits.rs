@@ -2,9 +2,10 @@
 //!
 //! A TOML file the operator writes and the agent cannot change: the server
 //! loads it at start and reports it in `describe` and `status`, so an agent
-//! plans inside it instead of finding it by being refused. Every acting
-//! request checks the limits that concern it before anything reaches the
-//! controller; a field left out sets no limit.
+//! plans inside it instead of finding it by being refused. Acting requests,
+//! as they arrive, check the limits that concern them before anything
+//! reaches the controller; nothing acts yet. A field left out sets no
+//! limit.
 
 use std::path::Path;
 

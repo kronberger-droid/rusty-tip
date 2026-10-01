@@ -165,6 +165,7 @@ impl WorkbenchApp {
         // Drop first: a restart on the same address needs it free.
         self.control = None;
         let form = &self.pane.form;
+        self.pane.agent_applied = Some((form.agent_socket, form.agent_addr.trim().to_string()));
         let read_only = match form.agent_socket {
             AgentSocket::Off => {
                 self.pane.agent_status = None;
@@ -359,7 +360,7 @@ impl WorkbenchApp {
         if self.pane.form.settings().ok().as_ref() == Some(&settings) {
             return;
         }
-        if self.pane.state != ConnState::Disconnected {
+        if self.pane.status.state != ConnState::Disconnected {
             self.message = Some(Note::ok(
                 "The file's connection settings differ from the Connection page; \
                  disconnect and load again to take them",
@@ -476,11 +477,11 @@ impl WorkbenchApp {
                 let mut cx = SetupCx {
                     connection: self.pane.form.settings(),
                     import: None,
-                    can_run: !self.running() && self.pane.state == ConnState::Connected,
+                    can_run: !self.running() && self.pane.status.state == ConnState::Connected,
                     run: None,
                     view: if owns { &self.view } else { &self.blank },
                     samples: &self.samples,
-                    readouts: &self.pane.readouts,
+                    readouts: &self.pane.status.readouts,
                 };
                 note(ui, &self.message);
                 self.tools[tool].setup(ui, &mut cx);
@@ -512,7 +513,7 @@ impl WorkbenchApp {
             .run
             .as_ref()
             .is_some_and(|r| r.tool_id == self.tools[tool].id());
-        let can_start = !running && self.pane.state == ConnState::Connected;
+        let can_start = !running && self.pane.status.state == ConnState::Connected;
         let owns = self.owns_view(tool);
         let (mut start, mut stop) = (false, false);
         let view = if owns { &self.view } else { &self.blank };
@@ -678,7 +679,7 @@ impl eframe::App for WorkbenchApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain();
         ctx.set_theme(self.theme);
-        ctx.request_repaint_after(repaint_after(self.pane.state, self.running()));
+        ctx.request_repaint_after(repaint_after(self.pane.status.state, self.running()));
 
         egui::TopBottomPanel::top("connection")
             .resizable(false)

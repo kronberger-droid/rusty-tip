@@ -24,8 +24,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use log::LevelFilter;
 
+use rusty_tip::ShutdownFlag;
 use rusty_tip::config::load_config;
-use rusty_tip::control::server::{Server, call};
+use rusty_tip::control::server::{Server, call, check_loopback};
 use rusty_tip::control::{
     DEFAULT_ADDR, ErrorKind, Limits, Reply, Request, Serving, Target, describe, execute,
 };
@@ -87,7 +88,17 @@ enum Command {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // A malformed command line is a reply like any other; only help and
+    // the version are text, since they are asked for as text.
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) if !e.use_stderr() => e.exit(),
+        Err(e) => {
+            let reply = Reply::err(ErrorKind::BadRequest, e.to_string().trim().to_string());
+            print(&reply, false);
+            return ExitCode::from(reply.exit_code() as u8);
+        }
+    };
     env_logger::Builder::new()
         .filter_level(cli.log)
         .target(env_logger::Target::Stderr)
@@ -115,10 +126,7 @@ fn print(reply: &Reply, pretty: bool) {
     } else {
         serde_json::to_string(reply)
     };
-    match text {
-        Ok(text) => println!("{text}"),
-        Err(e) => println!(r#"{{"ok":false,"error":{{"kind":"failed","message":"{e}"}}}}"#),
-    }
+    println!("{}", text.expect("a reply serializes"));
 }
 
 /// One request, through the server or on a connection of its own.
@@ -126,7 +134,9 @@ fn run(cli: &Cli, request: Request) -> Reply {
     if !cli.one_shot {
         return call(&cli.addr, &request);
     }
-    let mut session = match connect(cli) {
+    // One command reads; loading the config's layout and settings files
+    // would change the instrument to answer it.
+    let mut session = match connect(cli, false) {
         Ok(session) => session,
         Err(reply) => return reply,
     };
@@ -135,14 +145,20 @@ fn run(cli: &Cli, request: Request) -> Reply {
     reply
 }
 
-/// What `--config` or `--mock` names, connected.
-fn connect(cli: &Cli) -> Result<Session, Reply> {
+/// What `--config` or `--mock` names, connected; with `presets`, loading
+/// the config's layout and settings files as the workbench does.
+fn connect(cli: &Cli, presets: bool) -> Result<Session, Reply> {
     let backend = if cli.mock {
         Backend::Mock
     } else if let Some(path) = &cli.config {
         let config = load_config(path)
             .map_err(|e| Reply::err(ErrorKind::BadRequest, format!("{}: {e}", path.display())))?;
-        Backend::Nanonis(NanonisBackend::from_config(&config))
+        let mut backend = NanonisBackend::from_config(&config);
+        if !presets {
+            backend.layout_file = None;
+            backend.settings_file = None;
+        }
+        Backend::Nanonis(backend)
     } else {
         return Err(Reply::err(
             ErrorKind::BadRequest,
@@ -162,11 +178,18 @@ fn serve(cli: &Cli, read_only: bool, limits: Option<&std::path::Path>) -> Reply 
         Ok(limits) => limits.unwrap_or_default(),
         Err(e) => return Reply::err(ErrorKind::BadRequest, e),
     };
-    let session = match connect(cli) {
+    if let Err(e) = check_loopback(&cli.addr) {
+        return Reply::err(ErrorKind::BadRequest, format!("--addr {}: {e}", cli.addr));
+    }
+    let session = match connect(cli, true) {
         Ok(session) => session,
         Err(reply) => return reply,
     };
     let handle = session::spawn_with(session);
+    // Nothing here shows the session's updates, but the thread sends them
+    // all the same, the stream ten times a second: read them away.
+    let updates = handle.updates().clone();
+    std::thread::spawn(move || for _ in updates.iter() {});
     let serving = Serving { read_only, limits };
     let server = match Server::start(&cli.addr, handle.remote(), serving.clone()) {
         Ok(server) => server,
@@ -188,13 +211,8 @@ fn serve(cli: &Cli, read_only: bool, limits: Option<&std::path::Path>) -> Reply 
         cli.pretty,
     );
 
-    let (tx, rx) = crossbeam_channel::bounded(1);
-    if let Err(e) = ctrlc::set_handler(move || {
-        let _ = tx.try_send(());
-    }) {
-        return Reply::err(ErrorKind::Failed, format!("cannot catch Ctrl+C: {e}"));
-    }
-    let _ = rx.recv();
+    let stop = ShutdownFlag::on_ctrl_c();
+    while !stop.wait_timeout(std::time::Duration::from_secs(3600)) {}
     log::info!("Stopping the control server");
     drop(server);
     handle.join();

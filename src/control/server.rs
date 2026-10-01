@@ -15,9 +15,6 @@ use std::time::Duration;
 use super::{BUSY_TIMEOUT, ErrorKind, Reply, Request, Serving, Target, execute};
 use crate::session::SessionRemote;
 
-/// How often the accept loop looks at its stop flag.
-const POLL: Duration = Duration::from_millis(50);
-
 /// A running control socket. Dropping it stops accepting; connections
 /// already open finish their current request and close.
 pub struct Server {
@@ -30,18 +27,9 @@ impl Server {
     /// Listen on `addr`, a loopback address, and answer requests against
     /// the session behind `remote`.
     pub fn start(addr: &str, remote: SessionRemote, serving: Serving) -> io::Result<Self> {
+        check_loopback(addr)?;
         let listener = TcpListener::bind(addr)?;
         let local = listener.local_addr()?;
-        if !local.ip().is_loopback() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "the control socket only listens on loopback, not {local}: it has no \
-                     authentication of its own"
-                ),
-            ));
-        }
-        listener.set_nonblocking(true)?;
         let read_only = serving.read_only;
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
@@ -49,19 +37,19 @@ impl Server {
         let thread = thread::Builder::new()
             .name("control".into())
             .spawn(move || {
-                while !flag.load(Ordering::Relaxed) {
-                    match listener.accept() {
-                        Ok((stream, peer)) => {
+                // Blocks in `accept`; a drop wakes it by connecting.
+                for stream in listener.incoming() {
+                    if flag.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    match stream {
+                        Ok(stream) => {
                             let (remote, serving) = (remote.clone(), Arc::clone(&serving));
                             let _ = thread::Builder::new()
-                                .name(format!("control {peer}"))
+                                .name("control client".into())
                                 .spawn(move || serve_client(stream, &remote, &serving));
                         }
-                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => thread::sleep(POLL),
-                        Err(e) => {
-                            log::warn!("control socket: accept failed: {e}");
-                            thread::sleep(POLL);
-                        }
+                        Err(e) => log::warn!("control socket: accept failed: {e}"),
                     }
                 }
             })?;
@@ -85,19 +73,38 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.stop.store(true, Ordering::SeqCst);
+        // Wake the accept loop so it sees the flag; if the connect fails the
+        // listener is gone already and the loop with it.
+        let _ = TcpStream::connect_timeout(&self.addr, Duration::from_secs(1));
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
     }
 }
 
+/// Refuse any address that is not loopback: the socket has no
+/// authentication of its own. Checked before anything connects, so a bad
+/// `--addr` costs nothing.
+pub fn check_loopback(addr: &str) -> io::Result<()> {
+    let mut resolved = addr.to_socket_addrs()?.peekable();
+    if resolved.peek().is_none() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "no address"));
+    }
+    match resolved.find(|a| !a.ip().is_loopback()) {
+        None => Ok(()),
+        Some(other) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "the control socket only listens on loopback, not {other}: it has no \
+                 authentication of its own"
+            ),
+        )),
+    }
+}
+
 /// Answer one client's requests until it hangs up.
 fn serve_client(stream: TcpStream, remote: &SessionRemote, serving: &Serving) {
-    // Accepted sockets may inherit the listener's non-blocking mode.
-    if stream.set_nonblocking(false).is_err() {
-        return;
-    }
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
@@ -112,9 +119,7 @@ fn serve_client(stream: TcpStream, remote: &SessionRemote, serving: &Serving) {
             Ok(request) => execute(Target::Remote(remote), &request, serving),
             Err(e) => Reply::err(ErrorKind::BadRequest, format!("not a request: {e}")),
         };
-        let mut text = serde_json::to_string(&reply).unwrap_or_else(|e| {
-            format!(r#"{{"ok":false,"error":{{"kind":"failed","message":"{e}"}}}}"#)
-        });
+        let mut text = serde_json::to_string(&reply).expect("a reply serializes");
         text.push('\n');
         if writer.write_all(text.as_bytes()).is_err() {
             return;
