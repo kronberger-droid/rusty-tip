@@ -305,6 +305,13 @@ impl Cycles {
         Some(self.completed)
     }
 
+    /// Change the budgets of a running loop. The clock and the count carry
+    /// on, so a limit already passed ends the loop at the next `next()`.
+    pub fn set_limits(&mut self, max_cycles: Option<usize>, max_duration: Option<Duration>) {
+        self.max_cycles = max_cycles;
+        self.max_duration = max_duration;
+    }
+
     /// Time since the loop started.
     pub fn elapsed(&self) -> Duration {
         self.started.elapsed()
@@ -375,6 +382,24 @@ mod tests {
         };
         assert_eq!(cycles.next(), None);
         assert_eq!(cycles.outcome(), Outcome::TimedOut(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn a_lowered_limit_ends_the_loop_at_the_next_cycle() {
+        let shutdown = ShutdownFlag::new();
+        let mut cycles = Cycles {
+            shutdown,
+            started: Instant::now(),
+            max_cycles: Some(10),
+            max_duration: None,
+            completed: 0,
+            ending: None,
+        };
+        assert_eq!(cycles.next(), Some(1));
+        assert_eq!(cycles.next(), Some(2));
+        cycles.set_limits(Some(1), None);
+        assert_eq!(cycles.next(), None);
+        assert_eq!(cycles.outcome(), Outcome::CycleLimit(1));
     }
 
     #[test]
