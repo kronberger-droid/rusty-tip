@@ -251,6 +251,37 @@ impl Tool for DriftTool {
             .collect();
         let before = statuses.iter().find(|s| !s.after());
         let after = statuses.iter().rev().find(|s| s.after());
+        let bursts: Vec<DriftBurstEvent> = view
+            .custom(DriftBurstEvent::KIND)
+            .iter()
+            .filter_map(|(_, d)| serde_json::from_value(d.clone()).ok())
+            .collect();
+
+        // The plot first, where it stays put; the text below it grows with
+        // the run.
+        if !bursts.is_empty() {
+            let drift: Vec<[f64; 2]> = bursts
+                .iter()
+                .map(|b| [b.burst as f64, b.drift_m_s / PM])
+                .collect();
+            let color = Palette::for_theme(ui.visuals().dark_mode).first;
+            Plot::new("drift_bursts_plot")
+                .height(180.0)
+                .allow_drag(false)
+                .allow_zoom(false)
+                .allow_scroll(false)
+                .x_axis_label("burst")
+                .y_axis_label("pm/s")
+                .show(ui, |plot_ui| {
+                    plot_ui.line(Line::new("drift", PlotPoints::from(drift.clone())).color(color));
+                    plot_ui.points(
+                        Points::new("bursts", PlotPoints::from(drift))
+                            .color(color)
+                            .radius(3.0_f32),
+                    );
+                });
+            ui.add_space(8.0);
+        }
 
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::Grid::new("drift_status")
@@ -296,11 +327,6 @@ impl Tool for DriftTool {
             };
         }
 
-        let bursts: Vec<DriftBurstEvent> = view
-            .custom(DriftBurstEvent::KIND)
-            .iter()
-            .filter_map(|(_, d)| serde_json::from_value(d.clone()).ok())
-            .collect();
         if !bursts.is_empty() {
             ui.add_space(8.0);
             ui.label("Bursts");
@@ -324,27 +350,6 @@ impl Tool for DriftTool {
                         ));
                         ui.end_row();
                     }
-                });
-
-            let drift: Vec<[f64; 2]> = bursts
-                .iter()
-                .map(|b| [b.burst as f64, b.drift_m_s / PM])
-                .collect();
-            let color = Palette::for_theme(ui.visuals().dark_mode).first;
-            Plot::new("drift_bursts_plot")
-                .height(120.0)
-                .allow_drag(false)
-                .allow_zoom(false)
-                .allow_scroll(false)
-                .x_axis_label("burst")
-                .y_axis_label("pm/s")
-                .show(ui, |plot_ui| {
-                    plot_ui.line(Line::new("drift", PlotPoints::from(drift.clone())).color(color));
-                    plot_ui.points(
-                        Points::new("bursts", PlotPoints::from(drift))
-                            .color(color)
-                            .radius(3.0_f32),
-                    );
                 });
         }
     }
