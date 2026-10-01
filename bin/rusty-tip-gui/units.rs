@@ -52,6 +52,23 @@ pub fn format_si(value: f64, base: &str) -> String {
     format!("{} {prefix}{base}", significant(value * scale))
 }
 
+/// An axis tick: like [`format_si`], with the trailing zeros dropped, so
+/// the ticks of one axis read `0 Hz`, `-5 Hz`, `-10 Hz` rather than
+/// `0.000 Hz` beside `-10.00 Hz`.
+pub fn format_tick(value: f64, base: &str) -> String {
+    let text = format_si(value, base);
+    let Some((num, unit)) = text.split_once(' ') else {
+        return text;
+    };
+    let num = if num.contains('.') {
+        num.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        num
+    };
+    let num = if num == "-0" { "0" } else { num };
+    format!("{num} {unit}")
+}
+
 /// Four significant digits, fixed decimals for a given magnitude so a
 /// readout does not jitter in width as it changes.
 pub fn significant(value: f64) -> String {
@@ -106,6 +123,15 @@ fn takes_prefix(base: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ticks_drop_trailing_zeros() {
+        assert_eq!(format_tick(0.0, "Hz"), "0 Hz");
+        assert_eq!(format_tick(-10.0, "Hz"), "-10 Hz");
+        assert_eq!(format_tick(-2.5, "Hz"), "-2.5 Hz");
+        assert_eq!(format_tick(4.0, "V"), "4 V");
+        assert_eq!(format_tick(1.2e-10, "A"), "120 pA");
+    }
 
     #[test]
     fn prefixes_scale_and_bare_units_do_not() {
