@@ -40,6 +40,33 @@ pub enum BackendKind {
     Mock,
 }
 
+/// Whether the window serves the control socket, and what it lets through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSocket {
+    Off,
+    /// Answers what only reads; refuses everything that acts.
+    #[default]
+    ReadOnly,
+    Full,
+}
+
+impl AgentSocket {
+    pub const ALL: [AgentSocket; 3] = [AgentSocket::Off, AgentSocket::ReadOnly, AgentSocket::Full];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AgentSocket::Off => "off",
+            AgentSocket::ReadOnly => "read-only",
+            AgentSocket::Full => "full",
+        }
+    }
+}
+
+fn default_agent_addr() -> String {
+    rusty_tip::control::DEFAULT_ADDR.into()
+}
+
 fn default_log_level() -> LevelFilter {
     LevelFilter::Info
 }
@@ -91,6 +118,12 @@ pub struct ConnectionForm {
     /// file neither carries it nor overrides it.
     #[serde(default = "default_log_level")]
     pub log_level: LevelFilter,
+    /// The control socket `rusty-tip` talks to. Read-only unless set
+    /// otherwise, so a command line can watch but not move by default.
+    #[serde(default)]
+    pub agent_socket: AgentSocket,
+    #[serde(default = "default_agent_addr")]
+    pub agent_addr: String,
     /// The controller preset file; a saved form from before it had one
     /// gets the default.
     #[serde(default = "default_presets_file")]
@@ -117,6 +150,8 @@ impl Default for ConnectionForm {
             motor_z_approach: MotorZApproach::default(),
             log_dir: "./experiments".into(),
             log_level: default_log_level(),
+            agent_socket: AgentSocket::default(),
+            agent_addr: default_agent_addr(),
             presets_file: default_presets_file(),
         };
         form.apply_settings(&ConnectionSettings {
@@ -277,6 +312,8 @@ pub enum PaneAction {
     LogDir(Option<PathBuf>),
     /// The log level changed.
     LogLevel(LevelFilter),
+    /// The agent socket's mode or address changed.
+    AgentSocket,
 }
 
 pub struct ConnectionPane {
@@ -288,6 +325,8 @@ pub struct ConnectionPane {
     pub layout_load: Option<PresetLoad>,
     pub settings_load: Option<PresetLoad>,
     pub error: Option<String>,
+    /// Where the agent socket listens, or why it does not.
+    pub agent_status: Option<Result<String, String>>,
 }
 
 impl ConnectionPane {
@@ -301,6 +340,7 @@ impl ConnectionPane {
             layout_load: None,
             settings_load: None,
             error: None,
+            agent_status: None,
         }
     }
 
@@ -501,6 +541,44 @@ impl ConnectionPane {
                             .add_filter("TOML", &["toml"])
                             .pick_file()
                     });
+                });
+                ui.end_row();
+
+                ui.label("Agent socket").on_hover_text(
+                    "Where `rusty-tip` reaches this window's connection, on this machine only. \
+                     Read-only answers status and reads and refuses anything that could move \
+                     the instrument.",
+                );
+                ui.horizontal(|ui| {
+                    let before = self.form.agent_socket;
+                    egui::ComboBox::from_id_salt("agent_socket")
+                        .selected_text(self.form.agent_socket.label())
+                        .show_ui(ui, |ui| {
+                            for mode in AgentSocket::ALL {
+                                ui.selectable_value(
+                                    &mut self.form.agent_socket,
+                                    mode,
+                                    mode.label(),
+                                );
+                            }
+                        });
+                    let addr = ui.add_enabled(
+                        self.form.agent_socket != AgentSocket::Off,
+                        egui::TextEdit::singleline(&mut self.form.agent_addr).desired_width(140.0),
+                    );
+                    // The address applies when editing ends, not on every key.
+                    if self.form.agent_socket != before || addr.lost_focus() {
+                        action = Some(PaneAction::AgentSocket);
+                    }
+                    match &self.agent_status {
+                        Some(Ok(listening)) => {
+                            ui.weak(listening);
+                        }
+                        Some(Err(e)) => {
+                            ui.colored_label(ui.visuals().error_fg_color, e);
+                        }
+                        None => {}
+                    }
                 });
                 ui.end_row();
             });

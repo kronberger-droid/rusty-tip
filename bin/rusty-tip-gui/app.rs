@@ -15,13 +15,16 @@ use crossbeam_channel::{Receiver, unbounded};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
+use rusty_tip::control;
 use rusty_tip::event::Event;
 use rusty_tip::experiment_log::reader::{self, Log, LogEntry};
 use rusty_tip::routine::Outcome;
 use rusty_tip::session::{self, ConnState, Job, SessionCmd, SessionHandle, SessionUpdate};
 use rusty_tip::shutdown::ShutdownFlag;
 
-use crate::connection::{ConnectionForm, ConnectionPane, ConnectionSettings, PaneAction};
+use crate::connection::{
+    AgentSocket, ConnectionForm, ConnectionPane, ConnectionSettings, PaneAction,
+};
 use crate::run_view::RunView;
 use crate::samples::Samples;
 use crate::tools::{self, SetupCx, Tool};
@@ -84,6 +87,8 @@ fn repaint_after(state: ConnState, running: bool) -> Duration {
 
 pub struct WorkbenchApp {
     session: SessionHandle,
+    /// The agent socket, while it is on.
+    control: Option<control::server::Server>,
     pane: ConnectionPane,
     tools: Vec<Box<dyn Tool>>,
     page: Page,
@@ -131,8 +136,9 @@ impl WorkbenchApp {
         let pane = ConnectionPane::new(prefs.connection);
         log::set_max_level(pane.form.log_level);
         let session = session::spawn(pane.form.log_dir());
-        Self {
+        let mut app = Self {
             session,
+            control: None,
             pane,
             tools,
             page,
@@ -149,6 +155,37 @@ impl WorkbenchApp {
             log_rx,
             history: Vec::new(),
             samples: Samples::default(),
+        };
+        app.apply_agent_socket();
+        app
+    }
+
+    /// Start, restart or stop the agent socket to match the pane.
+    fn apply_agent_socket(&mut self) {
+        // Drop first: a restart on the same address needs it free.
+        self.control = None;
+        let form = &self.pane.form;
+        let read_only = match form.agent_socket {
+            AgentSocket::Off => {
+                self.pane.agent_status = None;
+                return;
+            }
+            AgentSocket::ReadOnly => true,
+            AgentSocket::Full => false,
+        };
+        let serving = control::Serving {
+            read_only,
+            ..control::Serving::default()
+        };
+        match control::server::Server::start(form.agent_addr.trim(), self.session.remote(), serving)
+        {
+            Ok(server) => {
+                self.pane.agent_status = Some(Ok(format!("listening on {}", server.addr())));
+                self.control = Some(server);
+            }
+            Err(e) => {
+                self.pane.agent_status = Some(Err(format!("not listening: {e}")));
+            }
         }
     }
 
@@ -349,6 +386,7 @@ impl WorkbenchApp {
             Some(PaneAction::ReloadPresets) => self.send(SessionCmd::ReloadPresets),
             Some(PaneAction::LogDir(dir)) => self.send(SessionCmd::SetLogDir(dir)),
             Some(PaneAction::LogLevel(level)) => log::set_max_level(level),
+            Some(PaneAction::AgentSocket) => self.apply_agent_socket(),
             None => {}
         }
     }
