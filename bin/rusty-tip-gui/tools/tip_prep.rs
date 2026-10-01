@@ -17,6 +17,7 @@ use rusty_tip::experiment_log::{LogEvent, ToolSchema};
 use rusty_tip::routine::{Outcome, run_routine};
 use rusty_tip::session::{Job, JobCx, NanonisBackend};
 use rusty_tip::spm_error::SpmError;
+use rusty_tip::tip_prep::reload::FROZEN;
 use rusty_tip::tip_prep::{
     ConfigReload, ConfigReloadedEvent, CycleEvent, MaxPulseEvent, TipPrep, TipPrepSignals,
 };
@@ -26,8 +27,8 @@ use super::{SetupCx, Tool, load_toml, save_toml};
 use crate::connection::ConnectionSettings;
 use crate::form::SchemaForm;
 use crate::run_view::RunView;
-use crate::units::{format_si, number};
-use crate::widgets::{Note, Palette, note, path_field};
+use crate::units::{format_si, format_tick, number};
+use crate::widgets::{Note, Palette, Y_AXIS_WIDTH, note, path_field, section, stat};
 
 /// Tip prep as a [`Job`]: what the session runs.
 pub struct TipPrepJob {
@@ -223,37 +224,40 @@ impl TipPrepTool {
         };
     }
 
-    /// The reload button and what became of the last press.
-    fn render_reload(&mut self, ui: &mut egui::Ui, view: &RunView) {
-        ui.horizontal_wrapped(|ui| {
-            let live = self.reload.is_live();
-            if ui
-                .add_enabled(live, egui::Button::new("Reload config"))
-                .on_hover_text(
-                    "Send the Setup form to the run. It switches before its next pulse, \
-                     never during a stability check, and writes nothing to the controller: \
-                     the setpoint, initial bias, Z preset, safe-tip threshold and \
-                     connection tables stay as the run started. Edited the file instead? \
-                     Press Reload on Setup first.",
-                )
-                .on_disabled_hover_text("Only while a tip-prep run is going")
-                .clicked()
-            {
-                self.send_reload();
+    /// The Apply to run button, for the row beside Start and Stop, and a
+    /// word on what became of the last press.
+    fn render_apply(&mut self, ui: &mut egui::Ui, view: &RunView) {
+        let live = self.reload.is_live();
+        if ui
+            .add_enabled(live, egui::Button::new("Apply to run"))
+            .on_hover_text(
+                "Send the Setup form to the run. It switches before its next pulse, \
+                 never during a stability check, and writes nothing to the controller: \
+                 the setpoint, initial bias, Z preset, safe-tip threshold and connection \
+                 tables stay as the run started. Edited the file instead? Press Re-read \
+                 file on Setup first.",
+            )
+            .on_disabled_hover_text("Only while a tip-prep run is going")
+            .clicked()
+        {
+            self.send_reload();
+        }
+        if let Some(n) = &self.reload_note {
+            ui.colored_label(egui::Color32::RED, "not sent")
+                .on_hover_text(&n.text);
+        } else if live && self.reload.is_pending() {
+            ui.label(egui::RichText::new("waiting for the cycle to end").weak());
+        } else if let Some(r) = last_reload(view) {
+            ui.label(egui::RichText::new(format!("applied after cycle {}", r.after_cycle)).weak());
+            if !r.kept.is_empty() {
+                let warn = Palette::for_theme(ui.visuals().dark_mode).second;
+                ui.colored_label(warn, format!("{} kept", r.kept.len()))
+                    .on_hover_text(format!(
+                        "Kept as the run started, applied from the next run:\n{}",
+                        r.kept.join("\n")
+                    ));
             }
-            if live && self.reload.is_pending() {
-                ui.label("waiting for the current cycle to end");
-            } else if let Some(r) = last_reload(view) {
-                ui.label(format!("reloaded after cycle {}", r.after_cycle));
-                if !r.kept.is_empty() {
-                    ui.label(
-                        egui::RichText::new(format!("kept until next run: {}", r.kept.join(", ")))
-                            .color(Palette::for_theme(ui.visuals().dark_mode).bounds),
-                    );
-                }
-            }
-        });
-        note(ui, &self.reload_note);
+        }
     }
 }
 
@@ -303,16 +307,18 @@ impl TipPrepTool {
         &mut self,
         ui: &mut egui::Ui,
         connection: &Result<ConnectionSettings, String>,
+        enabled: bool,
     ) -> bool {
         self.refresh_z_presets(connection);
         let current = self.value["tip_prep"]["z_controller_preset"]
             .as_str()
             .map(str::to_string);
         let mut picked = current.clone();
-        ui.label("Z preset").on_hover_text(
-            "Written to the Z-controller before the first approach, with the run's setpoint. \
-             None runs on whatever the loop holds.",
-        );
+        ui.add_enabled(enabled, egui::Label::new("Z preset"))
+            .on_hover_text(
+                "Written to the Z-controller before the first approach, with the run's \
+                 setpoint. None runs on whatever the loop holds.",
+            );
         let shown = match &current {
             None => "none, the loop as it is".to_string(),
             Some(name) if !self.z_presets.iter().any(|p| p.is_named(name)) => {
@@ -320,14 +326,16 @@ impl TipPrepTool {
             }
             Some(name) => name.clone(),
         };
-        egui::ComboBox::from_id_salt("tip_prep_z_preset")
-            .selected_text(shown)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut picked, None, "none, the loop as it is");
-                for preset in &self.z_presets {
-                    ui.selectable_value(&mut picked, Some(preset.name.clone()), &preset.name);
-                }
-            });
+        ui.add_enabled_ui(enabled, |ui| {
+            egui::ComboBox::from_id_salt("tip_prep_z_preset")
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut picked, None, "none, the loop as it is");
+                    for preset in &self.z_presets {
+                        ui.selectable_value(&mut picked, Some(preset.name.clone()), &preset.name);
+                    }
+                });
+        });
         ui.end_row();
         if picked == current {
             return false;
@@ -357,7 +365,7 @@ impl Tool for TipPrepTool {
         let mut load = false;
         ui.horizontal(|ui| {
             ui.label("Config file");
-            let width = (ui.available_width() - 40.0).max(120.0);
+            let width = (ui.available_width() - 60.0).max(120.0);
             let (field, picked) = path_field(ui, &mut self.path, width, || {
                 rfd::FileDialog::new()
                     .add_filter("TOML", &["toml"])
@@ -371,7 +379,7 @@ impl Tool for TipPrepTool {
         }
         ui.horizontal_wrapped(|ui| {
             if ui
-                .add_enabled(!self.path.is_empty(), egui::Button::new("Reload"))
+                .add_enabled(!self.path.is_empty(), egui::Button::new("Re-read file"))
                 .on_hover_text("Read the file again, dropping edits made here")
                 .clicked()
             {
@@ -406,32 +414,51 @@ impl Tool for TipPrepTool {
         note(ui, &self.message);
         ui.add_space(8.0);
 
+        // While a run is going, the fields it keeps from its start are
+        // drawn greyed out: Apply to run would not change them.
+        let live = self.reload.is_live();
         egui::ScrollArea::vertical().show(ui, |ui| {
             let mut changed = false;
-            ui.label(egui::RichText::new("Key settings").strong());
+            section(
+                ui,
+                "Key settings",
+                Some(if live {
+                    "The settings that decide a run. Greyed out: kept as the run started \
+                     until the next one."
+                } else {
+                    "The settings that decide a run"
+                }),
+            );
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 egui::Grid::new("tip_prep_featured")
                     .num_columns(2)
                     .spacing([16.0, 6.0])
                     .show(ui, |ui| {
                         for path in FEATURED {
-                            changed |= self.form.render_path(ui, &mut self.value, path);
+                            let enabled = !(live && FROZEN.contains(path));
+                            changed |=
+                                self.form
+                                    .render_path_enabled(ui, &mut self.value, path, enabled);
                         }
-                        changed |= self.render_z_preset(ui, &cx.connection);
+                        changed |= self.render_z_preset(ui, &cx.connection, !live);
                     });
             });
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("Everything").strong());
-            ui.label(
-                egui::RichText::new(
-                    "Where the controller is and where logs go are set on the Connection \
-                     page; Save writes them into the file so the CLI reads the same one.",
-                )
-                .weak(),
+            section(
+                ui,
+                "All settings",
+                Some(
+                    "Everything else in the config. Where the controller is and where logs \
+                     go are set on the Connection page; Save writes them into the file so \
+                     the CLI reads the same one.",
+                ),
             );
-            changed |= self
-                .form
-                .render_except(ui, &mut self.value, CONNECTION_SECTIONS);
+            let hidden: Vec<&str> = CONNECTION_SECTIONS
+                .iter()
+                .chain(FEATURED)
+                .chain(&["tip_prep.z_controller_preset"])
+                .copied()
+                .collect();
+            changed |= self.form.render_except(ui, &mut self.value, &hidden);
             if changed {
                 self.message = None;
             }
@@ -450,85 +477,112 @@ impl Tool for TipPrepTool {
         let cycle = view.latest(CYCLE).unwrap_or(0.0) as usize;
         let phase = view.phase().unwrap_or("");
         let is_sharp = view.latest(CYCLE_SHARP) == Some(1.0);
-        let shape = if phase == "stable" {
-            "Stable"
+        let colors = Palette::for_theme(ui.visuals().dark_mode);
+        let (shape, shape_color) = if phase == "stable" {
+            ("Stable", colors.bounds.to_opaque())
         } else if is_sharp {
-            "Sharp"
+            ("Sharp", colors.bounds.to_opaque())
         } else if cycle > 0 {
-            "Blunt"
+            ("Blunt", ui.visuals().text_color())
         } else {
+            ("-", ui.visuals().weak_text_color())
+        };
+        // A phase is what a run is doing; once it has ended it is doing
+        // nothing, whatever the last phase event said.
+        let phase = if view.finish.is_some() {
+            "ended"
+        } else if phase.is_empty() {
             "-"
+        } else {
+            phase
         };
         let run = by_cycle(view);
+        let big = |text: String| egui::RichText::new(text).size(24.0).strong();
+        let value = |text: String| egui::RichText::new(text).size(16.0).monospace();
 
-        self.render_reload(ui, view);
-        ui.add_space(4.0);
         egui::Frame::group(ui.style()).show(ui, |ui| {
-            egui::Grid::new("tip_prep_status")
-                .num_columns(4)
-                .spacing([20.0, 4.0])
-                .show(ui, |ui| {
-                    ui.label("Tip shape:");
-                    ui.label(shape);
-                    ui.label("Phase:");
-                    ui.label(if phase.is_empty() { "-" } else { phase });
-                    ui.end_row();
-
-                    ui.label("Cycle:");
-                    ui.label(if cycle > 0 {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 28.0;
+                stat(ui, "Tip", big(shape.to_string()).color(shape_color));
+                stat(
+                    ui,
+                    "Cycle",
+                    big(if cycle > 0 {
                         cycle.to_string()
                     } else {
                         "-".into()
-                    });
-                    ui.label("Freq shift:");
-                    ui.label(
+                    }),
+                );
+                stat(ui, "Phase", value(phase.replace('_', " ")));
+                stat(
+                    ui,
+                    "Freq shift",
+                    value(
                         view.latest(CYCLE_FREQ_SHIFT)
                             .or_else(|| view.latest(FREQ_SHIFT_SERIES))
                             .map(|f| format_si(f, "Hz"))
                             .unwrap_or_else(|| "-".into()),
-                    );
-                    ui.end_row();
-
-                    ui.label("Pulse voltage:");
-                    // The pulse action as it fires: the cycle event only
-                    // follows after the reposition and the read, which
-                    // left the field empty all through cycle 1.
-                    ui.label(
+                    ),
+                );
+                // The pulse action as it fires: the cycle event only
+                // follows after the reposition and the read, which left the
+                // field empty all through cycle 1.
+                stat(
+                    ui,
+                    "Pulse",
+                    value(
                         fired_pulse(view)
                             .or_else(|| run.last_pulse())
                             .map(|v| format_si(v, "V"))
                             .unwrap_or_else(|| "-".into()),
-                    );
-                    ui.label("Sharp band:");
-                    ui.label(
+                    ),
+                );
+                stat(
+                    ui,
+                    "Sharp band",
+                    value(
                         self.sharp_bounds(view)
                             .map(|(lo, hi)| format!("{} to {} Hz", number(lo), number(hi)))
                             .unwrap_or_else(|| "-".into()),
-                    );
-                    ui.end_row();
-                });
+                    ),
+                );
+            });
         });
 
-        let colors = Palette::for_theme(ui.visuals().dark_mode);
+        // The last cycle any series reaches, so both plots span the same
+        // cycles and their x axes line up.
+        let last_cycle = run
+            .freq_shift
+            .iter()
+            .chain(&run.other_reads)
+            .chain(&run.pulses)
+            .chain(&run.max_pulses)
+            .map(|p| p[0])
+            .fold(1.0, f64::max);
+        let height = plot_height(ui);
+        let between = colors.second.gamma_multiply(0.85);
 
-        ui.add_space(6.0);
         plot_header(
             ui,
             "Frequency shift",
+            &[
+                (Mark::Dot, "after a cycle", colors.first),
+                (Mark::Ring, "between cycles", between),
+                (Mark::Dash, "sharp band", colors.bounds.to_opaque()),
+            ],
             "Measured after each cycle. Hollow points are the readings between cycles: \
              the initial read, and a stability check's confirmations and final read.",
         );
-        let fs_line =
-            Line::new("Freq shift", PlotPoints::from(run.freq_shift.clone())).color(colors.first);
-        let fs_marks = Points::new("Freq shift", PlotPoints::from(run.freq_shift))
+        let fs_line = Line::new("", PlotPoints::from(run.freq_shift.clone())).color(colors.first);
+        let fs_marks = Points::new("after a cycle", PlotPoints::from(run.freq_shift))
             .color(colors.first)
             .radius(MARKER_RADIUS);
-        let other_marks = Points::new("Between cycles", PlotPoints::from(run.other_reads))
-            .color(colors.first)
+        let other_marks = Points::new("between cycles", PlotPoints::from(run.other_reads))
+            .color(between)
             .filled(false)
             .radius(MARKER_RADIUS + 1.0);
         let bounds = self.sharp_bounds(view);
-        let mut plot = cycle_plot("tip_prep_freq_shift", "Hz");
+        let mut plot = cycle_plot("tip_prep_freq_shift", "Hz", height, last_cycle);
         if let Some((lower, upper)) = bounds {
             plot = plot.include_y(lower).include_y(upper);
         }
@@ -537,9 +591,9 @@ impl Tool for TipPrepTool {
             plot_ui.points(fs_marks);
             plot_ui.points(other_marks);
             if let Some((lower, upper)) = bounds {
-                for (name, y) in [("Lower bound", lower), ("Upper bound", upper)] {
+                for y in [lower, upper] {
                     plot_ui.hline(
-                        HLine::new(name, y)
+                        HLine::new("sharp band", y)
                             .color(colors.bounds)
                             .style(egui_plot::LineStyle::Dashed { length: 5.0 }),
                     );
@@ -547,22 +601,25 @@ impl Tool for TipPrepTool {
             }
         });
 
-        ui.add_space(10.0);
         plot_header(
             ui,
             "Pulse voltage",
+            &[
+                (Mark::Dot, "cycle pulse", colors.second),
+                (Mark::Diamond, "max pulse", colors.bounds.to_opaque()),
+            ],
             "The pulse fired at the start of each cycle. Diamonds are the max pulses of a \
              failed stability check, between the cycles they came after.",
         );
-        let v_line = Line::new("Pulse", PlotPoints::from(run.pulses.clone())).color(colors.second);
-        let v_marks = Points::new("Pulse", PlotPoints::from(run.pulses))
+        let v_line = Line::new("", PlotPoints::from(run.pulses.clone())).color(colors.second);
+        let v_marks = Points::new("cycle pulse", PlotPoints::from(run.pulses))
             .color(colors.second)
             .radius(MARKER_RADIUS);
-        let max_marks = Points::new("Max pulse", PlotPoints::from(run.max_pulses))
+        let max_marks = Points::new("max pulse", PlotPoints::from(run.max_pulses))
             .color(colors.bounds)
             .shape(egui_plot::MarkerShape::Diamond)
             .radius(MARKER_RADIUS + 1.5);
-        cycle_plot("tip_prep_pulses", "V")
+        cycle_plot("tip_prep_pulses", "V", height, last_cycle)
             // Pulses run over about ±10 V: a line every volt, heavier every
             // five and ten.
             .y_grid_spacer(egui_plot::uniform_grid_spacer(|_| [1.0, 5.0, 10.0]))
@@ -571,6 +628,10 @@ impl Tool for TipPrepTool {
                 plot_ui.points(v_marks);
                 plot_ui.points(max_marks);
             });
+    }
+
+    fn run_controls(&mut self, ui: &mut egui::Ui, view: &RunView) {
+        self.render_apply(ui, view);
     }
 
     fn prefs(&self) -> serde_json::Value {
@@ -701,27 +762,121 @@ fn by_cycle(view: &RunView) -> ByCycle {
     run
 }
 
-/// Height of each tip-prep plot, one for both so they line up.
-const PLOT_HEIGHT: f32 = 180.0;
+/// Height of each tip-prep plot: half the window's height after the status
+/// box, the headers and the log sections, so the two plots fill the tab,
+/// but never less than a readable minimum.
+fn plot_height(ui: &egui::Ui) -> f32 {
+    const RESERVED: f32 = 360.0;
+    ((ui.ctx().content_rect().height() - RESERVED) / 2.0).clamp(180.0, 420.0)
+}
 
 /// How to move around a plot, said on every plot's header.
 const PLOT_NAVIGATION: &str = "Drag to pan, scroll to zoom, right-drag a box to zoom into \
      it, double-click to fit. The two plots pan together.";
 
-/// A plot's title, with what it shows and how to navigate it on hover.
-fn plot_header(ui: &mut egui::Ui, title: &str, about: &str) {
-    ui.heading(title)
-        .on_hover_text(format!("{about}\n\n{PLOT_NAVIGATION}"));
+/// How a series is marked, for the key beside a plot's title. Painted,
+/// since the UI font has no circle or diamond glyphs.
+#[derive(Clone, Copy)]
+enum Mark {
+    Dot,
+    Ring,
+    Diamond,
+    Dash,
 }
 
-/// A plot over cycles: integer ticks on x, a fixed-width y axis with
-/// tick labels in the unit, a legend, and navigation on. Both tip-prep
-/// plots share one x range and one cursor, so panning one pans the other.
-fn cycle_plot<'a>(id: &str, unit: &'static str) -> Plot<'a> {
+/// A plot's title, with its key beside it and what it shows and how to
+/// navigate it on hover. The key sits here rather than on the plot, where
+/// it covered the first cycles.
+fn plot_header(ui: &mut egui::Ui, title: &str, key: &[(Mark, &str, egui::Color32)], about: &str) {
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(title).heading().size(17.0))
+            .on_hover_text(format!("{about}\n\n{PLOT_NAVIGATION}"));
+        ui.add_space(12.0);
+        for (mark, label, color) in key {
+            key_mark(ui, *mark, *color);
+            ui.label(egui::RichText::new(*label).size(12.0));
+            ui.add_space(8.0);
+        }
+    });
+}
+
+fn key_mark(ui: &mut egui::Ui, mark: Mark, color: egui::Color32) {
+    let size = ui.text_style_height(&egui::TextStyle::Small);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size * 1.4, size), egui::Sense::hover());
+    let painter = ui.painter();
+    let c = rect.center();
+    let r = size * 0.3;
+    match mark {
+        Mark::Dot => {
+            painter.circle_filled(c, r, color);
+        }
+        Mark::Ring => {
+            painter.circle_stroke(c, r, egui::Stroke::new(1.5, color));
+        }
+        Mark::Diamond => {
+            let points = vec![
+                c + egui::vec2(0.0, -r * 1.3),
+                c + egui::vec2(r * 1.3, 0.0),
+                c + egui::vec2(0.0, r * 1.3),
+                c + egui::vec2(-r * 1.3, 0.0),
+            ];
+            painter.add(egui::Shape::convex_polygon(
+                points,
+                color,
+                egui::Stroke::NONE,
+            ));
+        }
+        Mark::Dash => {
+            let stroke = egui::Stroke::new(1.5, color);
+            let w = rect.width() / 2.0;
+            painter.line_segment(
+                [c - egui::vec2(w, 0.0), c - egui::vec2(w * 0.2, 0.0)],
+                stroke,
+            );
+            painter.line_segment(
+                [c + egui::vec2(w * 0.2, 0.0), c + egui::vec2(w, 0.0)],
+                stroke,
+            );
+        }
+    }
+}
+
+/// Grid lines over cycles: whole cycles only, about eight across, at 1, 2
+/// or 5 times a power of ten. The default spacer drew tenths of a cycle,
+/// a dense field of lines that mean nothing.
+fn cycle_grid(input: egui_plot::GridInput) -> Vec<egui_plot::GridMark> {
+    let (lo, hi) = input.bounds;
+    let raw = ((hi - lo) / 8.0).max(1.0);
+    let magnitude = 10f64.powf(raw.log10().floor());
+    let step = [1.0, 2.0, 5.0, 10.0]
+        .iter()
+        .map(|m| m * magnitude)
+        .find(|s| *s >= raw)
+        .unwrap_or(10.0 * magnitude);
+    let mut marks = Vec::new();
+    let mut value = (lo / step).ceil() * step;
+    while value <= hi {
+        marks.push(egui_plot::GridMark {
+            value,
+            step_size: step,
+        });
+        value += step;
+    }
+    marks
+}
+
+/// A plot over cycles: whole-cycle ticks on x from 0 to past
+/// `last_cycle`, a y axis of fixed width with tick labels in the unit, and
+/// navigation on. Both tip-prep plots span the same cycles with the same
+/// axis width, and share one x range and one cursor, so their cycles line
+/// up and panning one pans the other.
+fn cycle_plot<'a>(id: &str, unit: &'static str, height: f32, last_cycle: f64) -> Plot<'a> {
     const LINK: &str = "tip_prep_cycles";
     Plot::new(id)
-        .height(PLOT_HEIGHT)
-        .legend(egui_plot::Legend::default().position(egui_plot::Corner::LeftTop))
+        .height(height)
+        .include_x(0.0)
+        .include_x(last_cycle + 0.5)
         .allow_drag([true, true])
         .allow_zoom([true, true])
         .allow_scroll(true)
@@ -729,24 +884,22 @@ fn cycle_plot<'a>(id: &str, unit: &'static str) -> Plot<'a> {
         .allow_double_click_reset(true)
         .link_axis(LINK, [true, false])
         .link_cursor(LINK, [true, false])
+        .x_grid_spacer(cycle_grid)
         .custom_x_axes(vec![AxisHints::new_x().label("Cycle").formatter(
             |mark, _| {
                 let whole = mark.value.round();
                 if (mark.value - whole).abs() < 1e-6 && whole >= 0.0 {
-                    format!("{whole:.0}")
+                    // `+ 0.0` turns -0 into 0, which `round` makes of a tick a hair below zero.
+                    format!("{:.0}", whole + 0.0)
                 } else {
                     String::new()
                 }
             },
         )])
-        // The y strip is sized to its widest tick label by default, which
-        // on a narrow run starts too thin to draw any; a fixed minimum
-        // keeps the labels there from the first point on.
         .custom_y_axes(vec![
             AxisHints::new_y()
-                .label(unit)
-                .min_thickness(64.0)
-                .formatter(move |mark, _| format_si(mark.value, unit)),
+                .min_thickness(Y_AXIS_WIDTH)
+                .formatter(move |mark, _| format_tick(mark.value, unit)),
         ])
         .label_formatter(move |name, point| {
             let what = if name.is_empty() { "" } else { name };

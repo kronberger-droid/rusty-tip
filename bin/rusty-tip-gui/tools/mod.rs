@@ -69,6 +69,16 @@ pub trait Tool {
     /// The tool's own view of a run, drawn above the generic panels.
     fn panel(&mut self, _ui: &mut egui::Ui, _view: &RunView) {}
 
+    /// Whether the tool has a Run tab. One whose jobs all start from its
+    /// Setup tab (reading or writing the controller) has none; the last
+    /// job's [`Tool::panel`] shows under its setup instead.
+    fn has_run_tab(&self) -> bool {
+        true
+    }
+
+    /// Controls beside Start and Stop, for acting on the run in flight.
+    fn run_controls(&mut self, _ui: &mut egui::Ui, _view: &RunView) {}
+
     /// Saved with the window's preferences, restored on the next start.
     fn prefs(&self) -> serde_json::Value {
         serde_json::Value::Null
