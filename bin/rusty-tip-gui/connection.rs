@@ -11,7 +11,6 @@
 //! a mirror of the session's updates; the pane never asks the controller
 //! anything.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -20,10 +19,10 @@ use log::LevelFilter;
 use serde::{Deserialize, Serialize};
 
 use rusty_tip::config::{MotorZApproach, TcpChannelMapping};
-use rusty_tip::experiment_log::ControllerFacts;
 use rusty_tip::nanonis_controller::CoarseMotor;
-use rusty_tip::session::{Backend, ConnState, NanonisBackend, PresetLoad, Readout, SessionUpdate};
-use rusty_tip::spm_controller::Capability;
+use rusty_tip::session::{
+    Backend, ConnState, NanonisBackend, PresetLoad, SessionStatus, SessionUpdate,
+};
 
 use crate::units::{format_si, number};
 use crate::widgets::{path_field, status_dot};
@@ -313,64 +312,38 @@ pub enum PaneAction {
 
 pub struct ConnectionPane {
     pub form: ConnectionForm,
-    pub state: ConnState,
-    pub facts: Option<ControllerFacts>,
-    pub capabilities: HashSet<Capability>,
-    pub readouts: Vec<Readout>,
-    pub layout_load: Option<PresetLoad>,
-    pub settings_load: Option<PresetLoad>,
-    pub error: Option<String>,
+    /// What the session reported, mirrored the way the control server
+    /// mirrors it.
+    pub status: SessionStatus,
     /// Where the agent socket listens, or why it does not.
     pub agent_status: Option<Result<String, String>>,
+    /// The mode and address the socket was last set up with, so only a
+    /// real change restarts it and cuts off its clients.
+    pub agent_applied: Option<(AgentSocket, String)>,
 }
 
 impl ConnectionPane {
     pub fn new(form: ConnectionForm) -> Self {
         Self {
             form,
-            state: ConnState::Disconnected,
-            facts: None,
-            capabilities: HashSet::new(),
-            readouts: Vec::new(),
-            layout_load: None,
-            settings_load: None,
-            error: None,
+            status: SessionStatus::default(),
             agent_status: None,
+            agent_applied: None,
         }
     }
 
     /// Mirror what the session reported.
     pub fn apply(&mut self, update: &SessionUpdate) {
-        match update {
-            SessionUpdate::State(state) => {
-                self.state = *state;
-                if *state == ConnState::Disconnected {
-                    self.facts = None;
-                    self.capabilities.clear();
-                    self.readouts.clear();
-                    self.layout_load = None;
-                    self.settings_load = None;
-                }
-            }
-            SessionUpdate::Facts(facts) => self.facts = Some(facts.clone()),
-            SessionUpdate::Capabilities(caps) => self.capabilities = caps.clone(),
-            SessionUpdate::Readouts(readouts) => self.readouts = readouts.clone(),
-            SessionUpdate::PresetsLoaded { layout, settings } => {
-                self.layout_load = layout.clone();
-                self.settings_load = settings.clone();
-            }
-            SessionUpdate::Error(e) => self.error = Some(e.clone()),
-            SessionUpdate::JobFinished(_) | SessionUpdate::Samples(_) => {}
-        }
+        self.status.apply(update);
     }
 
     pub fn connected(&self) -> bool {
-        matches!(self.state, ConnState::Connected | ConnState::Running)
+        matches!(self.status.state, ConnState::Connected | ConnState::Running)
     }
 
     /// The state as a word.
     pub fn state_word(&self) -> &'static str {
-        match self.state {
+        match self.status.state {
             ConnState::Disconnected => "disconnected",
             ConnState::Connecting => "connecting",
             ConnState::Connected => "connected",
@@ -382,7 +355,7 @@ impl ConnectionPane {
     /// The colour of the status dot: green while a connection is up, red
     /// when it broke, grey otherwise.
     pub fn state_color(&self) -> egui::Color32 {
-        match self.state {
+        match self.status.state {
             ConnState::Connected | ConnState::Running => egui::Color32::from_rgb(52, 168, 83),
             ConnState::Poisoned => egui::Color32::from_rgb(217, 48, 37),
             ConnState::Disconnected | ConnState::Connecting => egui::Color32::from_gray(140),
@@ -395,14 +368,14 @@ impl ConnectionPane {
         ui.horizontal(|ui| {
             status_dot(ui, self.state_color());
             ui.label(format!("{} · {}", self.state_word(), self.form.target()));
-            if let Some(facts) = &self.facts {
+            if let Some(facts) = &self.status.facts {
                 ui.separator();
                 match facts.stream_rate_hz {
                     Some(hz) => ui.label(format!("stream {hz:.0} Hz")),
                     None => ui.label("no stream"),
                 };
             }
-            if let Some(e) = &self.error {
+            if let Some(e) = &self.status.error {
                 ui.separator();
                 ui.colored_label(egui::Color32::RED, e);
             }
@@ -415,15 +388,15 @@ impl ConnectionPane {
 
     fn render_button(&mut self, ui: &mut egui::Ui, running: bool) -> Option<PaneAction> {
         let mut action = None;
-        match self.state {
+        match self.status.state {
             ConnState::Disconnected => {
                 if ui.button("Connect").clicked() {
                     match self.form.backend() {
                         Ok(backend) => {
-                            self.error = None;
+                            self.status.error = None;
                             action = Some(PaneAction::Connect(backend));
                         }
-                        Err(e) => self.error = Some(e),
+                        Err(e) => self.status.error = Some(e),
                     }
                 }
             }
@@ -441,7 +414,7 @@ impl ConnectionPane {
             }
             ConnState::Poisoned => {
                 if ui.button("Reconnect").clicked() {
-                    self.error = None;
+                    self.status.error = None;
                     action = Some(PaneAction::Reconnect);
                 }
                 if ui.button("Disconnect").clicked() {
@@ -455,7 +428,7 @@ impl ConnectionPane {
     /// The Connection page: the form, then what the session reports.
     pub fn render_page(&mut self, ui: &mut egui::Ui, running: bool) -> Option<PaneAction> {
         let mut action = None;
-        let editable = self.state == ConnState::Disconnected;
+        let editable = self.status.state == ConnState::Disconnected;
 
         ui.heading("Controller");
         if !editable {
@@ -519,7 +492,13 @@ impl ConnectionPane {
                 egui::TextEdit::singleline(&mut self.form.agent_addr).desired_width(140.0),
             );
             // The address applies when editing ends, not on every key.
-            if self.form.agent_socket != before || addr.lost_focus() {
+            let wanted = (
+                self.form.agent_socket,
+                self.form.agent_addr.trim().to_string(),
+            );
+            if (self.form.agent_socket != before || addr.lost_focus())
+                && self.agent_applied.as_ref() != Some(&wanted)
+            {
                 action = Some(PaneAction::AgentSocket);
             }
             match &self.agent_status {
@@ -573,7 +552,7 @@ impl ConnectionPane {
             }
         });
 
-        if self.state != ConnState::Disconnected {
+        if self.status.state != ConnState::Disconnected {
             ui.add_space(12.0);
             ui.separator();
             self.render_details(ui);
@@ -714,7 +693,7 @@ impl ConnectionPane {
                 ui.label("State");
                 ui.label(self.state_word());
                 ui.end_row();
-                if let Some(facts) = &self.facts {
+                if let Some(facts) = &self.status.facts {
                     ui.label("Stream");
                     ui.label(match facts.stream_rate_hz {
                         Some(hz) => format!("{hz:.0} Hz"),
@@ -723,28 +702,28 @@ impl ConnectionPane {
                     ui.end_row();
                 }
                 ui.label("Settings file");
-                ui.label(describe_load(self.settings_load.as_ref()));
+                ui.label(describe_load(self.status.settings.as_ref()));
                 ui.end_row();
                 ui.label("Layout file");
-                ui.label(describe_load(self.layout_load.as_ref()));
+                ui.label(describe_load(self.status.layout.as_ref()));
                 ui.end_row();
             });
 
         if self.connected() {
             ui.add_space(8.0);
             ui.label(egui::RichText::new("Live readouts").strong());
-            if self.readouts.is_empty() {
+            if self.status.readouts.is_empty() {
                 ui.label(egui::RichText::new("none").weak());
             }
             ui.horizontal(|ui| {
-                for r in &self.readouts {
+                for r in &self.status.readouts {
                     ui.label(egui::RichText::new(format_readout(&r.name, r.value)).size(16.0));
                     ui.add_space(16.0);
                 }
             });
         }
 
-        if let Some(facts) = &self.facts {
+        if let Some(facts) = &self.status.facts {
             ui.add_space(8.0);
             ui.collapsing(format!("Signals ({})", facts.signals.len()), |ui| {
                 let row_height = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
@@ -774,12 +753,16 @@ impl ConnectionPane {
             });
         }
 
-        if !self.capabilities.is_empty() {
+        if !self.status.capabilities.is_empty() {
             ui.collapsing(
-                format!("Capabilities ({})", self.capabilities.len()),
+                format!("Capabilities ({})", self.status.capabilities.len()),
                 |ui| {
-                    let mut caps: Vec<String> =
-                        self.capabilities.iter().map(|c| format!("{c:?}")).collect();
+                    let mut caps: Vec<String> = self
+                        .status
+                        .capabilities
+                        .iter()
+                        .map(|c| format!("{c:?}"))
+                        .collect();
                     caps.sort();
                     ui.label(caps.join(", "));
                 },

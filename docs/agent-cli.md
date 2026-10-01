@@ -6,7 +6,8 @@ says how it went. An agent can learn the interface from `rusty-tip describe`
 and plan inside the limits it reports, without reading this page.
 
 This first version only reads. Commands that act on the instrument come next,
-each checked against the read-only gate and the limits described below.
+each checked against the read-only gate and the limits described below, and
+each run as a job with its own experiment log; plain reads are not logged.
 
 ## Three ways to reach a controller
 
@@ -17,9 +18,13 @@ each checked against the read-only gate and the limits described below.
 | One-shot | `rusty-tip --one-shot --config lab.toml status` | Opened for the one command, closed after. |
 
 The first two keep the connection between commands, so a command costs a round
-trip, not a layout and settings load. Both listen on `127.0.0.1:47474` unless
-`--addr` or the Connection page says otherwise, and only ever on loopback: the
-socket has no authentication of its own. `--mock` stands in for `--config` and
+trip, not a layout and settings load. `serve` loads the config's layout and
+settings files on connect, as the workbench does; one-shot does not, since a
+command that only reads should not change the instrument to answer.
+
+The workbench and `serve` listen on `127.0.0.1:47474` unless `--addr` or the
+Connection page says otherwise, and only ever on loopback: the socket has no
+authentication of its own. `--mock` stands in for `--config` and
 connects to the simulator, to rehearse a plan without hardware.
 
 `serve` prints one line once it listens, `{"ok":true,"result":{"listening":
@@ -34,9 +39,12 @@ rusty-tip read current "freq shift"         # one value each
 rusty-tip read "Z (m)" --samples 500        # mean and std_dev of 500 stream samples
 ```
 
-Signal names are the registry's, case-insensitive. `status` answers from the
-session's last report, so it answers while a job runs; a `read` needs the
-controller and waits up to 10 s for a running job before answering `busy`.
+Signal names are the registry's, case-insensitive. Each reading carries the
+`unit` the controller names the signal with, `"A"` for `"Current (A)"`, or
+`null` when the name has none. `status` answers from the session's last
+report, so it answers while a job runs; a `read` needs the controller and
+waits up to 10 s for a running job before answering `busy`, and a request that
+timed out is dropped, never run late.
 
 Over the socket the same commands are JSON, one request per line and one reply
 per line, as many as you like on one connection:
@@ -65,7 +73,9 @@ A misspelt parameter is an error, not ignored.
 | 6 | `busy` | A job held the session past the timeout. |
 | 7 | `controller` | The controller or the link to it failed. |
 
-Logs go to stderr (`--log info` for more), so stdout is only ever the reply.
+Logs go to stderr (`--log info` for more), so stdout is only ever the reply. A
+malformed command line is a `bad_request` reply too; only `--help` and
+`--version` answer in plain text, since they are asked for as text.
 
 ## Read-only and limits
 
@@ -85,3 +95,7 @@ z_setpoint = [10e-12, 1e-9]  # Z setpoint range, in the loop input's unit
 ```
 
 A field left out sets no limit; a misspelt one is an error.
+
+For now only `serve` takes a limits file. The workbench's socket and one-shot
+commands will need one before the first acting command lands; until then
+there is nothing for limits to bound.

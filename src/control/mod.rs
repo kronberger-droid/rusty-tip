@@ -3,10 +3,12 @@
 //! A [`Request`] is one command, a [`Reply`] its answer, both JSON. The
 //! same requests run three ways:
 //!
-//! - **Through a server** on the session thread the workbench or
-//!   `rusty-tip serve` already holds, over a local TCP socket, one JSON
-//!   request per line and one reply per line ([`server`]). The connection
-//!   stays up between commands and one thread owns the controller.
+//! - **Through the workbench**, whose session thread serves them on a local
+//!   TCP socket, one JSON request per line and one reply per line
+//!   ([`server`]).
+//! - **Through `rusty-tip serve`**, the same server on a session of its
+//!   own, without a window. Either way the connection stays up between
+//!   commands and one thread owns the controller.
 //! - **In process**, on a [`Session`] the caller connected itself: the
 //!   one-shot mode of the CLI.
 //!
@@ -21,6 +23,8 @@
 pub mod limits;
 pub mod server;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use schemars::JsonSchema;
@@ -56,12 +60,16 @@ pub enum Request {
     /// does not wait for a running job.
     Status,
     /// Read signals by name: once each, or with `samples`, the mean and
-    /// standard deviation of that many stream samples.
+    /// standard deviation of that many stream samples. Each reading says
+    /// its unit.
     Read {
         /// Signal names as the registry knows them: `"current"`,
         /// `"freq shift"`, `"Z (m)"`. Case does not matter.
+        #[schemars(length(min = 1))]
         signals: Vec<String>,
+        /// Stream samples to average per signal; left out, one plain read.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(range(min = 1))]
         samples: Option<usize>,
     },
 }
@@ -251,23 +259,31 @@ pub fn execute(target: Target<'_>, request: &Request, serving: &Serving) -> Repl
 }
 
 /// Run `f` with the session: directly, or on the session thread, waiting
-/// at most [`BUSY_TIMEOUT`] for it.
+/// at most [`BUSY_TIMEOUT`] for it. A call that timed out is dropped unrun
+/// when the thread gets to it: the caller was told `busy`, and a request
+/// that ran after that answer would act behind its back.
 fn on_session(target: Target<'_>, f: impl FnOnce(&mut Session) -> Reply + Send + 'static) -> Reply {
     match target {
         Target::Local(session) => f(session),
         Target::Remote(remote) => {
             let (tx, rx) = crossbeam_channel::bounded(1);
+            let abandoned = Arc::new(AtomicBool::new(false));
+            let gave_up = Arc::clone(&abandoned);
             let call = SessionCmd::Call(Box::new(move |session: &mut Session| {
-                let _ = tx.send(f(session));
+                if !gave_up.load(Ordering::SeqCst) {
+                    let _ = tx.send(f(session));
+                }
             }));
             if let Err(e) = remote.send(call) {
                 return Reply::err(ErrorKind::NotConnected, e.to_string());
             }
             rx.recv_timeout(BUSY_TIMEOUT).unwrap_or_else(|_| {
+                abandoned.store(true, Ordering::SeqCst);
                 Reply::err(
                     ErrorKind::Busy,
                     format!(
-                        "the session did not answer within {} s; a job is probably running",
+                        "the session did not answer within {} s; a job is probably running. \
+                         Nothing was done.",
                         BUSY_TIMEOUT.as_secs()
                     ),
                 )
@@ -326,8 +342,9 @@ fn status_json(status: &SessionStatus, serving: &Serving) -> Value {
     let mut capabilities: Vec<_> = status.capabilities.iter().copied().collect();
     capabilities.sort_by_key(|c| format!("{c:?}"));
     json!({
-        "state": status.state.unwrap_or(ConnState::Disconnected),
+        "state": status.state,
         "read_only": serving.read_only,
+        "limits": serving.limits,
         "facts": status.facts,
         "capabilities": capabilities,
         "readouts": status.readouts,
@@ -384,6 +401,13 @@ mod tests {
     use super::*;
     use crate::session::Backend;
 
+    fn read(signals: &[&str], samples: Option<usize>) -> Request {
+        Request::Read {
+            signals: signals.iter().map(|s| s.to_string()).collect(),
+            samples,
+        }
+    }
+
     fn connected() -> Session {
         let mut session = Session::new(None);
         session.connect(&Backend::Mock).unwrap();
@@ -394,13 +418,7 @@ mod tests {
     fn requests_parse_from_the_json_an_agent_writes() {
         let r: Request =
             serde_json::from_str(r#"{"cmd":"read","signals":["current"],"samples":10}"#).unwrap();
-        assert_eq!(
-            r,
-            Request::Read {
-                signals: vec!["current".into()],
-                samples: Some(10)
-            }
-        );
+        assert_eq!(r, read(&["current"], Some(10)));
         assert!(serde_json::from_str::<Request>(r#"{"cmd":"fly"}"#).is_err());
         assert!(
             serde_json::from_str::<Request>(r#"{"cmd":"read","signals":["z"],"sample":5}"#)
@@ -424,10 +442,7 @@ mod tests {
         let serving = Serving::default();
         let reply = execute(
             Target::Local(&mut session),
-            &Request::Read {
-                signals: vec!["current".into(), "freq shift".into()],
-                samples: None,
-            },
+            &read(&["current", "freq shift"], None),
             &serving,
         );
         assert!(reply.ok, "{reply:?}");
@@ -437,10 +452,7 @@ mod tests {
 
         let reply = execute(
             Target::Local(&mut session),
-            &Request::Read {
-                signals: vec!["warp core".into()],
-                samples: None,
-            },
+            &read(&["warp core"], None),
             &serving,
         );
         assert_eq!(reply.error.unwrap().kind, ErrorKind::BadRequest);
@@ -451,10 +463,7 @@ mod tests {
         let mut session = connected();
         let reply = execute(
             Target::Local(&mut session),
-            &Request::Read {
-                signals: vec!["freq shift".into()],
-                samples: Some(20),
-            },
+            &read(&["freq shift"], Some(20)),
             &Serving::default(),
         );
         let reading = &reply.result.unwrap()["readings"][0];
@@ -462,15 +471,41 @@ mod tests {
         assert!(reading["std_dev"].as_f64().is_some());
     }
 
+    /// A reading says its unit, from the name the controller gives the
+    /// signal, so an agent never has to guess amps from picoamps.
+    #[test]
+    fn a_reading_carries_its_unit() {
+        let mut session = connected();
+        let reply = execute(
+            Target::Local(&mut session),
+            &read(&["current"], None),
+            &Serving::default(),
+        );
+        assert_eq!(reply.result.unwrap()["readings"][0]["unit"], "A");
+    }
+
+    /// `status` reports the limits in force, as `describe` does, so an agent
+    /// asking either learns them.
+    #[test]
+    fn status_reports_the_limits_in_force() {
+        let mut session = connected();
+        let serving = Serving {
+            read_only: false,
+            limits: Limits {
+                max_bias_v: Some(2.0),
+                ..Limits::default()
+            },
+        };
+        let status = execute(Target::Local(&mut session), &Request::Status, &serving);
+        assert_eq!(status.result.unwrap()["limits"]["max_bias_v"], 2.0);
+    }
+
     #[test]
     fn nothing_reads_without_a_connection() {
         let mut session = Session::new(None);
         let reply = execute(
             Target::Local(&mut session),
-            &Request::Read {
-                signals: vec!["current".into()],
-                samples: None,
-            },
+            &read(&["current"], None),
             &Serving::default(),
         );
         assert_eq!(reply.error.unwrap().kind, ErrorKind::NotConnected);
@@ -492,14 +527,7 @@ mod tests {
             read_only: true,
             ..Serving::default()
         };
-        for request in [
-            Request::Describe,
-            Request::Status,
-            Request::Read {
-                signals: vec!["current".into()],
-                samples: None,
-            },
-        ] {
+        for request in [Request::Describe, Request::Status, read(&["current"], None)] {
             assert!(!request.acts());
             let reply = execute(Target::Local(&mut session), &request, &serving);
             assert!(reply.ok, "{}: {reply:?}", request.name());
