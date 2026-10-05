@@ -1,0 +1,3 @@
+# Snapshots are compared byte for byte; a Windows checkout with
+# core.autocrlf would turn them CRLF and fail the comparison.
+tests/snapshots/** text eol=lf
