@@ -17,7 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{SetupCx, Tool};
 use crate::run_view::RunView;
-use crate::widgets::Palette;
+use crate::units::format_tick;
+use crate::widgets::{Palette, Y_AXIS_WIDTH, section, stat};
 
 pub struct DriftJob {
     z_name: String,
@@ -79,15 +80,15 @@ impl Tool for DriftTool {
     }
 
     fn setup(&mut self, ui: &mut egui::Ui, _cx: &mut SetupCx<'_>) {
-        ui.label(
-            egui::RichText::new(
+        section(
+            ui,
+            "Measurement",
+            Some(
                 "Measures how fast Z drifts with the feedback closed and the scan stopped, \
                  and can leave the controller compensating for it. Position the tip on flat, \
                  quiet ground first; the tip is left where it is.",
-            )
-            .small(),
+            ),
         );
-        ui.add_space(6.0);
 
         let p = &mut self.params;
         let measures = matches!(p.op, DriftOp::Measure | DriftOp::Compensate);
@@ -256,23 +257,52 @@ impl Tool for DriftTool {
             .iter()
             .filter_map(|(_, d)| serde_json::from_value(d.clone()).ok())
             .collect();
+        let colors = Palette::for_theme(ui.visuals().dark_mode);
 
         // The plot first, where it stays put; the text below it grows with
         // the run.
         if !bursts.is_empty() {
+            section(
+                ui,
+                "Drift per burst",
+                Some("Each burst's fitted Z drift, with its standard error as a bar."),
+            );
             let drift: Vec<[f64; 2]> = bursts
                 .iter()
                 .map(|b| [b.burst as f64, b.drift_m_s / PM])
                 .collect();
-            let color = Palette::for_theme(ui.visuals().dark_mode).first;
+            let color = colors.first;
+            let zero = ui.visuals().weak_text_color();
+            let last = bursts.len() as f64;
             Plot::new("drift_bursts_plot")
-                .height(180.0)
+                .height(200.0)
                 .allow_drag(false)
                 .allow_zoom(false)
                 .allow_scroll(false)
+                .include_x(0.5)
+                .include_x(last + 0.5)
+                .include_y(0.0)
                 .x_axis_label("burst")
-                .y_axis_label("pm/s")
+                .x_grid_spacer(egui_plot::uniform_grid_spacer(|_| [1.0, 5.0, 10.0]))
+                .custom_y_axes(vec![
+                    egui_plot::AxisHints::new_y()
+                        .min_thickness(Y_AXIS_WIDTH)
+                        .formatter(|mark, _| format_tick(mark.value * PM, "m/s")),
+                ])
                 .show(ui, |plot_ui| {
+                    plot_ui.hline(
+                        egui_plot::HLine::new("", 0.0)
+                            .color(zero)
+                            .style(egui_plot::LineStyle::Dashed { length: 4.0 }),
+                    );
+                    for b in &bursts {
+                        let (x, y, e) = (b.burst as f64, b.drift_m_s / PM, b.std_err_m_s / PM);
+                        plot_ui.line(
+                            Line::new("", PlotPoints::from(vec![[x, y - e], [x, y + e]]))
+                                .color(color.gamma_multiply(0.6))
+                                .width(2.0_f32),
+                        );
+                    }
                     plot_ui.line(Line::new("drift", PlotPoints::from(drift.clone())).color(color));
                     plot_ui.points(
                         Points::new("bursts", PlotPoints::from(drift))
@@ -280,74 +310,151 @@ impl Tool for DriftTool {
                             .radius(3.0_f32),
                     );
                 });
-            ui.add_space(8.0);
         }
 
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            egui::Grid::new("drift_status")
-                .num_columns(2)
-                .spacing([20.0, 4.0])
-                .show(ui, |ui| {
-                    ui.label("Before");
-                    ui.label(
-                        before
-                            .map(ToString::to_string)
-                            .unwrap_or_else(|| "-".into()),
-                    );
-                    ui.end_row();
-                    ui.label("After");
-                    ui.label(after.map(ToString::to_string).unwrap_or_else(|| "-".into()));
-                    ui.end_row();
-                });
-        });
-
-        if let Some(m) = view
+        let measured = view
             .custom(DriftMeasuredEvent::KIND)
             .last()
-            .and_then(|(_, d)| serde_json::from_value::<DriftMeasuredEvent>(d.clone()).ok())
-        {
-            ui.add_space(6.0);
-            ui.label(m.to_string());
-        }
-
-        if let Some(c) = view
+            .and_then(|(_, d)| serde_json::from_value::<DriftMeasuredEvent>(d.clone()).ok());
+        let compensated = view
             .custom(DriftCompensatedEvent::KIND)
             .last()
-            .and_then(|(_, d)| serde_json::from_value::<DriftCompensatedEvent>(d.clone()).ok())
-        {
-            ui.add_space(6.0);
-            ui.label(c.to_string());
-            match c.response {
-                Some(r) => ui.label(format!(
-                    "Response {r:+.2}: a positive vz {} the measured drift. Choose it in \
-                     Setup next time to skip the trial burst.",
-                    if r > 0.0 { "adds to" } else { "subtracts from" }
-                )),
-                None => ui.label("Drift was negligible from the start; nothing was changed."),
-            };
+            .and_then(|(_, d)| serde_json::from_value::<DriftCompensatedEvent>(d.clone()).ok());
+        let rate = |v: f64, e: f64| format!("{:+.3} ± {:.3} pm/s", v / PM, e / PM);
+        let value = |text: String| egui::RichText::new(text).size(16.0).monospace();
+
+        if measured.is_some() || compensated.is_some() {
+            section(ui, "Result", None);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 28.0;
+                if let Some(m) = &measured {
+                    stat(ui, "Z drift", value(rate(m.rate_m_s, m.std_err_m_s)));
+                    stat(
+                        ui,
+                        "Samples",
+                        value(format!("{} over {:.1} s", m.samples, m.window_s)),
+                    );
+                    stat(
+                        ui,
+                        "Verdict",
+                        value(
+                            if m.negligible {
+                                "consistent with zero"
+                            } else {
+                                "drifting"
+                            }
+                            .into(),
+                        ),
+                    );
+                }
+                if let Some(c) = &compensated {
+                    stat(
+                        ui,
+                        "Residual drift",
+                        value(rate(c.residual_rate_m_s, c.residual_std_err_m_s)),
+                    );
+                    stat(
+                        ui,
+                        "vz left on",
+                        value(format!("{:+.3} pm/s", c.vz_m_s / PM)),
+                    );
+                    stat(ui, "Bursts", value(c.bursts.to_string()));
+                    let (word, color) = if c.converged {
+                        ("inside error bar", colors.bounds.to_opaque())
+                    } else {
+                        ("outside error bar", colors.second)
+                    };
+                    stat(ui, "Converged", value(word.into()).color(color)).on_hover_text(
+                        "Outside once is noise now and then; if it repeats, lengthen the window",
+                    );
+                    match c.response {
+                        Some(r) => {
+                            stat(ui, "Response", value(format!("{r:+.2}"))).on_hover_text(format!(
+                                "A positive vz {} the measured drift. Choose it in Setup next \
+                                 time to skip the trial burst.",
+                                if r > 0.0 { "adds to" } else { "subtracts from" }
+                            ));
+                        }
+                        None => {
+                            stat(ui, "Response", value("not needed".into())).on_hover_text(
+                                "Drift was negligible from the start; nothing was changed.",
+                            );
+                        }
+                    }
+                }
+            });
+        }
+
+        if before.is_some() || after.is_some() {
+            section(ui, "Compensation", Some("As the controller reported it"));
+            egui::Grid::new("drift_status")
+                .num_columns(6)
+                .striped(true)
+                .spacing([20.0, 4.0])
+                .show(ui, |ui| {
+                    for h in [
+                        "",
+                        "state",
+                        "vx (pm/s)",
+                        "vy (pm/s)",
+                        "vz (pm/s)",
+                        "saturated",
+                    ] {
+                        ui.label(egui::RichText::new(h).strong());
+                    }
+                    ui.end_row();
+                    for (when, s) in [("Before", before), ("After", after)] {
+                        let Some(s) = s else { continue };
+                        ui.label(when);
+                        ui.label(if s.enabled { "on" } else { "off" });
+                        for v in [s.vx_m_s, s.vy_m_s, s.vz_m_s] {
+                            ui.label(egui::RichText::new(format!("{:+.3}", v / PM)).monospace());
+                        }
+                        let saturated: Vec<&str> = [
+                            (s.x_saturated, "x"),
+                            (s.y_saturated, "y"),
+                            (s.z_saturated, "z"),
+                        ]
+                        .into_iter()
+                        .filter_map(|(on, axis)| on.then_some(axis))
+                        .collect();
+                        ui.label(if saturated.is_empty() {
+                            "none".to_string()
+                        } else {
+                            saturated.join(", ")
+                        })
+                        .on_hover_text(format!(
+                            "An axis saturates at {:.0} % of its range",
+                            s.saturation_limit_percent
+                        ));
+                        ui.end_row();
+                    }
+                });
         }
 
         if !bursts.is_empty() {
-            ui.add_space(8.0);
-            ui.label("Bursts");
+            section(ui, "Bursts", None);
             egui::Grid::new("drift_bursts")
                 .num_columns(4)
                 .striped(true)
-                .spacing([16.0, 2.0])
+                .spacing([20.0, 4.0])
                 .show(ui, |ui| {
-                    for h in ["burst", "role", "vz (pm/s)", "drift (pm/s)"] {
+                    for h in ["Burst", "Role", "vz (pm/s)", "Drift (pm/s)"] {
                         ui.label(egui::RichText::new(h).strong());
                     }
                     ui.end_row();
                     for b in &bursts {
                         ui.label(b.burst.to_string());
                         ui.label(format!("{:?}", b.role).to_lowercase());
-                        ui.label(format!("{:+.3}", b.vz_m_s / PM));
-                        ui.label(format!(
-                            "{:+.3} ± {:.3}",
-                            b.drift_m_s / PM,
-                            b.std_err_m_s / PM
-                        ));
+                        ui.label(egui::RichText::new(format!("{:+.3}", b.vz_m_s / PM)).monospace());
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{:+.3} ± {:.3}",
+                                b.drift_m_s / PM,
+                                b.std_err_m_s / PM
+                            ))
+                            .monospace(),
+                        );
                         ui.end_row();
                     }
                 });

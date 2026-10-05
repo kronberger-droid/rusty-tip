@@ -26,7 +26,12 @@ use rusty_tip::session::{Backend, ConnState, NanonisBackend, PresetLoad, Readout
 use rusty_tip::spm_controller::Capability;
 
 use crate::units::{format_si, number};
-use crate::widgets::{path_field, status_dot};
+use crate::widgets::{Tone, path_field, section, stat, status_dot, toned, toned_if};
+
+/// Width of the label column on the Connection page, one for both
+/// sections and fixed, so the fields do not move when the backend changes
+/// which rows there are.
+const LABEL_WIDTH: f32 = 150.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BackendKind {
@@ -377,7 +382,7 @@ impl ConnectionPane {
         let mut action = None;
         match self.state {
             ConnState::Disconnected => {
-                if ui.button("Connect").clicked() {
+                if ui.add(toned(ui, "Connect", Tone::Primary)).clicked() {
                     match self.form.backend() {
                         Ok(backend) => {
                             self.error = None;
@@ -392,7 +397,7 @@ impl ConnectionPane {
             }
             ConnState::Connected | ConnState::Running => {
                 if ui
-                    .add_enabled(!running, egui::Button::new("Disconnect"))
+                    .add_enabled(!running, toned_if(ui, !running, "Disconnect", Tone::Danger))
                     .on_disabled_hover_text("Stop the running job first")
                     .clicked()
                 {
@@ -400,11 +405,11 @@ impl ConnectionPane {
                 }
             }
             ConnState::Poisoned => {
-                if ui.button("Reconnect").clicked() {
+                if ui.add(toned(ui, "Reconnect", Tone::Primary)).clicked() {
                     self.error = None;
                     action = Some(PaneAction::Reconnect);
                 }
-                if ui.button("Disconnect").clicked() {
+                if ui.add(toned(ui, "Disconnect", Tone::Danger)).clicked() {
                     action = Some(PaneAction::Disconnect);
                 }
             }
@@ -417,86 +422,88 @@ impl ConnectionPane {
         let mut action = None;
         let editable = self.state == ConnState::Disconnected;
 
-        ui.heading("Controller");
-        if !editable {
-            ui.label(egui::RichText::new("Disconnect to change the connection.").weak());
-        }
-        ui.add_space(4.0);
+        section(
+            ui,
+            "Controller",
+            Some(
+                "Where the controller is and what is loaded on connect. Connect and \
+                  disconnect from the bar at the top; disconnect to change these.",
+            ),
+        );
         ui.add_enabled_ui(editable, |ui| {
             egui::Grid::new("connection_form")
                 .num_columns(2)
+                .min_col_width(LABEL_WIDTH)
                 .spacing([16.0, 6.0])
                 .show(ui, |ui| self.render_form(ui));
         });
+        let has_files =
+            !(self.form.layout_file.trim().is_empty() && self.form.settings_file.trim().is_empty());
+        if self.connected()
+            && self.form.kind == BackendKind::Nanonis
+            && has_files
+            && ui
+                .add_enabled(!running, egui::Button::new("Reload files"))
+                .on_hover_text("Load the layout and settings files again")
+                .clicked()
+        {
+            action = Some(PaneAction::ReloadPresets);
+        }
 
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label("Log directory");
-            let before = self.form.log_dir.clone();
-            path_field(ui, &mut self.form.log_dir, 320.0, || {
-                rfd::FileDialog::new().pick_folder()
-            });
-            if self.form.log_dir != before {
-                action = Some(PaneAction::LogDir(self.form.log_dir()));
-            }
-        });
-
-        ui.horizontal(|ui| {
-            ui.label("Log level");
-            let before = self.form.log_level;
-            egui::ComboBox::from_id_salt("log_level")
-                .selected_text(self.form.log_level.as_str().to_lowercase())
-                .show_ui(ui, |ui| {
-                    // Everything but off: a window that logs nothing
-                    // cannot say why.
-                    for level in LevelFilter::iter().skip(1) {
-                        ui.selectable_value(
-                            &mut self.form.log_level,
-                            level,
-                            level.as_str().to_lowercase(),
-                        );
+        section(ui, "Files and logging", None);
+        egui::Grid::new("connection_files")
+            .num_columns(2)
+            .min_col_width(LABEL_WIDTH)
+            .spacing([16.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Log directory");
+                ui.horizontal(|ui| {
+                    let before = self.form.log_dir.clone();
+                    path_field(ui, &mut self.form.log_dir, 320.0, || {
+                        rfd::FileDialog::new().pick_folder()
+                    });
+                    if self.form.log_dir != before {
+                        action = Some(PaneAction::LogDir(self.form.log_dir()));
                     }
                 });
-            if self.form.log_level != before {
-                action = Some(PaneAction::LogLevel(self.form.log_level));
-            }
-        })
-        .response
-        .on_hover_text("How much the activity log and the terminal say. Takes effect at once.");
+                ui.end_row();
 
-        ui.horizontal(|ui| {
-            ui.label("Preset file");
-            path_field(ui, &mut self.form.presets_file, 320.0, || {
-                rfd::FileDialog::new()
-                    .add_filter("TOML", &["toml"])
-                    .pick_file()
+                ui.label("Log level").on_hover_text(
+                    "How much the activity log and the terminal say. Takes effect at once.",
+                );
+                let before = self.form.log_level;
+                egui::ComboBox::from_id_salt("log_level")
+                    .selected_text(self.form.log_level.as_str().to_lowercase())
+                    .show_ui(ui, |ui| {
+                        // Everything but off: a window that logs nothing
+                        // cannot say why.
+                        for level in LevelFilter::iter().skip(1) {
+                            ui.selectable_value(
+                                &mut self.form.log_level,
+                                level,
+                                level.as_str().to_lowercase(),
+                            );
+                        }
+                    });
+                if self.form.log_level != before {
+                    action = Some(PaneAction::LogLevel(self.form.log_level));
+                }
+                ui.end_row();
+
+                ui.label("Preset file").on_hover_text(
+                    "The controller presets, one TOML file. The Controllers page lists, saves \
+                     and applies them, and a tip-prep config names one by name. Created on \
+                     the first save.",
+                );
+                ui.horizontal(|ui| {
+                    path_field(ui, &mut self.form.presets_file, 320.0, || {
+                        rfd::FileDialog::new()
+                            .add_filter("TOML", &["toml"])
+                            .pick_file()
+                    });
+                });
+                ui.end_row();
             });
-        })
-        .response
-        .on_hover_text(
-            "The controller presets, one TOML file. The Controllers page lists, saves and \
-             applies them, and a tip-prep config names one by name. Created on the first \
-             save.",
-        );
-
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if let Some(a) = self.render_button(ui, running) {
-                action = Some(a);
-            }
-            let has_files = !(self.form.layout_file.trim().is_empty()
-                && self.form.settings_file.trim().is_empty());
-            if self.connected()
-                && self.form.kind == BackendKind::Nanonis
-                && has_files
-                && ui
-                    .add_enabled(!running, egui::Button::new("Reload files"))
-                    .on_hover_text("Load the layout and settings files again")
-                    .clicked()
-            {
-                action = Some(PaneAction::ReloadPresets);
-            }
-        });
 
         if self.state != ConnState::Disconnected {
             ui.add_space(12.0);
@@ -583,7 +590,7 @@ impl ConnectionPane {
                     ui.add(egui::TextEdit::singleline(index).desired_width(40.0));
                     ui.label("channel");
                     ui.add(egui::TextEdit::singleline(channel).desired_width(40.0));
-                    if ui.small_button("remove").clicked() {
+                    if ui.button("remove").clicked() {
                         remove = Some(i);
                     }
                 });
@@ -591,7 +598,7 @@ impl ConnectionPane {
             if let Some(i) = remove {
                 self.form.tcp_channel_mapping.remove(i);
             }
-            if ui.small_button("add").clicked() {
+            if ui.button("add").clicked() {
                 self.form
                     .tcp_channel_mapping
                     .push((String::new(), String::new()));
@@ -631,9 +638,10 @@ impl ConnectionPane {
     }
 
     fn render_details(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Session");
+        section(ui, "Session", None);
         egui::Grid::new("connection_details")
             .num_columns(2)
+            .min_col_width(LABEL_WIDTH)
             .spacing([16.0, 4.0])
             .show(ui, |ui| {
                 ui.label("State");
@@ -656,15 +664,19 @@ impl ConnectionPane {
             });
 
         if self.connected() {
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("Live readouts").strong());
+            section(ui, "Live readouts", None);
             if self.readouts.is_empty() {
                 ui.label(egui::RichText::new("none").weak());
             }
             ui.horizontal(|ui| {
                 for r in &self.readouts {
-                    ui.label(egui::RichText::new(format_readout(&r.name, r.value)).size(16.0));
-                    ui.add_space(16.0);
+                    let (label, value) = format_readout(&r.name, r.value);
+                    stat(
+                        ui,
+                        &label,
+                        egui::RichText::new(value).size(18.0).monospace(),
+                    );
+                    ui.add_space(20.0);
                 }
             });
         }
@@ -728,8 +740,15 @@ fn describe_load(load: Option<&PresetLoad>) -> String {
 /// A readout in the unit its name declares (`Z (m)`), in the prefix that
 /// fits the value; a frequency shift is in hertz by name, anything else is
 /// a bare number.
-fn format_readout(name: &str, value: f64) -> String {
+/// A readout as its label, capitalised and without the unit the registry
+/// name carries, and its value in that unit.
+fn format_readout(name: &str, value: f64) -> (String, String) {
     let short = name.split('(').next().unwrap_or(name).trim();
+    let mut chars = short.chars();
+    let label = match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    };
     let declared = name
         .rsplit_once('(')
         .and_then(|(_, rest)| rest.strip_suffix(')'))
@@ -740,7 +759,7 @@ fn format_readout(name: &str, value: f64) -> String {
         None if name.to_lowercase().contains("freq") => format_si(value, "Hz"),
         None => number(value),
     };
-    format!("{short} {shown}")
+    (label, shown)
 }
 
 /// Wall-clock time of day, local.
@@ -854,10 +873,14 @@ mod tests {
 
     #[test]
     fn readouts_show_human_units() {
-        assert_eq!(format_readout("Z (m)", 12.3e-9), "Z 12.30 nm");
-        assert_eq!(format_readout("Current (A)", 50.1e-12), "Current 50.10 pA");
-        assert_eq!(format_readout("Bias (V)", 0.2), "Bias 200.0 mV");
-        assert_eq!(format_readout("freq shift", -3.2), "freq shift -3.200 Hz");
-        assert_eq!(format_readout("Phase", 1.5), "Phase 1.5");
+        let readout = |name, value| {
+            let (label, shown) = format_readout(name, value);
+            format!("{label} {shown}")
+        };
+        assert_eq!(readout("Z (m)", 12.3e-9), "Z 12.30 nm");
+        assert_eq!(readout("Current (A)", 50.1e-12), "Current 50.10 pA");
+        assert_eq!(readout("Bias (V)", 0.2), "Bias 200.0 mV");
+        assert_eq!(readout("freq shift", -3.2), "Freq shift -3.200 Hz");
+        assert_eq!(readout("Phase", 1.5), "Phase 1.5");
     }
 }
