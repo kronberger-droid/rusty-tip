@@ -162,7 +162,8 @@ pub enum ErrorKind {
     ReadOnly,
     /// Outside the limits, or beyond what the controller can do.
     Refused,
-    /// The session thread did not answer in time; a job is running.
+    /// The session thread did not get to the request in time: a job or
+    /// another client's request held it.
     Busy,
     /// The controller or the link to it failed.
     Controller,
@@ -435,11 +436,18 @@ fn on_thread(
         .compare_exchange(PENDING, ABANDONED, Ordering::SeqCst, Ordering::SeqCst)
         .is_ok()
     {
+        // A job shows in the session's report; anything else holding the
+        // thread is another request, a long read from another client.
+        let holder = if remote.status().state == ConnState::Running {
+            "a job is running"
+        } else {
+            "another request holds it, such as a long read from another client"
+        };
         return Reply::err(
             ErrorKind::Busy,
             format!(
-                "the session did not get to the request within {} s; a job is probably \
-                 running. Nothing was done.",
+                "the session did not get to the request within {} s; {holder}. Nothing was \
+                 done.",
                 busy.as_secs()
             ),
         );
@@ -942,7 +950,14 @@ mod tests {
                 Reply::ok(json!({}))
             },
         );
-        assert_eq!(reply.error.unwrap().kind, ErrorKind::Busy);
+        let error = reply.error.unwrap();
+        assert_eq!(error.kind, ErrorKind::Busy);
+        // Held by another call, not a job, and the message says so.
+        assert!(
+            error.message.contains("another request"),
+            "{}",
+            error.message
+        );
         std::thread::sleep(Duration::from_millis(500));
         assert_eq!(
             ran.load(Ordering::SeqCst),

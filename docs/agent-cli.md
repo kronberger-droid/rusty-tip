@@ -48,8 +48,9 @@ Signal names are the registry's, case-insensitive. Each reading carries the
 `unit` the controller names the signal with, `"A"` for `"Current (A)"`, or
 `null` when the name has none. `status` answers from the session's last
 report, so it answers while a job runs; a `read` needs the controller and
-waits up to 10 s for a running job to let it start before answering `busy`. A
-request answered `busy` is dropped, never run late. One that has started is
+waits up to 10 s for whatever holds the session, a running job or another
+client's request, to let it start before answering `busy`, and the message says
+which of the two it was. A request answered `busy` is dropped, never run late. One that has started is
 waited for, however long past those 10 s it runs, up to 60 s; past that the
 reply is `failed`, since the controller has likely stopped answering. To keep
 reads inside that, `--samples` times the number of signals is at most 20000,
@@ -133,7 +134,7 @@ and their spectrum would show lines that are not there.
 | 3 | `not_connected` | No server, or the session is not connected. |
 | 4 | `read_only` | The command acts and the server is read-only. |
 | 5 | `refused` | Outside the limits, or beyond the controller. |
-| 6 | `busy` | A job held the session past the timeout. |
+| 6 | `busy` | A job or another request held the session past the timeout. |
 | 7 | `controller` | The controller or the link to it failed. |
 
 Logs go to stderr (`--log info` for more), so stdout is only ever the reply. A

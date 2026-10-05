@@ -336,6 +336,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`busy` blamed a job for whatever held the session.** A long read from
+  another client holds the session thread as a job does; the message now
+  says which of the two it was.
 - **Z limits read high first.** `ZControllerParams::limits_m` followed
   Nanonis, high then low, where everything else in rusty-tip, and the form
   that shows it as "a to b", writes a range low then high. It is low then
