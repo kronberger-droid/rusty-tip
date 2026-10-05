@@ -221,18 +221,35 @@ impl NanonisController {
         reader: &BufferedTCPReader,
         data_position: usize,
         num_samples: usize,
-        mut cursor: Instant,
+        cursor: Instant,
     ) -> Result<(Vec<f32>, Instant)> {
+        let (mut columns, cursor) =
+            Self::collect_tcp_columns(reader, &[data_position], num_samples, cursor)?;
+        Ok((columns.remove(0), cursor))
+    }
+
+    /// [`collect_tcp_samples`](Self::collect_tcp_samples) for several data
+    /// positions at once: one column per position, filled from the same
+    /// frames, so sample `i` of every column was taken at the same moment.
+    /// A frame counts only if it carries every position.
+    fn collect_tcp_columns(
+        reader: &BufferedTCPReader,
+        data_positions: &[usize],
+        num_samples: usize,
+        mut cursor: Instant,
+    ) -> Result<(Vec<Vec<f32>>, Instant)> {
         let timeout_secs = 5 + (num_samples as u64 / 100);
         let timeout = Duration::from_secs(timeout_secs);
         let start = std::time::Instant::now();
-        let mut collected: Vec<f32> = Vec::with_capacity(num_samples);
+        let mut columns: Vec<Vec<f32>> =
+            vec![Vec::with_capacity(num_samples); data_positions.len()];
+        let collected = |columns: &[Vec<f32>]| columns.first().map_or(0, Vec::len);
         // Tracked so an empty result can say whether frames were missing
         // entirely or merely too narrow for the requested channel position.
         let mut frames_seen = 0usize;
         let mut frame_width: Option<usize> = None;
 
-        while collected.len() < num_samples && start.elapsed() < timeout {
+        while collected(&columns) < num_samples && start.elapsed() < timeout {
             // Check if the stream reader thread died before waiting the
             // full timeout — provides an immediate, descriptive error.
             if !reader.is_buffering()
@@ -254,23 +271,22 @@ impl NanonisController {
                 cursor = frame.timestamp + Duration::from_nanos(1);
                 frames_seen += 1;
                 frame_width = Some(frame.signal_frame.data.len());
-                if let Some(&value) = frame.signal_frame.data.get(data_position) {
-                    collected.push(value);
-                    if collected.len() >= num_samples {
-                        break;
-                    }
+                if push_frame(&frame.signal_frame.data, data_positions, &mut columns)
+                    && collected(&columns) >= num_samples
+                {
+                    break;
                 }
             }
-            if collected.len() < num_samples {
+            if collected(&columns) < num_samples {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
 
-        if collected.is_empty() {
+        if collected(&columns) == 0 {
             return Err(SpmError::Timeout(match frame_width {
                 Some(width) => format!(
                     "TCP stream delivered {frames_seen} frames of {width} channels within \
-                     timeout, none carrying data position {data_position}; the logger is \
+                     timeout, none carrying data positions {data_positions:?}; the logger is \
                      streaming a different channel set than was configured"
                 ),
                 None => format!(
@@ -283,15 +299,15 @@ impl NanonisController {
             }));
         }
 
-        if collected.len() < num_samples {
+        if collected(&columns) < num_samples {
             log::warn!(
                 "TCP sample collection: requested {} samples but only got {} within timeout",
                 num_samples,
-                collected.len()
+                collected(&columns)
             );
         }
 
-        Ok((collected, cursor))
+        Ok((columns, cursor))
     }
 
     /// Configure and start the TCP logger data stream for every signal in
@@ -1374,6 +1390,36 @@ impl SpmController for NanonisController {
             Some(cursor),
         ))
     }
+
+    fn read_signals_samples(
+        &mut self,
+        indices: &[SignalIndex],
+        num_samples: usize,
+    ) -> Result<Vec<Vec<f64>>> {
+        if num_samples == 0 {
+            return Err(SpmError::Protocol(
+                "read_signals_samples: num_samples must be > 0".into(),
+            ));
+        }
+        // All on the stream: one pass over its frames for every signal.
+        // Otherwise each in turn, as `read_signal_samples` would.
+        let positions: Option<Vec<usize>> = indices
+            .iter()
+            .map(|index| self.signal_to_data_position.get(index).copied())
+            .collect();
+        let (Some(reader), Some(positions)) = (&self.tcp_reader, positions) else {
+            return indices
+                .iter()
+                .map(|&index| self.read_signal_samples(index, num_samples))
+                .collect();
+        };
+        let (columns, _) =
+            Self::collect_tcp_columns(reader, &positions, num_samples, Instant::now())?;
+        Ok(columns
+            .into_iter()
+            .map(|column| column.into_iter().map(f64::from).collect())
+            .collect())
+    }
 }
 
 /// Turn buffered frames into columns keyed by signal index, timed relative
@@ -1461,6 +1507,20 @@ fn on_off_word(on: bool) -> &'static str {
     if on { "on" } else { "off" }
 }
 
+/// Add one frame's value at each of `positions` to its column, or nothing
+/// when the frame is too narrow for any of them, so the columns stay the
+/// same length and sample `i` of each is from the same frame. Whether the
+/// frame was taken.
+fn push_frame(data: &[f32], positions: &[usize], columns: &mut [Vec<f32>]) -> bool {
+    if !positions.iter().all(|&p| p < data.len()) {
+        return false;
+    }
+    for (column, &p) in columns.iter_mut().zip(positions) {
+        column.push(data[p]);
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1519,6 +1579,19 @@ mod tests {
         assert_eq!(snap.signals, vec![30, 0]);
         assert_eq!(snap.columns, vec![vec![1.0, 2.0], vec![10.0, 20.0]]);
         assert_eq!(snap.t_s, vec![-0.5, 0.0]);
+    }
+
+    /// Several signals come from the same frames, in the order asked, and a
+    /// frame too narrow for one of them is skipped for all, so the columns
+    /// stay aligned in time.
+    #[test]
+    fn signals_sampled_together_come_from_the_same_frames() {
+        let mut columns = vec![Vec::new(), Vec::new()];
+        let positions = [2, 0];
+        assert!(push_frame(&[1.0, 10.0, 100.0], &positions, &mut columns));
+        assert!(!push_frame(&[2.0, 20.0], &positions, &mut columns));
+        assert!(push_frame(&[3.0, 30.0, 300.0], &positions, &mut columns));
+        assert_eq!(columns, vec![vec![100.0, 300.0], vec![1.0, 3.0]]);
     }
 
     #[test]

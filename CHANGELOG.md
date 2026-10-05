@@ -336,6 +336,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A sampled read of several signals took them one after another.**
+  `read a b c --samples n` collected `n` stream frames per signal in turn,
+  so the readings were of different moments and the read took three times
+  as long. Streamed signals now come from the same frames, through
+  `SpmController::read_signals_samples`, whose default still reads in turn
+  for a controller without a stream.
 - **`psd`'s RMS disagreed with its spectrum.** It was taken over the whole
   series about one mean, while each segment of the spectrum has its own
   mean removed, so drift slower than a segment counted in one and not the

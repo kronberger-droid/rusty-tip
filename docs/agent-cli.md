@@ -49,12 +49,16 @@ Signal names are the registry's, case-insensitive. Each reading carries the
 `null` when the name has none. `status` answers from the session's last
 report, so it answers while a job runs; a `read` needs the controller and
 waits up to 10 s for whatever holds the session, a running job or another
-client's request, to let it start before answering `busy`, and the message says
-which of the two it was. A request answered `busy` is dropped, never run late. One that has started is
-waited for, however long past those 10 s it runs, up to 60 s; past that the
-reply is `failed`, since the controller has likely stopped answering. To keep
-reads inside that, `--samples` times the number of signals is at most 20000,
-20 s at the usual 1 kHz stream.
+client's request, to let it start before answering `busy`, and the message
+says which of the two it was. A request answered `busy` is dropped, never run
+late. One that has started is waited for, however long past those 10 s it
+runs, up to 60 s; past that the reply is `failed`, since the controller has
+likely stopped answering.
+
+With `--samples`, signals on the data stream are read from the same frames:
+their readings are of one moment, and the read lasts as long as one signal's,
+20 s for 20000 samples at the usual 1 kHz. A signal off the stream is polled,
+one after another. `--samples` times the number of signals is at most 20000.
 
 Over the socket the same commands are JSON, one request per line and one reply
 per line, as many as you like on one connection:

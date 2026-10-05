@@ -641,24 +641,32 @@ impl Session {
                         })
                         .collect())
                 }
-                Some(n) => names
-                    .iter()
-                    .zip(&signals)
-                    .map(|(asked, signal)| {
-                        let values = controller.read_signal_samples(signal.signal_index(), n)?;
-                        // The same statistics the stable read judges by.
-                        let (mean, std_dev, _) = compute_stability_metrics(&values);
-                        Ok(SignalReading {
-                            asked: asked.clone(),
-                            name: signal.name.clone(),
-                            index: signal.index,
-                            value: mean,
-                            unit: unit_of(&signal.name),
-                            std_dev: Some(std_dev),
-                            samples: values.len(),
+                Some(n) => {
+                    // All signals over the same stretch of the stream, so
+                    // the readings are of one moment and the read lasts as
+                    // long as one signal's would.
+                    let indices: Vec<SignalIndex> =
+                        signals.iter().map(|s| s.signal_index()).collect();
+                    let columns = controller.read_signals_samples(&indices, n)?;
+                    Ok(names
+                        .iter()
+                        .zip(&signals)
+                        .zip(columns)
+                        .map(|((asked, signal), values)| {
+                            // The same statistics the stable read judges by.
+                            let (mean, std_dev, _) = compute_stability_metrics(&values);
+                            SignalReading {
+                                asked: asked.clone(),
+                                name: signal.name.clone(),
+                                index: signal.index,
+                                value: mean,
+                                unit: unit_of(&signal.name),
+                                std_dev: Some(std_dev),
+                                samples: values.len(),
+                            }
                         })
-                    })
-                    .collect(),
+                        .collect())
+                }
             }
         };
         let result = read(&mut *conn.controller);
