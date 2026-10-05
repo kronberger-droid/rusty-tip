@@ -407,7 +407,8 @@ impl ControllersTool {
             .and_then(|(_, data)| serde_json::from_value::<OperatingState>(data.clone()).ok());
         if let Some(state) = captured {
             ui.horizontal_wrapped(|ui| {
-                ui.label("Read");
+                ui.label("Last read")
+                    .on_hover_text("What the controller held after the last capture or apply");
                 ui.label(
                     egui::RichText::new(state_summary(
                         state.bias_v,
