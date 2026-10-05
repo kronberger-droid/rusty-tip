@@ -742,6 +742,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The workbench's log directory is relative by default; the reply has
+    /// to name the file so a client in another directory can open it.
+    #[test]
+    fn a_frame_path_is_absolute_under_a_relative_log_dir() {
+        let dir = std::path::PathBuf::from(format!(
+            "target/rusty-tip-relative-frames-{}",
+            std::process::id()
+        ));
+        let mut session = Session::new(Some(dir.clone()));
+        session.connect(&Backend::Mock).unwrap();
+        let reply = execute(
+            Target::Local(&mut session),
+            &Request::Frame {
+                signal: "current".into(),
+            },
+            &Serving::default(),
+        );
+        let file = std::path::PathBuf::from(reply.result.unwrap()["file"].as_str().unwrap());
+        assert!(file.is_absolute(), "{}", file.display());
+        assert!(file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Asking for a signal the scan does not record says which it does,
     /// rather than passing the controller's refusal on as its fault.
     #[test]
