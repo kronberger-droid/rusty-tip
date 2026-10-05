@@ -7,7 +7,9 @@ use nanonis_rs::{
     Position,
     motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D},
     oscilloscope::{OsciData, TriggerConfig},
-    scan::{ScanAction, ScanConfig, ScanDirection, ScanLineEnd, ScanProps, ScanPropsBuilder},
+    scan::{
+        ScanAction, ScanConfig, ScanDirection, ScanFrame, ScanLineEnd, ScanProps, ScanPropsBuilder,
+    },
     tcplog::TCPLogStatus,
     tip_recovery::TipShaperConfig,
 };
@@ -313,6 +315,13 @@ pub trait SpmController: Send {
     fn scan_props_set(&mut self, props: ScanPropsBuilder) -> Result<()>;
     fn scan_speed_get(&mut self) -> Result<ScanConfig>;
     fn scan_speed_set(&mut self, config: ScanConfig) -> Result<()>;
+
+    /// Where the scan frame sits: its centre, width, height and rotation.
+    fn scan_frame_get(&mut self) -> Result<ScanFrame> {
+        Err(SpmError::Unsupported(
+            "this controller cannot report the scan frame".into(),
+        ))
+    }
 
     /// Which signals the scan records, and the frame resolution.
     fn scan_buffer_get(&mut self) -> Result<ScanBuffer>;

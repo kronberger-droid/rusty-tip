@@ -6,7 +6,7 @@ use nanonis_rs::{
     NanonisClient, Position,
     motor::{MotorDirection, MotorDisplacement, MotorGroup, MovementMode, Position3D},
     oscilloscope::OsciData,
-    scan::{ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder},
+    scan::{ScanAction, ScanConfig, ScanDirection, ScanFrame, ScanProps, ScanPropsBuilder},
     tip_recovery::TipShaperConfig,
 };
 
@@ -1095,6 +1095,10 @@ impl SpmController for NanonisController {
 
     fn scan_speed_set(&mut self, config: ScanConfig) -> Result<()> {
         Ok(self.client.scan_config_set(config)?)
+    }
+
+    fn scan_frame_get(&mut self) -> Result<ScanFrame> {
+        Ok(self.client.scan_frame_get()?)
     }
 
     fn scan_buffer_get(&mut self) -> Result<ScanBuffer> {

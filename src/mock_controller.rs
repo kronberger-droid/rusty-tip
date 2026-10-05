@@ -62,7 +62,8 @@ use nanonis_rs::Position;
 use nanonis_rs::motor::{MotorDirection, MotorDisplacement, MovementMode, Position3D};
 use nanonis_rs::oscilloscope::OsciData;
 use nanonis_rs::scan::{
-    AutopasteMode, AutosaveMode, ScanAction, ScanConfig, ScanDirection, ScanProps, ScanPropsBuilder,
+    AutopasteMode, AutosaveMode, ScanAction, ScanConfig, ScanDirection, ScanFrame, ScanProps,
+    ScanPropsBuilder,
 };
 use nanonis_rs::tcplog::TCPLogStatus;
 use nanonis_rs::tip_recovery::TipShaperConfig;
@@ -339,6 +340,7 @@ pub struct MockController {
     capabilities: HashSet<Capability>,
     position: Position,
     scan_config: ScanConfig,
+    scan_frame: ScanFrame,
     /// How many `auto_approach_running` polls each approach stays "running"
     /// for. Zero means an approach is over as soon as it starts.
     approach_polls: usize,
@@ -997,6 +999,11 @@ impl SpmController for MockController {
         Ok(())
     }
 
+    fn scan_frame_get(&mut self) -> Result<ScanFrame> {
+        self.enter("scan_frame_get")?;
+        Ok(self.scan_frame)
+    }
+
     fn scan_buffer_get(&mut self) -> Result<ScanBuffer> {
         self.enter("scan_buffer_get")?;
         Ok(self.obs.lock().scan_buffer.clone())
@@ -1029,8 +1036,22 @@ impl SpmController for MockController {
         forward: bool,
     ) -> Result<(String, Vec<Vec<f32>>, bool)> {
         self.enter("scan_frame_data_grab")?;
-        // 2x2 flat frame is enough for routines that only check shape.
-        Ok(("mock_channel".into(), vec![vec![0.0; 2]; 2], forward))
+        // A frame the size of the buffer: a tilt along the fast axis and
+        // a retrace sitting 1 pm above the trace, so whatever reads the
+        // frame has a slope to remove and a difference to find.
+        let (pixels, lines) = {
+            let buffer = &self.obs.lock().scan_buffer;
+            (buffer.pixels.max(1) as usize, buffer.lines.max(1) as usize)
+        };
+        let offset = if forward { 0.0 } else { 1e-12 };
+        let frame = (0..lines)
+            .map(|_| {
+                (0..pixels)
+                    .map(|c| 1e-10 * c as f32 / pixels as f32 + offset)
+                    .collect()
+            })
+            .collect();
+        Ok(("mock_channel".into(), frame, forward))
     }
 
     // -- Drift compensation --
@@ -1308,6 +1329,7 @@ impl MockControllerBuilder {
             capabilities: self.capabilities,
             position: Position::new(0.0, 0.0),
             scan_config: mock_scan_config(),
+            scan_frame: ScanFrame::new(Position::new(0.0, 0.0), 50e-9, 50e-9, 0.0),
             approach_polls: self.approach_polls,
             approach_polls_left: 0,
             z_drift: self.z_drift,
