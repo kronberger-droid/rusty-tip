@@ -167,6 +167,38 @@
       }
     },
     {
+      "kind": "tip_prep/config_reloaded",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The run switched to a config handed to it while running, between two\npulse cycles.",
+        "properties": {
+          "after_cycle": {
+            "description": "The last cycle run on the config before, 0 before the first.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "config": {
+            "description": "The config as applied, the run's own setup kept."
+          },
+          "kept": {
+            "description": "Paths of the fields the sent config changed but the run kept, as\nthey describe its setup. They apply from the next run.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "after_cycle",
+          "config",
+          "kept"
+        ],
+        "title": "ConfigReloadedEvent",
+        "type": "object"
+      }
+    },
+    {
       "kind": "controller/applied",
       "schema": {
         "$defs": {

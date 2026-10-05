@@ -17,7 +17,9 @@ use rusty_tip::experiment_log::{LogEvent, ToolSchema};
 use rusty_tip::routine::{Outcome, run_routine};
 use rusty_tip::session::{Job, JobCx, NanonisBackend};
 use rusty_tip::spm_error::SpmError;
-use rusty_tip::tip_prep::{CycleEvent, MaxPulseEvent, TipPrep, TipPrepSignals};
+use rusty_tip::tip_prep::{
+    ConfigReload, ConfigReloadedEvent, CycleEvent, MaxPulseEvent, TipPrep, TipPrepSignals,
+};
 use serde::Deserialize;
 
 use super::{SetupCx, Tool, load_toml, save_toml};
@@ -30,6 +32,8 @@ use crate::widgets::{Note, Palette, note, path_field};
 /// Tip prep as a [`Job`]: what the session runs.
 pub struct TipPrepJob {
     pub config: AppConfig,
+    /// The Run panel's reload button sends into this.
+    pub reload: ConfigReload,
 }
 
 impl Job for TipPrepJob {
@@ -47,8 +51,27 @@ impl Job for TipPrepJob {
 
     fn run(&mut self, cx: JobCx<'_>) -> Result<Outcome, SpmError> {
         let signals = TipPrepSignals::resolve(cx.registry)?;
-        let mut routine = TipPrep::new(&self.config, signals.freq_shift, signals.current);
+        let mut routine = TipPrep::new(&self.config, signals.freq_shift, signals.current)
+            .with_reload(self.reload.clone());
+        let _live = Live::open(&self.reload);
         run_routine(cx.controller, cx.events, cx.shutdown, &mut routine)
+    }
+}
+
+/// The reload mailbox marked live for as long as this lives, a panic
+/// included.
+struct Live<'a>(&'a ConfigReload);
+
+impl<'a> Live<'a> {
+    fn open(reload: &'a ConfigReload) -> Self {
+        reload.set_live(true);
+        Self(reload)
+    }
+}
+
+impl Drop for Live<'_> {
+    fn drop(&mut self) {
+        self.0.set_live(false);
     }
 }
 
@@ -101,6 +124,10 @@ pub struct TipPrepTool {
     /// file at which modification time they were read from.
     z_presets: Vec<Preset>,
     presets_read: Option<(PathBuf, Option<std::time::SystemTime>)>,
+    /// Shared with every job this tool starts; live while one runs.
+    reload: ConfigReload,
+    /// What the last press of the Run panel's reload button came to.
+    reload_note: Option<Note>,
 }
 
 impl Default for TipPrepTool {
@@ -114,6 +141,8 @@ impl Default for TipPrepTool {
             message: None,
             z_presets: Vec::new(),
             presets_read: None,
+            reload: ConfigReload::new(),
+            reload_note: None,
         }
     }
 }
@@ -170,11 +199,78 @@ impl TipPrepTool {
         });
     }
 
-    /// The sharp window as the form has it now, for the plot.
-    fn sharp_bounds(&self) -> Option<(f64, f64)> {
-        let b = self.value.get("tip_prep")?.get("sharp_tip_bounds")?;
+    /// The sharp window the run is judging on, for the plot: its last
+    /// reload's, else the one it started with, else the form's.
+    fn sharp_bounds(&self, view: &RunView) -> Option<(f64, f64)> {
+        let config = last_reload(view)
+            .map(|r| r.config)
+            .or_else(|| view.header.as_ref().map(|h| h.config.clone()))
+            .filter(|c| !c.is_null());
+        let b = config.as_ref().unwrap_or(&self.value);
+        let b = b.get("tip_prep")?.get("sharp_tip_bounds")?;
         Some((b.get(0)?.as_f64()?, b.get(1)?.as_f64()?))
     }
+
+    /// Hand the Setup form to the running run, which takes it before its
+    /// next cycle.
+    fn send_reload(&mut self) {
+        self.reload_note = match self.parse() {
+            Ok(config) => {
+                self.reload.send(config);
+                None
+            }
+            Err(e) => Some(Note::err(format!("Not sent: {e}"))),
+        };
+    }
+
+    /// The reload button and what became of the last press.
+    fn render_reload(&mut self, ui: &mut egui::Ui, view: &RunView) {
+        ui.horizontal_wrapped(|ui| {
+            let live = self.reload.is_live();
+            if ui
+                .add_enabled(live, egui::Button::new("Reload config"))
+                .on_hover_text(
+                    "Send the Setup form to the run. It switches before its next pulse, \
+                     never during a stability check, and writes nothing to the controller: \
+                     the setpoint, initial bias, Z preset, safe-tip threshold and \
+                     connection tables stay as the run started. Edited the file instead? \
+                     Press Reload on Setup first.",
+                )
+                .on_disabled_hover_text("Only while a tip-prep run is going")
+                .clicked()
+            {
+                self.send_reload();
+            }
+            if live && self.reload.is_pending() {
+                ui.label("waiting for the current cycle to end");
+            } else if let Some(r) = last_reload(view) {
+                ui.label(format!("reloaded after cycle {}", r.after_cycle));
+                if !r.kept.is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!("kept until next run: {}", r.kept.join(", ")))
+                            .color(Palette::for_theme(ui.visuals().dark_mode).bounds),
+                    );
+                }
+            }
+        });
+        note(ui, &self.reload_note);
+    }
+}
+
+/// The voltage of the last pulse fired, cycle or max, sign included.
+fn fired_pulse(view: &RunView) -> Option<f64> {
+    view.last_started
+        .get("bias_pulse")?
+        .1
+        .get("voltage")?
+        .as_f64()
+}
+
+/// The run's last switch to a config sent while it ran.
+fn last_reload(view: &RunView) -> Option<ConfigReloadedEvent> {
+    view.custom(ConfigReloadedEvent::KIND)
+        .last()
+        .and_then(|(_, data)| ConfigReloadedEvent::deserialize(data).ok())
 }
 
 impl TipPrepTool {
@@ -344,7 +440,10 @@ impl Tool for TipPrepTool {
 
     fn job(&self) -> Result<Box<dyn Job>, String> {
         let config = self.parse()?;
-        Ok(Box::new(TipPrepJob { config }))
+        Ok(Box::new(TipPrepJob {
+            config,
+            reload: self.reload.clone(),
+        }))
     }
 
     fn panel(&mut self, ui: &mut egui::Ui, view: &RunView) {
@@ -362,6 +461,8 @@ impl Tool for TipPrepTool {
         };
         let run = by_cycle(view);
 
+        self.render_reload(ui, view);
+        ui.add_space(4.0);
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::Grid::new("tip_prep_status")
                 .num_columns(4)
@@ -389,14 +490,18 @@ impl Tool for TipPrepTool {
                     ui.end_row();
 
                     ui.label("Pulse voltage:");
+                    // The pulse action as it fires: the cycle event only
+                    // follows after the reposition and the read, which
+                    // left the field empty all through cycle 1.
                     ui.label(
-                        run.last_pulse()
+                        fired_pulse(view)
+                            .or_else(|| run.last_pulse())
                             .map(|v| format_si(v, "V"))
                             .unwrap_or_else(|| "-".into()),
                     );
                     ui.label("Sharp band:");
                     ui.label(
-                        self.sharp_bounds()
+                        self.sharp_bounds(view)
                             .map(|(lo, hi)| format!("{} to {} Hz", number(lo), number(hi)))
                             .unwrap_or_else(|| "-".into()),
                     );
@@ -422,7 +527,7 @@ impl Tool for TipPrepTool {
             .color(colors.first)
             .filled(false)
             .radius(MARKER_RADIUS + 1.0);
-        let bounds = self.sharp_bounds();
+        let bounds = self.sharp_bounds(view);
         let mut plot = cycle_plot("tip_prep_freq_shift", "Hz");
         if let Some((lower, upper)) = bounds {
             plot = plot.include_y(lower).include_y(upper);
@@ -729,6 +834,21 @@ mod tests {
         assert_eq!(run.pulses, vec![[1.0, 4.0], [2.0, 5.0], [3.0, 4.5]]);
         assert_eq!(run.max_pulses, vec![[2.5, 8.0]]);
         assert_eq!(run.last_pulse(), Some(4.5));
+    }
+
+    /// The pulse shows as soon as it fires, before the cycle that fired it
+    /// has read and logged its event.
+    #[test]
+    fn the_pulse_shows_before_its_cycle_event() {
+        let mut view = RunView::default();
+        assert_eq!(fired_pulse(&view), None);
+        view.apply_event(rusty_tip::event::Event::action_started(
+            "bias_pulse",
+            serde_json::json!({ "voltage": -4.5, "duration_ms": 50 }),
+            1,
+        ));
+        assert_eq!(fired_pulse(&view), Some(-4.5));
+        assert!(by_cycle(&view).pulses.is_empty());
     }
 
     /// The readings that are not a cycle's own sit between the cycles: the

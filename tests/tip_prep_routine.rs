@@ -19,9 +19,13 @@ use rusty_tip::controllers::{
     TunedAt, ZControllerParams,
 };
 use rusty_tip::event::{Event, EventAccumulator, EventBus, Observer};
+use rusty_tip::experiment_log::LogEvent;
 use rusty_tip::mock_controller::{FaultKind, MockController, models};
+use rusty_tip::routine::run_routine;
 use rusty_tip::shutdown::ShutdownFlag;
-use rusty_tip::tip_prep::{Outcome, TipPrepParams, run_tip_prep};
+use rusty_tip::tip_prep::{
+    ConfigReload, ConfigReloadedEvent, Outcome, TipPrep, TipPrepParams, run_tip_prep,
+};
 
 const FREQ_SHIFT_INDEX: SignalIndex = SignalIndex(2);
 /// `Current (A)` in the mock's signal table.
@@ -245,6 +249,75 @@ fn blunt_tip_hits_cycle_limit() {
     let obs = obs.lock();
     assert_eq!(obs.pulses.len(), 3, "one pulse per cycle for 3 cycles");
     assert!(obs.torn_down);
+}
+
+/// Sends a config into the run once the first cycle is logged, the way
+/// the workbench's reload button does while a run is going.
+struct ReloadAfterFirstCycle {
+    reload: ConfigReload,
+    config: StdMutex<Option<AppConfig>>,
+}
+
+impl Observer for ReloadAfterFirstCycle {
+    fn on_event(&self, event: &Event) {
+        if let Event::Custom { kind, .. } = event
+            && kind == "tip_prep/cycle"
+            && let Some(config) = self.config.lock().unwrap().take()
+        {
+            self.reload.send(config);
+        }
+    }
+}
+
+/// A config sent mid-run lands between cycles: a lowered cycle limit ends
+/// the run before another pulse, and the setpoint the run approached on is
+/// kept and reported as kept.
+#[test]
+fn a_config_sent_mid_run_lands_at_the_next_cycle() {
+    let mut cfg = fast_config();
+    cfg.tip_prep.max_cycles = Some(10);
+    let mut sent = cfg.clone();
+    sent.tip_prep.max_cycles = Some(1);
+    sent.tip_prep.initial_z_setpoint_a = cfg.tip_prep.initial_z_setpoint_a * 2.0;
+
+    let mut mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT_INDEX)
+        .freq_shift(models::always(-40.0))
+        .build();
+    let obs = mock.observations();
+    let reload = ConfigReload::new();
+    let mut events = EventBus::new();
+    let recorder = RecordingObserver::default();
+    events.add_observer(Box::new(recorder.clone()));
+    events.add_observer(Box::new(ReloadAfterFirstCycle {
+        reload: reload.clone(),
+        config: StdMutex::new(Some(sent)),
+    }));
+
+    let mut routine =
+        TipPrep::new(&cfg, FREQ_SHIFT_INDEX, CURRENT_INDEX).with_reload(reload.clone());
+    let outcome = run_routine(&mut mock, &events, &ShutdownFlag::new(), &mut routine)
+        .expect("routine should not error");
+
+    assert_eq!(outcome, Outcome::CycleLimit(1));
+    assert_eq!(obs.lock().pulses.len(), 1, "no pulse after the reload");
+    let events = recorder.events.lock().unwrap();
+    let reloaded: Vec<ConfigReloadedEvent> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Custom { kind, data, .. } if kind == ConfigReloadedEvent::KIND => {
+                serde_json::from_value(data.clone()).ok()
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reloaded.len(), 1);
+    assert_eq!(reloaded[0].after_cycle, 1);
+    assert_eq!(reloaded[0].kept, vec!["tip_prep.initial_z_setpoint_a"]);
+    assert_eq!(
+        reloaded[0].config["tip_prep"]["initial_z_setpoint_a"].as_f64(),
+        Some(cfg.tip_prep.initial_z_setpoint_a)
+    );
 }
 
 /// The GUI plots the voltage from the `tip_prep/cycle` event, so it must

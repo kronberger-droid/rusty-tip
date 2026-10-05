@@ -48,6 +48,15 @@ Each cycle, in order:
 The loop ends by cycle limit, time budget, Ctrl+C (all reported as distinct
 outcomes, not errors), or by passing the checks below.
 
+A config sent while the run is going (the workbench's Reload config) is
+taken between two cycles, before the budgets are checked for the next, so
+a lowered limit ends the run without another pulse. Never inside a
+confirmation or stability check, and nothing is written to the controller
+for it: the initial bias and setpoint, the Z preset, the safe-tip threshold
+and the connection tables stay as the run started and apply from the next
+run. A changed pulse method starts over from its own first voltage. The
+log records each switch as `tip_prep/config_reloaded`.
+
 ## Confirmation
 
 Sharp once could be luck: a fortunate spot, a metastable apex. The routine
