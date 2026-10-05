@@ -10,6 +10,12 @@
 //! The frame's centre is not part of it: applying a point never moves the
 //! scan window across the sample. Points live in their own TOML file, apart
 //! from the presets, so saving one never rewrites the other.
+//!
+//! An apply checks what it can before writing anything: no scan running,
+//! every Z loop's input defined. A loop write the controller refuses after
+//! that, a PLL bandwidth out of range say, stops it there: the scan
+//! settings and the loops before it are written, the loops after it and
+//! the bias are not, and no `operating_point/applied` is reported.
 
 use std::path::PathBuf;
 
@@ -24,6 +30,7 @@ use crate::routine::{Outcome, require};
 use crate::session::{Job, JobCx};
 use crate::spm_controller::{Capability, ScanBuffer, SpmController};
 use crate::spm_error::SpmError;
+use crate::utils::shortest;
 
 /// Where operating points are kept unless configured otherwise: beside the
 /// presets, in a file of their own.
@@ -257,32 +264,26 @@ impl OperatingPointStore {
     }
 }
 
-/// An f32 from the controller as the f64 its shortest decimal form names,
-/// so a saved file reads `5e-8`, not `5.000000058430487e-8`.
-fn short(value: f32) -> f64 {
-    value.to_string().parse().unwrap_or(f64::from(value))
-}
-
 fn read_scan(controller: &mut dyn SpmController) -> Result<ScanSettings, SpmError> {
     let frame = controller.scan_frame_get()?;
     let buffer = controller.scan_buffer_get()?;
     let speed = controller.scan_speed_get()?;
     Ok(ScanSettings {
-        width_m: short(frame.width_m),
-        height_m: short(frame.height_m),
-        angle_deg: short(frame.angle_deg),
+        width_m: shortest(frame.width_m),
+        height_m: shortest(frame.height_m),
+        angle_deg: shortest(frame.angle_deg),
         pixels: buffer.pixels,
         lines: buffer.lines,
         speed: ScanSpeed {
-            forward_m_s: short(speed.forward_linear_speed_m_s),
-            backward_m_s: short(speed.backward_linear_speed_m_s),
-            forward_time_per_line_s: short(speed.forward_time_per_line_s),
-            backward_time_per_line_s: short(speed.backward_time_per_line_s),
+            forward_m_s: shortest(speed.forward_linear_speed_m_s),
+            backward_m_s: shortest(speed.backward_linear_speed_m_s),
+            forward_time_per_line_s: shortest(speed.forward_time_per_line_s),
+            backward_time_per_line_s: shortest(speed.backward_time_per_line_s),
             keep: match speed.keep_parameter_constant {
                 0 => KeepConstant::LinearSpeed,
                 _ => KeepConstant::TimePerLine,
             },
-            backward_ratio: short(speed.speed_ratio),
+            backward_ratio: shortest(speed.speed_ratio),
         },
     })
 }
