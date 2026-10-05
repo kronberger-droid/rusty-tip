@@ -193,10 +193,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Tip-prep pulses are bars from 0 V.** The pulse-voltage plot draws each
-  cycle's pulse as a bar from a 0 V line instead of a point on a line, and a
-  failed stability check's max pulses as narrower bars between the cycles,
-  so sign and size read at a glance. The frequency-shift plot is unchanged.
+- **Tip-prep pulses are bars from 0 V.** The pulse-voltage plot draws every
+  pulse as a bar from a 0 V line instead of a point on a line, so sign and
+  size read at a glance. A failed stability check's pulse is no longer a
+  series of its own: it is a bar like the rest, between the cycles it came
+  after. The frequency-shift plot is unchanged.
+- **The workbench in base16 colours.** The desktop's base16 scheme is one
+  palette, `widgets::SCHEME`, and dark mode takes it whole: backgrounds,
+  text, selection, links, warnings and errors, and the plots' blue, amber
+  and olive in place of light blue, bright orange and neon green. Light mode
+  keeps egui's theme, since a dark scheme's shades do not flip into a light
+  one, and its plots take the same hues darker. Buttons keep their own
+  colours.
 - **The drift panel puts its plot first.** The burst plot sits above the
   status, results and burst table, and is taller.
 - **The workbench reads at arm's length.** Bigger buttons and rows

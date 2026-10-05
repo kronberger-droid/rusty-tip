@@ -9,6 +9,77 @@ use egui_plot::{HLine, Line, LineStyle, Plot, PlotPoint, PlotPoints};
 
 use crate::units::number;
 
+/// A base16 colour scheme: eight shades from background to foreground,
+/// then eight accents, by the slots base16 names them.
+#[allow(
+    dead_code,
+    reason = "the whole scheme, so a new series picks its accent from it"
+)]
+pub struct Base16 {
+    /// Default background.
+    pub base00: egui::Color32,
+    /// Lighter background: bars, fields.
+    pub base01: egui::Color32,
+    /// Selection background.
+    pub base02: egui::Color32,
+    /// Comments, invisibles.
+    pub base03: egui::Color32,
+    /// Dark foreground.
+    pub base04: egui::Color32,
+    /// Default foreground.
+    pub base05: egui::Color32,
+    /// Light foreground.
+    pub base06: egui::Color32,
+    /// Lightest background.
+    pub base07: egui::Color32,
+    /// Red: errors.
+    pub base08: egui::Color32,
+    /// Urgent; red again in this scheme.
+    pub base09: egui::Color32,
+    /// Yellow: warnings.
+    pub base0a: egui::Color32,
+    /// Green.
+    pub base0b: egui::Color32,
+    /// Cyan.
+    pub base0c: egui::Color32,
+    /// Blue.
+    pub base0d: egui::Color32,
+    /// Magenta.
+    pub base0e: egui::Color32,
+    /// Brown, an accent.
+    pub base0f: egui::Color32,
+}
+
+/// The desktop's scheme, a dark one, as the NixOS config's
+/// `theming/base16-scheme.nix` sets it. The window takes it in dark mode.
+/// A dark scheme's accents are picked against a dark background and its
+/// shades do not flip into a light theme, so light mode keeps egui's own
+/// and its plots take these hues darker (see [`Palette::for_theme`]).
+pub const SCHEME: Base16 = Base16 {
+    base00: egui::Color32::from_rgb(0x1e, 0x1e, 0x1e),
+    base01: egui::Color32::from_rgb(0x2c, 0x2f, 0x33),
+    base02: egui::Color32::from_rgb(0x37, 0x3c, 0x45),
+    base03: egui::Color32::from_rgb(0x55, 0x55, 0x55),
+    base04: egui::Color32::from_rgb(0xc0, 0xc5, 0xce),
+    base05: egui::Color32::from_rgb(0xdf, 0xe1, 0xe8),
+    base06: egui::Color32::from_rgb(0xef, 0xf0, 0xf1),
+    base07: egui::Color32::from_rgb(0xf5, 0xf5, 0xf5),
+    base08: egui::Color32::from_rgb(0xac, 0x41, 0x42),
+    base09: egui::Color32::from_rgb(0xac, 0x41, 0x42),
+    base0a: egui::Color32::from_rgb(0xe5, 0xb5, 0x66),
+    base0b: egui::Color32::from_rgb(0x7e, 0x8d, 0x50),
+    base0c: egui::Color32::from_rgb(0x6f, 0xb3, 0xad),
+    base0d: egui::Color32::from_rgb(0x6c, 0x99, 0xba),
+    base0e: egui::Color32::from_rgb(0x9e, 0x4e, 0x85),
+    base0f: egui::Color32::from_rgb(0x8a, 0x81, 0x77),
+};
+
+/// `color` with alpha `a`, unmultiplied.
+fn with_alpha(color: egui::Color32, a: u8) -> egui::Color32 {
+    let [r, g, b, _] = color.to_array();
+    egui::Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
 /// Plot colours for one theme, shared by every tool's plots.
 pub struct Palette {
     /// The first series: what the tool is about.
@@ -20,21 +91,23 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// The dark palette is pale series and faint bounds, which wash out on
-    /// white, so light mode gets saturated, darker equivalents and far more
-    /// opaque bounds. That is what makes a screenshot survive being printed.
+    /// The scheme's accents, so the plots sit with the buttons instead of
+    /// shouting over them. Dark mode takes base0D blue, base0A amber and
+    /// base0B green as they are; on white those wash out, so light mode
+    /// gets the same hues darker, and far more opaque bounds. That is what
+    /// makes a screenshot survive being printed.
     pub fn for_theme(dark_mode: bool) -> Self {
         if dark_mode {
             Self {
-                first: egui::Color32::LIGHT_BLUE,
-                second: egui::Color32::from_rgb(255, 165, 0),
-                bounds: egui::Color32::from_rgba_unmultiplied(0, 255, 0, 80),
+                first: SCHEME.base0d,
+                second: SCHEME.base0a,
+                bounds: with_alpha(SCHEME.base0b, 110),
             }
         } else {
             Self {
-                first: egui::Color32::from_rgb(0, 84, 159),
-                second: egui::Color32::from_rgb(191, 87, 0),
-                bounds: egui::Color32::from_rgba_unmultiplied(0, 120, 40, 180),
+                first: egui::Color32::from_rgb(0x3d, 0x67, 0x87),
+                second: egui::Color32::from_rgb(0x9a, 0x6e, 0x22),
+                bounds: egui::Color32::from_rgba_unmultiplied(0x5a, 0x66, 0x33, 190),
             }
         }
     }
@@ -54,6 +127,41 @@ pub fn apply_style(ctx: &egui::Context) {
         s.interact_size.y = 26.0;
         s.item_spacing = egui::vec2(8.0, 6.0);
     });
+    ctx.style_mut_of(egui::Theme::Dark, |style| apply_scheme(&mut style.visuals));
+}
+
+/// Dress dark mode in [`SCHEME`]: backgrounds from the dark shades, text
+/// from the light ones, accents for links, selection, warnings and errors.
+/// Buttons that carry a [`Tone`] keep their own fills.
+fn apply_scheme(v: &mut egui::Visuals) {
+    let s = &SCHEME;
+    v.panel_fill = s.base00;
+    v.window_fill = s.base01;
+    v.extreme_bg_color = s.base01;
+    v.faint_bg_color = s.base01;
+    v.code_bg_color = s.base01;
+    v.window_stroke.color = s.base02;
+    v.hyperlink_color = s.base0d;
+    v.warn_fg_color = s.base0a;
+    v.error_fg_color = s.base08;
+    v.weak_text_color = Some(s.base04);
+    v.selection.bg_fill = with_alpha(s.base0d, 90);
+    v.selection.stroke.color = s.base06;
+
+    let w = &mut v.widgets;
+    w.noninteractive.bg_fill = s.base00;
+    w.noninteractive.bg_stroke.color = s.base02;
+    w.noninteractive.fg_stroke.color = s.base05;
+    for (state, fill, text) in [
+        (&mut w.inactive, s.base02, s.base05),
+        (&mut w.hovered, s.base03, s.base06),
+        (&mut w.active, s.base03, s.base07),
+        (&mut w.open, s.base02, s.base06),
+    ] {
+        state.bg_fill = fill;
+        state.weak_bg_fill = fill;
+        state.fg_stroke.color = text;
+    }
 }
 
 /// What a button does, which its colour says.
@@ -176,7 +284,7 @@ impl Note {
 pub fn note(ui: &mut egui::Ui, note: &Option<Note>) {
     if let Some(note) = note {
         if note.is_error {
-            ui.colored_label(egui::Color32::RED, &note.text);
+            ui.colored_label(ui.visuals().error_fg_color, &note.text);
         } else {
             ui.label(&note.text);
         }

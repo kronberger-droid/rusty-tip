@@ -382,7 +382,7 @@ impl ConnectionPane {
             }
             if let Some(e) = &self.status.error {
                 ui.separator();
-                ui.colored_label(egui::Color32::RED, e);
+                ui.colored_label(ui.visuals().error_fg_color, e);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 action = self.render_button(ui, running);
