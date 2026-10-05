@@ -243,7 +243,7 @@ impl TipPrepTool {
             self.send_reload();
         }
         if let Some(n) = &self.reload_note {
-            ui.colored_label(egui::Color32::RED, "not sent")
+            ui.colored_label(ui.visuals().error_fg_color, "not sent")
                 .on_hover_text(&n.text);
         } else if live && self.reload.is_pending() {
             ui.label(egui::RichText::new("waiting for the cycle to end").weak());
