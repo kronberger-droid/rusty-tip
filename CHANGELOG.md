@@ -320,6 +320,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `frame`'s `trace_retrace_rms_mirrored`. It was there until a frame on
+  hardware settled which way Nanonis sends backward rows; it sends them the
+  same way round as forward ones, so the as-sent comparison is the one.
 - `data_acquisition.oversampling`. `sample_rate` is the one value now: the
   controller reads the RT frequency, derives the logger divisor that comes
   closest, measures what the stream delivers, and corrects the divisor
@@ -333,6 +336,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A sampled read of several signals took them one after another.**
+  `read a b c --samples n` collected `n` stream frames per signal in turn,
+  so the readings were of different moments and the read took three times
+  as long. Streamed signals now come from the same frames, through
+  `SpmController::read_signals_samples`, whose default still reads in turn
+  for a controller without a stream.
+- **`psd`'s RMS disagreed with its spectrum.** It was taken over the whole
+  series about one mean, while each segment of the spectrum has its own
+  mean removed, so drift slower than a segment counted in one and not the
+  other. `rms` is the spectrum's integral now, and `rms_total` the whole
+  series', larger by the drift.
+- **`busy` blamed a job for whatever held the session.** A long read from
+  another client holds the session thread as a job does; the message now
+  says which of the two it was.
+- **Z limits read high first.** `ZControllerParams::limits_m` followed
+  Nanonis, high then low, where everything else in rusty-tip, and the form
+  that shows it as "a to b", writes a range low then high. It is low then
+  high now; the controller turns it round for Nanonis. A preset saved high
+  first still loads as meant, since the smaller of the two is taken as the
+  low limit.
 - **`rusty-tip` answered `busy` to a read it was running.** The 10 s busy
   timeout covered the whole request, so a sampled read longer than that,
   three signals at 5000 samples on a 1 kHz stream, came back "busy, nothing

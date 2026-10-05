@@ -93,6 +93,13 @@ pub fn default_segment(samples: usize) -> usize {
     segment
 }
 
+/// The RMS the spectrum holds: the square root of its integral. Each
+/// segment has its mean removed, so drift slower than a segment is not in
+/// it; the RMS of the whole series about one mean is larger by that drift.
+pub fn rms(spectrum: &Spectrum) -> f64 {
+    (spectrum.psd.iter().sum::<f64>() * spectrum.resolution_hz).sqrt()
+}
+
 /// The noise floor as an amplitude density: the square root of the median
 /// PSD above DC. A peak not well above it is a bump in the noise.
 pub fn floor_asd(spectrum: &Spectrum) -> f64 {
@@ -215,6 +222,26 @@ mod tests {
         let spectrum = welch(&sine(2.0, 69.0, 1000.0, 16384), 1000.0, 1024);
         let total: f64 = spectrum.psd.iter().sum::<f64>() * spectrum.resolution_hz;
         assert!((total - 2.0).abs() < 0.02, "{total}");
+        assert!((rms(&spectrum) - 2.0_f64.sqrt()).abs() < 0.01);
+    }
+
+    /// Drift slower than a segment is removed with each segment's mean, so
+    /// the spectrum's RMS leaves it out where the whole series' does not.
+    #[test]
+    fn the_spectrum_rms_leaves_out_drift_slower_than_a_segment() {
+        let rate = 1000.0;
+        let n = 16384;
+        let values: Vec<f64> = sine(1.0, 69.0, rate, n)
+            .iter()
+            .enumerate()
+            .map(|(i, v)| v + 5.0 * i as f64 / n as f64)
+            .collect();
+        let spectrum = welch(&values, rate, 1024);
+        let mean = values.iter().sum::<f64>() / n as f64;
+        let total = (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n as f64).sqrt();
+        let in_spectrum = rms(&spectrum);
+        assert!((in_spectrum - 0.5_f64.sqrt()).abs() < 0.05, "{in_spectrum}");
+        assert!(total > 1.5, "{total}");
     }
 
     /// The 69 Hz line the lab sees shows as the top peak, near 69 Hz.
