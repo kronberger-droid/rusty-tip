@@ -86,9 +86,12 @@ line `i`, and their means over the scanned lines:
 | `trace_retrace_rms` | RMS of backward minus forward about that offset. A loop that lags shifts features between the directions, which shows here. |
 
 Lines not scanned yet read `null` and stay out of the means, so a partial frame
-is fine. Whether Nanonis sends backward rows mirrored has not been checked on
-hardware: `stats.backward_mirrored` says which way matched better on this
-frame, and the comparison uses that. The file keeps the rows as sent.
+is fine. The two directions are compared pixel for pixel as the controller
+sends them, the same way every frame, so frames stay comparable while the
+gains change. Whether Nanonis sends backward rows mirrored has not been
+checked on hardware; `mean.trace_retrace_rms_mirrored` gives the figure with
+them mirrored, and on a frame with features, whichever of the two is clearly
+smaller tells the way. The file keeps the rows as sent.
 
 ## Replies and exit codes
 

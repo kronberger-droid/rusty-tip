@@ -27,10 +27,7 @@ pub(super) fn controllers(session: &mut Session) -> Reply {
             .map(|id| controller.read_controller(id))
             .collect::<Result<Vec<_>, _>>()
     });
-    match readings {
-        Ok(readings) => Reply::ok(json!({ "controllers": readings })),
-        Err(e) => Reply::err(ErrorKind::of(&e), e.to_string()),
-    }
+    Reply::of(readings.map(|readings| json!({ "controllers": readings })))
 }
 
 /// The scan: where the frame sits, what the buffer records, how fast,
@@ -75,10 +72,7 @@ pub(super) fn scan(session: &mut Session) -> Reply {
             "bouncy": props.bouncy_scan,
         }))
     });
-    match scan {
-        Ok(scan) => Reply::ok(scan),
-        Err(e) => Reply::err(ErrorKind::of(&e), e.to_string()),
-    }
+    Reply::of(scan)
 }
 
 /// An f32 from the controller as the f64 its shortest decimal form
@@ -116,9 +110,6 @@ struct FrameFile<'a> {
     /// Whether the slow axis ran up. Rows are in the order the controller
     /// sent them.
     scan_up: bool,
-    /// Whether the backward rows were mirrored before comparing them with
-    /// the forward ones; the rows here are as sent.
-    backward_mirrored: bool,
     forward: &'a [Vec<f32>],
     backward: &'a [Vec<f32>],
 }
@@ -128,24 +119,22 @@ struct FrameFile<'a> {
 pub(super) fn frame(session: &mut Session, signal: &str) -> Reply {
     let dir = frames_dir(session.log_dir());
     let grabbed = session.query(|controller, registry| {
-        let Some(found) = registry.get_by_name(signal).cloned() else {
-            return Ok(Err(FrameError::BadRequest(format!(
-                "no signal called {signal}"
-            ))));
-        };
         let buffer = controller.scan_buffer_get()?;
-        if !buffer.channels.contains(&found.signal_index()) {
+        let found = registry
+            .get_by_name(signal)
+            .filter(|s| buffer.channels.contains(&s.signal_index()))
+            .cloned();
+        let Some(found) = found else {
             let recorded: Vec<String> = buffer
                 .channels
                 .iter()
                 .map(|c| signal_name(registry, c.0).unwrap_or_else(|| c.0.to_string()))
                 .collect();
             return Ok(Err(FrameError::BadRequest(format!(
-                "the scan does not record {}; it records {}",
-                found.name,
+                "the scan does not record {signal}; it records {}",
                 recorded.join(", ")
             ))));
-        }
+        };
         let channel = u32::from(found.index);
         let (_, forward, scan_up) = controller.scan_frame_data_grab(channel, true)?;
         let (_, backward, _) = controller.scan_frame_data_grab(channel, false)?;
@@ -168,7 +157,6 @@ pub(super) fn frame(session: &mut Session, signal: &str) -> Reply {
         unit: unit.clone(),
         index: found.index,
         scan_up,
-        backward_mirrored: stats.backward_mirrored,
         forward: &forward,
         backward: &backward,
     };
@@ -222,14 +210,16 @@ fn write_frame(dir: &Path, signal: &str, file: &FrameFile<'_>) -> Result<PathBuf
 /// `retrace_offset`: a loop that lags shows as features shifted between
 /// the directions, so as this difference, while the offset alone is
 /// mostly hysteresis and creep.
+///
+/// The directions are compared pixel for pixel as the controller sends
+/// them, the same way every frame, so frames stay comparable across a
+/// change of gains. Whether Nanonis sends backward rows mirrored has not
+/// been checked on hardware; `mean.trace_retrace_rms_mirrored` compares
+/// them mirrored too, and on a frame with features, whichever of the two is
+/// clearly smaller tells the way.
 #[derive(Debug, Serialize)]
 pub(crate) struct FrameStats {
     pub lines_scanned: usize,
-    /// Whether the backward rows matched the forward ones better mirrored.
-    /// Decided per frame by which gives the smaller trace-retrace
-    /// difference; which way Nanonis sends them has not been checked on
-    /// hardware.
-    pub backward_mirrored: bool,
     /// Means over the scanned lines.
     pub mean: Summary,
     pub lines: Lines,
@@ -241,6 +231,8 @@ pub(crate) struct Summary {
     pub rms_backward: Option<f64>,
     pub retrace_offset: Option<f64>,
     pub trace_retrace_rms: Option<f64>,
+    /// `trace_retrace_rms` with the backward rows mirrored.
+    pub trace_retrace_rms_mirrored: Option<f64>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -254,23 +246,15 @@ pub(crate) struct Lines {
 
 impl FrameStats {
     pub fn of(forward: &[Vec<f32>], backward: &[Vec<f32>]) -> Self {
-        let mismatch = |mirrored: bool| -> f64 {
-            forward
-                .iter()
-                .zip(backward)
-                .filter_map(|(f, b)| difference(f, b, mirrored))
-                .map(|(_, rms)| rms * rms)
-                .sum()
-        };
-        let backward_mirrored = mismatch(true) < mismatch(false);
-
         let mut lines = Lines::default();
+        let mut mirrored = Vec::new();
         for (i, f) in forward.iter().enumerate() {
             let b = backward.get(i).map(Vec::as_slice).unwrap_or(&[]);
-            let (offset, rms) = match difference(f, b, backward_mirrored) {
+            let (offset, rms) = match difference(f, b, false) {
                 Some((offset, rms)) => (Some(offset), Some(rms)),
                 None => (None, None),
             };
+            mirrored.push(difference(f, b, true).map(|(_, rms)| rms));
             lines.mean_forward.push(mean(f));
             lines.rms_forward.push(detrended_rms(f));
             lines.rms_backward.push(detrended_rms(b));
@@ -283,12 +267,12 @@ impl FrameStats {
         };
         Self {
             lines_scanned: lines.rms_forward.iter().flatten().count(),
-            backward_mirrored,
             mean: Summary {
                 rms_forward: average(&lines.rms_forward),
                 rms_backward: average(&lines.rms_backward),
                 retrace_offset: average(&lines.retrace_offset),
                 trace_retrace_rms: average(&lines.trace_retrace_rms),
+                trace_retrace_rms_mirrored: average(&mirrored),
             },
             lines,
         }
@@ -401,16 +385,18 @@ mod tests {
         assert!(shifted.mean.trace_retrace_rms.unwrap() > 0.1);
     }
 
-    /// Backward rows sent mirrored are compared mirrored, and the reply
-    /// says so.
+    /// The comparison is always as sent, so it cannot change between
+    /// frames; the mirrored figure is there to tell which way is right.
     #[test]
-    fn mirrored_backward_rows_are_detected() {
+    fn rows_are_compared_as_sent_with_the_mirrored_figure_beside() {
         let forward = vec![(0..32).map(|x| x as f32).collect::<Vec<f32>>()];
         let mirrored = vec![forward[0].iter().rev().copied().collect::<Vec<f32>>()];
         let stats = FrameStats::of(&forward, &mirrored);
-        assert!(stats.backward_mirrored);
-        assert!(close(stats.mean.trace_retrace_rms, 0.0));
-        assert!(!FrameStats::of(&forward, &forward).backward_mirrored);
+        assert!(stats.mean.trace_retrace_rms.unwrap() > 1.0);
+        assert!(close(stats.mean.trace_retrace_rms_mirrored, 0.0));
+        let same = FrameStats::of(&forward, &forward);
+        assert!(close(same.mean.trace_retrace_rms, 0.0));
+        assert!(same.mean.trace_retrace_rms_mirrored.unwrap() > 1.0);
     }
 
     #[test]
