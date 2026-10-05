@@ -333,6 +333,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Z limits read high first.** `ZControllerParams::limits_m` followed
+  Nanonis, high then low, where everything else in rusty-tip, and the form
+  that shows it as "a to b", writes a range low then high. It is low then
+  high now; the controller turns it round for Nanonis. A preset saved high
+  first still loads as meant, since the smaller of the two is taken as the
+  low limit.
 - **`rusty-tip` answered `busy` to a read it was running.** The 10 s busy
   timeout covered the whole request, so a sampled read longer than that,
   three signals at 5000 samples on a 1 kHz stream, came back "busy, nothing

@@ -904,7 +904,7 @@ impl SpmController for NanonisController {
                             rate.is_finite().then_some(rate)
                         },
                         limits_enabled: self.client.z_ctrl_limits_enabled_get()?,
-                        limits_m: (f64::from(high), f64::from(low)),
+                        limits_m: (f64::from(low), f64::from(high)),
                     }),
                     enabled: self.client.z_ctrl_on_off_get()?,
                     status: z_status_word(status).into(),
@@ -987,8 +987,8 @@ impl SpmController for NanonisController {
                 )?;
                 self.client.z_ctrl_limits_enabled_set(p.limits_enabled)?;
                 if p.limits_enabled {
-                    self.client
-                        .z_ctrl_limits_set(p.limits_m.0 as f32, p.limits_m.1 as f32)?;
+                    let (low, high) = p.limits_m;
+                    self.client.z_ctrl_limits_set(high as f32, low as f32)?;
                 }
                 Ok(())
             }
