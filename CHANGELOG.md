@@ -312,6 +312,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`rusty-tip` answered `busy` to a read it was running.** The 10 s busy
+  timeout covered the whole request, so a sampled read longer than that,
+  three signals at 5000 samples on a 1 kHz stream, came back "busy, nothing
+  was done" while it held the session. The timeout now covers only the wait
+  for the session to start a request; one that started is waited for up to
+  60 s, and whether it started or was dropped is settled atomically, so
+  `busy` always means nothing ran. A read takes at most 20000 samples over
+  its signals.
+- **`rusty-tip --addr localhost:…` missed a server on `127.0.0.1`.** Windows
+  resolves `localhost` to `::1` first and the client tried only that; it now
+  tries each address the name resolves to.
+- **`rusty-tip serve` connected before it knew it could listen.** With the
+  port taken it connected and loaded the config's layout and settings, then
+  gave up. It binds first now, and `Server::serve` takes the bound listener.
+- **Tool names in the workbench sidebar sat indented.** Every tool's label
+  kept room for the running marker; only the running tool carries one now,
+  and the rest line up with Connection.
 - **One tool's run showed on another's tabs.** The last run's status,
   elapsed time and "Run finished" message appeared on every tool. A run
   now shows only on its own tool, and a message goes with the page it came
