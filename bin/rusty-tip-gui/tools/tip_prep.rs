@@ -656,6 +656,7 @@ fn connection_of(config: &AppConfig) -> ConnectionSettings {
             .enabled
             .then(|| PathBuf::from(&config.experiment_logging.output_path)),
         presets_file: PathBuf::from(&config.controllers.presets_file),
+        operating_points_file: PathBuf::from(&config.controllers.operating_points_file),
     }
 }
 
@@ -670,6 +671,7 @@ fn set_connection(config: &mut AppConfig, s: &ConnectionSettings) {
         None => config.experiment_logging.enabled = false,
     }
     config.controllers.presets_file = s.presets_file.display().to_string();
+    config.controllers.operating_points_file = s.operating_points_file.display().to_string();
 }
 
 /// The run by cycle: what each cycle fired and then measured, and what
