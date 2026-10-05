@@ -1,4 +1,5 @@
-//! The reads for tuning: the feedback loops, the scan, and a scan frame.
+//! The reads for tuning: the feedback loops, the scan, a scan frame, and a
+//! streamed signal's spectrum.
 //!
 //! Each only asks; none changes anything on the instrument. A frame's
 //! pixels go to a file in a directory the server picks, never one the
@@ -13,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::{ErrorKind, Reply};
+use super::{ErrorKind, Reply, spectrum};
 use crate::session::{Session, unit_of};
 use crate::signal_registry::SignalRegistry;
 use crate::spm_error::SpmError;
@@ -173,6 +174,85 @@ pub(super) fn frame(session: &mut Session, signal: &str) -> Reply {
         "lines": forward.len(),
         "scan_up": scan_up,
         "stats": stats,
+    }))
+}
+
+/// How many peaks a `psd` reply lists.
+const PSD_PEAKS: usize = 8;
+
+/// One streamed signal's power spectral density over `samples` evenly
+/// spaced stream samples, Welch-averaged in segments of `segment`.
+///
+/// Only a signal on the data stream will do: polled samples have no time
+/// base, so their spectrum would put lines at frequencies that are not
+/// there.
+pub(super) fn psd(session: &mut Session, signal: &str, samples: usize, segment: usize) -> Reply {
+    let taken = session.query(|controller, registry| {
+        let Some(found) = registry.get_by_name(signal).cloned() else {
+            return Ok(Err(Reply::err(
+                ErrorKind::BadRequest,
+                format!("no signal called {signal}"),
+            )));
+        };
+        if !controller.streams_signal(found.signal_index()) {
+            // The registry lists aliases too; name each streamed signal once.
+            let mut streamed: Vec<(u8, String)> = registry
+                .tcp_signals()
+                .into_iter()
+                .filter(|s| controller.streams_signal(s.signal_index()))
+                .map(|s| (s.index, s.name.clone()))
+                .collect();
+            streamed.sort();
+            streamed.dedup_by_key(|(index, _)| *index);
+            let streamed: Vec<String> = streamed.into_iter().map(|(_, name)| name).collect();
+            return Ok(Err(Reply::err(
+                ErrorKind::BadRequest,
+                format!(
+                    "{} is not on the data stream, and a spectrum needs evenly spaced \
+                     samples; the stream carries {}",
+                    found.name,
+                    streamed.join(", ")
+                ),
+            )));
+        }
+        let Some(rate_hz) = controller.stream_rate_hz() else {
+            return Ok(Err(Reply::err(
+                ErrorKind::Refused,
+                "the data stream reports no sample rate, so the spectrum has no frequency axis",
+            )));
+        };
+        let values = controller.read_signal_samples(found.signal_index(), samples)?;
+        Ok(Ok((found, rate_hz, values)))
+    });
+    let (found, rate_hz, values) = match taken {
+        Ok(Ok(taken)) => taken,
+        Ok(Err(reply)) => return reply,
+        Err(e) => return Reply::of(Err(e)),
+    };
+    if values.len() < segment {
+        return Reply::err(
+            ErrorKind::Failed,
+            format!(
+                "the stream gave {} samples, fewer than one segment of {segment}",
+                values.len()
+            ),
+        );
+    }
+
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let rms = (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64).sqrt();
+    let spectrum = spectrum::welch(&values, rate_hz, segment);
+    let peaks = spectrum::peaks(&spectrum, PSD_PEAKS);
+    Reply::ok(json!({
+        "signal": found.name,
+        "unit": unit_of(&found.name),
+        "index": found.index,
+        "rate_hz": rate_hz,
+        "samples": values.len(),
+        "rms": rms,
+        "peaks": peaks,
+        "floor_asd": spectrum::floor_asd(&spectrum),
+        "spectrum": spectrum,
     }))
 }
 

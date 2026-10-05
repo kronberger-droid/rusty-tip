@@ -23,6 +23,7 @@
 pub mod inspect;
 pub mod limits;
 pub mod server;
+pub mod spectrum;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -98,7 +99,27 @@ pub enum Request {
         /// A signal the scan buffer records, as the registry names it.
         signal: String,
     },
+    /// One streamed signal's power spectral density, Welch-averaged over
+    /// evenly spaced stream samples: the spectrum in the signal's unit
+    /// squared per hertz, the strongest peaks as amplitude densities, and
+    /// the RMS. Tells a loop that rings from a line the room puts there.
+    Psd {
+        /// A signal on the data stream, as the registry names it.
+        signal: String,
+        /// Stream samples to take; left out, 16384.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(range(min = 64, max = MAX_SAMPLES))]
+        samples: Option<usize>,
+        /// Samples per segment, a power of two from 16 up; left out, 1024
+        /// or shorter so that at least seven segments are averaged. Longer
+        /// segments resolve finer and average fewer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        segment: Option<usize>,
+    },
 }
+
+/// Stream samples a `psd` takes unless asked otherwise.
+pub const PSD_SAMPLES: usize = 16_384;
 
 impl Request {
     /// Whether the request can change anything on the instrument. A
@@ -110,7 +131,8 @@ impl Request {
             | Request::Read { .. }
             | Request::Controllers
             | Request::Scan
-            | Request::Frame { .. } => false,
+            | Request::Frame { .. }
+            | Request::Psd { .. } => false,
         }
     }
 
@@ -123,6 +145,7 @@ impl Request {
             Request::Controllers => "controllers",
             Request::Scan => "scan",
             Request::Frame { .. } => "frame",
+            Request::Psd { .. } => "psd",
         }
     }
 }
@@ -322,6 +345,34 @@ pub fn execute(target: Target<'_>, request: &Request, serving: &Serving) -> Repl
                 connected(session).unwrap_or_else(|| inspect::frame(session, &signal))
             })
         }
+        Request::Psd {
+            signal,
+            samples,
+            segment,
+        } => {
+            let samples = samples.unwrap_or(PSD_SAMPLES);
+            if !(64..=MAX_SAMPLES).contains(&samples) {
+                return Reply::err(
+                    ErrorKind::BadRequest,
+                    format!("`samples` has to be from 64 to {MAX_SAMPLES}, not {samples}"),
+                );
+            }
+            let segment = segment.unwrap_or_else(|| spectrum::default_segment(samples));
+            if !segment.is_power_of_two() || segment < 16 || segment > samples {
+                return Reply::err(
+                    ErrorKind::BadRequest,
+                    format!(
+                        "`segment` has to be a power of two from 16 to the {samples} samples, \
+                         not {segment}"
+                    ),
+                );
+            }
+            let signal = signal.clone();
+            on_session(target, move |session| {
+                connected(session)
+                    .unwrap_or_else(|| inspect::psd(session, &signal, samples, segment))
+            })
+        }
     }
 }
 
@@ -494,6 +545,11 @@ pub fn describe(serving: Option<&Serving>) -> Value {
         Request::Scan,
         Request::Frame {
             signal: String::new(),
+        },
+        Request::Psd {
+            signal: String::new(),
+            samples: None,
+            segment: None,
         },
     ]
     .iter()
@@ -668,6 +724,11 @@ mod tests {
             Request::Frame {
                 signal: "current".into(),
             },
+            Request::Psd {
+                signal: "Z (m)".into(),
+                samples: Some(1024),
+                segment: None,
+            },
         ] {
             assert!(!request.acts());
             let reply = execute(Target::Local(&mut session), &request, &serving);
@@ -740,6 +801,67 @@ mod tests {
         let offset = frame["stats"]["mean"]["retrace_offset"].as_f64().unwrap();
         assert!((offset - 1e-12).abs() < 1e-14, "{offset}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_psd_of_a_streamed_signal_has_its_spectrum_and_peaks() {
+        let mut session = connected();
+        let reply = execute(
+            Target::Local(&mut session),
+            &Request::Psd {
+                signal: "Z (m)".into(),
+                samples: Some(2048),
+                segment: Some(256),
+            },
+            &Serving::default(),
+        );
+        let psd = reply.result.unwrap();
+        assert_eq!(psd["samples"], 2048);
+        assert_eq!(psd["spectrum"]["segment"], 256);
+        assert_eq!(psd["spectrum"]["averages"], 15);
+        assert_eq!(psd["spectrum"]["psd"].as_array().unwrap().len(), 129);
+        assert!(psd["rate_hz"].as_f64().unwrap() > 0.0);
+        assert!(psd["peaks"].is_array());
+    }
+
+    /// Polled samples have no time base; their spectrum would invent
+    /// lines, so a signal off the stream is refused, naming the ones on it.
+    #[test]
+    fn a_psd_of_a_signal_off_the_stream_is_a_bad_request() {
+        let mut session = connected();
+        let reply = execute(
+            Target::Local(&mut session),
+            &Request::Psd {
+                signal: "freq shift".into(),
+                samples: None,
+                segment: None,
+            },
+            &Serving::default(),
+        );
+        let error = reply.error.unwrap();
+        assert_eq!(error.kind, ErrorKind::BadRequest);
+        assert!(error.message.contains("data stream"), "{}", error.message);
+    }
+
+    #[test]
+    fn a_psd_segment_has_to_be_a_power_of_two_inside_the_samples() {
+        let mut session = connected();
+        for (samples, segment) in [
+            (Some(2048), Some(1000)),
+            (Some(512), Some(1024)),
+            (Some(10), None),
+        ] {
+            let reply = execute(
+                Target::Local(&mut session),
+                &Request::Psd {
+                    signal: "Z (m)".into(),
+                    samples,
+                    segment,
+                },
+                &Serving::default(),
+            );
+            assert_eq!(reply.error.unwrap().kind, ErrorKind::BadRequest);
+        }
     }
 
     /// The workbench's log directory is relative by default; the reply has
@@ -875,7 +997,15 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["describe", "status", "read", "controllers", "scan", "frame"]
+            [
+                "describe",
+                "status",
+                "read",
+                "controllers",
+                "scan",
+                "frame",
+                "psd"
+            ]
         );
         assert_eq!(d["read_only"], true);
         assert_eq!(d["exit_codes"]["read_only"], 4);

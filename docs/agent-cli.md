@@ -41,6 +41,7 @@ rusty-tip read "Z (m)" --samples 500        # mean and std_dev of 500 stream sam
 rusty-tip controllers                       # Z-controller and PLL loops: parameters, on/off, status
 rusty-tip scan                              # frame, buffer, speed, running
 rusty-tip frame "Z (m)"                     # one recorded signal's frame, both directions
+rusty-tip psd "Z (m)"                       # spectrum of a streamed signal, with its peaks
 ```
 
 Signal names are the registry's, case-insensitive. Each reading carries the
@@ -96,6 +97,29 @@ gains change. Whether Nanonis sends backward rows mirrored has not been
 checked on hardware; `mean.trace_retrace_rms_mirrored` gives the figure with
 them mirrored, and on a frame with features, whichever of the two is clearly
 smaller tells the way. The file keeps the rows as sent.
+
+`psd <signal> [--samples N] [--segment N]` takes `N` evenly spaced samples of a
+signal on the data stream (16384 by default, at most 20000) and averages their
+spectrum by Welch's method: segments of `--segment` samples, a power of two,
+overlapping by half, each with its mean removed and a Hann window applied. The
+default segment is 1024, shorter when that would average fewer than seven.
+Longer segments resolve finer and average fewer, so the trace is noisier.
+The default takes 16 s on a 1 kHz stream, and the session is held for that long.
+
+| Field | What it is |
+| --- | --- |
+| `rate_hz` | The stream's rate, the one the logger's divisor gives on Nanonis; the frequency axis comes from it. |
+| `rms` | RMS of the samples about their mean, in the signal's unit. |
+| `peaks` | The eight highest local maxima above DC, highest first: `freq_hz` and `asd`, the amplitude density in unit/√Hz. |
+| `floor_asd` | The noise floor in unit/√Hz, the root of the median PSD above DC. On a flat spectrum most peaks are bumps in the noise; only those well above the floor are lines. |
+| `spectrum` | `freq_hz` and `psd` (unit²/Hz) from 0 to Nyquist, with `segment`, `averages` and `resolution_hz`. |
+
+The density integrates to the variance, so `rms²` is the PSD summed times
+`resolution_hz`. A pure tone's `asd` depends on the resolution, its frequency
+does not: a line that stays put while the gains change is the room, one that
+moves or grows with the gain is the loop. A signal not on the stream is a
+`bad_request` naming the ones that are, since polled samples have no time base
+and their spectrum would show lines that are not there.
 
 ## Replies and exit codes
 
