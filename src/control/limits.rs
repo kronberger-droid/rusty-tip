@@ -79,7 +79,7 @@ mod tests {
         assert_eq!(limits.max_bias_v, Some(2.0));
         assert!(limits.validate().is_ok());
         assert!(
-            toml::from_str::<Limits>("max_bais_v = 2.0").is_err(),
+            toml::from_str::<Limits>("max_bias_volts = 2.0").is_err(),
             "a misspelt limit must not silently set none"
         );
     }
