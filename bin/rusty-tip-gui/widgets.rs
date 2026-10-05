@@ -20,21 +20,23 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// The dark palette is pale series and faint bounds, which wash out on
-    /// white, so light mode gets saturated, darker equivalents and far more
+    /// Muted base16 accents, so the plots sit with the buttons instead of
+    /// shouting over them. Dark mode takes the base0D blue, base0A amber
+    /// and base0B green of the desktop's scheme as they are; on white those
+    /// wash out, so light mode gets the same hues darker, and far more
     /// opaque bounds. That is what makes a screenshot survive being printed.
     pub fn for_theme(dark_mode: bool) -> Self {
         if dark_mode {
             Self {
-                first: egui::Color32::LIGHT_BLUE,
-                second: egui::Color32::from_rgb(255, 165, 0),
-                bounds: egui::Color32::from_rgba_unmultiplied(0, 255, 0, 80),
+                first: egui::Color32::from_rgb(0x6c, 0x99, 0xba),
+                second: egui::Color32::from_rgb(0xe5, 0xb5, 0x66),
+                bounds: egui::Color32::from_rgba_unmultiplied(0x7e, 0x8d, 0x50, 110),
             }
         } else {
             Self {
-                first: egui::Color32::from_rgb(0, 84, 159),
-                second: egui::Color32::from_rgb(191, 87, 0),
-                bounds: egui::Color32::from_rgba_unmultiplied(0, 120, 40, 180),
+                first: egui::Color32::from_rgb(0x3d, 0x67, 0x87),
+                second: egui::Color32::from_rgb(0x9a, 0x6e, 0x22),
+                bounds: egui::Color32::from_rgba_unmultiplied(0x5a, 0x66, 0x33, 190),
             }
         }
     }
