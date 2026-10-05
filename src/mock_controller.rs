@@ -1004,6 +1004,12 @@ impl SpmController for MockController {
         Ok(self.scan_frame)
     }
 
+    fn scan_frame_set(&mut self, frame: ScanFrame) -> Result<()> {
+        self.enter("scan_frame_set")?;
+        self.scan_frame = frame;
+        Ok(())
+    }
+
     fn scan_buffer_get(&mut self) -> Result<ScanBuffer> {
         self.enter("scan_buffer_get")?;
         Ok(self.obs.lock().scan_buffer.clone())

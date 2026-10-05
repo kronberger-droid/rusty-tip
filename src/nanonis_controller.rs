@@ -1138,6 +1138,10 @@ impl SpmController for NanonisController {
         Ok(self.client.scan_frame_get()?)
     }
 
+    fn scan_frame_set(&mut self, frame: ScanFrame) -> Result<()> {
+        Ok(self.client.scan_frame_set(frame)?)
+    }
+
     fn scan_buffer_get(&mut self) -> Result<ScanBuffer> {
         let (channels, pixels, lines) = self.client.scan_buffer_get()?;
         let slots = self.signal_slots()?;
