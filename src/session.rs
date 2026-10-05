@@ -1026,7 +1026,10 @@ pub fn spawn(log_dir: Option<PathBuf>) -> SessionHandle {
 pub fn spawn_with(session: Session) -> SessionHandle {
     let (commands, command_rx) = crossbeam_channel::unbounded();
     let (update_tx, updates) = crossbeam_channel::unbounded();
-    let status = Arc::new(Mutex::new(SessionStatus::default()));
+    // Seeded from the session, not left at the default until the thread
+    // first reports: a `status` asked before then would read a session
+    // handed over connected as disconnected.
+    let status = Arc::new(Mutex::new(SessionStatus::of(&session)));
     let shared = Arc::clone(&status);
     let thread = thread::Builder::new()
         .name("session".into())
