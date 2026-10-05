@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crossbeam_channel::RecvTimeoutError;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -211,6 +212,15 @@ impl Reply {
         }
     }
 
+    /// The reply to a controller call: its result, or its error under the
+    /// kind it falls under.
+    pub fn of(result: Result<Value, SpmError>) -> Self {
+        match result {
+            Ok(value) => Self::ok(value),
+            Err(e) => Self::err(ErrorKind::of(&e), e.to_string()),
+        }
+    }
+
     /// 0 on success, the error kind's code otherwise.
     pub fn exit_code(&self) -> i32 {
         match &self.error {
@@ -311,17 +321,26 @@ fn on_session(target: Target<'_>, f: impl FnOnce(&mut Session) -> Reply + Send +
             if let Err(e) = remote.send(call) {
                 return Reply::err(ErrorKind::NotConnected, e.to_string());
             }
-            rx.recv_timeout(BUSY_TIMEOUT).unwrap_or_else(|_| {
-                abandoned.store(true, Ordering::SeqCst);
-                Reply::err(
-                    ErrorKind::Busy,
-                    format!(
-                        "the session did not answer within {} s; a job is probably running. \
-                         Nothing was done.",
-                        BUSY_TIMEOUT.as_secs()
-                    ),
-                )
-            })
+            match rx.recv_timeout(BUSY_TIMEOUT) {
+                Ok(reply) => reply,
+                Err(RecvTimeoutError::Timeout) => {
+                    abandoned.store(true, Ordering::SeqCst);
+                    Reply::err(
+                        ErrorKind::Busy,
+                        format!(
+                            "the session did not answer within {} s; a job is probably \
+                             running. Nothing was done.",
+                            BUSY_TIMEOUT.as_secs()
+                        ),
+                    )
+                }
+                // The thread dropped the call without running it: it is
+                // gone, not busy.
+                Err(RecvTimeoutError::Disconnected) => Reply::err(
+                    ErrorKind::NotConnected,
+                    "the session thread is gone; nothing was done",
+                ),
+            }
         }
     }
 }
@@ -359,10 +378,11 @@ fn read(session: &mut Session, signals: &[String], samples: Option<usize>) -> Re
             );
         }
     }
-    match session.read_named(signals, samples) {
-        Ok(readings) => Reply::ok(json!({ "readings": readings })),
-        Err(e) => Reply::err(ErrorKind::of(&e), e.to_string()),
-    }
+    Reply::of(
+        session
+            .read_named(signals, samples)
+            .map(|readings| json!({ "readings": readings })),
+    )
 }
 
 /// `status` as JSON.
@@ -567,7 +587,9 @@ mod tests {
     /// Read-only refuses only what acts: watching stays possible.
     #[test]
     fn a_read_only_server_still_answers_what_only_reads() {
-        let mut session = connected();
+        let dir = std::env::temp_dir().join(format!("rusty-tip-ro-test-{}", std::process::id()));
+        let mut session = Session::new(Some(dir.clone()));
+        session.connect(&Backend::Mock).unwrap();
         let serving = Serving {
             read_only: true,
             ..Serving::default()
@@ -578,11 +600,15 @@ mod tests {
             read(&["current"], None),
             Request::Controllers,
             Request::Scan,
+            Request::Frame {
+                signal: "current".into(),
+            },
         ] {
             assert!(!request.acts());
             let reply = execute(Target::Local(&mut session), &request, &serving);
             assert!(reply.ok, "{}: {reply:?}", request.name());
         }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -5,23 +5,31 @@
 //! socket since the lab PCs run Windows too; the server only binds to
 //! loopback addresses, since the socket has no authentication of its own.
 
+use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use super::{BUSY_TIMEOUT, ErrorKind, Reply, Request, Serving, Target, execute};
 use crate::session::SessionRemote;
 
-/// A running control socket. Dropping it stops accepting; connections
-/// already open finish their current request and close.
+/// A running control socket. Dropping it stops accepting and cuts off the
+/// connections already open: a request in flight still gets its reply
+/// written if it can, but no further request is read. A client served under
+/// the old mode would otherwise outlive a switch to read-only or off.
 pub struct Server {
     addr: SocketAddr,
     stop: Arc<AtomicBool>,
+    clients: Clients,
     thread: Option<JoinHandle<()>>,
 }
+
+/// The open connections, by id, so a drop can shut them down. Each client
+/// removes itself when it hangs up.
+type Clients = Arc<Mutex<HashMap<u64, TcpStream>>>;
 
 impl Server {
     /// Listen on `addr`, a loopback address, and answer requests against
@@ -34,6 +42,9 @@ impl Server {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
         let serving = Arc::new(serving);
+        let clients = Clients::default();
+        let open = Arc::clone(&clients);
+        let next_id = AtomicU64::new(0);
         let thread = thread::Builder::new()
             .name("control".into())
             .spawn(move || {
@@ -44,10 +55,18 @@ impl Server {
                     }
                     match stream {
                         Ok(stream) => {
+                            let id = next_id.fetch_add(1, Ordering::SeqCst);
+                            if let Ok(handle) = stream.try_clone() {
+                                lock(&open).insert(id, handle);
+                            }
                             let (remote, serving) = (remote.clone(), Arc::clone(&serving));
-                            let _ = thread::Builder::new()
-                                .name("control client".into())
-                                .spawn(move || serve_client(stream, &remote, &serving));
+                            let open = Arc::clone(&open);
+                            let _ = thread::Builder::new().name("control client".into()).spawn(
+                                move || {
+                                    serve_client(stream, &remote, &serving);
+                                    lock(&open).remove(&id);
+                                },
+                            );
                         }
                         Err(e) => log::warn!("control socket: accept failed: {e}"),
                     }
@@ -60,6 +79,7 @@ impl Server {
         Ok(Self {
             addr: local,
             stop,
+            clients,
             thread: Some(thread),
         })
     }
@@ -80,7 +100,17 @@ impl Drop for Server {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        // A blocked read returns at once on a shut-down socket, so each
+        // client's loop ends.
+        for stream in lock(&self.clients).values() {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
     }
+}
+
+/// The client table, even if a client thread panicked holding it.
+fn lock(clients: &Clients) -> std::sync::MutexGuard<'_, HashMap<u64, TcpStream>> {
+    clients.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Refuse any address that is not loopback: the socket has no
@@ -224,6 +254,28 @@ mod tests {
     fn no_server_is_a_not_connected_reply() {
         let reply = call("127.0.0.1:1", &Request::Status);
         assert_eq!(reply.error.unwrap().kind, ErrorKind::NotConnected);
+    }
+
+    /// A client connected before a restart is not served under the old
+    /// mode after it.
+    #[test]
+    fn dropping_the_server_cuts_off_its_clients() {
+        let (_handle, server) = mock_server(false);
+        let stream = TcpStream::connect(server.addr()).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        // One round trip, so the server has registered the client.
+        let mut writer = stream.try_clone().unwrap();
+        writer.write_all(b"{\"cmd\":\"describe\"}\n").unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+
+        drop(server);
+        line.clear();
+        let _ = writer.write_all(b"{\"cmd\":\"status\"}\n");
+        assert_eq!(reader.read_line(&mut line).unwrap_or(0), 0, "{line}");
     }
 
     #[test]
