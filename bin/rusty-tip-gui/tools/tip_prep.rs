@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use eframe::egui;
-use egui_plot::{AxisHints, HLine, Line, Plot, PlotPoints, Points};
+use egui_plot::{AxisHints, Bar, BarChart, HLine, Line, Plot, PlotPoints, Points};
 
 use rusty_tip::config::AppConfig;
 use rusty_tip::controllers::{ControllerId, Preset, PresetStore, TomlPresetStore};
@@ -601,32 +601,32 @@ impl Tool for TipPrepTool {
             }
         });
 
+        let max_color = colors.bounds.to_opaque();
         plot_header(
             ui,
             "Pulse voltage",
             &[
-                (Mark::Dot, "cycle pulse", colors.second),
-                (Mark::Diamond, "max pulse", colors.bounds.to_opaque()),
+                (Mark::Bar, "cycle pulse", colors.second),
+                (Mark::Bar, "max pulse", max_color),
             ],
-            "The pulse fired at the start of each cycle. Diamonds are the max pulses of a \
-             failed stability check, between the cycles they came after.",
+            "The pulse fired at the start of each cycle, as a bar from 0 V. The narrow bars \
+             are the max pulses of a failed stability check, between the cycles they came \
+             after.",
         );
-        let v_line = Line::new("", PlotPoints::from(run.pulses.clone())).color(colors.second);
-        let v_marks = Points::new("cycle pulse", PlotPoints::from(run.pulses))
-            .color(colors.second)
-            .radius(MARKER_RADIUS);
-        let max_marks = Points::new("max pulse", PlotPoints::from(run.max_pulses))
-            .color(colors.bounds)
-            .shape(egui_plot::MarkerShape::Diamond)
-            .radius(MARKER_RADIUS + 1.5);
+        // A cycle's bar spans ±0.25 around its number and a max pulse's
+        // ±0.15 around the half cycle after, so neither covers the other.
+        let cycle_bars = pulse_bars("cycle pulse", &run.pulses, 0.5, colors.second);
+        let max_bars = pulse_bars("max pulse", &run.max_pulses, 0.3, max_color);
+        let zero = ui.visuals().weak_text_color();
         cycle_plot("tip_prep_pulses", "V", height, last_cycle)
             // Pulses run over about ±10 V: a line every volt, heavier every
             // five and ten.
             .y_grid_spacer(egui_plot::uniform_grid_spacer(|_| [1.0, 5.0, 10.0]))
+            .include_y(0.0)
             .show(ui, |plot_ui| {
-                plot_ui.line(v_line);
-                plot_ui.points(v_marks);
-                plot_ui.points(max_marks);
+                plot_ui.hline(HLine::new("", 0.0).color(zero).width(1.0_f32));
+                plot_ui.bar_chart(cycle_bars);
+                plot_ui.bar_chart(max_bars);
             });
     }
 
@@ -780,8 +780,22 @@ const PLOT_NAVIGATION: &str = "Drag to pan, scroll to zoom, right-drag a box to 
 enum Mark {
     Dot,
     Ring,
-    Diamond,
+    Bar,
     Dash,
+}
+
+/// Pulses as bars from 0 V, one per `[x, volts]`, `width` wide in cycles.
+fn pulse_bars(name: &str, pulses: &[[f64; 2]], width: f64, color: egui::Color32) -> BarChart {
+    let bars = pulses
+        .iter()
+        .map(|&[x, volts]| {
+            Bar::new(x, volts)
+                .width(width)
+                .fill(color.gamma_multiply(0.7))
+                .stroke(egui::Stroke::new(1.0_f32, color))
+        })
+        .collect();
+    BarChart::new(name, bars).color(color)
 }
 
 /// A plot's title, with its key beside it and what it shows and how to
@@ -814,18 +828,12 @@ fn key_mark(ui: &mut egui::Ui, mark: Mark, color: egui::Color32) {
         Mark::Ring => {
             painter.circle_stroke(c, r, egui::Stroke::new(1.5_f32, color));
         }
-        Mark::Diamond => {
-            let points = vec![
-                c + egui::vec2(0.0, -r * 1.3),
-                c + egui::vec2(r * 1.3, 0.0),
-                c + egui::vec2(0.0, r * 1.3),
-                c + egui::vec2(-r * 1.3, 0.0),
-            ];
-            painter.add(egui::Shape::convex_polygon(
-                points,
-                color,
-                egui::Stroke::NONE,
-            ));
+        Mark::Bar => {
+            let bar = egui::Rect::from_min_max(
+                c + egui::vec2(-r * 0.8, -size * 0.45),
+                c + egui::vec2(r * 0.8, size * 0.45),
+            );
+            painter.rect_filled(bar, 0.0, color);
         }
         Mark::Dash => {
             let stroke = egui::Stroke::new(1.5_f32, color);

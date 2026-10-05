@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`rusty-tip psd`, the spectrum of a streamed signal.** Welch-averaged
+  over evenly spaced stream samples (16384 by default, segments of 1024
+  overlapping by half, Hann window), at the stream's rate as its divisor
+  sets it. The reply has the one-sided PSD in the signal's unit squared per
+  hertz, the eight highest peaks as amplitude densities with the noise
+  floor to judge them against, and the RMS, so an agent can tell a loop
+  that rings from a line the room puts there. Only
+  signals on the data stream qualify; polled samples have no time base.
+  `control::spectrum` holds the FFT and the Welch estimate.
 - **`rusty-tip`, a command line for scripts and agents.** Every command
   prints one JSON reply and exits with a code per outcome; `describe` lists
   the commands, the request schema and the exit codes. Commands go to the
@@ -184,6 +193,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Tip-prep pulses are bars from 0 V.** The pulse-voltage plot draws each
+  cycle's pulse as a bar from a 0 V line instead of a point on a line, and a
+  failed stability check's max pulses as narrower bars between the cycles,
+  so sign and size read at a glance. The frequency-shift plot is unchanged.
 - **The drift panel puts its plot first.** The burst plot sits above the
   status, results and burst table, and is taller.
 - **The workbench reads at arm's length.** Bigger buttons and rows

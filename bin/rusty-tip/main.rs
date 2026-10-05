@@ -12,6 +12,7 @@
 //! rusty-tip read current "freq shift" --samples 200
 //! rusty-tip controllers                    # Z and PLL loop parameters
 //! rusty-tip frame "Z (m)"                  # per-line stats, pixels to a file
+//! rusty-tip psd "Z (m)"                    # spectrum and its peaks
 //! rusty-tip --one-shot --mock status       # connect for this command only
 //! rusty-tip serve --config lab.toml --read-only   # headless, watch-only
 //! ```
@@ -88,6 +89,17 @@ enum Command {
         /// A signal the scan buffer records: "Z (m)", "current".
         signal: String,
     },
+    /// One streamed signal's power spectral density: peaks, RMS, spectrum.
+    Psd {
+        /// A signal on the data stream: "Z (m)", "current", "freq shift".
+        signal: String,
+        /// Stream samples to take, 64 to 20000; 16384 left out.
+        #[arg(long)]
+        samples: Option<usize>,
+        /// Samples per segment, a power of two; finer resolution, fewer averages.
+        #[arg(long)]
+        segment: Option<usize>,
+    },
     /// Connect and serve requests on `--addr` until Ctrl+C.
     Serve {
         /// Refuse every request that can change the instrument.
@@ -132,6 +144,18 @@ fn main() -> ExitCode {
             &cli,
             Request::Frame {
                 signal: signal.clone(),
+            },
+        ),
+        Command::Psd {
+            signal,
+            samples,
+            segment,
+        } => run(
+            &cli,
+            Request::Psd {
+                signal: signal.clone(),
+                samples: *samples,
+                segment: *segment,
             },
         ),
         Command::Serve { read_only, limits } => serve(&cli, *read_only, limits.as_deref()),
