@@ -1032,7 +1032,7 @@ impl SpmController for MockController {
 
     fn scan_frame_data_grab(
         &mut self,
-        _channel_index: u32,
+        _signal: SignalIndex,
         forward: bool,
     ) -> Result<(String, Vec<Vec<f32>>, bool)> {
         self.enter("scan_frame_data_grab")?;

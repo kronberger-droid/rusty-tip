@@ -135,7 +135,7 @@ pub(super) fn frame(session: &mut Session, signal: &str) -> Reply {
                 recorded.join(", ")
             ))));
         };
-        let channel = u32::from(found.index);
+        let channel = found.signal_index();
         let (_, forward, scan_up) = controller.scan_frame_data_grab(channel, true)?;
         let (_, backward, _) = controller.scan_frame_data_grab(channel, false)?;
         Ok(Ok((found, forward, backward, scan_up)))
@@ -185,8 +185,13 @@ fn frames_dir(log_dir: Option<&Path>) -> PathBuf {
     }
 }
 
+/// Write the frame and return its absolute path. The log directory is
+/// often relative (`./experiments`), and a path relative to the server's
+/// working directory means nothing to a client started somewhere else.
 fn write_frame(dir: &Path, signal: &str, file: &FrameFile<'_>) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let dir =
+        std::path::absolute(dir).map_err(|e| format!("cannot resolve {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())

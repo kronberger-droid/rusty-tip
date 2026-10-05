@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use nanonis_rs::scan::{ScanAction, ScanDirection};
 
 use crate::action::{Action, ActionContext, ActionOutput};
+use crate::signal_registry::SignalIndex;
 use crate::spm_controller::Capability;
 
 /// DataStore key that `GrabScanFrame` writes and `RunAnalyzer` reads by default.
@@ -88,7 +89,8 @@ impl Action for ScanControl {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GrabScanFrame {
-    /// Which scan buffer channel to read (0-based index).
+    /// The recorded signal to read, by signal index (Current is 0, Z (m)
+    /// 30 on a stock assignment); it has to be in the scan buffer.
     pub channel_index: u32,
     /// `true` for forward scan direction, `false` for backward.
     #[serde(default = "super::default_true")]
@@ -117,7 +119,7 @@ impl Action for GrabScanFrame {
     fn execute(&self, ctx: &mut ActionContext) -> super::Result<ActionOutput> {
         let (channel_name, data, direction_up) = ctx
             .controller
-            .scan_frame_data_grab(self.channel_index, self.forward)?;
+            .scan_frame_data_grab(SignalIndex(self.channel_index), self.forward)?;
         let result = serde_json::json!({
             "channel_name": channel_name,
             "data": data,

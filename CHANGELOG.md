@@ -312,6 +312,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`rusty-tip` answered `busy` to a read it was running.** The 10 s busy
+  timeout covered the whole request, so a sampled read longer than that,
+  three signals at 5000 samples on a 1 kHz stream, came back "busy, nothing
+  was done" while it held the session. The timeout now covers only the wait
+  for the session to start a request; one that started is waited for up to
+  60 s, and whether it started or was dropped is settled atomically, so
+  `busy` always means nothing ran. A read takes at most 20000 samples over
+  its signals.
+- **`rusty-tip --addr localhost:…` missed a server on `127.0.0.1`.** Windows
+  resolves `localhost` to `::1` first and the client tried only that; it now
+  tries each address the name resolves to.
+- **`rusty-tip serve` connected before it knew it could listen.** With the
+  port taken it connected and loaded the config's layout and settings, then
+  gave up. It binds first now, and `Server::serve` takes the bound listener.
+- **The scan buffer named the wrong signals on Nanonis.** `Scan.BufferGet`,
+  `Scan.BufferSet` and `Scan.FrameDataGrab` number channels by Signals
+  Manager slot (0 to 23), not by signal, and they were passed through as
+  signal indexes. A scan of Current, Z, the PLL's phase and amplitude, the
+  frequency shift and the excitation read as Current and five unused
+  inputs, `rusty-tip frame "Z (m)"` was refused, and multi-pass asked the
+  buffer for slot 30, which does not exist. `NanonisController` now
+  translates through `Signals.InSlotsGet`, asked on each use since slots can
+  be reassigned, and `SpmController::scan_frame_data_grab` takes a
+  `SignalIndex`. The query is sent by hand: `nanonis-rs` 0.5's
+  `signals_in_slots_get` parses its reply without the slot names that come
+  first.
+- **Tool names in the workbench sidebar sat indented.** Every tool's label
+  kept room for the running marker; only the running tool carries one now,
+  and the rest line up with Connection.
 - **One tool's run showed on another's tabs.** The last run's status,
   elapsed time and "Run finished" message appeared on every tool. A run
   now shows only on its own tool, and a message goes with the page it came
