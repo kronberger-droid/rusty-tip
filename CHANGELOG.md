@@ -165,12 +165,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so in a `tip_prep/config_reloaded` event, which also records the config
   as applied. `Cycles::set_limits` lets a lowered `max_cycles` or
   `max_duration_secs` end the loop before another pulse. The workbench's
-  tip-prep Run panel has a Reload config button that sends the Setup form.
+  tip-prep Run tab has an Apply to run button beside Start and Stop that
+  sends the Setup form, and Setup greys out the fields a run keeps.
 
 ### Changed
 
 - **The drift panel puts its plot first.** The burst plot sits above the
   status, results and burst table, and is taller.
+- **The workbench reads at arm's length.** Bigger buttons and rows
+  throughout; Start, Connect and Reconnect green, Stop, Disconnect and
+  Delete red, and the buttons that write to the controller amber, each
+  plain while disabled. Headings with their explanations on hover replace
+  the paragraphs, and results are labelled values: the tip-prep status, the
+  live readouts, the drift result, and drift's before and after as a
+  table. The tip-prep plots fill the tab, share one x scale and axis width
+  so their cycles line up, draw whole-cycle grid lines, and keep their key
+  beside the title rather than over the first cycles. The Connection page
+  is one aligned form that no longer moves when the backend changes, and
+  Connect lives on the top bar only. Controllers groups its buttons under
+  Profile, All loops, Presets and Parameters, shows a loop as ON or OFF
+  beside its switch, and has no Run tab: its last action shows under
+  Setup. Setup's file reload is Re-read file, the preset one Refresh
+  presets.
+- **History is per tool.** The History tab lists the current tool's logs,
+  newest first, with readable outcomes and durations; All tools shows the
+  rest.
 - **Drift compensation waits out creep first.** `compensate` takes baseline
   bursts until three in a row agree, then corrects; a drift still changing
   after `settle_max_ms` (180 s, `--settle`) fails with nothing touched. Only
@@ -279,6 +298,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One tool's run showed on another's tabs.** The last run's status,
+  elapsed time and "Run finished" message appeared on every tool. A run
+  now shows only on its own tool, and a message goes with the page it came
+  up on.
+- **A loop's "on" marker drew as an empty box.** The UI font has no
+  circle glyph; the Controllers tabs say "(on)" instead.
 - **No pulse voltage during cycle 1.** The tip-prep status read the voltage
   off the cycle event, which only follows the reposition and the read. It
   now shows the `bias_pulse` action's voltage as the pulse fires, and the

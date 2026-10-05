@@ -25,7 +25,7 @@ use crate::connection::{ConnectionForm, ConnectionPane, ConnectionSettings, Pane
 use crate::run_view::RunView;
 use crate::samples::Samples;
 use crate::tools::{self, SetupCx, Tool};
-use crate::widgets::{Note, note};
+use crate::widgets::{Note, Tone, apply_style, note, toned_if};
 
 /// Which of a tool's tabs is shown. Not saved: a start opens on Run,
 /// where the Start button and the last run are.
@@ -91,6 +91,13 @@ pub struct WorkbenchApp {
     run: Option<ActiveRun>,
     status: RunStatus,
     view: RunView,
+    /// The tool `view` and `status` belong to. Every other tool shows a
+    /// blank run, so one tool's outcome never reads as another's.
+    view_owner: Option<&'static str>,
+    /// What a tool with no run of its own is shown.
+    blank: RunView,
+    /// Show every tool's logs on the History tab, not just this one's.
+    history_all: bool,
     theme: egui::ThemePreference,
     message: Option<Note>,
     log_lines: Vec<String>,
@@ -102,6 +109,7 @@ pub struct WorkbenchApp {
 
 impl WorkbenchApp {
     pub fn new(cc: &eframe::CreationContext<'_>, log_rx: Receiver<String>) -> Self {
+        apply_style(&cc.egui_ctx);
         let prefs: Prefs = cc
             .storage
             .and_then(|s| eframe::get_value(s, PREFS_KEY))
@@ -116,6 +124,10 @@ impl WorkbenchApp {
             .iter()
             .position(|t| t.id() == prefs.page)
             .map_or(Page::Connection, Page::Tool);
+        let tab = match page {
+            Page::Tool(i) if !tools[i].has_run_tab() => Tab::Setup,
+            _ => Tab::default(),
+        };
         let pane = ConnectionPane::new(prefs.connection);
         log::set_max_level(pane.form.log_level);
         let session = session::spawn(pane.form.log_dir());
@@ -124,10 +136,13 @@ impl WorkbenchApp {
             pane,
             tools,
             page,
-            tab: Tab::default(),
+            tab,
             run: None,
             status: RunStatus::Idle,
             view: RunView::default(),
+            view_owner: None,
+            blank: RunView::default(),
+            history_all: false,
             theme: prefs.theme,
             message: None,
             log_lines: Vec::new(),
@@ -139,6 +154,35 @@ impl WorkbenchApp {
 
     fn running(&self) -> bool {
         self.run.is_some()
+    }
+
+    /// The tool a log belongs to: its job's name is the tool's id, or the
+    /// id and what the job did (`controllers_read`).
+    fn tool_for_log(&self, log_tool: &str) -> Option<usize> {
+        self.tools
+            .iter()
+            .position(|t| log_is_from(t.id(), log_tool))
+    }
+
+    /// Show another page. A message is about the page it came up on, so it
+    /// goes.
+    fn go_to(&mut self, page: Page) {
+        if self.page != page {
+            self.message = None;
+        }
+        self.page = page;
+        if let Page::Tool(i) = page
+            && !self.tools[i].has_run_tab()
+            && self.tab == Tab::Run
+        {
+            self.tab = Tab::Setup;
+        }
+    }
+
+    /// The run a tool shows: the last one if it was this tool's, else
+    /// nothing.
+    fn owns_view(&self, tool: usize) -> bool {
+        self.view_owner == Some(self.tools[tool].id())
     }
 
     /// The tool the middle shows, if a tool page is up.
@@ -188,10 +232,13 @@ impl WorkbenchApp {
         // Whatever is still in the channel belongs to this run.
         self.drain_run_events();
         self.run = None;
-        self.message = Some(match &result {
-            Ok(outcome) => Note::ok(format!("Run finished: {}", outcome_text(*outcome))),
-            Err(e) => Note::err(format!("Run failed: {e}")),
-        });
+        // The status line says how a run ended; only a failure needs the
+        // message line too, for the error's text. "Stop requested" is
+        // answered by the run ending, so it goes.
+        self.message = match &result {
+            Ok(_) => None,
+            Err(e) => Some(Note::err(format!("Run failed: {e}"))),
+        };
         self.status = RunStatus::Finished(result);
     }
 
@@ -214,6 +261,7 @@ impl WorkbenchApp {
         let shutdown = ShutdownFlag::new();
         let (tx, rx) = unbounded();
         self.view = RunView::default();
+        self.view_owner = Some(self.tools[tool].id());
         self.status = RunStatus::Idle;
         self.message = None;
         self.send(SessionCmd::Run {
@@ -249,14 +297,18 @@ impl WorkbenchApp {
                 for record in log.records {
                     view.apply(record);
                 }
-                if let Some(tool) = view.header.as_ref().map(|h| h.tool.clone())
-                    && let Some(i) = self.tools.iter().position(|t| t.id() == tool)
-                {
+                let tool = view.header.as_ref().map(|h| h.tool.clone());
+                let found = tool.and_then(|tool| self.tool_for_log(&tool));
+                if let Some(i) = found {
                     self.page = Page::Tool(i);
                 }
+                self.view_owner = found.map(|i| self.tools[i].id());
                 self.view = view;
                 self.status = RunStatus::Replay(path);
-                self.tab = Tab::Run;
+                self.tab = match found {
+                    Some(i) if !self.tools[i].has_run_tab() => Tab::Setup,
+                    _ => Tab::Run,
+                };
             }
             Err(e) => {
                 self.message = Some(Note::err(format!("Cannot open {}: {e}", path.display())));
@@ -309,10 +361,10 @@ impl WorkbenchApp {
             .selectable_label(self.page == Page::Connection, "Connection")
             .clicked()
         {
-            self.page = Page::Connection;
+            self.go_to(Page::Connection);
         }
-        ui.add_space(8.0);
-        ui.label(egui::RichText::new("Tools").strong());
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new("Tools").weak().size(12.0));
         let running_id = self.run.as_ref().map(|r| r.tool_id);
         for i in 0..self.tools.len() {
             let marker = if running_id == Some(self.tools[i].id()) {
@@ -325,7 +377,7 @@ impl WorkbenchApp {
                 .selectable_label(self.page == Page::Tool(i), text)
                 .clicked()
             {
-                self.page = Page::Tool(i);
+                self.go_to(Page::Tool(i));
             }
         }
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
@@ -358,38 +410,50 @@ impl WorkbenchApp {
             self.apply_pane_action(action);
             return;
         };
+        let has_run = self.tools[tool].has_run_tab();
         ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(self.tools[tool].label()).heading());
+            ui.add_space(12.0);
             for (tab, label) in [
                 (Tab::Run, "Run"),
                 (Tab::Setup, "Setup"),
                 (Tab::History, "History"),
             ] {
-                if ui.selectable_label(self.tab == tab, label).clicked() {
+                if tab == Tab::Run && !has_run {
+                    continue;
+                }
+                let text = egui::RichText::new(label).size(15.0);
+                if ui.selectable_label(self.tab == tab, text).clicked() {
                     self.tab = tab;
                     if tab == Tab::History {
                         self.refresh_history();
                     }
                 }
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new(self.tools[tool].label()).strong());
-            });
         });
         ui.separator();
         match self.tab {
             Tab::Setup => {
+                let owns = self.owns_view(tool);
                 let mut cx = SetupCx {
                     connection: self.pane.form.settings(),
                     import: None,
                     can_run: !self.running() && self.pane.state == ConnState::Connected,
                     run: None,
-                    view: &self.view,
+                    view: if owns { &self.view } else { &self.blank },
                     samples: &self.samples,
                     readouts: &self.pane.readouts,
                 };
                 note(ui, &self.message);
                 self.tools[tool].setup(ui, &mut cx);
                 let SetupCx { import, run, .. } = cx;
+                // A tool without a Run tab shows its last job here.
+                if !has_run && owns {
+                    ui.add_space(8.0);
+                    egui::CollapsingHeader::new("Last action")
+                        .default_open(true)
+                        .show(ui, |ui| self.tools[tool].panel(ui, &self.view));
+                }
                 if let Some(settings) = import {
                     self.import_connection(settings);
                 }
@@ -400,7 +464,7 @@ impl WorkbenchApp {
                 }
             }
             Tab::Run => self.render_run(ui, tool),
-            Tab::History => self.render_history(ui),
+            Tab::History => self.render_history(ui, tool),
         }
     }
 
@@ -411,36 +475,39 @@ impl WorkbenchApp {
             .as_ref()
             .is_some_and(|r| r.tool_id == self.tools[tool].id());
         let can_start = !running && self.pane.state == ConnState::Connected;
+        let owns = self.owns_view(tool);
+        let (mut start, mut stop) = (false, false);
+        let view = if owns { &self.view } else { &self.blank };
 
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(can_start, egui::Button::new("Start"))
+            start = ui
+                .add_enabled(
+                    can_start,
+                    toned_if(ui, can_start, "Start", Tone::Primary)
+                        .min_size(egui::vec2(90.0, 30.0)),
+                )
                 .on_disabled_hover_text(if running {
                     "A job is running"
                 } else {
                     "Connect first"
                 })
-                .clicked()
-            {
-                self.start(tool);
-            }
-            if ui
-                .add_enabled(this_running, egui::Button::new("Stop"))
-                .clicked()
-            {
-                self.stop();
-            }
+                .clicked();
+            stop = ui
+                .add_enabled(
+                    this_running,
+                    toned_if(ui, this_running, "Stop", Tone::Danger)
+                        .min_size(egui::vec2(90.0, 30.0)),
+                )
+                .clicked();
+            self.tools[tool].run_controls(ui, view);
             ui.separator();
-            match &self.status {
+            let status = if owns { &self.status } else { &RunStatus::Idle };
+            match status {
                 RunStatus::Idle => {
-                    ui.label(if self.run.is_some() {
-                        "running"
-                    } else {
-                        "ready"
-                    });
+                    ui.label(if this_running { "running" } else { "ready" });
                 }
                 RunStatus::Finished(Ok(outcome)) => {
-                    ui.label(outcome_text(*outcome));
+                    ui.label(egui::RichText::new(outcome_text(*outcome)).strong());
                 }
                 RunStatus::Finished(Err(e)) => {
                     ui.colored_label(egui::Color32::RED, "error")
@@ -450,26 +517,32 @@ impl WorkbenchApp {
                     ui.label(format!("replay of {}", file_name(path)));
                 }
             }
-            if let Some((action, depth)) = &self.view.current_action {
-                ui.separator();
-                ui.label(format!("{}{action}", "  ".repeat(*depth)));
+            if this_running && let Some((action, _)) = &view.current_action {
+                ui.label(egui::RichText::new(action.replace('_', " ")).weak());
             }
-            if let Some(elapsed) = self.view.elapsed_s() {
+            if let Some(elapsed) = view.elapsed_s() {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!("{elapsed:.0} s"));
+                    ui.label(elapsed_text(elapsed));
                 });
             }
         });
+        if start {
+            self.start(tool);
+        }
+        if stop {
+            self.stop();
+        }
         note(ui, &self.message);
         ui.add_space(6.0);
 
+        let view = if owns { &self.view } else { &self.blank };
         egui::ScrollArea::vertical().show(ui, |ui| {
             // The tool's own view first; its series names are its own.
-            self.tools[tool].panel(ui, &self.view);
+            self.tools[tool].panel(ui, view);
 
             ui.add_space(8.0);
             ui.collapsing("Run events", |ui| {
-                log_lines(ui, "run_events", self.view.tail.iter().map(String::as_str));
+                log_lines(ui, "run_events", view.tail.iter().map(String::as_str));
             });
             ui.collapsing("Process log", |ui| {
                 log_lines(ui, "process_log", self.log_lines.iter().map(String::as_str));
@@ -480,44 +553,80 @@ impl WorkbenchApp {
         });
     }
 
-    fn render_history(&mut self, ui: &mut egui::Ui) {
+    fn render_history(&mut self, ui: &mut egui::Ui, tool: usize) {
         ui.horizontal(|ui| {
             match self.pane.form.log_dir() {
-                Some(dir) => ui.label(format!("logs in {}", dir.display())),
+                Some(dir) => ui
+                    .label(egui::RichText::new(dir.display().to_string()).weak())
+                    .on_hover_text("The log directory, set on the Connection page"),
                 None => ui.label("no log directory set"),
             };
             if ui.button("Refresh").clicked() {
                 self.refresh_history();
             }
+            ui.checkbox(&mut self.history_all, "All tools");
         });
         ui.add_space(4.0);
+        let mut rows: Vec<&LogEntry> = self
+            .history
+            .iter()
+            .filter(|e| {
+                self.history_all
+                    || e.tool.as_deref().and_then(|t| self.tool_for_log(t)) == Some(tool)
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            b.started_at
+                .partial_cmp(&a.started_at)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let mut open = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
             egui::Grid::new("history")
                 .num_columns(5)
                 .striped(true)
-                .spacing([16.0, 4.0])
+                .spacing([20.0, 6.0])
                 .show(ui, |ui| {
-                    for h in ["file", "tool", "started", "outcome", ""] {
+                    for h in ["Started", "Tool", "Outcome", "Duration", ""] {
                         ui.label(egui::RichText::new(h).strong());
                     }
                     ui.end_row();
-                    for entry in &self.history {
-                        ui.label(file_name(&entry.path));
-                        ui.label(entry.tool.as_deref().unwrap_or("(no header)"));
-                        ui.label(entry.started_at.map(started_text).unwrap_or_default());
-                        ui.label(match &entry.finished {
-                            Some((outcome, Some(detail), _)) => format!("{outcome} ({detail})"),
-                            Some((outcome, None, _)) => outcome.clone(),
-                            None => "cut off".into(),
-                        });
+                    for entry in &rows {
+                        ui.label(entry.started_at.map(started_text).unwrap_or_default())
+                            .on_hover_text(file_name(&entry.path));
+                        ui.label(
+                            entry
+                                .tool
+                                .as_deref()
+                                .map(|t| t.replace('_', " "))
+                                .unwrap_or_else(|| "(no header)".into()),
+                        );
+                        match &entry.finished {
+                            Some((outcome, detail, _)) => {
+                                let r = ui.label(outcome.replace('_', " "));
+                                if let Some(detail) = detail {
+                                    r.on_hover_text(detail);
+                                }
+                            }
+                            None => {
+                                ui.colored_label(egui::Color32::RED, "cut off")
+                                    .on_hover_text("The log ends without a finish line");
+                            }
+                        }
+                        ui.label(
+                            entry
+                                .finished
+                                .as_ref()
+                                .map(|(_, _, ms)| elapsed_text(ms / 1000.0))
+                                .unwrap_or_default(),
+                        );
                         if ui.button("Open").clicked() {
                             open = Some(entry.path.clone());
                         }
                         ui.end_row();
                     }
                 });
-            if self.history.is_empty() {
+            if rows.is_empty() {
                 ui.label(egui::RichText::new("no logs").weak());
             }
         });
@@ -604,6 +713,28 @@ fn outcome_text(outcome: Outcome) -> String {
     }
 }
 
+/// Whether a log whose header names `log_tool` came from the tool `id`:
+/// the job is named after the tool, or the tool and what it did.
+fn log_is_from(id: &str, log_tool: &str) -> bool {
+    log_tool == id
+        || log_tool
+            .strip_prefix(id)
+            .is_some_and(|rest| rest.starts_with('_'))
+}
+
+/// A duration: tenths under ten seconds, so a quick job does not read as
+/// `0 s`, then whole seconds, then minutes and seconds.
+fn elapsed_text(secs: f64) -> String {
+    if secs < 10.0 {
+        format!("{secs:.1} s")
+    } else if secs < 120.0 {
+        format!("{secs:.0} s")
+    } else {
+        let whole = secs.round() as u64;
+        format!("{} min {:02} s", whole / 60, whole % 60)
+    }
+}
+
 /// A log's first timestamp as local date and time.
 fn started_text(unix_secs: f64) -> String {
     chrono::DateTime::from_timestamp(unix_secs as i64, 0)
@@ -619,4 +750,25 @@ fn file_name(path: &std::path::Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_log_belongs_to_the_tool_its_job_is_named_after() {
+        assert!(log_is_from("tip_prep", "tip_prep"));
+        assert!(log_is_from("controllers", "controllers_read"));
+        assert!(!log_is_from("drift", "driftwood"));
+        assert!(!log_is_from("tip_prep", "drift"));
+    }
+
+    #[test]
+    fn durations_keep_tenths_while_short() {
+        assert_eq!(elapsed_text(0.4), "0.4 s");
+        assert_eq!(elapsed_text(3.2), "3.2 s");
+        assert_eq!(elapsed_text(95.0), "95 s");
+        assert_eq!(elapsed_text(125.0), "2 min 05 s");
+    }
 }

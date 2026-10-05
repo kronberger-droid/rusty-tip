@@ -43,9 +43,10 @@ impl SchemaForm {
     }
 
     /// Draw the whole value, each top-level field a collapsible section,
-    /// except the top-level fields named in `hidden`: their values stay in
-    /// `value` untouched, they are just not drawn, for sections another
-    /// page owns. Returns whether anything was edited.
+    /// except the fields named in `hidden` by dotted path (`console`,
+    /// `tip_prep.initial_bias_v`): their values stay in `value` untouched,
+    /// they are just not drawn, for fields another page or another part of
+    /// the page shows. Returns whether anything was edited.
     pub fn render_except(&self, ui: &mut egui::Ui, value: &mut Value, hidden: &[&str]) -> bool {
         let mut changed = false;
         if let Some(props) = self.root.get("properties").and_then(Value::as_object) {
@@ -57,7 +58,7 @@ impl SchemaForm {
                 let field = object
                     .entry(key.clone())
                     .or_insert_with(|| default_for(prop));
-                changed |= self.render_section(ui, prop, field, key, key);
+                changed |= self.render_section(ui, prop, field, key, key, hidden);
             }
         }
         changed
@@ -66,6 +67,18 @@ impl SchemaForm {
     /// Draw one field by its dotted path as a row of the enclosing grid,
     /// for the featured fields at the top.
     pub fn render_path(&self, ui: &mut egui::Ui, value: &mut Value, path: &str) -> bool {
+        self.render_path_enabled(ui, value, path, true)
+    }
+
+    /// [`SchemaForm::render_path`], greyed out and not editable when
+    /// `enabled` is false, for a field that cannot change right now.
+    pub fn render_path_enabled(
+        &self,
+        ui: &mut egui::Ui,
+        value: &mut Value,
+        path: &str,
+        enabled: bool,
+    ) -> bool {
         let mut schema = &self.root;
         let mut node = value;
         let mut last = path;
@@ -85,7 +98,15 @@ impl SchemaForm {
             schema = prop;
             last = segment;
         }
-        self.render_field(ui, schema, node, last, path)
+        if enabled {
+            return self.render_field(ui, schema, node, last, path);
+        }
+        // A scalar row only: the label and the editor greyed out, each in
+        // its own cell so the grid still lines up.
+        ui.add_enabled(false, egui::Label::new(label_for(last, schema)));
+        ui.add_enabled_ui(false, |ui| render_editor(ui, schema, node, path));
+        ui.end_row();
+        false
     }
 
     /// The top-level field names, in the schema's order.
@@ -123,6 +144,7 @@ impl SchemaForm {
         value: &mut Value,
         key: &str,
         id: &str,
+        hidden: &[&str],
     ) -> bool {
         let mut changed = false;
         let response = egui::CollapsingHeader::new(label_for(key, schema))
@@ -130,7 +152,7 @@ impl SchemaForm {
             .default_open(false)
             .show(ui, |ui| {
                 changed = if matches!(classify(schema), Kind::Object) {
-                    self.render_object(ui, schema, value, id)
+                    self.render_object(ui, schema, value, id, hidden)
                 } else {
                     grid(ui, id, |ui| self.render_field(ui, schema, value, key, id))
                 };
@@ -149,15 +171,20 @@ impl SchemaForm {
         schema: &Value,
         value: &mut Value,
         id: &str,
+        hidden: &[&str],
     ) -> bool {
         let Some(props) = schema.get("properties").and_then(Value::as_object) else {
             return render_raw(ui, value, id);
         };
         let object = ensure_object(value);
+        let is_hidden = |key: &str| hidden.contains(&format!("{id}.{key}").as_str());
         let mut changed = grid(ui, id, |ui| {
             let mut changed = false;
             for (key, prop) in props {
-                if matches!(classify(prop), Kind::Object) || !is_shown(prop, object) {
+                if matches!(classify(prop), Kind::Object)
+                    || !is_shown(prop, object)
+                    || is_hidden(key)
+                {
                     continue;
                 }
                 let field = object
@@ -168,13 +195,14 @@ impl SchemaForm {
             changed
         });
         for (key, prop) in props {
-            if !matches!(classify(prop), Kind::Object) || !is_shown(prop, object) {
+            if !matches!(classify(prop), Kind::Object) || !is_shown(prop, object) || is_hidden(key)
+            {
                 continue;
             }
             let field = object
                 .entry(key.clone())
                 .or_insert_with(|| default_for(prop));
-            changed |= self.render_section(ui, prop, field, key, &format!("{id}.{key}"));
+            changed |= self.render_section(ui, prop, field, key, &format!("{id}.{key}"), hidden);
         }
         changed
     }
@@ -784,6 +812,26 @@ mod tests {
             });
         });
         changed
+    }
+
+    /// A greyed-out field is drawn but cannot edit, even one whose value is
+    /// missing: nothing is filled in behind the user's back.
+    #[test]
+    fn a_greyed_out_field_never_edits() {
+        let form = form();
+        let mut value = serde_json::to_value(AppConfig::default()).unwrap();
+        let before = value.clone();
+        let ctx = egui::Context::default();
+        let mut changed = false;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                changed |= grid(ui, "frozen", |ui| {
+                    form.render_path_enabled(ui, &mut value, "tip_prep.initial_bias_v", false)
+                });
+            });
+        });
+        assert!(!changed);
+        assert_eq!(value, before);
     }
 
     #[test]

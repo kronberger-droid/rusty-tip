@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use eframe::egui;
 use egui_plot::{HLine, Line, LineStyle, Plot, PlotPoint, PlotPoints};
 
+use crate::units::number;
+
 /// Plot colours for one theme, shared by every tool's plots.
 pub struct Palette {
     /// The first series: what the tool is about.
@@ -38,6 +40,83 @@ impl Palette {
     }
 }
 
+/// Width of every plot's y-axis strip, fixed so stacked plots share one
+/// x scale whatever their tick labels are (`-10.00 Hz` against `4.000 V`).
+pub const Y_AXIS_WIDTH: f32 = 84.0;
+
+/// Spacing for the whole window. egui's defaults are sized for dense
+/// tool panels; a lab window is read at arm's length and clicked in
+/// gloves, so buttons get room and rows breathe.
+pub fn apply_style(ctx: &egui::Context) {
+    ctx.all_styles_mut(|style| {
+        let s = &mut style.spacing;
+        s.button_padding = egui::vec2(10.0, 4.0);
+        s.interact_size.y = 26.0;
+        s.item_spacing = egui::vec2(8.0, 6.0);
+    });
+}
+
+/// What a button does, which its colour says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    /// The page's main action: Start, Connect.
+    Primary,
+    /// Stops or cuts something off: Stop, Disconnect, Delete.
+    Danger,
+    /// Writes to the controller: Apply, Apply preset, Switch on.
+    Write,
+}
+
+/// A button coloured by what it does. egui greys a disabled one out on top.
+pub fn toned(ui: &egui::Ui, text: impl Into<String>, tone: Tone) -> egui::Button<'static> {
+    let dark = ui.visuals().dark_mode;
+    let (fill, text_color) = match (tone, dark) {
+        (Tone::Primary, true) => (egui::Color32::from_rgb(30, 110, 60), egui::Color32::WHITE),
+        (Tone::Primary, false) => (egui::Color32::from_rgb(40, 140, 75), egui::Color32::WHITE),
+        (Tone::Danger, true) => (egui::Color32::from_rgb(150, 40, 40), egui::Color32::WHITE),
+        (Tone::Danger, false) => (egui::Color32::from_rgb(190, 50, 50), egui::Color32::WHITE),
+        (Tone::Write, true) => (egui::Color32::from_rgb(140, 95, 20), egui::Color32::WHITE),
+        (Tone::Write, false) => (egui::Color32::from_rgb(165, 95, 0), egui::Color32::WHITE),
+    };
+    egui::Button::new(egui::RichText::new(text.into()).color(text_color).strong()).fill(fill)
+}
+
+/// [`toned`] while `enabled`, a plain button otherwise: a greyed-out
+/// colour still reads as live, so a button that cannot act drops it. Pass
+/// the same flag to `add_enabled`.
+pub fn toned_if(
+    ui: &egui::Ui,
+    enabled: bool,
+    text: impl Into<String>,
+    tone: Tone,
+) -> egui::Button<'static> {
+    if enabled {
+        toned(ui, text, tone)
+    } else {
+        egui::Button::new(text.into())
+    }
+}
+
+/// A section heading, with what the section is about on hover rather than
+/// as a paragraph under it.
+pub fn section(ui: &mut egui::Ui, title: &str, help: Option<&str>) {
+    ui.add_space(6.0);
+    let response = ui.label(egui::RichText::new(title).heading().size(17.0));
+    if let Some(help) = help {
+        response.on_hover_text(help);
+    }
+    ui.add_space(2.0);
+}
+
+/// A label and a value, the value large, for the numbers a page is about.
+pub fn stat(ui: &mut egui::Ui, label: &str, value: impl Into<egui::WidgetText>) -> egui::Response {
+    ui.vertical(|ui| {
+        ui.label(egui::RichText::new(label).weak().size(12.0));
+        ui.label(value);
+    })
+    .response
+}
+
 /// A filled circle the height of a line of text, the one place the
 /// workbench uses colour for state.
 pub fn status_dot(ui: &mut egui::Ui, color: egui::Color32) {
@@ -56,7 +135,11 @@ pub fn path_field(
     width: f32,
     dialog: impl FnOnce() -> Option<PathBuf>,
 ) -> (egui::Response, bool) {
-    let response = ui.add(egui::TextEdit::singleline(text).desired_width(width));
+    let response = ui.add(
+        egui::TextEdit::singleline(text)
+            .desired_width(width)
+            .hint_text("none, or … to pick one"),
+    );
     let mut picked = false;
     if ui.button("…").clicked()
         && let Some(path) = dialog()
@@ -115,6 +198,7 @@ pub struct StripChart<'a> {
 impl StripChart<'_> {
     pub fn show(&self, ui: &mut egui::Ui, points: impl IntoIterator<Item = [f64; 2]>) {
         let points: Vec<PlotPoint> = points.into_iter().map(PlotPoint::from).collect();
+        let unit = self.unit.to_string();
         Plot::new(self.id)
             .width(self.size[0])
             .height(self.size[1])
@@ -126,7 +210,11 @@ impl StripChart<'_> {
             .include_x(-self.window_s)
             .include_x(0.0)
             .x_axis_label("s")
-            .y_axis_label(self.unit)
+            .custom_y_axes(vec![
+                egui_plot::AxisHints::new_y()
+                    .min_thickness(Y_AXIS_WIDTH)
+                    .formatter(move |mark, _| format!("{} {unit}", number(mark.value))),
+            ])
             .show(ui, |plot_ui| {
                 if let Some(sp) = self.setpoint {
                     plot_ui.hline(

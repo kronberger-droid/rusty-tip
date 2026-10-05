@@ -27,7 +27,7 @@ use super::{SetupCx, Tool, load_toml, save_toml};
 use crate::form::{SchemaForm, number_field};
 use crate::run_view::RunView;
 use crate::units::{display_unit_for, format_si, number, prefix_scale};
-use crate::widgets::{Note, Palette, StripChart, note, path_field};
+use crate::widgets::{Note, Palette, StripChart, Tone, note, path_field, section, toned_if};
 
 /// The controllers a profile can be composed for before anything is read.
 const KNOWN: [ControllerId; 3] = [
@@ -197,6 +197,14 @@ impl ControllersTool {
             .collect();
         let chosen = self.picked_preset(id);
 
+        section(
+            ui,
+            "Presets",
+            Some(&format!(
+                "This loop's saved parameter sets, from {}",
+                path.display()
+            )),
+        );
         ui.horizontal_wrapped(|ui| {
             ui.label("Preset")
                 .on_hover_text(format!("From {}", path.display()));
@@ -229,7 +237,12 @@ impl ControllersTool {
             if ui
                 .add_enabled(
                     chosen.is_some() && cx.can_run,
-                    egui::Button::new("Apply preset"),
+                    toned_if(
+                        ui,
+                        chosen.is_some() && cx.can_run,
+                        "Apply preset",
+                        Tone::Write,
+                    ),
                 )
                 .on_hover_text(
                     "Write the preset's gains, keeping the setpoint the loop holds, and read \
@@ -242,7 +255,10 @@ impl ControllersTool {
                 cx.run = Some(Box::new(ApplyPreset { preset: p }));
             }
             if ui
-                .add_enabled(chosen.is_some(), egui::Button::new("Delete"))
+                .add_enabled(
+                    chosen.is_some(),
+                    toned_if(ui, chosen.is_some(), "Delete", Tone::Danger),
+                )
                 .on_hover_text("Remove it from the preset file")
                 .clicked()
                 && let Some(p) = &chosen
@@ -257,7 +273,7 @@ impl ControllersTool {
                 self.refresh_presets(&path);
             }
             if ui
-                .small_button("Reload")
+                .button("Refresh presets")
                 .on_hover_text("Read the preset file again")
                 .clicked()
             {
@@ -596,12 +612,26 @@ impl Tool for ControllersTool {
         "Controllers"
     }
 
+    /// Every job here starts from a Setup button; the last one's result
+    /// shows under the setup.
+    fn has_run_tab(&self) -> bool {
+        false
+    }
+
     fn setup(&mut self, ui: &mut egui::Ui, cx: &mut SetupCx) {
         self.take_readings(cx.view);
 
+        section(
+            ui,
+            "Profile",
+            Some(
+                "Every loop's form and the settings file, saved together as one TOML file \
+                 to load again later",
+            ),
+        );
         ui.horizontal(|ui| {
-            ui.label("Profile");
-            let width = (ui.available_width() - 150.0).max(120.0);
+            ui.label("Profile file");
+            let width = (ui.available_width() - 190.0).max(120.0);
             let (_, picked) = path_field(ui, &mut self.profile_path, width, || {
                 rfd::FileDialog::new()
                     .add_filter("TOML", &["toml"])
@@ -630,13 +660,19 @@ impl Tool for ControllersTool {
                  controller's input signal and log or linear input are defined. \
                  Empty loads nothing.",
             );
-            let width = (ui.available_width() - 40.0).max(120.0);
+            let width = (ui.available_width() - 60.0).max(120.0);
             path_field(ui, &mut self.settings_file, width, || {
                 rfd::FileDialog::new()
                     .add_filter("Nanonis settings", &["ini"])
                     .pick_file()
             });
         });
+
+        section(
+            ui,
+            "All loops",
+            Some("Read every loop from the controller, or write every form that differs"),
+        );
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(cx.can_run, egui::Button::new("Read from controller"))
@@ -647,7 +683,10 @@ impl Tool for ControllersTool {
                 cx.run = Some(Box::new(ReadControllers));
             }
             if ui
-                .add_enabled(cx.can_run, egui::Button::new("Apply"))
+                .add_enabled(
+                    cx.can_run,
+                    toned_if(ui, cx.can_run, "Apply to controller", Tone::Write),
+                )
                 .on_hover_text(
                     "Load the settings file, write every controller whose form differs \
                      from its last reading, and read everything back. Switches nothing \
@@ -673,16 +712,18 @@ impl Tool for ControllersTool {
             }
         });
         note(ui, &self.message);
-        ui.add_space(6.0);
 
+        section(ui, "Loop", None);
         ui.horizontal_wrapped(|ui| {
             for id in self.ids() {
+                // Words, not a dot: the UI font has no circle glyph.
                 let marker = match self.readings.get(&id) {
-                    Some(r) if r.enabled => " ●",
+                    Some(r) if r.enabled => " (on)",
                     _ => "",
                 };
+                let text = egui::RichText::new(format!("{id}{marker}")).size(15.0);
                 if ui
-                    .selectable_label(self.selected == Some(id), format!("{id}{marker}"))
+                    .selectable_label(self.selected == Some(id), text)
                     .clicked()
                 {
                     self.selected = Some(id);
@@ -692,30 +733,31 @@ impl Tool for ControllersTool {
         let Some(id) = self.selected else {
             return;
         };
-        self.render_presets(ui, cx, id);
         ui.add_space(4.0);
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.horizontal(|ui| match self.readings.get(&id) {
                 Some(r) => {
-                    ui.label(format!(
-                        "{}, {}",
-                        r.status,
-                        if r.enabled { "on" } else { "off" }
-                    ));
+                    let colors = Palette::for_theme(ui.visuals().dark_mode);
+                    let (word, color) = if r.enabled {
+                        ("ON", colors.bounds.to_opaque())
+                    } else {
+                        ("OFF", ui.visuals().weak_text_color())
+                    };
+                    let mut about = format!("Controller status: {}", r.status);
                     if !r.available.is_empty() {
-                        ui.label(
-                            egui::RichText::new(format!("defined: {}", r.available.join(", ")))
-                                .weak(),
-                        );
+                        about.push_str(&format!("\nInputs defined: {}", r.available.join(", ")));
                     }
+                    ui.label(egui::RichText::new(word).strong().size(16.0).color(color))
+                        .on_hover_text(about);
                     let (label, on) = if r.enabled {
                         ("Switch off", false)
                     } else {
                         ("Switch on", true)
                     };
+                    let tone = if on { Tone::Write } else { Tone::Danger };
                     if ui
-                        .add_enabled(cx.can_run, egui::Button::new(label))
+                        .add_enabled(cx.can_run, toned_if(ui, cx.can_run, label, tone))
                         .on_hover_text("Switches this loop only; the forms are not written")
                         .clicked()
                     {
@@ -727,6 +769,8 @@ impl Tool for ControllersTool {
                 }
             });
             ui.add_space(4.0);
+            self.render_presets(ui, cx, id);
+            section(ui, "Parameters", None);
             if self.render_form(ui, id) {
                 self.message = None;
             }
