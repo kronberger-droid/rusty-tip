@@ -10,6 +10,8 @@
 //! rusty-tip describe                       # the interface; needs no connection
 //! rusty-tip status                         # ask the workbench or `serve`
 //! rusty-tip read current "freq shift" --samples 200
+//! rusty-tip controllers                    # Z and PLL loop parameters
+//! rusty-tip frame "Z (m)"                  # per-line stats, pixels to a file
 //! rusty-tip --one-shot --mock status       # connect for this command only
 //! rusty-tip serve --config lab.toml --read-only   # headless, watch-only
 //! ```
@@ -76,6 +78,16 @@ enum Command {
         #[arg(long)]
         samples: Option<usize>,
     },
+    /// The feedback loops: Z-controller and PLL, parameters and status.
+    Controllers,
+    /// The scan: frame, buffer, speed, and whether it runs.
+    Scan,
+    /// One recorded signal's current frame: pixels to a file, per-line
+    /// statistics in the reply.
+    Frame {
+        /// A signal the scan buffer records: "Z (m)", "current".
+        signal: String,
+    },
     /// Connect and serve requests on `--addr` until Ctrl+C.
     Serve {
         /// Refuse every request that can change the instrument.
@@ -112,6 +124,14 @@ fn main() -> ExitCode {
             Request::Read {
                 signals: signals.clone(),
                 samples: *samples,
+            },
+        ),
+        Command::Controllers => run(&cli, Request::Controllers),
+        Command::Scan => run(&cli, Request::Scan),
+        Command::Frame { signal } => run(
+            &cli,
+            Request::Frame {
+                signal: signal.clone(),
             },
         ),
         Command::Serve { read_only, limits } => serve(&cli, *read_only, limits.as_deref()),

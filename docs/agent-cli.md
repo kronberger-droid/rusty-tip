@@ -5,7 +5,8 @@ the other end: every command prints one JSON reply and exits with a code that
 says how it went. An agent can learn the interface from `rusty-tip describe`
 and plan inside the limits it reports, without reading this page.
 
-This first version only reads. Commands that act on the instrument come next,
+This first version only reads: signals, the feedback loops, the scan and its
+frames. Commands that act on the instrument come next,
 each checked against the read-only gate and the limits described below, and
 each run as a job with its own experiment log; plain reads are not logged.
 
@@ -37,6 +38,9 @@ rusty-tip describe                          # commands, request schema, exit cod
 rusty-tip status                            # state, controller, capabilities, readouts
 rusty-tip read current "freq shift"         # one value each
 rusty-tip read "Z (m)" --samples 500        # mean and std_dev of 500 stream samples
+rusty-tip controllers                       # Z-controller and PLL loops: parameters, on/off, status
+rusty-tip scan                              # frame, buffer, speed, running
+rusty-tip frame "Z (m)"                     # one recorded signal's frame, both directions
 ```
 
 Signal names are the registry's, case-insensitive. Each reading carries the
@@ -54,6 +58,37 @@ per line, as many as you like on one connection:
 ```
 
 A misspelt parameter is an error, not ignored.
+
+## Reading for tuning
+
+`controllers` reads every feedback loop the controller exposes, the
+Z-controller and the PLL's amplitude and phase loops, each with its
+parameters, whether it is on, and its status word. `scan` gives the frame's
+centre, size and angle, the signals the scan buffer records (by name where the
+registry has one), pixels and lines, the speeds, and whether a scan runs.
+
+`frame <signal>` grabs the signal's current frame in both directions. The
+signal has to be one the buffer records; any other is a `bad_request` that
+lists the ones it does. The pixels do not come back in the reply, where a
+512 × 512 frame would be megabytes; they go to a JSON file in a `frames`
+directory beside the job logs, or under the system's temporary directory when
+the session keeps none, and the reply names it. The directory is the server's
+choice, never the request's, so a read-only server cannot be made to write
+where a client says.
+
+The reply carries per-line statistics instead, as columns where entry `i` is
+line `i`, and their means over the scanned lines:
+
+| Field | What it is |
+| --- | --- |
+| `rms_forward`, `rms_backward` | RMS about the line's own mean and slope, so tilt is not roughness. Ringing shows here. |
+| `retrace_offset` | Mean of backward minus forward. Mostly hysteresis and creep. |
+| `trace_retrace_rms` | RMS of backward minus forward about that offset. A loop that lags shifts features between the directions, which shows here. |
+
+Lines not scanned yet read `null` and stay out of the means, so a partial frame
+is fine. Whether Nanonis sends backward rows mirrored has not been checked on
+hardware: `stats.backward_mirrored` says which way matched better on this
+frame, and the comparison uses that. The file keeps the rows as sent.
 
 ## Replies and exit codes
 

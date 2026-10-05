@@ -20,6 +20,7 @@
 //! Each [`ErrorKind`] has an exit code, so a caller of the CLI can branch on
 //! the outcome without reading the message.
 
+pub mod inspect;
 pub mod limits;
 pub mod server;
 
@@ -72,6 +73,19 @@ pub enum Request {
         #[schemars(range(min = 1))]
         samples: Option<usize>,
     },
+    /// Every feedback loop the controller exposes, the Z-controller and the
+    /// PLL's amplitude and phase loops: parameters, on or off, and status.
+    Controllers,
+    /// The scan: the frame's centre, size and angle, the signals the buffer
+    /// records with pixels and lines, the speeds, and whether it runs.
+    Scan,
+    /// One recorded signal's current frame, forward and backward. The
+    /// pixels go to a file the reply names; the reply carries per-line
+    /// RMS, trace-retrace offset and trace-retrace RMS.
+    Frame {
+        /// A signal the scan buffer records, as the registry names it.
+        signal: String,
+    },
 }
 
 impl Request {
@@ -79,7 +93,12 @@ impl Request {
     /// read-only server refuses the ones that do.
     pub fn acts(&self) -> bool {
         match self {
-            Request::Describe | Request::Status | Request::Read { .. } => false,
+            Request::Describe
+            | Request::Status
+            | Request::Read { .. }
+            | Request::Controllers
+            | Request::Scan
+            | Request::Frame { .. } => false,
         }
     }
 
@@ -89,6 +108,9 @@ impl Request {
             Request::Describe => "describe",
             Request::Status => "status",
             Request::Read { .. } => "read",
+            Request::Controllers => "controllers",
+            Request::Scan => "scan",
+            Request::Frame { .. } => "frame",
         }
     }
 }
@@ -255,6 +277,18 @@ pub fn execute(target: Target<'_>, request: &Request, serving: &Serving) -> Repl
             let (signals, samples) = (signals.clone(), *samples);
             on_session(target, move |session| read(session, &signals, samples))
         }
+        Request::Controllers => on_session(target, |session| {
+            connected(session).unwrap_or_else(|| inspect::controllers(session))
+        }),
+        Request::Scan => on_session(target, |session| {
+            connected(session).unwrap_or_else(|| inspect::scan(session))
+        }),
+        Request::Frame { signal } => {
+            let signal = signal.clone();
+            on_session(target, move |session| {
+                connected(session).unwrap_or_else(|| inspect::frame(session, &signal))
+            })
+        }
     }
 }
 
@@ -292,15 +326,21 @@ fn on_session(target: Target<'_>, f: impl FnOnce(&mut Session) -> Reply + Send +
     }
 }
 
-fn read(session: &mut Session, signals: &[String], samples: Option<usize>) -> Reply {
+/// `None` when the session is connected, the reply saying it is not
+/// otherwise.
+fn connected(session: &Session) -> Option<Reply> {
     match session.state() {
-        ConnState::Connected => {}
-        state => {
-            return Reply::err(
-                ErrorKind::NotConnected,
-                format!("the session is {state:?}, not connected"),
-            );
-        }
+        ConnState::Connected => None,
+        state => Some(Reply::err(
+            ErrorKind::NotConnected,
+            format!("the session is {state:?}, not connected"),
+        )),
+    }
+}
+
+fn read(session: &mut Session, signals: &[String], samples: Option<usize>) -> Reply {
+    if let Some(reply) = connected(session) {
+        return reply;
     }
     if let Some(registry) = session.registry() {
         let unknown: Vec<&str> = signals
@@ -364,6 +404,11 @@ pub fn describe(serving: Option<&Serving>) -> Value {
         Request::Read {
             signals: Vec::new(),
             samples: None,
+        },
+        Request::Controllers,
+        Request::Scan,
+        Request::Frame {
+            signal: String::new(),
         },
     ]
     .iter()
@@ -527,11 +572,100 @@ mod tests {
             read_only: true,
             ..Serving::default()
         };
-        for request in [Request::Describe, Request::Status, read(&["current"], None)] {
+        for request in [
+            Request::Describe,
+            Request::Status,
+            read(&["current"], None),
+            Request::Controllers,
+            Request::Scan,
+        ] {
             assert!(!request.acts());
             let reply = execute(Target::Local(&mut session), &request, &serving);
             assert!(reply.ok, "{}: {reply:?}", request.name());
         }
+    }
+
+    #[test]
+    fn controllers_reports_each_loop_with_its_parameters() {
+        let mut session = connected();
+        let reply = execute(
+            Target::Local(&mut session),
+            &Request::Controllers,
+            &Serving::default(),
+        );
+        let controllers = reply.result.unwrap()["controllers"].clone();
+        let z = controllers
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"]["kind"] == "z")
+            .expect("the Z-controller is listed");
+        assert!(z["params"].is_object());
+    }
+
+    /// The buffer's signals come back by name where the registry has one.
+    #[test]
+    fn scan_names_the_signals_the_buffer_records() {
+        let mut session = connected();
+        let reply = execute(
+            Target::Local(&mut session),
+            &Request::Scan,
+            &Serving::default(),
+        );
+        let scan = reply.result.unwrap();
+        assert_eq!(scan["frame"]["width_m"], 50e-9);
+        let signals = scan["buffer"]["signals"].as_array().unwrap();
+        assert_eq!(signals[0]["name"], "Current (A)", "{signals:?}");
+    }
+
+    #[test]
+    fn a_frame_goes_to_a_file_and_its_statistics_to_the_reply() {
+        let dir = std::env::temp_dir().join(format!("rusty-tip-frame-test-{}", std::process::id()));
+        let mut session = Session::new(Some(dir.clone()));
+        session.connect(&Backend::Mock).unwrap();
+        let recorded = execute(
+            Target::Local(&mut session),
+            &Request::Scan,
+            &Serving::default(),
+        )
+        .result
+        .unwrap()["buffer"]["signals"][0]["name"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let reply = execute(
+            Target::Local(&mut session),
+            &Request::Frame { signal: recorded },
+            &Serving::default(),
+        );
+        let frame = reply.result.unwrap();
+        assert_eq!(frame["lines"], 256);
+        let file = std::path::PathBuf::from(frame["file"].as_str().unwrap());
+        assert!(file.starts_with(dir.join("frames")));
+        let written: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(written["forward"].as_array().unwrap().len(), 256);
+        // The mock's retrace sits 1 pm above its trace.
+        let offset = frame["stats"]["mean"]["retrace_offset"].as_f64().unwrap();
+        assert!((offset - 1e-12).abs() < 1e-14, "{offset}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Asking for a signal the scan does not record says which it does,
+    /// rather than passing the controller's refusal on as its fault.
+    #[test]
+    fn a_frame_of_an_unrecorded_signal_is_a_bad_request() {
+        let mut session = connected();
+        let reply = execute(
+            Target::Local(&mut session),
+            &Request::Frame {
+                signal: "freq shift".into(),
+            },
+            &Serving::default(),
+        );
+        let error = reply.error.unwrap();
+        assert_eq!(error.kind, ErrorKind::BadRequest);
+        assert!(error.message.contains("records"), "{}", error.message);
     }
 
     #[test]
@@ -546,7 +680,10 @@ mod tests {
             .iter()
             .map(|c| c["cmd"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["describe", "status", "read"]);
+        assert_eq!(
+            names,
+            ["describe", "status", "read", "controllers", "scan", "frame"]
+        );
         assert_eq!(d["read_only"], true);
         assert_eq!(d["exit_codes"]["read_only"], 4);
     }

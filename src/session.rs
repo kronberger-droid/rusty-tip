@@ -239,7 +239,7 @@ pub struct SignalReading {
 }
 
 /// The unit in a controller's signal name, `"A"` from `"Current (A)"`.
-fn unit_of(name: &str) -> Option<String> {
+pub(crate) fn unit_of(name: &str) -> Option<String> {
     let inner = name.trim_end().strip_suffix(')')?;
     let (_, unit) = inner.rsplit_once('(')?;
     (!unit.trim().is_empty()).then(|| unit.trim().to_string())
@@ -668,6 +668,28 @@ impl Session {
             self.poisoned = true;
         }
         result
+    }
+
+    /// Ask the controller something outside a job, with the registry at
+    /// hand to name what comes back. Nothing is logged; a connection error
+    /// poisons the session, as a job's would.
+    pub fn query<T>(
+        &mut self,
+        f: impl FnOnce(&mut dyn SpmController, &SignalRegistry) -> Result<T, SpmError>,
+    ) -> Result<T, SpmError> {
+        let conn = self.connected_mut()?;
+        let result = f(&mut *conn.controller, &conn.registry);
+        if let Err(e) = &result
+            && e.is_connection_error()
+        {
+            self.poisoned = true;
+        }
+        result
+    }
+
+    /// Where job logs go, if anywhere.
+    pub fn log_dir(&self) -> Option<&Path> {
+        self.log_dir.as_deref()
     }
 
     /// Run one job on the connection.

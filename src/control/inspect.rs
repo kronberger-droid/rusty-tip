@@ -1,0 +1,424 @@
+//! The reads for tuning: the feedback loops, the scan, and a scan frame.
+//!
+//! Each only asks; none changes anything on the instrument. A frame's
+//! pixels go to a file in a directory the server picks, never one the
+//! request names, so a read-only server cannot be made to write where a
+//! client says; the reply names the file and carries per-line statistics,
+//! which is what tells a slow loop from a ringing one without reading
+//! megabytes of pixels.
+
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::Serialize;
+use serde_json::{Value, json};
+
+use super::{ErrorKind, Reply};
+use crate::session::{Session, unit_of};
+use crate::signal_registry::SignalRegistry;
+use crate::spm_error::SpmError;
+
+/// Every feedback loop the controller exposes, read once each.
+pub(super) fn controllers(session: &mut Session) -> Reply {
+    let readings = session.query(|controller, _| {
+        controller
+            .controllers()?
+            .into_iter()
+            .map(|id| controller.read_controller(id))
+            .collect::<Result<Vec<_>, _>>()
+    });
+    match readings {
+        Ok(readings) => Reply::ok(json!({ "controllers": readings })),
+        Err(e) => Reply::err(ErrorKind::of(&e), e.to_string()),
+    }
+}
+
+/// The scan: where the frame sits, what the buffer records, how fast,
+/// and whether it runs.
+pub(super) fn scan(session: &mut Session) -> Reply {
+    let scan = session.query(|controller, registry| {
+        let frame = controller.scan_frame_get()?;
+        let buffer = controller.scan_buffer_get()?;
+        let speed = controller.scan_speed_get()?;
+        let props = controller.scan_props_get()?;
+        let running = controller.scan_status()?;
+        let signals: Vec<Value> = buffer
+            .channels
+            .iter()
+            .map(|c| json!({ "index": c.0, "name": signal_name(registry, c.0) }))
+            .collect();
+        Ok(json!({
+            "running": running,
+            "frame": {
+                "center_m": [short(frame.center.x as f32), short(frame.center.y as f32)],
+                "width_m": short(frame.width_m),
+                "height_m": short(frame.height_m),
+                "angle_deg": short(frame.angle_deg),
+            },
+            "buffer": {
+                "signals": signals,
+                "pixels": buffer.pixels,
+                "lines": buffer.lines,
+            },
+            "speed": {
+                "forward_m_s": short(speed.forward_linear_speed_m_s),
+                "backward_m_s": short(speed.backward_linear_speed_m_s),
+                "forward_time_per_line_s": short(speed.forward_time_per_line_s),
+                "backward_time_per_line_s": short(speed.backward_time_per_line_s),
+                "keep_constant": match speed.keep_parameter_constant {
+                    0 => "linear_speed",
+                    _ => "time_per_line",
+                },
+                "backward_to_forward_ratio": short(speed.speed_ratio),
+            },
+            "continuous": props.continuous_scan,
+            "bouncy": props.bouncy_scan,
+        }))
+    });
+    match scan {
+        Ok(scan) => Reply::ok(scan),
+        Err(e) => Reply::err(ErrorKind::of(&e), e.to_string()),
+    }
+}
+
+/// An f32 from the controller as the f64 its shortest decimal form
+/// names: `5e-8`, not the `5.000000058430487e-8` widening gives.
+fn short(value: f32) -> f64 {
+    value.to_string().parse().unwrap_or(f64::from(value))
+}
+
+fn signal_name(registry: &SignalRegistry, index: u32) -> Option<String> {
+    u8::try_from(index)
+        .ok()
+        .and_then(|i| registry.get_by_index(i))
+        .map(|s| s.name.clone())
+}
+
+/// What a frame request can go wrong with before the controller does.
+enum FrameError {
+    BadRequest(String),
+    Controller(SpmError),
+}
+
+impl From<SpmError> for FrameError {
+    fn from(e: SpmError) -> Self {
+        FrameError::Controller(e)
+    }
+}
+
+/// The file a frame is written to: the pixels as the controller sent
+/// them, both directions.
+#[derive(Serialize)]
+struct FrameFile<'a> {
+    signal: &'a str,
+    unit: Option<String>,
+    index: u8,
+    /// Whether the slow axis ran up. Rows are in the order the controller
+    /// sent them.
+    scan_up: bool,
+    /// Whether the backward rows were mirrored before comparing them with
+    /// the forward ones; the rows here are as sent.
+    backward_mirrored: bool,
+    forward: &'a [Vec<f32>],
+    backward: &'a [Vec<f32>],
+}
+
+/// One signal's current frame, both directions: the pixels to a file, the
+/// per-line statistics in the reply.
+pub(super) fn frame(session: &mut Session, signal: &str) -> Reply {
+    let dir = frames_dir(session.log_dir());
+    let grabbed = session.query(|controller, registry| {
+        let Some(found) = registry.get_by_name(signal).cloned() else {
+            return Ok(Err(FrameError::BadRequest(format!(
+                "no signal called {signal}"
+            ))));
+        };
+        let buffer = controller.scan_buffer_get()?;
+        if !buffer.channels.contains(&found.signal_index()) {
+            let recorded: Vec<String> = buffer
+                .channels
+                .iter()
+                .map(|c| signal_name(registry, c.0).unwrap_or_else(|| c.0.to_string()))
+                .collect();
+            return Ok(Err(FrameError::BadRequest(format!(
+                "the scan does not record {}; it records {}",
+                found.name,
+                recorded.join(", ")
+            ))));
+        }
+        let channel = u32::from(found.index);
+        let (_, forward, scan_up) = controller.scan_frame_data_grab(channel, true)?;
+        let (_, backward, _) = controller.scan_frame_data_grab(channel, false)?;
+        Ok(Ok((found, forward, backward, scan_up)))
+    });
+    let (found, forward, backward, scan_up) = match grabbed {
+        Ok(Ok(grabbed)) => grabbed,
+        Ok(Err(FrameError::BadRequest(message))) => {
+            return Reply::err(ErrorKind::BadRequest, message);
+        }
+        Ok(Err(FrameError::Controller(e))) | Err(e) => {
+            return Reply::err(ErrorKind::of(&e), e.to_string());
+        }
+    };
+
+    let stats = FrameStats::of(&forward, &backward);
+    let unit = unit_of(&found.name);
+    let file = FrameFile {
+        signal: &found.name,
+        unit: unit.clone(),
+        index: found.index,
+        scan_up,
+        backward_mirrored: stats.backward_mirrored,
+        forward: &forward,
+        backward: &backward,
+    };
+    let path = match write_frame(&dir, &found.name, &file) {
+        Ok(path) => path,
+        Err(e) => return Reply::err(ErrorKind::Failed, e),
+    };
+    Reply::ok(json!({
+        "signal": found.name,
+        "unit": unit,
+        "index": found.index,
+        "file": path,
+        "pixels": forward.first().map_or(0, Vec::len),
+        "lines": forward.len(),
+        "scan_up": scan_up,
+        "stats": stats,
+    }))
+}
+
+/// Where frame files go: a `frames` directory beside the job logs, or
+/// under the system's temporary directory when the session keeps none.
+fn frames_dir(log_dir: Option<&Path>) -> PathBuf {
+    match log_dir {
+        Some(dir) => dir.join("frames"),
+        None => std::env::temp_dir().join("rusty-tip").join("frames"),
+    }
+}
+
+fn write_frame(dir: &Path, signal: &str, file: &FrameFile<'_>) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let stem: String = signal
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    let path = dir.join(format!("frame-{millis}-{stem}.json"));
+    let text = serde_json::to_string(file).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    Ok(path)
+}
+
+/// Per-line statistics of a frame, as columns: entry `i` of each list is
+/// line `i`, `null` where the line is not scanned yet.
+///
+/// A line's RMS is taken after removing its mean and slope, so tilt does
+/// not count as roughness. The trace-retrace RMS is of the difference
+/// between the two directions after removing its mean, which is
+/// `retrace_offset`: a loop that lags shows as features shifted between
+/// the directions, so as this difference, while the offset alone is
+/// mostly hysteresis and creep.
+#[derive(Debug, Serialize)]
+pub(crate) struct FrameStats {
+    pub lines_scanned: usize,
+    /// Whether the backward rows matched the forward ones better mirrored.
+    /// Decided per frame by which gives the smaller trace-retrace
+    /// difference; which way Nanonis sends them has not been checked on
+    /// hardware.
+    pub backward_mirrored: bool,
+    /// Means over the scanned lines.
+    pub mean: Summary,
+    pub lines: Lines,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct Summary {
+    pub rms_forward: Option<f64>,
+    pub rms_backward: Option<f64>,
+    pub retrace_offset: Option<f64>,
+    pub trace_retrace_rms: Option<f64>,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct Lines {
+    pub mean_forward: Vec<Option<f64>>,
+    pub rms_forward: Vec<Option<f64>>,
+    pub rms_backward: Vec<Option<f64>>,
+    pub retrace_offset: Vec<Option<f64>>,
+    pub trace_retrace_rms: Vec<Option<f64>>,
+}
+
+impl FrameStats {
+    pub fn of(forward: &[Vec<f32>], backward: &[Vec<f32>]) -> Self {
+        let mismatch = |mirrored: bool| -> f64 {
+            forward
+                .iter()
+                .zip(backward)
+                .filter_map(|(f, b)| difference(f, b, mirrored))
+                .map(|(_, rms)| rms * rms)
+                .sum()
+        };
+        let backward_mirrored = mismatch(true) < mismatch(false);
+
+        let mut lines = Lines::default();
+        for (i, f) in forward.iter().enumerate() {
+            let b = backward.get(i).map(Vec::as_slice).unwrap_or(&[]);
+            let (offset, rms) = match difference(f, b, backward_mirrored) {
+                Some((offset, rms)) => (Some(offset), Some(rms)),
+                None => (None, None),
+            };
+            lines.mean_forward.push(mean(f));
+            lines.rms_forward.push(detrended_rms(f));
+            lines.rms_backward.push(detrended_rms(b));
+            lines.retrace_offset.push(offset);
+            lines.trace_retrace_rms.push(rms);
+        }
+        let average = |column: &[Option<f64>]| {
+            let values: Vec<f64> = column.iter().flatten().copied().collect();
+            (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
+        };
+        Self {
+            lines_scanned: lines.rms_forward.iter().flatten().count(),
+            backward_mirrored,
+            mean: Summary {
+                rms_forward: average(&lines.rms_forward),
+                rms_backward: average(&lines.rms_backward),
+                retrace_offset: average(&lines.retrace_offset),
+                trace_retrace_rms: average(&lines.trace_retrace_rms),
+            },
+            lines,
+        }
+    }
+}
+
+/// The finite pixels of a line with their positions along it.
+fn finite(line: &[f32]) -> impl Iterator<Item = (f64, f64)> + '_ {
+    line.iter()
+        .enumerate()
+        .filter(|(_, v)| v.is_finite())
+        .map(|(x, &v)| (x as f64, f64::from(v)))
+}
+
+fn mean(line: &[f32]) -> Option<f64> {
+    let (n, sum) = finite(line).fold((0usize, 0.0), |(n, s), (_, v)| (n + 1, s + v));
+    (n > 0).then(|| sum / n as f64)
+}
+
+/// RMS about the least-squares line through the finite pixels; `None`
+/// with fewer than two.
+fn detrended_rms(line: &[f32]) -> Option<f64> {
+    let points: Vec<(f64, f64)> = finite(line).collect();
+    if points.len() < 2 {
+        return None;
+    }
+    let n = points.len() as f64;
+    let mx = points.iter().map(|p| p.0).sum::<f64>() / n;
+    let my = points.iter().map(|p| p.1).sum::<f64>() / n;
+    let sxx: f64 = points.iter().map(|p| (p.0 - mx).powi(2)).sum();
+    let sxy: f64 = points.iter().map(|p| (p.0 - mx) * (p.1 - my)).sum();
+    let slope = if sxx > 0.0 { sxy / sxx } else { 0.0 };
+    let ss: f64 = points
+        .iter()
+        .map(|p| (p.1 - my - slope * (p.0 - mx)).powi(2))
+        .sum();
+    Some((ss / n).sqrt())
+}
+
+/// The mean of backward minus forward over the pixels both have, and the
+/// RMS of that difference about its mean; `None` with fewer than two such
+/// pixels.
+fn difference(forward: &[f32], backward: &[f32], mirrored: bool) -> Option<(f64, f64)> {
+    if forward.len() != backward.len() {
+        return None;
+    }
+    let len = forward.len();
+    let diffs: Vec<f64> = (0..len)
+        .filter_map(|x| {
+            let b = backward[if mirrored { len - 1 - x } else { x }];
+            let f = forward[x];
+            (f.is_finite() && b.is_finite()).then(|| f64::from(b) - f64::from(f))
+        })
+        .collect();
+    if diffs.len() < 2 {
+        return None;
+    }
+    let n = diffs.len() as f64;
+    let offset = diffs.iter().sum::<f64>() / n;
+    let rms = (diffs.iter().map(|d| (d - offset).powi(2)).sum::<f64>() / n).sqrt();
+    Some((offset, rms))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn close(a: Option<f64>, b: f64) -> bool {
+        a.is_some_and(|a| (a - b).abs() < 1e-9 * b.abs().max(1.0))
+    }
+
+    #[test]
+    fn a_tilt_is_not_roughness() {
+        let line: Vec<f32> = (0..64).map(|x| 0.5 * x as f32 + 3.0).collect();
+        assert!(close(detrended_rms(&line), 0.0));
+        let bumpy: Vec<f32> = (0..64)
+            .map(|x| if x % 2 == 0 { 1.0 } else { -1.0 })
+            .collect();
+        let rms = detrended_rms(&bumpy).unwrap();
+        assert!((rms - 1.0).abs() < 0.01, "{rms}");
+    }
+
+    /// A partial frame reads NaN past the last scanned line; those lines
+    /// come back `null` and do not enter the means.
+    #[test]
+    fn unscanned_lines_are_null_and_left_out() {
+        let scanned: Vec<f32> = (0..16).map(|x| (x % 2) as f32).collect();
+        let unscanned = vec![f32::NAN; 16];
+        let forward = vec![scanned.clone(), unscanned.clone()];
+        let backward = vec![scanned, unscanned];
+        let stats = FrameStats::of(&forward, &backward);
+        assert_eq!(stats.lines_scanned, 1);
+        assert_eq!(stats.lines.rms_forward[1], None);
+        let rms = stats.mean.rms_forward.unwrap();
+        assert!((rms - 0.5).abs() < 0.02, "{rms}");
+        assert!(close(stats.mean.trace_retrace_rms, 0.0));
+    }
+
+    /// A feature shifted between the directions is what a lagging loop
+    /// leaves; a constant offset between them is not.
+    #[test]
+    fn a_shift_shows_as_trace_retrace_rms_and_an_offset_does_not() {
+        let step = |at: usize| -> Vec<f32> { (0..32).map(|x| (x >= at) as u8 as f32).collect() };
+        let offset: Vec<f32> = step(16).iter().map(|v| v + 2.0).collect();
+        let same = FrameStats::of(&[step(16)], &[offset]);
+        assert!(close(same.mean.retrace_offset, 2.0));
+        assert!(close(same.mean.trace_retrace_rms, 0.0));
+
+        let shifted = FrameStats::of(&[step(16)], &[step(20)]);
+        assert!(shifted.mean.trace_retrace_rms.unwrap() > 0.1);
+    }
+
+    /// Backward rows sent mirrored are compared mirrored, and the reply
+    /// says so.
+    #[test]
+    fn mirrored_backward_rows_are_detected() {
+        let forward = vec![(0..32).map(|x| x as f32).collect::<Vec<f32>>()];
+        let mirrored = vec![forward[0].iter().rev().copied().collect::<Vec<f32>>()];
+        let stats = FrameStats::of(&forward, &mirrored);
+        assert!(stats.backward_mirrored);
+        assert!(close(stats.mean.trace_retrace_rms, 0.0));
+        assert!(!FrameStats::of(&forward, &forward).backward_mirrored);
+    }
+
+    #[test]
+    fn frames_go_beside_the_logs_or_to_the_temp_dir() {
+        assert_eq!(
+            frames_dir(Some(Path::new("/logs"))),
+            Path::new("/logs/frames")
+        );
+        assert!(frames_dir(None).starts_with(std::env::temp_dir()));
+    }
+}

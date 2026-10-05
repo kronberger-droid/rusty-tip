@@ -15,7 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workbench's agent socket by default, to `rusty-tip serve` when it runs
   headless, or connect for one command with `--one-shot`. A server started
   read-only refuses every command that acts; the workbench's socket is
-  read-only unless switched. This version reads only: `status` and `read`.
+  read-only unless switched. This version reads only: `status`, `read`,
+  `controllers` for the Z and PLL loops, `scan` for frame, buffer and speed,
+  and `frame`, which writes one signal's frame to a file and replies with
+  per-line RMS and trace-retrace statistics for tuning the loop.
+  `SpmController::scan_frame_get` and `Session::query` back them.
   `control` holds the protocol, the TCP server and `Limits`, and
   `SessionCmd::Call` and `SessionHandle::remote` let a server share a session
   thread with the window. See `docs/agent-cli.md`.
