@@ -74,6 +74,13 @@ pub const SCHEME: Base16 = Base16 {
     base0f: egui::Color32::from_rgb(0x8a, 0x81, 0x77),
 };
 
+/// `color` darkened to `factor` of its brightness, alpha kept.
+fn darker(color: egui::Color32, factor: f32) -> egui::Color32 {
+    let [r, g, b, a] = color.to_array();
+    let scale = |c: u8| (f32::from(c) * factor).round() as u8;
+    egui::Color32::from_rgba_unmultiplied(scale(r), scale(g), scale(b), a)
+}
+
 /// `color` with alpha `a`, unmultiplied.
 fn with_alpha(color: egui::Color32, a: u8) -> egui::Color32 {
     let [r, g, b, _] = color.to_array();
@@ -137,7 +144,10 @@ fn apply_scheme(v: &mut egui::Visuals) {
     let s = &SCHEME;
     v.panel_fill = s.base00;
     v.window_fill = s.base01;
-    v.extreme_bg_color = s.base01;
+    // Plots and text fields sit below the panel, darker than any shade the
+    // scheme has, so points and lines stand out on them; base01 read too
+    // light behind a plot's points.
+    v.extreme_bg_color = darker(s.base00, 0.6);
     v.faint_bg_color = s.base01;
     v.code_bg_color = s.base01;
     v.window_stroke.color = s.base02;
