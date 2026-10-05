@@ -551,7 +551,7 @@ impl WorkbenchApp {
                     ui.label(egui::RichText::new(outcome_text(*outcome)).strong());
                 }
                 RunStatus::Finished(Err(e)) => {
-                    ui.colored_label(egui::Color32::RED, "error")
+                    ui.colored_label(ui.visuals().error_fg_color, "error")
                         .on_hover_text(e);
                 }
                 RunStatus::Replay(path) => {
@@ -650,7 +650,7 @@ impl WorkbenchApp {
                                 }
                             }
                             None => {
-                                ui.colored_label(egui::Color32::RED, "cut off")
+                                ui.colored_label(ui.visuals().error_fg_color, "cut off")
                                     .on_hover_text("The log ends without a finish line");
                             }
                         }

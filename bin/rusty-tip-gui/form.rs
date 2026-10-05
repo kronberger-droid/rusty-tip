@@ -84,7 +84,7 @@ impl SchemaForm {
         let mut last = path;
         for segment in path.split('.') {
             let Some(prop) = schema.get("properties").and_then(|p| p.get(segment)) else {
-                ui.colored_label(egui::Color32::RED, format!("no field {path}"));
+                ui.colored_label(ui.visuals().error_fg_color, format!("no field {path}"));
                 ui.end_row();
                 return false;
             };

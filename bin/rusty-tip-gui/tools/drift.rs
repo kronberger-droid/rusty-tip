@@ -230,7 +230,7 @@ impl Tool for DriftTool {
             });
 
         if self.z_name.trim().is_empty() {
-            ui.colored_label(egui::Color32::RED, "The Z signal name is empty");
+            ui.colored_label(ui.visuals().error_fg_color, "The Z signal name is empty");
         }
     }
 
