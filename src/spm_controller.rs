@@ -325,6 +325,13 @@ pub trait SpmController: Send {
         ))
     }
 
+    /// Place the scan frame: its centre, width, height and rotation.
+    fn scan_frame_set(&mut self, _frame: ScanFrame) -> Result<()> {
+        Err(SpmError::Unsupported(
+            "this controller cannot place the scan frame".into(),
+        ))
+    }
+
     /// Which signals the scan records, and the frame resolution.
     fn scan_buffer_get(&mut self) -> Result<ScanBuffer>;
 

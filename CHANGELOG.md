@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Operating points: every loop, the bias and the scan under one name.**
+  A preset is one loop's gains; what a lab tunes is the set, the loops at a
+  bias, scanned at a speed over a frame of a size and resolution. The
+  Controllers page captures all of it from the controller in one read,
+  saves it under a name and note, and lists the saved points with their
+  bias, Z setpoint, frame, pixels and speed, each with Apply and Delete.
+  Apply writes the scan's size, angle, resolution and speed with the
+  frame's centre kept, then every loop with its setpoint, then the bias,
+  and reads it all back; it refuses while a scan runs, refuses a Z input
+  the module has not defined before writing anything, and switches no loop
+  on or off. The panel lists what changed of the bias and scan, as it does
+  for the loops. Points live in their own file,
+  `[controllers].operating_points_file` (default `./operating_points.toml`,
+  on the Connection page beside the preset file), so saving one never
+  rewrites the presets. `operating_point` holds the types, the store and
+  the `CaptureOperatingPoint` and `ApplyOperatingPoint` jobs;
+  `SpmController::scan_frame_set` is new, implemented for Nanonis and the
+  mock.
 - **`rusty-tip psd`, the spectrum of a streamed signal.** Welch-averaged
   over evenly spaced stream samples (16384 by default, segments of 1024
   overlapping by half, Hann window), at the stream's rate as its divisor

@@ -18,6 +18,7 @@ use super::{ErrorKind, Reply, spectrum};
 use crate::session::{Session, unit_of};
 use crate::signal_registry::SignalRegistry;
 use crate::spm_error::SpmError;
+use crate::utils::shortest;
 
 /// Every feedback loop the controller exposes, read once each.
 pub(super) fn controllers(session: &mut Session) -> Reply {
@@ -48,10 +49,10 @@ pub(super) fn scan(session: &mut Session) -> Reply {
         Ok(json!({
             "running": running,
             "frame": {
-                "center_m": [short(frame.center.x as f32), short(frame.center.y as f32)],
-                "width_m": short(frame.width_m),
-                "height_m": short(frame.height_m),
-                "angle_deg": short(frame.angle_deg),
+                "center_m": [shortest(frame.center.x as f32), shortest(frame.center.y as f32)],
+                "width_m": shortest(frame.width_m),
+                "height_m": shortest(frame.height_m),
+                "angle_deg": shortest(frame.angle_deg),
             },
             "buffer": {
                 "signals": signals,
@@ -59,27 +60,21 @@ pub(super) fn scan(session: &mut Session) -> Reply {
                 "lines": buffer.lines,
             },
             "speed": {
-                "forward_m_s": short(speed.forward_linear_speed_m_s),
-                "backward_m_s": short(speed.backward_linear_speed_m_s),
-                "forward_time_per_line_s": short(speed.forward_time_per_line_s),
-                "backward_time_per_line_s": short(speed.backward_time_per_line_s),
+                "forward_m_s": shortest(speed.forward_linear_speed_m_s),
+                "backward_m_s": shortest(speed.backward_linear_speed_m_s),
+                "forward_time_per_line_s": shortest(speed.forward_time_per_line_s),
+                "backward_time_per_line_s": shortest(speed.backward_time_per_line_s),
                 "keep_constant": match speed.keep_parameter_constant {
                     0 => "linear_speed",
                     _ => "time_per_line",
                 },
-                "backward_to_forward_ratio": short(speed.speed_ratio),
+                "backward_to_forward_ratio": shortest(speed.speed_ratio),
             },
             "continuous": props.continuous_scan,
             "bouncy": props.bouncy_scan,
         }))
     });
     Reply::of(scan)
-}
-
-/// An f32 from the controller as the f64 its shortest decimal form
-/// names: `5e-8`, not the `5.000000058430487e-8` widening gives.
-fn short(value: f32) -> f64 {
-    value.to_string().parse().unwrap_or(f64::from(value))
 }
 
 fn signal_name(registry: &SignalRegistry, index: u32) -> Option<String> {

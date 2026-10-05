@@ -38,6 +38,12 @@ pub struct ControllersConfig {
     /// The preset file, relative to the working directory unless absolute.
     #[serde(default = "default_presets_file")]
     pub presets_file: String,
+    /// The operating points file (see
+    /// [`crate::operating_point::OperatingPoint`]): every loop, the bias
+    /// and the scan under one name. Apart from the presets, so saving one
+    /// never rewrites the other.
+    #[serde(default = "default_operating_points_file")]
+    pub operating_points_file: String,
 }
 
 /// Where presets are kept unless configured otherwise: beside the working
@@ -48,10 +54,15 @@ fn default_presets_file() -> String {
     DEFAULT_PRESETS_FILE.to_string()
 }
 
+fn default_operating_points_file() -> String {
+    crate::operating_point::DEFAULT_OPERATING_POINTS_FILE.to_string()
+}
+
 impl Default for ControllersConfig {
     fn default() -> Self {
         Self {
             presets_file: default_presets_file(),
+            operating_points_file: default_operating_points_file(),
         }
     }
 }
