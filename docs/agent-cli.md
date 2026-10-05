@@ -107,13 +107,14 @@ The default takes 16 s on a 1 kHz stream, and the session is held for that long.
 | Field | What it is |
 | --- | --- |
 | `rate_hz` | The stream's rate, the one the logger's divisor gives on Nanonis; the frequency axis comes from it. |
-| `rms` | RMS of the samples about their mean, in the signal's unit. |
+| `rms` | The RMS the spectrum holds, its integral, in the signal's unit. |
+| `rms_total` | RMS of all the samples about their one mean. Larger than `rms` by drift slower than a segment, which each segment's mean removal leaves out of the spectrum. |
 | `peaks` | The eight highest local maxima above DC, highest first: `freq_hz` and `asd`, the amplitude density in unit/√Hz. |
 | `floor_asd` | The noise floor in unit/√Hz, the root of the median PSD above DC. On a flat spectrum most peaks are bumps in the noise; only those well above the floor are lines. |
 | `spectrum` | `freq_hz` and `psd` (unit²/Hz) from 0 to Nyquist, with `segment`, `averages` and `resolution_hz`. |
 
-The density integrates to the variance, so `rms²` is the PSD summed times
-`resolution_hz`. A pure tone's `asd` depends on the resolution, its frequency
+`rms²` is the PSD summed times `resolution_hz`, so it always agrees with the
+spectrum; where `rms_total` is well above it, the signal drifts. A pure tone's `asd` depends on the resolution, its frequency
 does not: a line that stays put while the gains change is the room, one that
 moves or grows with the gain is the loop. A signal not on the stream is a
 `bad_request` naming the ones that are, since polled samples have no time base

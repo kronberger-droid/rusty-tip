@@ -336,6 +336,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`psd`'s RMS disagreed with its spectrum.** It was taken over the whole
+  series about one mean, while each segment of the spectrum has its own
+  mean removed, so drift slower than a segment counted in one and not the
+  other. `rms` is the spectrum's integral now, and `rms_total` the whole
+  series', larger by the drift.
 - **`busy` blamed a job for whatever held the session.** A long read from
   another client holds the session thread as a job does; the message now
   says which of the two it was.

@@ -240,7 +240,8 @@ pub(super) fn psd(session: &mut Session, signal: &str, samples: usize, segment: 
     }
 
     let mean = values.iter().sum::<f64>() / values.len() as f64;
-    let rms = (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64).sqrt();
+    let rms_total =
+        (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64).sqrt();
     let spectrum = spectrum::welch(&values, rate_hz, segment);
     let peaks = spectrum::peaks(&spectrum, PSD_PEAKS);
     Reply::ok(json!({
@@ -249,7 +250,10 @@ pub(super) fn psd(session: &mut Session, signal: &str, samples: usize, segment: 
         "index": found.index,
         "rate_hz": rate_hz,
         "samples": values.len(),
-        "rms": rms,
+        // What the spectrum holds, so the two agree; the whole series about
+        // one mean also counts drift slower than a segment.
+        "rms": spectrum::rms(&spectrum),
+        "rms_total": rms_total,
         "peaks": peaks,
         "floor_asd": spectrum::floor_asd(&spectrum),
         "spectrum": spectrum,
