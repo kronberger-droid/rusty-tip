@@ -11,10 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`rusty-tip psd`, the spectrum of a streamed signal.** Welch-averaged
   over evenly spaced stream samples (16384 by default, segments of 1024
-  overlapping by half, Hann window), at the rate the stream measured when it
-  started. The reply has the one-sided PSD in the signal's unit squared per
-  hertz, the eight highest peaks as amplitude densities, and the RMS, so an
-  agent can tell a loop that rings from a line the room puts there. Only
+  overlapping by half, Hann window), at the stream's rate as its divisor
+  sets it. The reply has the one-sided PSD in the signal's unit squared per
+  hertz, the eight highest peaks as amplitude densities with the noise
+  floor to judge them against, and the RMS, so an agent can tell a loop
+  that rings from a line the room puts there. Only
   signals on the data stream qualify; polled samples have no time base.
   `control::spectrum` holds the FFT and the Welch estimate.
 - **`rusty-tip`, a command line for scripts and agents.** Every command

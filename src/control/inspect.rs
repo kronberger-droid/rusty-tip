@@ -251,6 +251,7 @@ pub(super) fn psd(session: &mut Session, signal: &str, samples: usize, segment: 
         "samples": values.len(),
         "rms": rms,
         "peaks": peaks,
+        "floor_asd": spectrum::floor_asd(&spectrum),
         "spectrum": spectrum,
     }))
 }

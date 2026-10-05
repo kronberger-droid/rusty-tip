@@ -93,6 +93,17 @@ pub fn default_segment(samples: usize) -> usize {
     segment
 }
 
+/// The noise floor as an amplitude density: the square root of the median
+/// PSD above DC. A peak not well above it is a bump in the noise.
+pub fn floor_asd(spectrum: &Spectrum) -> f64 {
+    let mut above_dc: Vec<f64> = spectrum.psd.iter().skip(1).copied().collect();
+    if above_dc.is_empty() {
+        return 0.0;
+    }
+    above_dc.sort_by(f64::total_cmp);
+    above_dc[above_dc.len() / 2].sqrt()
+}
+
 /// The `count` highest local maxima above DC, highest first.
 pub fn peaks(spectrum: &Spectrum, count: usize) -> Vec<Peak> {
     let psd = &spectrum.psd;
@@ -225,6 +236,10 @@ mod tests {
             "{top:?}"
         );
         assert!(top[0].asd > top[1].asd);
+        assert!(
+            top[1].asd > 10.0 * floor_asd(&spectrum),
+            "tones stand far above the floor"
+        );
     }
 
     #[test]
