@@ -601,22 +601,18 @@ impl Tool for TipPrepTool {
             }
         });
 
-        let max_color = colors.bounds.to_opaque();
         plot_header(
             ui,
             "Pulse voltage",
-            &[
-                (Mark::Bar, "cycle pulse", colors.second),
-                (Mark::Bar, "max pulse", max_color),
-            ],
-            "The pulse fired at the start of each cycle, as a bar from 0 V. The narrow bars \
-             are the max pulses of a failed stability check, between the cycles they came \
-             after.",
+            &[(Mark::Bar, "pulse", colors.second)],
+            "Every pulse fired, as a bar from 0 V. A bar between two cycles is the pulse a \
+             failed stability check fires before the next cycle.",
         );
-        // A cycle's bar spans ±0.25 around its number and a max pulse's
-        // ±0.15 around the half cycle after, so neither covers the other.
-        let cycle_bars = pulse_bars("cycle pulse", &run.pulses, 0.5, colors.second);
-        let max_bars = pulse_bars("max pulse", &run.max_pulses, 0.3, max_color);
+        // One series: a stability check's pulse is a pulse like any other,
+        // it only sits half a cycle on. At ±0.2 around their places, a
+        // cycle's bar and one half a cycle on leave a gap between them.
+        let pulses: Vec<[f64; 2]> = run.pulses.iter().chain(&run.max_pulses).copied().collect();
+        let bars = pulse_bars("pulse", &pulses, 0.4, colors.second);
         let zero = ui.visuals().weak_text_color();
         cycle_plot("tip_prep_pulses", "V", height, last_cycle)
             // Pulses run over about ±10 V: a line every volt, heavier every
@@ -625,8 +621,7 @@ impl Tool for TipPrepTool {
             .include_y(0.0)
             .show(ui, |plot_ui| {
                 plot_ui.hline(HLine::new("", 0.0).color(zero).width(1.0_f32));
-                plot_ui.bar_chart(cycle_bars);
-                plot_ui.bar_chart(max_bars);
+                plot_ui.bar_chart(bars);
             });
     }
 
