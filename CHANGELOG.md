@@ -157,9 +157,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data; it tolerates logs from before the header and lines a crash cut
   short. `tip-prep-mock --log <path>` writes a log from a dry run to try
   it on.
+- **Changing a running tip prep's config.** `TipPrep::with_reload` takes a
+  `ConfigReload` mailbox; a config sent into it is taken between two pulse
+  cycles, never inside a stability check, and writes nothing to the
+  controller. The run keeps what it was set up with (initial bias and
+  setpoint, Z preset, safe-tip threshold, the connection tables) and says
+  so in a `tip_prep/config_reloaded` event, which also records the config
+  as applied. `Cycles::set_limits` lets a lowered `max_cycles` or
+  `max_duration_secs` end the loop before another pulse. The workbench's
+  tip-prep Run panel has a Reload config button that sends the Setup form.
 
 ### Changed
 
+- **The drift panel puts its plot first.** The burst plot sits above the
+  status, results and burst table, and is taller.
 - **Drift compensation waits out creep first.** `compensate` takes baseline
   bursts until three in a row agree, then corrects; a drift still changing
   after `settle_max_ms` (180 s, `--settle`) fails with nothing touched. Only
@@ -268,6 +279,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **No pulse voltage during cycle 1.** The tip-prep status read the voltage
+  off the cycle event, which only follows the reposition and the read. It
+  now shows the `bias_pulse` action's voltage as the pulse fires, and the
+  sharp band is the run's own, not the Setup form's.
 - **The phase stuck after a stability check.** Phases were only emitted on
   the way into a check, so one that did not end the run left the GUI on its
   last step. `PhaseEvent::Pulsing` marks every return to the pulse cycles.

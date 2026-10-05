@@ -76,6 +76,23 @@ impl LogEvent for MaxPulseEvent {
     const KIND: &'static str = "tip_prep/max_pulse";
 }
 
+/// The run switched to a config handed to it while running, between two
+/// pulse cycles.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+pub struct ConfigReloadedEvent {
+    /// The last cycle run on the config before, 0 before the first.
+    pub after_cycle: usize,
+    /// The config as applied, the run's own setup kept.
+    pub config: serde_json::Value,
+    /// Paths of the fields the sent config changed but the run kept, as
+    /// they describe its setup. They apply from the next run.
+    pub kept: Vec<String>,
+}
+
+impl LogEvent for ConfigReloadedEvent {
+    const KIND: &'static str = "tip_prep/config_reloaded";
+}
+
 /// Everything a tip-prep log can contain beyond the built-in events,
 /// including what the routine harness emits on its behalf.
 pub fn log_schema() -> ToolSchema {
@@ -83,6 +100,7 @@ pub fn log_schema() -> ToolSchema {
         .with::<CycleEvent>()
         .with::<PhaseEvent>()
         .with::<MaxPulseEvent>()
+        .with::<ConfigReloadedEvent>()
         .with::<ControllerAppliedEvent>()
         .with::<ControllerReading>()
         .including(crate::routine::log_schema())
