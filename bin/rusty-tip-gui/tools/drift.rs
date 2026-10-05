@@ -300,7 +300,7 @@ impl Tool for DriftTool {
                         plot_ui.line(
                             Line::new("", PlotPoints::from(vec![[x, y - e], [x, y + e]]))
                                 .color(color.gamma_multiply(0.6))
-                                .width(2.0),
+                                .width(2.0_f32),
                         );
                     }
                     plot_ui.line(Line::new("drift", PlotPoints::from(drift.clone())).color(color));

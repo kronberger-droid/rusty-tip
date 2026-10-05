@@ -812,7 +812,7 @@ fn key_mark(ui: &mut egui::Ui, mark: Mark, color: egui::Color32) {
             painter.circle_filled(c, r, color);
         }
         Mark::Ring => {
-            painter.circle_stroke(c, r, egui::Stroke::new(1.5, color));
+            painter.circle_stroke(c, r, egui::Stroke::new(1.5_f32, color));
         }
         Mark::Diamond => {
             let points = vec![
@@ -828,7 +828,7 @@ fn key_mark(ui: &mut egui::Ui, mark: Mark, color: egui::Color32) {
             ));
         }
         Mark::Dash => {
-            let stroke = egui::Stroke::new(1.5, color);
+            let stroke = egui::Stroke::new(1.5_f32, color);
             let w = rect.width() / 2.0;
             painter.line_segment(
                 [c - egui::vec2(w, 0.0), c - egui::vec2(w * 0.2, 0.0)],
