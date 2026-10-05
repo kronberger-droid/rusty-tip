@@ -25,7 +25,7 @@ pub mod limits;
 pub mod server;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use crossbeam_channel::RecvTimeoutError;
@@ -47,8 +47,18 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const DEFAULT_ADDR: &str = "127.0.0.1:47474";
 
 /// How long a request that needs the controller waits for the session
-/// thread before answering `busy`. A running job holds the thread.
+/// thread to start it before answering `busy`. A running job holds the
+/// thread.
 pub const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a request the session thread has started may take before the
+/// reply gives up on it. Longer than any read the limits allow, so it only
+/// fires on a controller that stopped answering.
+pub const RUN_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The most stream samples one `read` takes, over all its signals: 20 s at
+/// the usual 1 kHz, well inside [`RUN_TIMEOUT`].
+pub const MAX_SAMPLES: usize = 20_000;
 
 /// One command.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -70,8 +80,9 @@ pub enum Request {
         #[schemars(length(min = 1))]
         signals: Vec<String>,
         /// Stream samples to average per signal; left out, one plain read.
+        /// At most 20000 over all the signals.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[schemars(range(min = 1))]
+        #[schemars(range(min = 1, max = MAX_SAMPLES))]
         samples: Option<usize>,
     },
     /// Every feedback loop the controller exposes, the Z-controller and the
@@ -284,6 +295,18 @@ pub fn execute(target: Target<'_>, request: &Request, serving: &Serving) -> Repl
             if *samples == Some(0) {
                 return Reply::err(ErrorKind::BadRequest, "`samples` has to be at least 1");
             }
+            if let Some(n) = samples
+                && n.saturating_mul(signals.len()) > MAX_SAMPLES
+            {
+                return Reply::err(
+                    ErrorKind::BadRequest,
+                    format!(
+                        "{n} samples of {} signals is more than the {MAX_SAMPLES} one read \
+                         takes; ask for fewer, or read the signals one at a time",
+                        signals.len()
+                    ),
+                );
+            }
             let (signals, samples) = (signals.clone(), *samples);
             on_session(target, move |session| read(session, &signals, samples))
         }
@@ -303,45 +326,87 @@ pub fn execute(target: Target<'_>, request: &Request, serving: &Serving) -> Repl
 }
 
 /// Run `f` with the session: directly, or on the session thread, waiting
-/// at most [`BUSY_TIMEOUT`] for it. A call that timed out is dropped unrun
-/// when the thread gets to it: the caller was told `busy`, and a request
-/// that ran after that answer would act behind its back.
+/// at most [`BUSY_TIMEOUT`] for it to start and [`RUN_TIMEOUT`] for it to
+/// finish.
 fn on_session(target: Target<'_>, f: impl FnOnce(&mut Session) -> Reply + Send + 'static) -> Reply {
     match target {
         Target::Local(session) => f(session),
-        Target::Remote(remote) => {
-            let (tx, rx) = crossbeam_channel::bounded(1);
-            let abandoned = Arc::new(AtomicBool::new(false));
-            let gave_up = Arc::clone(&abandoned);
-            let call = SessionCmd::Call(Box::new(move |session: &mut Session| {
-                if !gave_up.load(Ordering::SeqCst) {
-                    let _ = tx.send(f(session));
-                }
-            }));
-            if let Err(e) = remote.send(call) {
-                return Reply::err(ErrorKind::NotConnected, e.to_string());
-            }
-            match rx.recv_timeout(BUSY_TIMEOUT) {
-                Ok(reply) => reply,
-                Err(RecvTimeoutError::Timeout) => {
-                    abandoned.store(true, Ordering::SeqCst);
-                    Reply::err(
-                        ErrorKind::Busy,
-                        format!(
-                            "the session did not answer within {} s; a job is probably \
-                             running. Nothing was done.",
-                            BUSY_TIMEOUT.as_secs()
-                        ),
-                    )
-                }
-                // The thread dropped the call without running it: it is
-                // gone, not busy.
-                Err(RecvTimeoutError::Disconnected) => Reply::err(
-                    ErrorKind::NotConnected,
-                    "the session thread is gone; nothing was done",
-                ),
-            }
+        Target::Remote(remote) => on_thread(remote, BUSY_TIMEOUT, RUN_TIMEOUT, f),
+    }
+}
+
+/// A call waiting for the session thread, started by it, or given up on
+/// before it started.
+const PENDING: u8 = 0;
+const STARTED: u8 = 1;
+const ABANDONED: u8 = 2;
+
+/// Run `f` on the session thread. A call that has not started within
+/// `busy` is dropped unrun when the thread gets to it: the caller was told
+/// `busy`, and a request that ran after that answer would act behind its
+/// back. One that has started is waited for, since it runs either way;
+/// whichever of the two happens first is settled once, so `busy` always
+/// means nothing was done.
+fn on_thread(
+    remote: &SessionRemote,
+    busy: Duration,
+    run: Duration,
+    f: impl FnOnce(&mut Session) -> Reply + Send + 'static,
+) -> Reply {
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    let state = Arc::new(AtomicU8::new(PENDING));
+    let on_thread = Arc::clone(&state);
+    let call = SessionCmd::Call(Box::new(move |session: &mut Session| {
+        if on_thread
+            .compare_exchange(PENDING, STARTED, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            let _ = tx.send(f(session));
         }
+    }));
+    if let Err(e) = remote.send(call) {
+        return Reply::err(ErrorKind::NotConnected, e.to_string());
+    }
+    let gone = || {
+        Reply::err(
+            ErrorKind::NotConnected,
+            "the session thread is gone; nothing was done",
+        )
+    };
+    match rx.recv_timeout(busy) {
+        Ok(reply) => return reply,
+        // The thread dropped the call without running it: it is gone, not
+        // busy.
+        Err(RecvTimeoutError::Disconnected) => return gone(),
+        Err(RecvTimeoutError::Timeout) => {}
+    }
+    if state
+        .compare_exchange(PENDING, ABANDONED, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        return Reply::err(
+            ErrorKind::Busy,
+            format!(
+                "the session did not get to the request within {} s; a job is probably \
+                 running. Nothing was done.",
+                busy.as_secs()
+            ),
+        );
+    }
+    match rx.recv_timeout(run) {
+        Ok(reply) => reply,
+        Err(RecvTimeoutError::Timeout) => Reply::err(
+            ErrorKind::Failed,
+            format!(
+                "the request started but did not finish within {} s; the controller may \
+                 have stopped answering. Its result is lost.",
+                run.as_secs()
+            ),
+        ),
+        Err(RecvTimeoutError::Disconnected) => Reply::err(
+            ErrorKind::NotConnected,
+            "the session thread stopped while running the request",
+        ),
     }
 }
 
@@ -677,6 +742,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The workbench's log directory is relative by default; the reply has
+    /// to name the file so a client in another directory can open it.
+    #[test]
+    fn a_frame_path_is_absolute_under_a_relative_log_dir() {
+        let dir = std::path::PathBuf::from(format!(
+            "target/rusty-tip-relative-frames-{}",
+            std::process::id()
+        ));
+        let mut session = Session::new(Some(dir.clone()));
+        session.connect(&Backend::Mock).unwrap();
+        let reply = execute(
+            Target::Local(&mut session),
+            &Request::Frame {
+                signal: "current".into(),
+            },
+            &Serving::default(),
+        );
+        let file = std::path::PathBuf::from(reply.result.unwrap()["file"].as_str().unwrap());
+        assert!(file.is_absolute(), "{}", file.display());
+        assert!(file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Asking for a signal the scan does not record says which it does,
     /// rather than passing the controller's refusal on as its fault.
     #[test]
@@ -692,6 +780,85 @@ mod tests {
         let error = reply.error.unwrap();
         assert_eq!(error.kind, ErrorKind::BadRequest);
         assert!(error.message.contains("records"), "{}", error.message);
+    }
+
+    #[test]
+    fn a_read_past_the_sample_limit_is_a_bad_request() {
+        let mut session = connected();
+        let reply = execute(
+            Target::Local(&mut session),
+            &read(&["current", "z"], Some(MAX_SAMPLES / 2 + 1)),
+            &Serving::default(),
+        );
+        assert_eq!(reply.error.unwrap().kind, ErrorKind::BadRequest);
+    }
+
+    /// The session thread, held by a call that sleeps for `hold`.
+    fn held_thread(hold: Duration) -> crate::session::SessionHandle {
+        let handle = crate::session::spawn_with(Session::new(None));
+        handle
+            .send(SessionCmd::Call(Box::new(move |_| {
+                std::thread::sleep(hold)
+            })))
+            .unwrap();
+        handle
+    }
+
+    /// `busy` means nothing was done: a call the thread gets to too late
+    /// never runs.
+    #[test]
+    fn a_call_not_started_in_time_is_busy_and_never_runs() {
+        let handle = held_thread(Duration::from_millis(300));
+        let ran = Arc::new(AtomicU8::new(0));
+        let flag = Arc::clone(&ran);
+        let reply = on_thread(
+            &handle.remote(),
+            Duration::from_millis(50),
+            Duration::from_secs(5),
+            move |_| {
+                flag.store(1, Ordering::SeqCst);
+                Reply::ok(json!({}))
+            },
+        );
+        assert_eq!(reply.error.unwrap().kind, ErrorKind::Busy);
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            0,
+            "a call answered busy ran late"
+        );
+    }
+
+    /// A call that started is waited for, even past the busy timeout: it
+    /// runs either way, so its reply is the answer, not `busy`.
+    #[test]
+    fn a_call_that_started_is_answered_even_when_it_runs_long() {
+        let handle = held_thread(Duration::ZERO);
+        let reply = on_thread(
+            &handle.remote(),
+            Duration::from_millis(50),
+            Duration::from_secs(5),
+            |_| {
+                std::thread::sleep(Duration::from_millis(300));
+                Reply::ok(json!({ "done": true }))
+            },
+        );
+        assert_eq!(reply.result.unwrap()["done"], true);
+    }
+
+    #[test]
+    fn a_call_that_outruns_the_run_timeout_fails_rather_than_hangs() {
+        let handle = held_thread(Duration::ZERO);
+        let reply = on_thread(
+            &handle.remote(),
+            Duration::from_millis(50),
+            Duration::from_millis(100),
+            |_| {
+                std::thread::sleep(Duration::from_millis(400));
+                Reply::ok(json!({}))
+            },
+        );
+        assert_eq!(reply.error.unwrap().kind, ErrorKind::Failed);
     }
 
     #[test]

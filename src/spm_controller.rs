@@ -58,8 +58,10 @@ pub struct DriftComp {
 
 /// Which signals a scan records, and at what resolution.
 ///
-/// The channels are RT signal slots, the same 0..=127 numbering
-/// [`SignalIndex`] carries everywhere else. `pixels` is coerced by the
+/// The channels are signals, in the 0..=127 numbering [`SignalIndex`]
+/// carries everywhere else. Nanonis numbers the scan's channels by the
+/// Signals Manager slot instead; its controller translates both ways, so a
+/// signal has to sit in a slot to be recorded. `pixels` is coerced by the
 /// controller to the nearest multiple of 16, since scan data reaches the host
 /// in packets of 16.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -368,11 +370,11 @@ pub trait SpmController: Send {
     /// Returns `(channel_name, data_2d, scan_direction_up)` where `data_2d`
     /// is a row-major `Vec<Vec<f32>>` (rows x cols).
     ///
-    /// - `channel_index`: which scan buffer channel to read (0-based)
+    /// - `signal`: the recorded signal to read, one of the buffer's channels
     /// - `forward`: `true` for the forward scan direction, `false` for backward
     fn scan_frame_data_grab(
         &mut self,
-        channel_index: u32,
+        signal: SignalIndex,
         forward: bool,
     ) -> Result<(String, Vec<Vec<f32>>, bool)>;
 

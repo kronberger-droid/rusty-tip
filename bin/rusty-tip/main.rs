@@ -28,7 +28,7 @@ use log::LevelFilter;
 
 use rusty_tip::ShutdownFlag;
 use rusty_tip::config::load_config;
-use rusty_tip::control::server::{Server, call, check_loopback};
+use rusty_tip::control::server::{self, Server, call};
 use rusty_tip::control::{
     DEFAULT_ADDR, ErrorKind, Limits, Reply, Request, Serving, Target, describe, execute,
 };
@@ -198,9 +198,20 @@ fn serve(cli: &Cli, read_only: bool, limits: Option<&std::path::Path>) -> Reply 
         Ok(limits) => limits.unwrap_or_default(),
         Err(e) => return Reply::err(ErrorKind::BadRequest, e),
     };
-    if let Err(e) = check_loopback(&cli.addr) {
+    if let Err(e) = server::check_loopback(&cli.addr) {
         return Reply::err(ErrorKind::BadRequest, format!("--addr {}: {e}", cli.addr));
     }
+    // Listen before connecting: a taken port should not cost a connect and
+    // a load of the config's layout and settings.
+    let listener = match server::bind(&cli.addr) {
+        Ok(listener) => listener,
+        Err(e) => {
+            return Reply::err(
+                ErrorKind::Failed,
+                format!("cannot listen on {}: {e}", cli.addr),
+            );
+        }
+    };
     let session = match connect(cli, true) {
         Ok(session) => session,
         Err(reply) => return reply,
@@ -211,7 +222,7 @@ fn serve(cli: &Cli, read_only: bool, limits: Option<&std::path::Path>) -> Reply 
     let updates = handle.updates().clone();
     std::thread::spawn(move || for _ in updates.iter() {});
     let serving = Serving { read_only, limits };
-    let server = match Server::start(&cli.addr, handle.remote(), serving.clone()) {
+    let server = match Server::serve(listener, handle.remote(), serving.clone()) {
         Ok(server) => server,
         Err(e) => {
             return Reply::err(

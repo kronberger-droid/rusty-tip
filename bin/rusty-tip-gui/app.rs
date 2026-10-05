@@ -406,12 +406,14 @@ impl WorkbenchApp {
         ui.label(egui::RichText::new("Tools").weak().size(12.0));
         let running_id = self.run.as_ref().map(|r| r.tool_id);
         for i in 0..self.tools.len() {
-            let marker = if running_id == Some(self.tools[i].id()) {
-                "▶ "
+            // Only the running tool carries a marker; the others line up
+            // with Connection rather than leaving room for one.
+            let label = self.tools[i].label();
+            let text = if running_id == Some(self.tools[i].id()) {
+                format!("▶ {label}")
             } else {
-                "   "
+                label.to_string()
             };
-            let text = format!("{marker}{}", self.tools[i].label());
             if ui
                 .selectable_label(self.page == Page::Tool(i), text)
                 .clicked()

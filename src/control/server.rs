@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use super::{BUSY_TIMEOUT, ErrorKind, Reply, Request, Serving, Target, execute};
+use super::{BUSY_TIMEOUT, ErrorKind, RUN_TIMEOUT, Reply, Request, Serving, Target, execute};
 use crate::session::SessionRemote;
 
 /// A running control socket. Dropping it stops accepting and cuts off the
@@ -35,8 +35,17 @@ impl Server {
     /// Listen on `addr`, a loopback address, and answer requests against
     /// the session behind `remote`.
     pub fn start(addr: &str, remote: SessionRemote, serving: Serving) -> io::Result<Self> {
-        check_loopback(addr)?;
-        let listener = TcpListener::bind(addr)?;
+        Self::serve(bind(addr)?, remote, serving)
+    }
+
+    /// Answer requests on a listener from [`bind`], against the session
+    /// behind `remote`. Binding first lets `serve` learn the address is
+    /// taken before it connects, and loads presets, for nothing.
+    pub fn serve(
+        listener: TcpListener,
+        remote: SessionRemote,
+        serving: Serving,
+    ) -> io::Result<Self> {
         let local = listener.local_addr()?;
         let read_only = serving.read_only;
         let stop = Arc::new(AtomicBool::new(false));
@@ -133,6 +142,12 @@ pub fn check_loopback(addr: &str) -> io::Result<()> {
     }
 }
 
+/// Listen on `addr`, a loopback address, for [`Server::serve`].
+pub fn bind(addr: &str) -> io::Result<TcpListener> {
+    check_loopback(addr)?;
+    TcpListener::bind(addr)
+}
+
 /// Answer one client's requests until it hangs up.
 fn serve_client(stream: TcpStream, remote: &SessionRemote, serving: &Serving) {
     let Ok(mut writer) = stream.try_clone() else {
@@ -162,13 +177,10 @@ fn serve_client(stream: TcpStream, remote: &SessionRemote, serving: &Serving) {
 /// caller handles every outcome the same way.
 pub fn call(addr: &str, request: &Request) -> Reply {
     let attempt = || -> io::Result<Reply> {
-        let target = addr
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no address"))?;
-        let mut stream = TcpStream::connect_timeout(&target, Duration::from_secs(2))?;
-        // A read waits up to the server's own busy timeout and a margin.
-        stream.set_read_timeout(Some(BUSY_TIMEOUT + Duration::from_secs(5)))?;
+        let mut stream = connect(addr)?;
+        // A reply waits for the session thread to start the request and
+        // then to run it; a margin on top.
+        stream.set_read_timeout(Some(BUSY_TIMEOUT + RUN_TIMEOUT + Duration::from_secs(5)))?;
         let mut line = serde_json::to_string(request).map_err(io::Error::other)?;
         line.push('\n');
         stream.write_all(line.as_bytes())?;
@@ -185,6 +197,20 @@ pub fn call(addr: &str, request: &Request) -> Reply {
             ),
         )
     })
+}
+
+/// Connect to the first of `addr`'s addresses that answers. A name like
+/// `localhost` resolves to `::1` before `127.0.0.1` on Windows, and the
+/// server may listen on either.
+fn connect(addr: &str) -> io::Result<TcpStream> {
+    let mut last = io::Error::new(io::ErrorKind::InvalidInput, "no address");
+    for target in addr.to_socket_addrs()? {
+        match TcpStream::connect_timeout(&target, Duration::from_secs(2)) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
 }
 
 #[cfg(test)]
@@ -248,6 +274,18 @@ mod tests {
         BufReader::new(stream).read_line(&mut line).unwrap();
         let reply: Reply = serde_json::from_str(&line).unwrap();
         assert_eq!(reply.error.unwrap().kind, ErrorKind::BadRequest);
+    }
+
+    /// `localhost` resolves to `::1` first on Windows; a server on
+    /// `127.0.0.1` has to be found all the same.
+    #[test]
+    fn a_name_reaches_the_server_on_whichever_address_it_listens() {
+        let (_handle, server) = mock_server(true);
+        let reply = call(
+            &format!("localhost:{}", server.addr().port()),
+            &Request::Status,
+        );
+        assert!(reply.ok, "{reply:?}");
     }
 
     #[test]
