@@ -326,6 +326,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`rusty-tip serve` connected before it knew it could listen.** With the
   port taken it connected and loaded the config's layout and settings, then
   gave up. It binds first now, and `Server::serve` takes the bound listener.
+- **The scan buffer named the wrong signals on Nanonis.** `Scan.BufferGet`,
+  `Scan.BufferSet` and `Scan.FrameDataGrab` number channels by Signals
+  Manager slot (0 to 23), not by signal, and they were passed through as
+  signal indexes. A scan of Current, Z, the PLL's phase and amplitude, the
+  frequency shift and the excitation read as Current and five unused
+  inputs, `rusty-tip frame "Z (m)"` was refused, and multi-pass asked the
+  buffer for slot 30, which does not exist. `NanonisController` now
+  translates through `Signals.InSlotsGet`, asked on each use since slots can
+  be reassigned, and `SpmController::scan_frame_data_grab` takes a
+  `SignalIndex`. The query is sent by hand: `nanonis-rs` 0.5's
+  `signals_in_slots_get` parses its reply without the slot names that come
+  first.
 - **Tool names in the workbench sidebar sat indented.** Every tool's label
   kept room for the running marker; only the running tool carries one now,
   and the rest line up with Connection.

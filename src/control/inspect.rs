@@ -135,7 +135,7 @@ pub(super) fn frame(session: &mut Session, signal: &str) -> Reply {
                 recorded.join(", ")
             ))));
         };
-        let channel = u32::from(found.index);
+        let channel = found.signal_index();
         let (_, forward, scan_up) = controller.scan_frame_data_grab(channel, true)?;
         let (_, backward, _) = controller.scan_frame_data_grab(channel, false)?;
         Ok(Ok((found, forward, backward, scan_up)))
