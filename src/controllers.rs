@@ -168,10 +168,21 @@ pub struct ZControllerParams {
     pub withdraw_rate_m_s: Option<f64>,
     /// Whether the Z position limits below apply.
     pub limits_enabled: bool,
-    /// Z position limits, high then low. Without `limits_enabled` these
-    /// read as the piezo range and a write is ignored.
+    /// Z position limits, low then high, as a range is written. Nanonis
+    /// sends and takes them high first; the controller turns them round. A
+    /// file may give them either way, since the low limit is the smaller:
+    /// presets saved high first still load as they were meant. Without
+    /// `limits_enabled` these read as the piezo range and a write is
+    /// ignored.
     #[schemars(extend("x-unit" = "m", "x-display-unit" = "nm", "x-enabled-by" = "limits_enabled"))]
+    #[serde(deserialize_with = "low_then_high")]
     pub limits_m: (f64, f64),
+}
+
+/// A `(low, high)` pair, whichever order it was written in.
+fn low_then_high<'de, D: serde::Deserializer<'de>>(d: D) -> Result<(f64, f64), D::Error> {
+    let (a, b) = <(f64, f64)>::deserialize(d)?;
+    Ok(if a <= b { (a, b) } else { (b, a) })
 }
 
 impl Default for ZControllerParams {
@@ -927,6 +938,20 @@ mod tests {
         );
         let json = serde_json::to_string(&ControllerId::PllPhase { modulator: 1 }).unwrap();
         assert_eq!(json, r#"{"kind":"pll_phase","modulator":1}"#);
+    }
+
+    /// Z limits are low then high, and a preset saved high first, as they
+    /// were before, loads the same way rather than swapped.
+    #[test]
+    fn z_limits_load_low_then_high_whichever_way_they_were_written() {
+        let mut fields = ControllerParams::Z(ZControllerParams::default()).to_fields();
+        fields["limits_m"] = serde_json::json!([1e-6, -2e-6]);
+        let ControllerParams::Z(z) =
+            ControllerParams::from_fields(ControllerId::Z, fields).unwrap()
+        else {
+            panic!("a Z preset loads as Z parameters");
+        };
+        assert_eq!(z.limits_m, (-2e-6, 1e-6));
     }
 
     #[test]

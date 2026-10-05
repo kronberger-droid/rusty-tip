@@ -386,7 +386,7 @@
                   0.0,
                   0.0
                 ],
-                "description": "Z position limits, high then low. Without `limits_enabled` these\nread as the piezo range and a write is ignored.",
+                "description": "Z position limits, low then high, as a range is written. Nanonis\nsends and takes them high first; the controller turns them round. A\nfile may give them either way, since the low limit is the smaller:\npresets saved high first still load as they were meant. Without\n`limits_enabled` these read as the piezo range and a write is\nignored.",
                 "maxItems": 2,
                 "minItems": 2,
                 "prefixItems": [
@@ -667,7 +667,7 @@
                   0.0,
                   0.0
                 ],
-                "description": "Z position limits, high then low. Without `limits_enabled` these\nread as the piezo range and a write is ignored.",
+                "description": "Z position limits, low then high, as a range is written. Nanonis\nsends and takes them high first; the controller turns them round. A\nfile may give them either way, since the low limit is the smaller:\npresets saved high first still load as they were meant. Without\n`limits_enabled` these read as the piezo range and a write is\nignored.",
                 "maxItems": 2,
                 "minItems": 2,
                 "prefixItems": [

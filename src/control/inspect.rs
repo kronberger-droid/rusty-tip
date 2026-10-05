@@ -240,7 +240,8 @@ pub(super) fn psd(session: &mut Session, signal: &str, samples: usize, segment: 
     }
 
     let mean = values.iter().sum::<f64>() / values.len() as f64;
-    let rms = (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64).sqrt();
+    let rms_total =
+        (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64).sqrt();
     let spectrum = spectrum::welch(&values, rate_hz, segment);
     let peaks = spectrum::peaks(&spectrum, PSD_PEAKS);
     Reply::ok(json!({
@@ -249,7 +250,10 @@ pub(super) fn psd(session: &mut Session, signal: &str, samples: usize, segment: 
         "index": found.index,
         "rate_hz": rate_hz,
         "samples": values.len(),
-        "rms": rms,
+        // What the spectrum holds, so the two agree; the whole series about
+        // one mean also counts drift slower than a segment.
+        "rms": spectrum::rms(&spectrum),
+        "rms_total": rms_total,
         "peaks": peaks,
         "floor_asd": spectrum::floor_asd(&spectrum),
         "spectrum": spectrum,
@@ -297,11 +301,8 @@ fn write_frame(dir: &Path, signal: &str, file: &FrameFile<'_>) -> Result<PathBuf
 /// mostly hysteresis and creep.
 ///
 /// The directions are compared pixel for pixel as the controller sends
-/// them, the same way every frame, so frames stay comparable across a
-/// change of gains. Whether Nanonis sends backward rows mirrored has not
-/// been checked on hardware; `mean.trace_retrace_rms_mirrored` compares
-/// them mirrored too, and on a frame with features, whichever of the two is
-/// clearly smaller tells the way.
+/// them: Nanonis sends backward rows in the same orientation as forward
+/// ones, checked on the lab's controller.
 #[derive(Debug, Serialize)]
 pub(crate) struct FrameStats {
     pub lines_scanned: usize,
@@ -316,8 +317,6 @@ pub(crate) struct Summary {
     pub rms_backward: Option<f64>,
     pub retrace_offset: Option<f64>,
     pub trace_retrace_rms: Option<f64>,
-    /// `trace_retrace_rms` with the backward rows mirrored.
-    pub trace_retrace_rms_mirrored: Option<f64>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -332,14 +331,12 @@ pub(crate) struct Lines {
 impl FrameStats {
     pub fn of(forward: &[Vec<f32>], backward: &[Vec<f32>]) -> Self {
         let mut lines = Lines::default();
-        let mut mirrored = Vec::new();
         for (i, f) in forward.iter().enumerate() {
             let b = backward.get(i).map(Vec::as_slice).unwrap_or(&[]);
-            let (offset, rms) = match difference(f, b, false) {
+            let (offset, rms) = match difference(f, b) {
                 Some((offset, rms)) => (Some(offset), Some(rms)),
                 None => (None, None),
             };
-            mirrored.push(difference(f, b, true).map(|(_, rms)| rms));
             lines.mean_forward.push(mean(f));
             lines.rms_forward.push(detrended_rms(f));
             lines.rms_backward.push(detrended_rms(b));
@@ -357,7 +354,6 @@ impl FrameStats {
                 rms_backward: average(&lines.rms_backward),
                 retrace_offset: average(&lines.retrace_offset),
                 trace_retrace_rms: average(&lines.trace_retrace_rms),
-                trace_retrace_rms_mirrored: average(&mirrored),
             },
             lines,
         }
@@ -400,17 +396,15 @@ fn detrended_rms(line: &[f32]) -> Option<f64> {
 /// The mean of backward minus forward over the pixels both have, and the
 /// RMS of that difference about its mean; `None` with fewer than two such
 /// pixels.
-fn difference(forward: &[f32], backward: &[f32], mirrored: bool) -> Option<(f64, f64)> {
+fn difference(forward: &[f32], backward: &[f32]) -> Option<(f64, f64)> {
     if forward.len() != backward.len() {
         return None;
     }
-    let len = forward.len();
-    let diffs: Vec<f64> = (0..len)
-        .filter_map(|x| {
-            let b = backward[if mirrored { len - 1 - x } else { x }];
-            let f = forward[x];
-            (f.is_finite() && b.is_finite()).then(|| f64::from(b) - f64::from(f))
-        })
+    let diffs: Vec<f64> = forward
+        .iter()
+        .zip(backward)
+        .filter(|(f, b)| f.is_finite() && b.is_finite())
+        .map(|(&f, &b)| f64::from(b) - f64::from(f))
         .collect();
     if diffs.len() < 2 {
         return None;
@@ -470,18 +464,23 @@ mod tests {
         assert!(shifted.mean.trace_retrace_rms.unwrap() > 0.1);
     }
 
-    /// The comparison is always as sent, so it cannot change between
-    /// frames; the mirrored figure is there to tell which way is right.
+    /// Rows are compared pixel for pixel as sent: the same row both ways
+    /// shows no difference, a reversed one shows its whole ramp.
     #[test]
-    fn rows_are_compared_as_sent_with_the_mirrored_figure_beside() {
+    fn rows_are_compared_as_sent() {
         let forward = vec![(0..32).map(|x| x as f32).collect::<Vec<f32>>()];
-        let mirrored = vec![forward[0].iter().rev().copied().collect::<Vec<f32>>()];
-        let stats = FrameStats::of(&forward, &mirrored);
-        assert!(stats.mean.trace_retrace_rms.unwrap() > 1.0);
-        assert!(close(stats.mean.trace_retrace_rms_mirrored, 0.0));
-        let same = FrameStats::of(&forward, &forward);
-        assert!(close(same.mean.trace_retrace_rms, 0.0));
-        assert!(same.mean.trace_retrace_rms_mirrored.unwrap() > 1.0);
+        let reversed = vec![forward[0].iter().rev().copied().collect::<Vec<f32>>()];
+        assert!(close(
+            FrameStats::of(&forward, &forward).mean.trace_retrace_rms,
+            0.0
+        ));
+        assert!(
+            FrameStats::of(&forward, &reversed)
+                .mean
+                .trace_retrace_rms
+                .unwrap()
+                > 1.0
+        );
     }
 
     #[test]

@@ -527,6 +527,22 @@ pub trait SpmController: Send {
         Ok((self.read_signal_samples(index, num_samples)?, None))
     }
 
+    /// [`read_signal_samples`](Self::read_signal_samples) for several
+    /// signals: `num_samples` of each, one list per signal in the order
+    /// asked. A controller that streams them all takes them from the same
+    /// frames, so the readings are simultaneous and the read lasts as long
+    /// as one; the default reads one signal after another.
+    fn read_signals_samples(
+        &mut self,
+        indices: &[SignalIndex],
+        num_samples: usize,
+    ) -> Result<Vec<Vec<f64>>> {
+        indices
+            .iter()
+            .map(|&index| self.read_signal_samples(index, num_samples))
+            .collect()
+    }
+
     /// Read a noise-reduced signal value by averaging multiple samples.
     ///
     /// Convenience wrapper around `read_signal_samples` that returns the mean.
