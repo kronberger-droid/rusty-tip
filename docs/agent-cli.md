@@ -92,11 +92,8 @@ line `i`, and their means over the scanned lines:
 
 Lines not scanned yet read `null` and stay out of the means, so a partial frame
 is fine. The two directions are compared pixel for pixel as the controller
-sends them, the same way every frame, so frames stay comparable while the
-gains change. Whether Nanonis sends backward rows mirrored has not been
-checked on hardware; `mean.trace_retrace_rms_mirrored` gives the figure with
-them mirrored, and on a frame with features, whichever of the two is clearly
-smaller tells the way. The file keeps the rows as sent.
+sends them; Nanonis sends backward rows the same way round as forward ones,
+checked on the lab's controller. The file keeps the rows as sent.
 
 `psd <signal> [--samples N] [--segment N]` takes `N` evenly spaced samples of a
 signal on the data stream (16384 by default, at most 20000) and averages their

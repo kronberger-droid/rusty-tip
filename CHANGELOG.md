@@ -320,6 +320,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `frame`'s `trace_retrace_rms_mirrored`. It was there until a frame on
+  hardware settled which way Nanonis sends backward rows; it sends them the
+  same way round as forward ones, so the as-sent comparison is the one.
 - `data_acquisition.oversampling`. `sample_rate` is the one value now: the
   controller reads the RT frequency, derives the logger divisor that comes
   closest, measures what the stream delivers, and corrects the divisor
