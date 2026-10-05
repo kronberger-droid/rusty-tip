@@ -27,6 +27,30 @@ struct Inner {
 }
 
 impl ShutdownFlag {
+    /// The process's flag for Ctrl+C: the first press requests a shutdown,
+    /// so the run ends at its next wake-up with the controller torn down; a
+    /// second exits at once. Installed on the first call and the same flag
+    /// after, since a process can hold only one handler.
+    pub fn on_ctrl_c() -> Self {
+        static FLAG: std::sync::OnceLock<ShutdownFlag> = std::sync::OnceLock::new();
+        FLAG.get_or_init(|| {
+            let flag = ShutdownFlag::new();
+            let raised = flag.clone();
+            let installed = ctrlc::set_handler(move || {
+                if raised.is_requested() {
+                    std::process::exit(130);
+                }
+                eprintln!("Ctrl+C: stopping after the current step (again to exit now)");
+                raised.request();
+            });
+            if let Err(e) = installed {
+                eprintln!("warning: Ctrl+C will kill the run outright: {e}");
+            }
+            flag
+        })
+        .clone()
+    }
+
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Inner {

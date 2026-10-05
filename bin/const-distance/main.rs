@@ -37,7 +37,6 @@ mod surface;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::Instant;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -545,29 +544,6 @@ fn start_z_stream(
     Ok(())
 }
 
-/// The stop flag Ctrl+C raises, so a drift burst or a settle ends at the next
-/// wake-up and the controller is still torn down. Installed once, since a
-/// process can hold only one handler. A second Ctrl+C exits at once.
-fn ctrl_c_flag() -> ShutdownFlag {
-    static FLAG: OnceLock<ShutdownFlag> = OnceLock::new();
-    FLAG.get_or_init(|| {
-        let flag = ShutdownFlag::new();
-        let raised = flag.clone();
-        let installed = ctrlc::set_handler(move || {
-            if raised.is_requested() {
-                std::process::exit(130);
-            }
-            eprintln!("Ctrl+C: stopping after the current step (again to exit now)");
-            raised.request();
-        });
-        if let Err(e) = installed {
-            eprintln!("warning: Ctrl+C will kill the run outright: {e}");
-        }
-        flag
-    })
-    .clone()
-}
-
 /// The drift operation itself, once the log is open.
 ///
 /// A thin wrapper over [`DriftRoutine`], which the workbench runs too, so
@@ -612,7 +588,7 @@ fn drift_op(
             require_stream: !args.no_stream,
         },
     );
-    let outcome = run_routine(controller, events, &ctrl_c_flag(), &mut routine)?;
+    let outcome = run_routine(controller, events, &ShutdownFlag::on_ctrl_c(), &mut routine)?;
     let report = routine.report;
     if let Some(before) = &report.before {
         println!("{before}");
@@ -753,7 +729,7 @@ fn baseline_apply(
     events: &EventBus,
     controller: &mut NanonisController,
 ) -> Result<(), Box<dyn Error>> {
-    let shutdown = ctrl_c_flag();
+    let shutdown = ShutdownFlag::on_ctrl_c();
     let mut store = DataStore::new();
     let mut ctx = ActionContext {
         controller,
