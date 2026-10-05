@@ -9,6 +9,7 @@ pub mod action;
 pub mod controllers;
 pub mod drift;
 pub mod loop_model;
+pub mod operating_point;
 pub mod routine;
 pub mod tip_prep;
 

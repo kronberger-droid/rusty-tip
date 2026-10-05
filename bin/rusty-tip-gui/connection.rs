@@ -127,11 +127,19 @@ pub struct ConnectionForm {
     /// gets the default.
     #[serde(default = "default_presets_file")]
     pub presets_file: String,
+    /// The operating points file; a saved form from before it had one gets
+    /// the default.
+    #[serde(default = "default_operating_points_file")]
+    pub operating_points_file: String,
 }
 
 /// Next to the config and the log directory, where the app is launched.
 fn default_presets_file() -> String {
     rusty_tip::config::DEFAULT_PRESETS_FILE.into()
+}
+
+fn default_operating_points_file() -> String {
+    rusty_tip::operating_point::DEFAULT_OPERATING_POINTS_FILE.into()
 }
 
 impl Default for ConnectionForm {
@@ -152,11 +160,13 @@ impl Default for ConnectionForm {
             agent_socket: AgentSocket::default(),
             agent_addr: default_agent_addr(),
             presets_file: default_presets_file(),
+            operating_points_file: default_operating_points_file(),
         };
         form.apply_settings(&ConnectionSettings {
             backend: NanonisBackend::default(),
             log_dir: None,
             presets_file: PathBuf::from(default_presets_file()),
+            operating_points_file: PathBuf::from(default_operating_points_file()),
         });
         form
     }
@@ -172,6 +182,18 @@ pub struct ConnectionSettings {
     pub log_dir: Option<PathBuf>,
     /// The controller preset file (`[controllers].presets_file`).
     pub presets_file: PathBuf,
+    /// The operating points file (`[controllers].operating_points_file`).
+    pub operating_points_file: PathBuf,
+}
+
+/// A path field's path, or the default when it was emptied.
+fn or_default(field: &str, default: fn() -> String) -> PathBuf {
+    let path = field.trim();
+    PathBuf::from(if path.is_empty() {
+        default()
+    } else {
+        path.to_string()
+    })
 }
 
 impl ConnectionForm {
@@ -248,17 +270,18 @@ impl ConnectionForm {
             backend: self.nanonis()?,
             log_dir: self.log_dir(),
             presets_file: self.presets_file(),
+            operating_points_file: self.operating_points_file(),
         })
     }
 
     /// The preset file, the default when the field was emptied.
     pub fn presets_file(&self) -> PathBuf {
-        let path = self.presets_file.trim();
-        if path.is_empty() {
-            PathBuf::from(default_presets_file())
-        } else {
-            PathBuf::from(path)
-        }
+        or_default(&self.presets_file, default_presets_file)
+    }
+
+    /// The operating points file, the default when the field was emptied.
+    pub fn operating_points_file(&self) -> PathBuf {
+        or_default(&self.operating_points_file, default_operating_points_file)
     }
 
     /// Take a file's settings into the form. The backend kind stays.
@@ -289,6 +312,7 @@ impl ConnectionForm {
             self.log_dir = dir.display().to_string();
         }
         self.presets_file = s.presets_file.display().to_string();
+        self.operating_points_file = s.operating_points_file.display().to_string();
     }
 
     /// One line saying what the form points at.
@@ -510,6 +534,20 @@ impl ConnectionPane {
                 );
                 ui.horizontal(|ui| {
                     path_field(ui, &mut self.form.presets_file, 320.0, || {
+                        rfd::FileDialog::new()
+                            .add_filter("TOML", &["toml"])
+                            .pick_file()
+                    });
+                });
+                ui.end_row();
+
+                ui.label("Operating points").on_hover_text(
+                    "Every loop with its setpoint, the bias, and the scan's size, angle, \
+                     resolution and speed, saved under a name. The Controllers page \
+                     captures, lists and applies them. Created on the first save.",
+                );
+                ui.horizontal(|ui| {
+                    path_field(ui, &mut self.form.operating_points_file, 320.0, || {
                         rfd::FileDialog::new()
                             .add_filter("TOML", &["toml"])
                             .pick_file()
@@ -917,6 +955,7 @@ mod tests {
             },
             log_dir: Some(PathBuf::from("/tmp/logs")),
             presets_file: PathBuf::from("/lab/presets.toml"),
+            operating_points_file: PathBuf::from("/lab/points.toml"),
         };
         let mut form = ConnectionForm {
             kind: BackendKind::Mock,

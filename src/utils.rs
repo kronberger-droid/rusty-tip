@@ -1,5 +1,12 @@
 use std::time::{Duration, Instant};
 
+/// An f32 from the controller as the f64 its shortest decimal form names:
+/// `5e-8`, not the `5.000000058430487e-8` widening gives, so a reply or a
+/// saved file reads as the value was set.
+pub fn shortest(value: f32) -> f64 {
+    value.to_string().parse().unwrap_or(f64::from(value))
+}
+
 /// Error type for polling operations
 #[derive(Debug)]
 pub enum PollError<E> {

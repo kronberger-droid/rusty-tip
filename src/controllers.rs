@@ -644,26 +644,41 @@ impl ApplyPreset {
         preset.validate().map_err(SpmError::Workflow)?;
         require(controller, Capability::Controllers)?;
         let current = controller.read_controller(preset.id)?;
-        if let ControllerParams::Z(p) = &preset.params
-            && !p.active.is_empty()
-            && !current.available.is_empty()
-            && !current.available.iter().any(|a| a == &p.active)
-        {
-            return Err(SpmError::Workflow(format!(
-                "preset {:?} names a Z-controller called {:?}; the module has {}",
-                preset.name,
-                p.active,
-                current.available.join(", ")
-            )));
-        }
+        refuse_unknown_z_loop(
+            &format!("preset {:?}", preset.name),
+            &preset.params,
+            &current,
+        )?;
         let params = preset.params_over(&current.params);
         write_and_report(controller, events, preset.id, current.params, &params)
     }
 }
 
+/// Refuse Z parameters whose `active` loop the module has not defined, as
+/// `current` lists them; `what` names the preset or point in the message.
+/// Anything else passes.
+pub(crate) fn refuse_unknown_z_loop(
+    what: &str,
+    params: &ControllerParams,
+    current: &ControllerReading,
+) -> Result<(), SpmError> {
+    if let ControllerParams::Z(p) = params
+        && !p.active.is_empty()
+        && !current.available.is_empty()
+        && !current.available.iter().any(|a| a == &p.active)
+    {
+        return Err(SpmError::Workflow(format!(
+            "{what} names a Z-controller called {:?}; the module has {}",
+            p.active,
+            current.available.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 /// Write `params`, read the loop back, and report both: the
 /// `controller/applied` event against `before`, then the reading.
-fn write_and_report(
+pub(crate) fn write_and_report(
     controller: &mut dyn SpmController,
     events: &dyn EventEmitter,
     id: ControllerId,
