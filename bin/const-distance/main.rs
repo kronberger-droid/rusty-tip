@@ -97,12 +97,12 @@ struct DriftArgs {
     #[command(subcommand)]
     op: DriftOp,
 
-    /// RT signal slot carrying the Z position, in metres. 30 on a stock
+    /// Signal index carrying the Z position, in metres. 30 on a stock
     /// signal assignment; `--signal-name` resolves it from the controller.
     #[arg(long, default_value_t = 30)]
     signal: u32,
 
-    /// Resolve the Z signal by name instead of by slot, e.g. "Z (m)".
+    /// Resolve the Z signal by name instead of by index, e.g. "Z (m)".
     #[arg(long, conflicts_with = "signal")]
     signal_name: Option<String>,
 
@@ -141,9 +141,10 @@ struct DriftArgs {
     #[arg(long, default_value_t = 6590)]
     data_port: u16,
 
-    /// TCP logger channel that carries Z. Looked up in the controller's
-    /// signal slots when omitted.
-    #[arg(long)]
+    /// Ignored: the TCP logger is asked for Z by its signal index and says
+    /// which column it lands in. Kept so existing scripts still parse.
+    #[arg(long, hide = true)]
+    #[allow(dead_code, reason = "accepted and ignored, for old scripts")]
     tcp_channel: Option<u8>,
 
     /// Poll Z instead of streaming it: `--samples` timed reads per window.
@@ -191,13 +192,13 @@ struct BaselineArgs {
     #[arg(short, long, default_value = "0.2e-9")]
     lift: f64,
 
-    /// RT signal slot to record in the first pass. 30 is Z (m) on a stock
+    /// Signal index to record in the first pass. 30 is Z (m) on a stock
     /// signal assignment; `--signal-name` resolves it from the controller
     /// instead.
     #[arg(long, default_value_t = 30)]
     signal: u32,
 
-    /// Resolve the recorded signal by name instead of by slot, e.g. "Z (m)".
+    /// Resolve the recorded signal by name instead of by index, e.g. "Z (m)".
     /// Needs a connection.
     #[arg(long, conflicts_with = "signal")]
     signal_name: Option<String>,
@@ -431,7 +432,7 @@ fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
                 .get_by_name(name)
                 .ok_or_else(|| format!("no signal called {name:?} on this controller"))?
                 .signal_index();
-            println!("resolved {name:?} to RT slot {}", signal.0);
+            println!("resolved {name:?} to signal {}", signal.0);
             signal
         }
         None => SignalIndex(args.signal),
@@ -473,58 +474,22 @@ fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
 
 /// Bring the TCP logger up with Z in it, and check that what it streams is Z.
 ///
-/// A TCP logger channel is a position in the controller's 24 signal slots,
-/// so the channel for `z` is wherever the slot list holds its RT index. That
-/// assignment differs between instruments, which is why it is looked up
-/// rather than taken from a table. Whatever the lookup or `--tcp-channel`
-/// says, the stream is then compared against a plain read of Z: a drift
-/// fitted to the wrong channel would be applied to the piezo with confidence.
+/// The logger is asked for Z by its signal index and announces the column
+/// it lands in. The stream is still compared against a plain read of Z: a
+/// drift fitted to the wrong channel would be applied to the piezo with
+/// confidence.
 fn start_z_stream(
     args: &DriftArgs,
     z: SignalIndex,
     controller: &mut NanonisController,
 ) -> Result<(), Box<dyn Error>> {
-    let z_slot = u8::try_from(z.0).map_err(|_| format!("RT signal {} is out of range", z.0))?;
-    let channel =
-        match args.tcp_channel {
-            Some(channel) => channel,
-            None => {
-                // Asked for with the full response layout, names then indexes;
-                // nanonis-rs 0.5's own `signals_in_slots_get` leaves the names
-                // out of its layout.
-                let reply = controller.client_mut().quick_send(
-                    "Signals.InSlotsGet",
-                    vec![],
-                    vec![],
-                    vec!["+*c", "i", "*i"],
-                )?;
-                let slots = reply
-                    .get(2)
-                    .and_then(|v| v.as_i32_array().ok())
-                    .filter(|s| {
-                        !s.is_empty() && s.len() <= 24 && s.iter().all(|i| (0..=255).contains(i))
-                    })
-                    .ok_or(
-                        "could not read the controller's signal slots; pass the TCP logger \
-                     channel that carries Z with --tcp-channel, or poll with --no-stream",
-                    )?;
-                let position = slots.iter().position(|&rt| rt == i32::from(z_slot)).ok_or_else(|| {
-                format!(
-                    "RT signal {} is in none of the controller's {} signal slots, so the TCP \
-                     logger cannot stream it. Assign it to a slot in the Signals Manager, or \
-                     poll it with --no-stream.",
-                    z.0,
-                    slots.len()
-                )
-            })?;
-                position as u8
-            }
-        };
-    println!("streaming Z from TCP logger channel {channel}");
+    let z_index = u8::try_from(z.0).map_err(|_| format!("signal {} is out of range", z.0))?;
 
+    // The channel number only marks Z for streaming: the logger is asked
+    // for it by signal index and announces its column.
     let registry = SignalRegistry::builder()
-        .add_tcp_mapping(z_slot, channel)
-        .add_signal("Z (m)".to_string(), z_slot)
+        .add_tcp_mapping(z_index, 0)
+        .add_signal("Z (m)".to_string(), z_index)
         .build();
     let setup = StreamSetup::new(args.host.as_str(), args.data_port, args.sample_rate);
     if !controller.start_streaming(&registry, &setup)? {
@@ -536,8 +501,8 @@ fn start_z_stream(
     let polled = controller.read_signal(z, true)?;
     if (mean - polled).abs() > 1e-9 {
         return Err(format!(
-            "TCP logger channel {channel} streams {mean:.4e} while Z reads {polled:.4e} m, so \
-             it is not carrying Z. Pass the right channel with --tcp-channel."
+            "the TCP logger streams {mean:.4e} while Z reads {polled:.4e} m, so it is not \
+             carrying Z; poll it with --no-stream"
         )
         .into());
     }
@@ -653,7 +618,7 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
                 .get_by_name(name)
                 .ok_or_else(|| format!("no signal called {name:?} on this controller"))?
                 .signal_index();
-            println!("resolved {name:?} to RT slot {}", signal.0);
+            println!("resolved {name:?} to signal {}", signal.0);
             signal
         }
         (Some(_), None) => return Err("--signal-name needs a connection; drop --dry-run".into()),
@@ -679,7 +644,7 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
     // be checked against the GUI at a glance.
     for (i, pass) in config.passes.iter().enumerate() {
         let what = match (pass.recorded(), pass.played()) {
-            (Some(s), _) => format!("record RT slot {}", s.0),
+            (Some(s), _) => format!("record signal {}", s.0),
             (_, Some((offset, _))) => format!("play back, offset {:.4} nm", offset / NM),
             _ => "nothing".to_string(),
         };
@@ -750,7 +715,7 @@ fn baseline_apply(
 
     let buffer = ctx.controller.scan_buffer_get()?;
     println!(
-        "scan buffer records RT slots {:?} at {}x{}",
+        "scan buffer records signals {:?} at {}x{}",
         buffer.channels.iter().map(|c| c.0).collect::<Vec<_>>(),
         buffer.pixels,
         buffer.lines
