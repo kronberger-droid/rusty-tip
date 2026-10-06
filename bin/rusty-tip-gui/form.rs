@@ -127,6 +127,16 @@ impl SchemaForm {
             .as_str()
     }
 
+    /// A top-level field's label, as the form shows it.
+    pub fn label_of(&self, key: &str) -> String {
+        let schema = self
+            .root
+            .get("properties")
+            .and_then(|p| p.get(key))
+            .unwrap_or(&Value::Null);
+        label_for(key, schema)
+    }
+
     /// A value with every field at its schema default.
     #[cfg(test)]
     pub fn default_value(&self) -> Value {

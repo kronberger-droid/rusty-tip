@@ -12,7 +12,7 @@ use rusty_tip::event::EventAccumulator;
 use rusty_tip::mock_controller::{MockController, MockObservations, models};
 use rusty_tip::operating_point::{
     ApplyOperatingPoint, CaptureOperatingPoint, OperatingPoint, OperatingPointApplied,
-    OperatingState,
+    OperatingPointSaved, OperatingPointStore, OperatingState, SaveAs,
 };
 use rusty_tip::session::{Job, PresetFiles, Session};
 use rusty_tip::signal_registry::{SignalIndex, SignalRegistry};
@@ -40,7 +40,7 @@ fn run(session: &mut Session, job: &mut dyn Job) -> Arc<EventAccumulator> {
 }
 
 fn capture(session: &mut Session) -> OperatingState {
-    let events = run(session, &mut CaptureOperatingPoint);
+    let events = run(session, &mut CaptureOperatingPoint::default());
     let states = events.custom::<OperatingState>();
     assert_eq!(states.len(), 1);
     states[0].clone()
@@ -104,6 +104,39 @@ fn a_point_applied_is_what_a_capture_reads_back() {
     assert_eq!(after.bias_v, point.bias_v);
     assert_eq!(after.scan, point.scan);
     assert_eq!(after.controllers, point.controllers);
+}
+
+/// A capture with a name saves what it read there, replacing a point of
+/// that name, and says so.
+#[test]
+fn a_capture_saves_what_it_read_under_the_name() {
+    let (mut session, _) = session();
+    let path = std::env::temp_dir().join(format!(
+        "rusty-tip-capture-save-{}.toml",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let save = |note: &str| CaptureOperatingPoint {
+        save_as: Some(SaveAs {
+            path: path.clone(),
+            name: "overview".into(),
+            note: note.into(),
+        }),
+    };
+
+    run(&mut session, &mut save("first"));
+    let events = run(&mut session, &mut save("second"));
+
+    let read = events.custom::<OperatingState>();
+    let saved = events.custom::<OperatingPointSaved>();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].name, "overview");
+    let points = OperatingPointStore::new(&path).list().unwrap();
+    assert_eq!(points.len(), 1, "the second save replaces the first");
+    assert_eq!(points[0].note, "second");
+    assert_eq!(points[0].bias_v, read[0].bias_v);
+    assert_eq!(points[0].controllers, read[0].controllers);
+    let _ = std::fs::remove_file(&path);
 }
 
 /// Applying a point resizes and turns the frame but leaves it where it is
