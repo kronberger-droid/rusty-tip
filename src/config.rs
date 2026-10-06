@@ -5,10 +5,12 @@ use std::path::Path;
 
 use crate::controller_types::{PulseMethod, StabilityConfig};
 
-/// One more signal to stream, beyond the standard set. On Nanonis only
-/// `nanonis_index` counts: the TCP logger is asked for signals by index and
-/// announces which column each lands in; `tcp_channel` is kept so existing
-/// files load, and decides nothing.
+/// One more signal to stream, beyond the standard set. The TCP logger is
+/// asked for signals by `nanonis_index` and announces which column each
+/// lands in, so `tcp_channel` no longer says where a signal goes. It still
+/// takes the signal the standard set has on that number off the stream,
+/// which is how older files replaced one; pick a number nothing else uses to
+/// add a signal without losing another.
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, JsonSchema)]
 pub struct TcpChannelMapping {
     pub nanonis_index: u8,

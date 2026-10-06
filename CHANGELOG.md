@@ -368,8 +368,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warns by name about a signal the logger left out, and a read of it says
   it is not on the stream. The reader parses the logger's frames itself,
   since `nanonis_rs::TCPLoggerStream` drops that start frame, and an idle
-  logger no longer ends it after 30 s. `TcpChannelMapping::tcp_channel` is
-  kept so files load, and decides nothing on Nanonis.
+  logger no longer ends it after 30 s. `TcpChannelMapping::tcp_channel` no
+  longer says where a signal goes; it still takes the standard signal on
+  that number off the stream, as before.
 - **A sampled read of several signals took them one after another.**
   `read a b c --samples n` collected `n` stream frames per signal in turn,
   so the readings were of different moments and the read took three times

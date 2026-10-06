@@ -400,6 +400,15 @@ impl SignalRegistry {
     pub fn get_by_index(&self, index: u8) -> Option<&Signal> {
         self.0.values().find(|signal| signal.index == index)
     }
+
+    /// The name of the signal at `index`, for an index as wide as any the
+    /// controller hands back; `None` when there is none.
+    pub fn name_of(&self, index: u32) -> Option<&str> {
+        u8::try_from(index)
+            .ok()
+            .and_then(|i| self.get_by_index(i))
+            .map(|s| s.name.as_str())
+    }
 }
 
 #[cfg(test)]

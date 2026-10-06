@@ -9,12 +9,12 @@
 //! most needs: the first frame after every logger start is not data but the
 //! list of signals the columns hold, in column order, with any signal the
 //! logger could not stream already left out (one with no Signals Manager
-//! slot, say). The header's state field marks it, `2` ("start") against
-//! `4` ("running") for data; its counter is 0 like the first data frame's,
-//! so the counter cannot tell them apart. See [`BufferedTCPReader::columns`].
+//! slot, say). The header's state field marks it, `Start` against `Running`
+//! for data; its counter is 0 like the first data frame's, so the counter
+//! cannot tell them apart. See [`Window::columns`].
 
 use crate::NanonisError;
-use crate::types::{SignalFrame, TimestampedSignalFrame};
+use crate::types::{SignalFrame, TCPLogStatus, TimestampedSignalFrame};
 use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
 use std::io::{ErrorKind, Read};
@@ -23,9 +23,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-
-/// The logger's state as its frame header carries it, for the start frame.
-const STATE_START: u16 = 2;
 
 /// Bytes in a frame header: channels (u32), oversampling (f32), counter
 /// (u64), state (u16), all big-endian.
@@ -39,23 +36,37 @@ const MAX_CHANNELS: usize = 128;
 /// so a stopped logger does not kill the reader and a shutdown is prompt.
 const POLL: Duration = Duration::from_millis(200);
 
+/// Frames together with the column list they were sent under, taken in one
+/// look so a start frame arriving in between cannot pair old frames with a
+/// new list.
+pub struct Window {
+    pub frames: Vec<TimestampedSignalFrame>,
+    /// The signal indexes of the columns, in column order, as the logger
+    /// announced them at its last start; `None` before any start frame was
+    /// seen. A signal the logger was asked for and could not stream is not
+    /// in it.
+    pub columns: Option<Arc<[u32]>>,
+}
+
+/// The buffer and what describes it, under one lock.
+#[derive(Default)]
+struct Stream {
+    frames: VecDeque<TimestampedSignalFrame>,
+    columns: Option<Arc<[u32]>>,
+    /// Set by [`BufferedTCPReader::forget_columns`]: data frames are dropped
+    /// until the next start frame, since until then nothing says which list
+    /// they were sent under.
+    awaiting_start: bool,
+}
+
 /// Buffered TCP reader that continuously collects timestamped signal data
 ///
 /// A background thread reads the logger's frames into a circular buffer of
 /// [`TimestampedSignalFrame`]s, and keeps the column list the logger last
 /// announced. A new announcement clears the buffer, since the frames before
-/// it belong to the previous channel list and would be decoded wrongly
-/// against the new one.
+/// it belong to the previous channel list.
 pub struct BufferedTCPReader {
-    /// Thread-safe circular buffer of timestamped signal frames
-    buffer: Arc<RwLock<VecDeque<TimestampedSignalFrame>>>,
-    /// The signal indexes of the columns, in column order, as the logger
-    /// last announced them; `None` until a start frame has been seen.
-    columns: Arc<RwLock<Option<Vec<u32>>>>,
-    /// Set by [`forget_columns`](Self::forget_columns): data frames are
-    /// dropped until the next start frame, since until then nothing says
-    /// which list they were sent under.
-    awaiting_start: Arc<AtomicBool>,
+    stream: Arc<RwLock<Stream>>,
     /// Background thread handle for buffering operations
     buffering_thread: Option<JoinHandle<Result<(), NanonisError>>>,
     /// Signal to shut down background thread
@@ -80,67 +91,58 @@ impl BufferedTCPReader {
             .ok()
             .and_then(|mut a| a.next())
             .ok_or_else(|| NanonisError::Protocol(format!("Invalid address: {host}:{port}")))?;
-        let socket = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(|e| {
-            NanonisError::Io {
-                source: e,
-                context: format!("Failed to connect to TCP stream at {addr}"),
-            }
-        })?;
+        let io = |context: String| move |source| NanonisError::Io { source, context };
+        let socket = TcpStream::connect_timeout(&addr, Duration::from_secs(10))
+            .map_err(io(format!("Failed to connect to TCP stream at {addr}")))?;
         socket
             .set_read_timeout(Some(POLL))
-            .map_err(|e| NanonisError::Io {
-                source: e,
-                context: "Setting TCP stream read timeout".to_string(),
-            })?;
-        let mut stream = socket.try_clone().map_err(|e| NanonisError::Io {
-            source: e,
-            context: "Cloning the TCP stream".to_string(),
-        })?;
+            .map_err(io("Setting TCP stream read timeout".into()))?;
+        let mut reading = socket
+            .try_clone()
+            .map_err(io("Cloning the TCP stream".into()))?;
 
-        let buffer = Arc::new(RwLock::new(VecDeque::with_capacity(buffer_size)));
-        let columns = Arc::new(RwLock::new(None));
-        let awaiting_start = Arc::new(AtomicBool::new(false));
+        let stream = Arc::new(RwLock::new(Stream::default()));
         let shutdown_signal = Arc::new(AtomicBool::new(false));
         let stream_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let start_time = Instant::now();
 
-        let (buffer_t, columns_t) = (Arc::clone(&buffer), Arc::clone(&columns));
-        let awaiting_t = Arc::clone(&awaiting_start);
-        let (shutdown_t, error_t) = (Arc::clone(&shutdown_signal), Arc::clone(&stream_error));
+        let (stream_t, shutdown_t, error_t) = (
+            Arc::clone(&stream),
+            Arc::clone(&shutdown_signal),
+            Arc::clone(&stream_error),
+        );
         let buffering_thread = thread::Builder::new()
             .name("tcp-logger-buffer".into())
             .spawn(move || -> Result<(), NanonisError> {
                 log::debug!("Started buffering thread for TCP logger data");
                 loop {
-                    match read_frame(&mut stream, &shutdown_t) {
+                    let frame = match read_frame(&mut reading, &shutdown_t) {
+                        Ok(Some(frame)) => frame,
                         Ok(None) => return Ok(()),
-                        Ok(Some(frame)) if frame.state == STATE_START => {
-                            let announced: Vec<u32> =
-                                frame.data.iter().map(|&v| v.round() as u32).collect();
-                            log::debug!("TCP logger announced its columns: {announced:?}");
-                            buffer_t.write().clear();
-                            *columns_t.write() = Some(announced);
-                            awaiting_t.store(false, Ordering::SeqCst);
-                        }
-                        Ok(Some(_)) if awaiting_t.load(Ordering::SeqCst) => {}
-                        Ok(Some(frame)) => {
-                            let timestamped = TimestampedSignalFrame::new(
-                                SignalFrame {
-                                    counter: frame.counter,
-                                    data: frame.data,
-                                },
-                                start_time,
-                            );
-                            let mut buffer = buffer_t.write();
-                            buffer.push_back(timestamped);
-                            if buffer.len() > buffer_size {
-                                buffer.pop_front();
-                            }
-                        }
                         Err(e) => {
                             log::error!("TCP logger stream error: {e}");
                             *error_t.lock() = Some(e.to_string());
                             return Err(e);
+                        }
+                    };
+                    let mut s = stream_t.write();
+                    if frame.state == TCPLogStatus::Start as u16 {
+                        let announced: Arc<[u32]> =
+                            frame.data.iter().map(|&v| v.round() as u32).collect();
+                        log::debug!("TCP logger announced its columns: {announced:?}");
+                        s.frames.clear();
+                        s.columns = Some(announced);
+                        s.awaiting_start = false;
+                    } else if !s.awaiting_start {
+                        s.frames.push_back(TimestampedSignalFrame::new(
+                            SignalFrame {
+                                counter: frame.counter,
+                                data: frame.data,
+                            },
+                            start_time,
+                        ));
+                        if s.frames.len() > buffer_size {
+                            s.frames.pop_front();
                         }
                     }
                 }
@@ -148,9 +150,7 @@ impl BufferedTCPReader {
             .expect("failed to spawn tcp-logger-buffer thread");
 
         Ok(Self {
-            buffer,
-            columns,
-            awaiting_start,
+            stream,
             buffering_thread: Some(buffering_thread),
             shutdown_signal,
             stream_error,
@@ -173,15 +173,17 @@ impl BufferedTCPReader {
 
     /// Number of frames currently buffered.
     pub fn buffered_frames(&self) -> usize {
-        self.buffer.read().len()
+        self.stream.read().frames.len()
     }
 
-    /// The signal indexes of the columns, in column order, as the logger
-    /// announced them at its last start; `None` before any start frame was
-    /// seen. A signal the logger was asked for and could not stream is not
-    /// in it.
-    pub fn columns(&self) -> Option<Vec<u32>> {
-        self.columns.read().clone()
+    /// The announced columns (see [`Window::columns`]) and how many values
+    /// the newest buffered frame carries, read together.
+    pub fn layout(&self) -> (Option<Arc<[u32]>>, Option<usize>) {
+        let s = self.stream.read();
+        (
+            s.columns.clone(),
+            s.frames.back().map(|f| f.signal_frame.data.len()),
+        )
     }
 
     /// Forget the announced columns, for a channel list about to change:
@@ -190,14 +192,10 @@ impl BufferedTCPReader {
     /// that start frame, so a frame sent under the old list cannot pass for
     /// one of the new list, even by being as wide.
     pub fn forget_columns(&self) {
-        self.awaiting_start.store(true, Ordering::SeqCst);
-        *self.columns.write() = None;
-        self.buffer.write().clear();
-    }
-
-    /// How many values the newest buffered frame carries.
-    pub fn frame_width(&self) -> Option<usize> {
-        self.buffer.read().back().map(|f| f.signal_frame.data.len())
+        let mut s = self.stream.write();
+        s.awaiting_start = true;
+        s.columns = None;
+        s.frames.clear();
     }
 
     /// Returns the error message from the reader thread, if it died
@@ -208,28 +206,36 @@ impl BufferedTCPReader {
         self.stream_error.lock().clone()
     }
 
-    /// Get all signal data since a specific timestamp
-    pub fn get_data_since(&self, since: Instant) -> Vec<TimestampedSignalFrame> {
+    /// The frames since a timestamp, with the columns they were sent under.
+    pub fn get_data_since(&self, since: Instant) -> Window {
         // Frames arrive in time order, so the matches are a suffix: walk in
         // from the newest end instead of past the whole buffer, which is what
         // a 10 ms poll would otherwise do under the lock each time.
-        let buffer = self.buffer.read();
-        let first = buffer
+        let s = self.stream.read();
+        let first = s
+            .frames
             .iter()
             .rposition(|frame| frame.timestamp < since)
             .map_or(0, |i| i + 1);
-        buffer.range(first..).cloned().collect()
+        Window {
+            frames: s.frames.range(first..).cloned().collect(),
+            columns: s.columns.clone(),
+        }
     }
 
-    /// A copy of every frame currently buffered, oldest first.
-    pub fn snapshot(&self) -> Vec<TimestampedSignalFrame> {
-        self.buffer.read().iter().cloned().collect()
+    /// Every frame currently buffered, oldest first, with their columns.
+    pub fn snapshot(&self) -> Window {
+        let s = self.stream.read();
+        Window {
+            frames: s.frames.iter().cloned().collect(),
+            columns: s.columns.clone(),
+        }
     }
 
     /// Clear all buffered data. The background thread keeps running and
     /// fills the buffer again.
     pub fn clear_buffer(&self) {
-        self.buffer.write().clear();
+        self.stream.write().frames.clear();
         log::debug!("Cleared TCP reader buffer");
     }
 
@@ -266,13 +272,13 @@ fn read_frame(
     stream: &mut impl Read,
     shutdown: &AtomicBool,
 ) -> Result<Option<RawFrame>, NanonisError> {
-    let mut header = [0u8; HEADER_BYTES];
-    if !read_fully(stream, &mut header, shutdown)? {
+    let mut h = [0u8; HEADER_BYTES];
+    if !read_fully(stream, &mut h, shutdown)? {
         return Ok(None);
     }
-    let channels = u32::from_be_bytes(header[0..4].try_into().unwrap_or_default()) as usize;
-    let counter = u64::from_be_bytes(header[8..16].try_into().unwrap_or_default());
-    let state = u16::from_be_bytes(header[16..18].try_into().unwrap_or_default());
+    let channels = u32::from_be_bytes([h[0], h[1], h[2], h[3]]) as usize;
+    let counter = u64::from_be_bytes([h[8], h[9], h[10], h[11], h[12], h[13], h[14], h[15]]);
+    let state = u16::from_be_bytes([h[16], h[17]]);
     if channels > MAX_CHANNELS {
         return Err(NanonisError::Protocol(format!(
             "TCP logger frame claims {channels} channels; the stream is out of step"
@@ -294,7 +300,8 @@ fn read_frame(
 }
 
 /// Fill `buf`, retrying across read timeouts so an idle logger is not an
-/// error; `false` when shutdown was requested first.
+/// error; `false` when shutdown was requested first. A closed or failed
+/// socket after a shutdown request is the shutdown, not an error.
 fn read_fully(
     stream: &mut impl Read,
     buf: &mut [u8],
@@ -302,14 +309,12 @@ fn read_fully(
 ) -> Result<bool, NanonisError> {
     let mut filled = 0;
     while filled < buf.len() {
+        let read = stream.read(&mut buf[filled..]);
         if shutdown.load(Ordering::Relaxed) {
             return Ok(false);
         }
-        match stream.read(&mut buf[filled..]) {
+        match read {
             Ok(0) => {
-                if shutdown.load(Ordering::Relaxed) {
-                    return Ok(false);
-                }
                 return Err(NanonisError::Io {
                     source: std::io::Error::new(ErrorKind::UnexpectedEof, "connection closed"),
                     context: "TCP logger closed the data connection".to_string(),
@@ -322,9 +327,6 @@ fn read_fully(
                     ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
                 ) => {}
             Err(e) => {
-                if shutdown.load(Ordering::Relaxed) {
-                    return Ok(false);
-                }
                 return Err(NanonisError::Io {
                     source: e,
                     context: "Reading the TCP logger stream".to_string(),
@@ -361,8 +363,13 @@ mod tests {
         }
     }
 
+    fn columns(reader: &BufferedTCPReader) -> Option<Vec<u32>> {
+        reader.layout().0.map(|c| c.to_vec())
+    }
+
     /// The start frame is the column list, not data; the counter-0 data
-    /// frame after it is kept; a new start drops the old list's frames.
+    /// frame after it is kept; a new start drops the old list's frames, and
+    /// after the list is forgotten nothing is buffered until it does.
     #[test]
     fn the_start_frame_names_the_columns_and_a_new_one_clears_the_buffer() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -383,18 +390,17 @@ mod tests {
 
         let mut reader = BufferedTCPReader::new("127.0.0.1", port, 100).unwrap();
         wait_for(|| reader.buffered_frames() == 2);
-        assert_eq!(reader.columns(), Some(vec![30, 0, 24]));
-        assert_eq!(reader.frame_width(), Some(3));
+        assert_eq!(columns(&reader), Some(vec![30, 0, 24]));
+        let window = reader.snapshot();
+        assert_eq!(window.columns.as_deref(), Some(&[30, 0, 24][..]));
+        assert_eq!(window.frames.len(), 2);
 
-        // A list about to change: frames until the next start frame are
-        // not trusted, whatever their width.
         reader.forget_columns();
-        assert_eq!(reader.columns(), None);
-        assert_eq!(reader.buffered_frames(), 0);
+        assert_eq!(reader.layout(), (None, None));
 
         go_on.send(()).unwrap();
-        wait_for(|| reader.columns() == Some(vec![24]) && reader.buffered_frames() == 1);
-        assert_eq!(reader.snapshot()[0].signal_frame.data, vec![2.0]);
+        wait_for(|| columns(&reader) == Some(vec![24]) && reader.buffered_frames() == 1);
+        assert_eq!(reader.snapshot().frames[0].signal_frame.data, vec![2.0]);
 
         go_on.send(()).unwrap();
         reader.stop().unwrap();
