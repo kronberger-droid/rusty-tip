@@ -135,6 +135,11 @@
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath guiDeps;
         HEADLESS_GUI_MESA = "${pkgs.mesa}";
       };
+
+      # Python for dev/nanonis: Nanonis .dat/.sxm files and raw TCP calls.
+      analysis = pkgs.mkShell {
+        packages = [(pkgs.python3.withPackages (ps: [ps.numpy ps.scipy]))];
+      };
     });
   };
 }
