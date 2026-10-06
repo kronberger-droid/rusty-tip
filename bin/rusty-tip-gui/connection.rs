@@ -676,7 +676,11 @@ impl ConnectionPane {
         );
         ui.end_row();
 
-        ui.label("TCP channel mapping");
+        ui.label("TCP channel mapping").on_hover_text(
+            "Signals to stream beyond the standard set. On Nanonis only the signal index \
+             counts: the logger is asked for signals by index and says itself which column \
+             each lands in. A signal with no Signals Manager slot is left out of the stream.",
+        );
         ui.vertical(|ui| {
             let mut remove = None;
             for (i, (index, channel)) in self.form.tcp_channel_mapping.iter_mut().enumerate() {

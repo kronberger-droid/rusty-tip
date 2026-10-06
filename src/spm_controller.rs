@@ -452,6 +452,10 @@ pub trait SpmController: Send {
     fn safe_tip_enabled(&mut self) -> Result<bool>;
 
     // -- TCP Logger --
+    /// Choose the signals the data stream carries, by signal index (0 to
+    /// 127; what `TCPLog.ChsSet` takes on Nanonis, not a Signals Manager
+    /// slot), and its oversampling. Where each lands in a frame is the
+    /// controller's to work out; Nanonis says so in its start frame.
     fn data_stream_configure(&mut self, channels: &[i32], oversampling: i32) -> Result<()>;
     fn data_stream_start(&mut self) -> Result<()>;
     fn data_stream_stop(&mut self) -> Result<()>;

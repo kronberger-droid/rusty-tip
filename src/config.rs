@@ -5,7 +5,10 @@ use std::path::Path;
 
 use crate::controller_types::{PulseMethod, StabilityConfig};
 
-/// One signal index to TCP logger channel assignment beyond the standard map.
+/// One more signal to stream, beyond the standard set. On Nanonis only
+/// `nanonis_index` counts: the TCP logger is asked for signals by index and
+/// announces which column each lands in; `tcp_channel` is kept so existing
+/// files load, and decides nothing.
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, JsonSchema)]
 pub struct TcpChannelMapping {
     pub nanonis_index: u8,
