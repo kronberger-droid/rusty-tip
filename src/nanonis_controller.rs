@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nanonis_rs::{
@@ -12,7 +13,7 @@ use nanonis_rs::{
 
 use std::collections::HashSet;
 
-use crate::buffered_tcp_reader::BufferedTCPReader;
+use crate::buffered_tcp_reader::{BufferedTCPReader, Window};
 use crate::config::MotorZApproach;
 use crate::controllers::{
     ControllerId, ControllerParams, ControllerReading, PllAmplitudeParams, PllPhaseParams,
@@ -133,6 +134,9 @@ const LOGGER_BASE_PER_RT: f64 = 0.1;
 /// Base rate to assume when the RT frequency cannot be read.
 const FALLBACK_LOGGER_BASE_HZ: f64 = 2000.0;
 
+/// How long to wait for the logger's start frame after a start.
+const COLUMNS_WAIT: Duration = Duration::from_millis(1500);
+
 /// Whether a measured rate agrees with an expected one to within 10 %,
 /// the slack `start_streaming` allows for packet-timing jitter.
 fn within_tolerance(measured_hz: f64, expected_hz: f64) -> bool {
@@ -153,12 +157,10 @@ pub struct NanonisController {
     client: NanonisClient,
     setup: NanonisSetupConfig,
     tcp_reader: Option<BufferedTCPReader>,
-    /// Maps Nanonis signal index -> position in SignalFrame.data array.
-    /// Set by the caller via `set_channel_mapping` before starting the TCP reader.
-    signal_to_data_position: HashMap<SignalIndex, usize>,
-    /// Number of channels configured in the TCP data stream.
-    /// Set by `data_stream_configure`, used by `start_tcp_reader`.
-    configured_channel_count: Option<u32>,
+    /// The signals asked of the logger, in the order sent to `TCPLog.ChsSet`.
+    /// Where each one sits in a frame comes from the logger's own start
+    /// frame (see [`column_positions`]), not from this order.
+    stream_signals: Vec<SignalIndex>,
     /// The rate the stream runs at, in Hz, set by `start_streaming`: the
     /// nominal base/divisor when the measurement confirmed it, otherwise
     /// the measured rate.
@@ -173,8 +175,7 @@ impl NanonisController {
             client,
             setup,
             tcp_reader: None,
-            signal_to_data_position: HashMap::new(),
-            configured_channel_count: None,
+            stream_signals: Vec::new(),
             stream_rate_hz: None,
             disconnected: false,
         }
@@ -219,21 +220,25 @@ impl NanonisController {
     /// count (minimum 5s, +1s per 100 samples).
     fn collect_tcp_samples(
         reader: &BufferedTCPReader,
+        announced: &Option<Arc<[u32]>>,
         data_position: usize,
         num_samples: usize,
         cursor: Instant,
     ) -> Result<(Vec<f32>, Instant)> {
         let (mut columns, cursor) =
-            Self::collect_tcp_columns(reader, &[data_position], num_samples, cursor)?;
+            Self::collect_tcp_columns(reader, announced, &[data_position], num_samples, cursor)?;
         Ok((columns.remove(0), cursor))
     }
 
     /// [`collect_tcp_samples`](Self::collect_tcp_samples) for several data
     /// positions at once: one column per position, filled from the same
     /// frames, so sample `i` of every column was taken at the same moment.
-    /// A frame counts only if it carries every position.
+    /// A frame counts only if it carries every position. The positions hold
+    /// for the column list `announced`; a stream restarted onto another list
+    /// mid-read ends it with an error rather than read the wrong columns.
     fn collect_tcp_columns(
         reader: &BufferedTCPReader,
+        announced: &Option<Arc<[u32]>>,
         data_positions: &[usize],
         num_samples: usize,
         mut cursor: Instant,
@@ -264,8 +269,13 @@ impl NanonisController {
                 });
             }
 
-            let new_frames = reader.get_data_since(cursor);
-            for frame in &new_frames {
+            let window = reader.get_data_since(cursor);
+            if window.columns != *announced {
+                return Err(SpmError::Protocol(
+                    "the TCP logger restarted onto another channel list during the read".into(),
+                ));
+            }
+            for frame in &window.frames {
                 // Moved per frame, not per batch: a batch the read stops
                 // inside is where the next call carries on.
                 cursor = frame.timestamp + Duration::from_nanos(1);
@@ -314,10 +324,12 @@ impl NanonisController {
     /// `registry` that has a TCP channel mapping, then attach the buffered
     /// reader that `read_signal_samples` pulls from.
     ///
-    /// Bridges the three coordinate systems around the stream: the registry
-    /// supplies (signal index, TCP channel) per signal, and the position of
-    /// that channel in the sorted channel list is where the signal's values
-    /// appear inside each streamed frame.
+    /// The logger is asked for the signals by their signal index: that is
+    /// what `TCPLog.ChsSet` takes, checked against Nanonis, not the
+    /// registry's TCP channel numbers, which only say which signals to
+    /// stream. Where each one lands in a frame is what the logger announces
+    /// in its start frame; a signal it could not stream, one with no Signals
+    /// Manager slot, is left out of that and is not read from the stream.
     ///
     /// Returns `Ok(false)` without touching the hardware when the registry
     /// has no TCP-mapped signals; signal-sample reads then fall back to
@@ -344,32 +356,20 @@ impl NanonisController {
             return Ok(false);
         }
 
-        let mut tcp_channels: Vec<i32> = tcp_signals
-            .iter()
-            .filter_map(|s| s.tcp_channel.map(|ch| ch as i32))
-            .collect();
+        let mut tcp_channels: Vec<i32> = tcp_signals.iter().map(|s| i32::from(s.index)).collect();
         tcp_channels.sort_unstable();
         tcp_channels.dedup();
-
-        let tcp_to_position: HashMap<u8, usize> = tcp_channels
-            .iter()
-            .enumerate()
-            .map(|(pos, &ch)| (ch as u8, pos))
-            .collect();
-
-        let mut signal_mapping: HashMap<SignalIndex, usize> = HashMap::new();
-        for signal in &tcp_signals {
-            if let Some(tcp_ch) = signal.tcp_channel
-                && let Some(&position) = tcp_to_position.get(&tcp_ch)
-            {
-                signal_mapping.insert(signal.signal_index(), position);
-            }
-        }
-
         log::info!(
-            "TCP stream: {} channels, {} signals mapped",
+            "TCP stream: asking for {} signals: {}",
             tcp_channels.len(),
-            signal_mapping.len()
+            tcp_channels
+                .iter()
+                .map(|&i| {
+                    let name = registry.name_of(i as u32).unwrap_or("?");
+                    format!("{name} ({i})")
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
         );
 
         // First guess at the divisor, from the RT frequency. The delivered
@@ -387,7 +387,6 @@ impl NanonisController {
         let mut divisor = divisor_for(base_hz, setup.sample_rate_hz);
 
         self.data_stream_configure(&tcp_channels, divisor)?;
-        self.set_channel_mapping(signal_mapping);
 
         // Attach the reader first. Nanonis' TCPLogger sits in Disconnected
         // until a client connects to the data port, and from there neither
@@ -470,23 +469,96 @@ impl NanonisController {
                 None
             }
         };
+        self.confirm_columns(registry)?;
         Ok(true)
     }
 
-    /// Set the mapping from Nanonis signal indices to TCP data array positions:
-    /// for each signal of interest, its `tcp_channel`'s position in the
-    /// configured channel list (the order passed to `data_stream_configure`).
-    fn set_channel_mapping(&mut self, mapping: HashMap<SignalIndex, usize>) {
-        self.signal_to_data_position = mapping;
-        log::debug!(
-            "Channel mapping set: {} signals mapped to data positions",
-            self.signal_to_data_position.len()
-        );
+    /// Make sure the stream's columns are known: wait for the logger's start
+    /// frame, restarting the logger once when it was missed (it can be, on
+    /// the first start after the data connection opens), then say which
+    /// signals it did not stream.
+    fn confirm_columns(&mut self, registry: &SignalRegistry) -> Result<()> {
+        if !self.await_columns(COLUMNS_WAIT) {
+            log::debug!("No start frame from the TCP logger; restarting it once for one");
+            let _ = self.data_stream_stop();
+            std::thread::sleep(Duration::from_millis(200));
+            self.data_stream_start()?;
+            self.await_columns(COLUMNS_WAIT);
+        }
+        let (announced, positions) = self.stream_layout();
+        let missing: Vec<String> = self
+            .stream_signals
+            .iter()
+            .filter(|s| !positions.contains_key(s))
+            .map(|s| {
+                registry
+                    .name_of(s.0)
+                    .map_or_else(|| format!("signal {}", s.0), str::to_string)
+            })
+            .collect();
+        if announced.is_some() && missing.is_empty() {
+            log::info!(
+                "TCP stream columns as the logger announced them: {} signals",
+                positions.len()
+            );
+        } else if announced.is_some() {
+            log::warn!(
+                "The TCP logger did not stream {}; it leaves out a signal with no Signals \
+                 Manager slot. Those are not read from the stream.",
+                missing.join(", ")
+            );
+        } else if positions.is_empty() {
+            log::warn!(
+                "The TCP logger never announced its columns and its frames are not as wide as \
+                 the list asked for, so no column can be trusted: nothing is read from the \
+                 stream"
+            );
+        } else {
+            log::warn!(
+                "The TCP logger never announced its columns; taking them in the order asked, \
+                 since its frames are exactly as wide as that list"
+            );
+        }
+        Ok(())
+    }
+
+    /// Whether the logger announced its columns within `wait`.
+    fn await_columns(&self, wait: Duration) -> bool {
+        let Some(reader) = &self.tcp_reader else {
+            return false;
+        };
+        poll_until(
+            || Ok::<_, ()>(reader.layout().0.is_some()),
+            wait,
+            Duration::from_millis(20),
+        )
+        .is_ok()
+    }
+
+    /// The announced columns and where each streamed signal sits in a
+    /// frame now, read together.
+    fn stream_layout(&self) -> (Option<Arc<[u32]>>, HashMap<SignalIndex, usize>) {
+        let Some(reader) = &self.tcp_reader else {
+            return (None, HashMap::new());
+        };
+        let (announced, width) = reader.layout();
+        let positions = column_positions(announced.as_deref(), width, &self.stream_signals);
+        (announced, positions)
+    }
+
+    /// Where each signal sits in the frames of `window`, under the columns
+    /// they were sent with.
+    fn window_positions(&self, window: &Window) -> HashMap<SignalIndex, usize> {
+        column_positions(
+            window.columns.as_deref(),
+            window.frames.last().map(|f| f.signal_frame.data.len()),
+            &self.stream_signals,
+        )
     }
 
     /// Start the background TCP data stream for stable signal reading.
     ///
-    /// Call `set_channel_mapping` and `data_stream_configure` before this.
+    /// Call `data_stream_configure` before this.
     /// Connects to the TCP logger data port and spawns the background
     /// buffering thread.
     fn start_tcp_reader(&mut self, host: &str, data_port: u16, buffer_size: usize) -> Result<()> {
@@ -495,17 +567,12 @@ impl NanonisController {
             self.stop_tcp_reader()?;
         }
 
-        let num_channels = self.configured_channel_count.ok_or_else(|| {
-            SpmError::Protocol(
-                "No channels configured. Call data_stream_configure before start_tcp_reader".into(),
-            )
-        })?;
-
-        if num_channels == 0 {
+        if self.stream_signals.is_empty() {
             return Err(SpmError::Protocol(
-                "Channel count is zero. Configure at least one channel".into(),
+                "No channels configured. Call data_stream_configure before start_tcp_reader".into(),
             ));
         }
+        let num_channels = self.stream_signals.len();
 
         let reader = BufferedTCPReader::new(host, data_port, buffer_size)
             .map_err(|e| SpmError::Protocol(format!("Failed to start TCP reader: {}", e)))?;
@@ -535,7 +602,7 @@ impl NanonisController {
         let start = Instant::now();
         reader.clear_buffer();
         std::thread::sleep(window);
-        let frames = reader.get_data_since(start);
+        let frames = reader.get_data_since(start).frames;
         let (first, last) = (frames.first()?, frames.last()?);
         let span = last.timestamp.duration_since(first.timestamp).as_secs_f64();
         if frames.len() < 2 || span <= 0.0 {
@@ -1308,9 +1375,30 @@ impl SpmController for NanonisController {
                 "data_stream_configure: at least one channel is required".into(),
             ));
         }
-        self.client.tcplog_chs_set(channels.to_vec())?;
+        // A new list makes the announced one stale until the logger's next
+        // start frame.
+        if let Some(reader) = &self.tcp_reader {
+            reader.forget_columns();
+        }
+        // Sent by hand: nanonis-rs 0.5's `tcplog_chs_set` takes the channels
+        // for Signals Manager slots and refuses anything above 23, but the
+        // logger takes signal indexes, 0 to 127.
+        if let Some(&bad) = channels.iter().find(|&&c| !(0..=127).contains(&c)) {
+            return Err(SpmError::Protocol(format!(
+                "data_stream_configure: {bad} is not a signal index (0 to 127)"
+            )));
+        }
+        self.client.quick_send(
+            "TCPLog.ChsSet",
+            vec![
+                NanonisValue::I32(channels.len() as i32),
+                NanonisValue::ArrayI32(channels.to_vec()),
+            ],
+            vec!["i", "*i"],
+            vec![],
+        )?;
         self.client.tcplog_oversampl_set(oversampling)?;
-        self.configured_channel_count = Some(channels.len() as u32);
+        self.stream_signals = channels.iter().map(|&c| SignalIndex(c as u32)).collect();
         Ok(())
     }
 
@@ -1335,19 +1423,27 @@ impl SpmController for NanonisController {
     }
 
     fn streams_signal(&mut self, index: SignalIndex) -> bool {
-        self.tcp_reader.is_some() && self.signal_to_data_position.contains_key(&index)
+        self.stream_layout().1.contains_key(&index)
     }
 
     // -- Signal Reading (TCP stream override) --
 
     fn stream_snapshot(&mut self) -> Option<StreamSnapshot> {
-        let frames = self.tcp_reader.as_ref()?.snapshot();
-        stream_snapshot_from(&frames, &self.signal_to_data_position, Instant::now())
+        let window = self.tcp_reader.as_ref()?.snapshot();
+        stream_snapshot_from(
+            &window.frames,
+            &self.window_positions(&window),
+            Instant::now(),
+        )
     }
 
     fn stream_since(&mut self, since: Instant) -> Option<StreamSnapshot> {
-        let frames = self.tcp_reader.as_ref()?.get_data_since(since);
-        stream_snapshot_from(&frames, &self.signal_to_data_position, Instant::now())
+        let window = self.tcp_reader.as_ref()?.get_data_since(since);
+        stream_snapshot_from(
+            &window.frames,
+            &self.window_positions(&window),
+            Instant::now(),
+        )
     }
 
     fn read_signal_samples(&mut self, index: SignalIndex, num_samples: usize) -> Result<Vec<f64>> {
@@ -1378,17 +1474,17 @@ impl SpmController for NanonisController {
             }
         };
 
-        let &data_position = self.signal_to_data_position.get(&index).ok_or_else(|| {
+        let (announced, positions) = self.stream_layout();
+        let &data_position = positions.get(&index).ok_or_else(|| {
             SpmError::Protocol(format!(
-                "Signal index {} has no TCP channel mapping. \
-                 Call set_channel_mapping with a mapping that includes this signal.",
-                index
+                "signal {index} is not on the TCP data stream: it was not asked for, or the \
+                 logger left it out (no Signals Manager slot)"
             ))
         })?;
 
         let start = after.unwrap_or_else(Instant::now);
         let (collected, cursor) =
-            Self::collect_tcp_samples(reader, data_position, num_samples, start)?;
+            Self::collect_tcp_samples(reader, &announced, data_position, num_samples, start)?;
         Ok((
             collected.into_iter().map(|v| v as f64).collect(),
             Some(cursor),
@@ -1407,9 +1503,10 @@ impl SpmController for NanonisController {
         }
         // All on the stream: one pass over its frames for every signal.
         // Otherwise each in turn, as `read_signal_samples` would.
+        let (announced, stream) = self.stream_layout();
         let positions: Option<Vec<usize>> = indices
             .iter()
-            .map(|index| self.signal_to_data_position.get(index).copied())
+            .map(|index| stream.get(index).copied())
             .collect();
         let (Some(reader), Some(positions)) = (&self.tcp_reader, positions) else {
             return indices
@@ -1418,7 +1515,7 @@ impl SpmController for NanonisController {
                 .collect();
         };
         let (columns, _) =
-            Self::collect_tcp_columns(reader, &positions, num_samples, Instant::now())?;
+            Self::collect_tcp_columns(reader, &announced, &positions, num_samples, Instant::now())?;
         Ok(columns
             .into_iter()
             .map(|column| column.into_iter().map(f64::from).collect())
@@ -1511,6 +1608,33 @@ fn on_off_word(on: bool) -> &'static str {
     if on { "on" } else { "off" }
 }
 
+/// Where each signal sits in a frame of the TCP logger's stream.
+///
+/// The logger's start frame says it: the signal index of each column, in
+/// column order, with a signal it could not stream left out. Without one,
+/// the columns are the order asked only when the frames are exactly as
+/// wide as that list, so that nothing can have been left out; otherwise no
+/// column is trusted and the map is empty.
+fn column_positions(
+    announced: Option<&[u32]>,
+    frame_width: Option<usize>,
+    asked: &[SignalIndex],
+) -> HashMap<SignalIndex, usize> {
+    match announced {
+        Some(columns) => columns
+            .iter()
+            .enumerate()
+            .map(|(position, &index)| (SignalIndex(index), position))
+            .collect(),
+        None if frame_width == Some(asked.len()) => asked
+            .iter()
+            .enumerate()
+            .map(|(position, &index)| (index, position))
+            .collect(),
+        None => HashMap::new(),
+    }
+}
+
 /// Add one frame's value at each of `positions` to its column, or nothing
 /// when the frame is too narrow for any of them, so the columns stay the
 /// same length and sample `i` of each is from the same frame. Whether the
@@ -1583,6 +1707,39 @@ mod tests {
         assert_eq!(snap.signals, vec![30, 0]);
         assert_eq!(snap.columns, vec![vec![1.0, 2.0], vec![10.0, 20.0]]);
         assert_eq!(snap.t_s, vec![-0.5, 0.0]);
+    }
+
+    /// The columns are where the logger said: in the order announced, a
+    /// signal it left out absent; without an announcement, the order asked
+    /// only when the frames are as wide as the list.
+    #[test]
+    fn columns_come_from_the_announcement_and_never_from_a_guess() {
+        let asked = [
+            SignalIndex(0),
+            SignalIndex(14),
+            SignalIndex(24),
+            SignalIndex(30),
+        ];
+        // Input 15 (14) has no slot: announced without it, Z moves up one.
+        let announced = column_positions(Some(&[0, 24, 30]), Some(3), &asked);
+        assert_eq!(announced.get(&SignalIndex(30)), Some(&2));
+        assert_eq!(announced.get(&SignalIndex(14)), None);
+
+        let order = column_positions(Some(&[30, 0, 24]), Some(3), &asked);
+        assert_eq!(
+            order.get(&SignalIndex(30)),
+            Some(&0),
+            "the logger's order, not ours"
+        );
+
+        let full = column_positions(None, Some(4), &asked);
+        assert_eq!(full.get(&SignalIndex(30)), Some(&3));
+
+        assert!(
+            column_positions(None, Some(3), &asked).is_empty(),
+            "one was dropped, which one is unknown, so none is trusted"
+        );
+        assert!(column_positions(None, None, &asked).is_empty());
     }
 
     /// Several signals come from the same frames, in the order asked, and a

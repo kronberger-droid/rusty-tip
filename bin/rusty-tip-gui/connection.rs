@@ -676,7 +676,12 @@ impl ConnectionPane {
         );
         ui.end_row();
 
-        ui.label("TCP channel mapping");
+        ui.label("TCP channel mapping").on_hover_text(
+            "Signals to stream beyond the standard set. The logger is asked for signals by \
+             index and says itself which column each lands in. The channel number only \
+             takes the standard signal on that number off the stream. A signal with no \
+             Signals Manager slot is left out of the stream.",
+        );
         ui.vertical(|ui| {
             let mut remove = None;
             for (i, (index, channel)) in self.form.tcp_channel_mapping.iter_mut().enumerate() {

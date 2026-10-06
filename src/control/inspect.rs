@@ -78,10 +78,7 @@ pub(super) fn scan(session: &mut Session) -> Reply {
 }
 
 fn signal_name(registry: &SignalRegistry, index: u32) -> Option<String> {
-    u8::try_from(index)
-        .ok()
-        .and_then(|i| registry.get_by_index(i))
-        .map(|s| s.name.clone())
+    registry.name_of(index).map(str::to_string)
 }
 
 /// What a frame request can go wrong with before the controller does.
