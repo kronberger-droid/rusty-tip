@@ -1,24 +1,44 @@
 #!/usr/bin/env bash
-# Pre-push hook: refuse to push unless the tree is rustfmt-clean.
+# Pre-push hook: run the fast half of the CI gate (.github/workflows/ci.yml)
+# so a push does not come back red. Tests stay in CI, since they are the slow
+# half and rarely what fails after a clean local run.
 #
 # Formatting width is pinned by the project rustfmt.toml (max_width = 100),
 # which shadows any personal ~/.rustfmt.toml, so this checks at 100 columns
 # regardless of your global config.
 #
+# Run inside `nix develop`: it brings the same stable toolchain CI uses, and
+# typos. Outside it a missing tool skips its step with a note.
+#
 # Activate (once per clone):   git config core.hooksPath .githooks
 # Bypass for one push:         git push --no-verify
 set -uo pipefail
 
+fail() {
+  echo >&2
+  echo "pre-push: $1" >&2
+  echo "          (one-off bypass: git push --no-verify)" >&2
+  exit 1
+}
+
 if ! command -v cargo >/dev/null 2>&1; then
-  echo "pre-push: cargo not found on PATH; skipping fmt check (run 'nix develop')." >&2
+  echo "pre-push: cargo not found on PATH; skipping checks (run 'nix develop')." >&2
   exit 0
 fi
 
-echo "pre-push: checking formatting (cargo fmt --all --check)…"
-if ! cargo fmt --all --check; then
-  echo >&2
-  echo "pre-push: formatting check failed — run 'cargo fmt --all' to fix, then push again." >&2
-  echo "          (one-off bypass: git push --no-verify)" >&2
-  exit 1
+echo "pre-push: cargo fmt --all --check"
+cargo fmt --all --check || fail "formatting check failed; run 'cargo fmt --all'."
+
+# Same flags as the CI clippy job; keep the two in step.
+echo "pre-push: cargo clippy --all-targets --features gui,cuox -- -D warnings"
+cargo clippy --quiet --all-targets --features gui,cuox -- -D warnings \
+  || fail "clippy failed."
+
+if command -v typos >/dev/null 2>&1; then
+  echo "pre-push: typos"
+  typos || fail "typos found misspellings; fix them or extend typos.toml."
+else
+  echo "pre-push: typos not on PATH; skipping (CI still runs it)." >&2
 fi
-echo "pre-push: formatting OK."
+
+echo "pre-push: OK."

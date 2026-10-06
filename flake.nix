@@ -3,11 +3,21 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # The dev-shell toolchain rides its own input so it tracks the newest
+    # stable, the same channel CI's `dtolnay/rust-toolchain@stable` installs.
+    # Pinned to nixpkgs' rustc it sat at 1.94 while CI ran a newer clippy,
+    # so a locally clean tree failed CI. `nix flake update rust-overlay`
+    # catches up without dragging nixpkgs forward.
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = {
     self,
     nixpkgs,
+    rust-overlay,
     ...
   }: let
     forAllSystems = nixpkgs.lib.genAttrs ["x86_64-linux" "aarch64-linux"];
@@ -69,7 +79,15 @@
     });
 
     devShells = forAllSystems (system: let
-      pkgs = nixpkgs.legacyPackages.${system};
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [rust-overlay.overlays.default];
+      };
+      # rust-analyzer finds std through the toolchain's sysroot via rust-src,
+      # so RUST_SRC_PATH is no longer needed.
+      toolchain = pkgs.rust-bin.stable.latest.default.override {
+        extensions = ["rust-analyzer" "rust-src"];
+      };
       guiDeps = with pkgs; [
         wayland
         wayland-protocols
@@ -88,13 +106,10 @@
     in {
       default = pkgs.mkShell {
         nativeBuildInputs =
-          (with pkgs; [
-            cargo
-            clippy
-            rustc
-            rustfmt
-            rust-analyzer
+          [toolchain]
+          ++ (with pkgs; [
             pkg-config
+            typos
             gcc
             cargo-expand
             cargo-dist
@@ -102,10 +117,9 @@
           ++ guiDeps;
 
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath guiDeps;
-        RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
 
         shellHook = ''
-          # Activate the repo's git hooks (pre-push rustfmt check).
+          # Activate the repo's git hooks (pre-push mirrors the CI gate).
           git config core.hooksPath .githooks 2>/dev/null || true
         '';
       };
