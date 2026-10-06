@@ -289,8 +289,10 @@ fn read_frame(
         return Ok(None);
     }
     let data = payload
-        .chunks_exact(4)
-        .map(|b| f32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_be_bytes(*b))
         .collect();
     Ok(Some(RawFrame {
         counter,
