@@ -353,7 +353,20 @@ impl NanonisController {
         let mut tcp_channels: Vec<i32> = tcp_signals.iter().map(|s| i32::from(s.index)).collect();
         tcp_channels.sort_unstable();
         tcp_channels.dedup();
-        log::info!("TCP stream: asking for {} signals", tcp_channels.len());
+        log::info!(
+            "TCP stream: asking for {} signals: {}",
+            tcp_channels.len(),
+            tcp_channels
+                .iter()
+                .map(|&i| {
+                    u8::try_from(i)
+                        .ok()
+                        .and_then(|i| registry.get_by_index(i))
+                        .map_or_else(|| i.to_string(), |s| format!("{} ({i})", s.name))
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
 
         // First guess at the divisor, from the RT frequency. The delivered
         // rate is checked below and the divisor corrected once if the guess

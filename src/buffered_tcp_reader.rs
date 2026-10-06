@@ -52,6 +52,10 @@ pub struct BufferedTCPReader {
     /// The signal indexes of the columns, in column order, as the logger
     /// last announced them; `None` until a start frame has been seen.
     columns: Arc<RwLock<Option<Vec<u32>>>>,
+    /// Set by [`forget_columns`](Self::forget_columns): data frames are
+    /// dropped until the next start frame, since until then nothing says
+    /// which list they were sent under.
+    awaiting_start: Arc<AtomicBool>,
     /// Background thread handle for buffering operations
     buffering_thread: Option<JoinHandle<Result<(), NanonisError>>>,
     /// Signal to shut down background thread
@@ -95,11 +99,13 @@ impl BufferedTCPReader {
 
         let buffer = Arc::new(RwLock::new(VecDeque::with_capacity(buffer_size)));
         let columns = Arc::new(RwLock::new(None));
+        let awaiting_start = Arc::new(AtomicBool::new(false));
         let shutdown_signal = Arc::new(AtomicBool::new(false));
         let stream_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let start_time = Instant::now();
 
         let (buffer_t, columns_t) = (Arc::clone(&buffer), Arc::clone(&columns));
+        let awaiting_t = Arc::clone(&awaiting_start);
         let (shutdown_t, error_t) = (Arc::clone(&shutdown_signal), Arc::clone(&stream_error));
         let buffering_thread = thread::Builder::new()
             .name("tcp-logger-buffer".into())
@@ -114,7 +120,9 @@ impl BufferedTCPReader {
                             log::debug!("TCP logger announced its columns: {announced:?}");
                             buffer_t.write().clear();
                             *columns_t.write() = Some(announced);
+                            awaiting_t.store(false, Ordering::SeqCst);
                         }
+                        Ok(Some(_)) if awaiting_t.load(Ordering::SeqCst) => {}
                         Ok(Some(frame)) => {
                             let timestamped = TimestampedSignalFrame::new(
                                 SignalFrame {
@@ -142,6 +150,7 @@ impl BufferedTCPReader {
         Ok(Self {
             buffer,
             columns,
+            awaiting_start,
             buffering_thread: Some(buffering_thread),
             shutdown_signal,
             stream_error,
@@ -177,9 +186,13 @@ impl BufferedTCPReader {
 
     /// Forget the announced columns, for a channel list about to change:
     /// until the logger announces the new one, the old one would be read
-    /// against frames it does not describe.
+    /// against frames it does not describe. Data frames are dropped until
+    /// that start frame, so a frame sent under the old list cannot pass for
+    /// one of the new list, even by being as wide.
     pub fn forget_columns(&self) {
+        self.awaiting_start.store(true, Ordering::SeqCst);
         *self.columns.write() = None;
+        self.buffer.write().clear();
     }
 
     /// How many values the newest buffered frame carries.
@@ -361,6 +374,8 @@ mod tests {
             s.write_all(&frame(0, 4, &[7.5e-7, 0.0, 2.0])).unwrap();
             s.write_all(&frame(1, 4, &[7.5e-7, 0.0, 2.0])).unwrap();
             wait.recv().unwrap();
+            // Sent after the list changed but before its start frame.
+            s.write_all(&frame(2, 4, &[7.5e-7, 0.0, 2.0])).unwrap();
             s.write_all(&frame(0, 2, &[24.0])).unwrap();
             s.write_all(&frame(0, 4, &[2.0])).unwrap();
             wait.recv().unwrap();
@@ -370,6 +385,12 @@ mod tests {
         wait_for(|| reader.buffered_frames() == 2);
         assert_eq!(reader.columns(), Some(vec![30, 0, 24]));
         assert_eq!(reader.frame_width(), Some(3));
+
+        // A list about to change: frames until the next start frame are
+        // not trusted, whatever their width.
+        reader.forget_columns();
+        assert_eq!(reader.columns(), None);
+        assert_eq!(reader.buffered_frames(), 0);
 
         go_on.send(()).unwrap();
         wait_for(|| reader.columns() == Some(vec![24]) && reader.buffered_frames() == 1);
