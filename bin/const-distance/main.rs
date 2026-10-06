@@ -97,12 +97,12 @@ struct DriftArgs {
     #[command(subcommand)]
     op: DriftOp,
 
-    /// RT signal slot carrying the Z position, in metres. 30 on a stock
+    /// Signal index carrying the Z position, in metres. 30 on a stock
     /// signal assignment; `--signal-name` resolves it from the controller.
     #[arg(long, default_value_t = 30)]
     signal: u32,
 
-    /// Resolve the Z signal by name instead of by slot, e.g. "Z (m)".
+    /// Resolve the Z signal by name instead of by index, e.g. "Z (m)".
     #[arg(long, conflicts_with = "signal")]
     signal_name: Option<String>,
 
@@ -141,10 +141,10 @@ struct DriftArgs {
     #[arg(long, default_value_t = 6590)]
     data_port: u16,
 
-    /// Registry channel number for Z. The TCP logger is asked for Z by its
-    /// signal index and says which column it lands in, so this decides
-    /// nothing; kept so existing scripts still parse.
-    #[arg(long)]
+    /// Ignored: the TCP logger is asked for Z by its signal index and says
+    /// which column it lands in. Kept so existing scripts still parse.
+    #[arg(long, hide = true)]
+    #[allow(dead_code, reason = "accepted and ignored, for old scripts")]
     tcp_channel: Option<u8>,
 
     /// Poll Z instead of streaming it: `--samples` timed reads per window.
@@ -192,13 +192,13 @@ struct BaselineArgs {
     #[arg(short, long, default_value = "0.2e-9")]
     lift: f64,
 
-    /// RT signal slot to record in the first pass. 30 is Z (m) on a stock
+    /// Signal index to record in the first pass. 30 is Z (m) on a stock
     /// signal assignment; `--signal-name` resolves it from the controller
     /// instead.
     #[arg(long, default_value_t = 30)]
     signal: u32,
 
-    /// Resolve the recorded signal by name instead of by slot, e.g. "Z (m)".
+    /// Resolve the recorded signal by name instead of by index, e.g. "Z (m)".
     /// Needs a connection.
     #[arg(long, conflicts_with = "signal")]
     signal_name: Option<String>,
@@ -432,7 +432,7 @@ fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
                 .get_by_name(name)
                 .ok_or_else(|| format!("no signal called {name:?} on this controller"))?
                 .signal_index();
-            println!("resolved {name:?} to RT slot {}", signal.0);
+            println!("resolved {name:?} to signal {}", signal.0);
             signal
         }
         None => SignalIndex(args.signal),
@@ -483,12 +483,13 @@ fn start_z_stream(
     z: SignalIndex,
     controller: &mut NanonisController,
 ) -> Result<(), Box<dyn Error>> {
-    let z_slot = u8::try_from(z.0).map_err(|_| format!("RT signal {} is out of range", z.0))?;
-    let channel = args.tcp_channel.unwrap_or(0);
+    let z_index = u8::try_from(z.0).map_err(|_| format!("signal {} is out of range", z.0))?;
 
+    // The channel number only marks Z for streaming: the logger is asked
+    // for it by signal index and announces its column.
     let registry = SignalRegistry::builder()
-        .add_tcp_mapping(z_slot, channel)
-        .add_signal("Z (m)".to_string(), z_slot)
+        .add_tcp_mapping(z_index, 0)
+        .add_signal("Z (m)".to_string(), z_index)
         .build();
     let setup = StreamSetup::new(args.host.as_str(), args.data_port, args.sample_rate);
     if !controller.start_streaming(&registry, &setup)? {
@@ -617,7 +618,7 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
                 .get_by_name(name)
                 .ok_or_else(|| format!("no signal called {name:?} on this controller"))?
                 .signal_index();
-            println!("resolved {name:?} to RT slot {}", signal.0);
+            println!("resolved {name:?} to signal {}", signal.0);
             signal
         }
         (Some(_), None) => return Err("--signal-name needs a connection; drop --dry-run".into()),
@@ -643,7 +644,7 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
     // be checked against the GUI at a glance.
     for (i, pass) in config.passes.iter().enumerate() {
         let what = match (pass.recorded(), pass.played()) {
-            (Some(s), _) => format!("record RT slot {}", s.0),
+            (Some(s), _) => format!("record signal {}", s.0),
             (_, Some((offset, _))) => format!("play back, offset {:.4} nm", offset / NM),
             _ => "nothing".to_string(),
         };
@@ -714,7 +715,7 @@ fn baseline_apply(
 
     let buffer = ctx.controller.scan_buffer_get()?;
     println!(
-        "scan buffer records RT slots {:?} at {}x{}",
+        "scan buffer records signals {:?} at {}x{}",
         buffer.channels.iter().map(|c| c.0).collect::<Vec<_>>(),
         buffer.pixels,
         buffer.lines

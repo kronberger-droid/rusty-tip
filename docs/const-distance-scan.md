@@ -298,10 +298,9 @@ controller stops compensating it silently and only an off/on cycle restarts
 it. Every burst lands in the log as a `drift/burst` event, so
 `rt-log plot <file> drift/burst.drift_m_s` shows the convergence.
 
-Z reaches the TCP logger as a channel, and a channel is a position in the
-controller's 24 signal slots, which differs between instruments. The tool looks
-Z up in the slot list, and whatever it finds, or `--tcp-channel` says, it
-compares the stream against a plain read of Z before fitting anything.
+The TCP logger is asked for Z by its signal index and announces the column
+it lands in. The tool still compares the stream against a plain read of Z
+before fitting anything.
 `--no-stream` falls back to `--samples` timed reads per window, which is far
 noisier.
 
