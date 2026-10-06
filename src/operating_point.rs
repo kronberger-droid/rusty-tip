@@ -106,6 +106,17 @@ impl LogEvent for OperatingPointApplied {
     const KIND: &'static str = "operating_point/applied";
 }
 
+/// A capture saved under a name: the `operating_point/saved` event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct OperatingPointSaved {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+impl LogEvent for OperatingPointSaved {
+    const KIND: &'static str = "operating_point/saved";
+}
+
 /// An operating state under a name: what a lab keeps and recalls.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct OperatingPoint {
@@ -398,12 +409,24 @@ pub fn log_schema() -> ToolSchema {
     controllers::log_schema()
         .with::<OperatingState>()
         .with::<OperatingPointApplied>()
+        .with::<OperatingPointSaved>()
+}
+
+/// Where a capture saves what it read, and under which name.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SaveAs {
+    pub path: PathBuf,
+    pub name: String,
+    pub note: String,
 }
 
 /// Read everything an operating point sets, as an `operating_point/read`
-/// event, for the workbench to save under a name.
+/// event, and with `save_as` put it in that file under that name, one of
+/// the same name replaced.
 #[derive(Debug, Default)]
-pub struct CaptureOperatingPoint;
+pub struct CaptureOperatingPoint {
+    pub save_as: Option<SaveAs>,
+}
 
 impl Job for CaptureOperatingPoint {
     fn name(&self) -> &str {
@@ -415,12 +438,23 @@ impl Job for CaptureOperatingPoint {
     }
 
     fn header_config(&self) -> serde_json::Value {
-        serde_json::Value::Null
+        serde_json::to_value(&self.save_as).unwrap_or(serde_json::Value::Null)
     }
 
     fn run(&mut self, cx: JobCx<'_>) -> Result<Outcome, SpmError> {
         let state = read_state(cx.controller)?;
         cx.events.emit(Event::typed(&state));
+        if let Some(save) = &self.save_as {
+            let saved_at = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+            let point = OperatingPoint::from_state(&save.name, &save.note, Some(saved_at), state);
+            OperatingPointStore::new(&save.path)
+                .put(point.clone())
+                .map_err(SpmError::Workflow)?;
+            cx.events.emit(Event::typed(&OperatingPointSaved {
+                name: point.name,
+                path: save.path.clone(),
+            }));
+        }
         Ok(Outcome::Completed)
     }
 }

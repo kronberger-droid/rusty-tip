@@ -30,7 +30,7 @@ use rusty_tip::operating_point::{BiasAndScan, OperatingPointApplied};
 use rusty_tip::routine::SettingsLoadedEvent;
 use rusty_tip::session::{Job, Readout};
 
-use super::operating_points::{PointsPage, frame_text};
+use super::operating_points::{PointsPage, scan_rows, value_text};
 use super::{SetupCx, Tool, load_toml, save_toml};
 use crate::form::{SchemaForm, number_field};
 use crate::run_view::RunView;
@@ -341,33 +341,12 @@ fn bias_and_scan_changes(
     before: &BiasAndScan,
     after: &BiasAndScan,
 ) -> Vec<(&'static str, String, String)> {
-    let (b, a) = (&before.scan, &after.scan);
-    [
-        (
-            "bias",
-            format_si(before.bias_v, "V"),
-            format_si(after.bias_v, "V"),
-        ),
-        ("frame", frame_text(b), frame_text(a)),
-        (
-            "pixels",
-            format!("{} × {}", b.pixels, b.lines),
-            format!("{} × {}", a.pixels, a.lines),
-        ),
-        (
-            "speed",
-            format!("{}/s", format_si(b.speed.forward_m_s, "m")),
-            format!("{}/s", format_si(a.speed.forward_m_s, "m")),
-        ),
-        (
-            "time per line",
-            format_si(b.speed.forward_time_per_line_s, "s"),
-            format_si(a.speed.forward_time_per_line_s, "s"),
-        ),
-    ]
-    .into_iter()
-    .filter(|(_, x, y)| x != y)
-    .collect()
+    scan_rows(before.bias_v, &before.scan)
+        .into_iter()
+        .zip(scan_rows(after.bias_v, &after.scan))
+        .filter(|((_, b), (_, a))| b != a)
+        .map(|((field, b), (_, a))| (field, b, a))
+        .collect()
 }
 
 /// One line on where a preset was tuned, and whether that matters.
@@ -678,7 +657,8 @@ impl Tool for ControllersTool {
 
     fn setup(&mut self, ui: &mut egui::Ui, cx: &mut SetupCx) {
         self.take_readings(cx.view);
-        self.points.take_state(cx.view, &PointsPage::path_of(cx));
+        let points_path = PointsPage::path_of(cx);
+        self.points.take_state(cx.view, &points_path);
 
         ui.horizontal(|ui| {
             for (page, label) in [(Page::Points, "Operating points"), (Page::Loops, "Loops")] {
@@ -690,7 +670,7 @@ impl Tool for ControllersTool {
         });
         ui.add_space(2.0);
         match self.page {
-            Page::Points => self.points.render(ui, cx, &self.forms),
+            Page::Points => self.points.render(ui, cx, &self.forms, &points_path),
             Page::Loops => self.render_loops(ui, cx),
         }
     }
@@ -704,15 +684,152 @@ impl Tool for ControllersTool {
     }
 
     fn panel(&mut self, ui: &mut egui::Ui, view: &RunView) {
-        self.render_panel(ui, view);
+        for (_, data) in view.custom(OperatingPointApplied::KIND) {
+            let Ok(e) = serde_json::from_value::<OperatingPointApplied>(data.clone()) else {
+                continue;
+            };
+            ui.label(egui::RichText::new(format!("Applied operating point {}", e.name)).strong());
+            let changes = bias_and_scan_changes(&e.before, &e.after);
+            if changes.is_empty() {
+                ui.label(egui::RichText::new("bias and scan unchanged").weak());
+            }
+            egui::Grid::new("operating_point_applied")
+                .num_columns(3)
+                .striped(true)
+                .spacing([16.0, 4.0])
+                .show(ui, |ui| {
+                    for (field, before, after) in changes {
+                        ui.label(field);
+                        ui.label(before);
+                        ui.label(after);
+                        ui.end_row();
+                    }
+                });
+            ui.add_space(6.0);
+        }
+        for (_, data) in view.custom(SettingsLoadedEvent::KIND) {
+            if let Ok(e) = serde_json::from_value::<SettingsLoadedEvent>(data.clone()) {
+                ui.label(format!("Loaded settings file {}", e.path));
+            }
+        }
+        let applied: Vec<ControllerAppliedEvent> = view
+            .custom(ControllerAppliedEvent::KIND)
+            .iter()
+            .filter_map(|(_, d)| serde_json::from_value(d.clone()).ok())
+            .collect();
+        if !applied.is_empty() {
+            ui.label(egui::RichText::new("Applied").strong());
+            egui::Grid::new("controllers_applied")
+                .num_columns(4)
+                .striped(true)
+                .spacing([16.0, 4.0])
+                .show(ui, |ui| {
+                    for e in &applied {
+                        let before = e.before.to_fields();
+                        let after = e.after.to_fields();
+                        let schema = self.forms.get(kind_key(e.id));
+                        let changed = changed_fields(&before, &after);
+                        if changed.is_empty() {
+                            ui.label(e.id.to_string());
+                            ui.label(egui::RichText::new("no change").weak());
+                            ui.label("");
+                            ui.label("");
+                            ui.end_row();
+                        }
+                        for key in changed {
+                            ui.label(e.id.to_string());
+                            ui.label(&key);
+                            ui.label(field_text(schema, &key, &before[&key]));
+                            ui.label(field_text(schema, &key, &after[&key]));
+                            ui.end_row();
+                        }
+                    }
+                });
+        }
+        let reads: BTreeMap<ControllerId, ControllerReading> = view
+            .custom(ControllerReading::KIND)
+            .iter()
+            .filter_map(|(_, d)| serde_json::from_value::<ControllerReading>(d.clone()).ok())
+            .map(|r| (r.id, r))
+            .collect();
+        if !reads.is_empty() {
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new("Read").strong());
+            egui::Grid::new("controllers_read")
+                .num_columns(3)
+                .striped(true)
+                .spacing([16.0, 4.0])
+                .show(ui, |ui| {
+                    for (id, r) in &reads {
+                        ui.label(id.to_string());
+                        ui.label(&r.status);
+                        let schema = self.forms.get(kind_key(*id));
+                        let fields = r.params.to_fields();
+                        let summary: Vec<String> = fields
+                            .as_object()
+                            .map(|o| {
+                                o.iter()
+                                    .map(|(k, v)| format!("{k} {}", field_text(schema, k, v)))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        ui.label(summary.join(", "));
+                        ui.end_row();
+                    }
+                });
+        }
     }
 
     fn prefs(&self) -> Value {
-        self.prefs_value()
+        // A JSON object needs string keys, so the edits go as pairs.
+        let edits: Vec<(&ControllerId, &Value)> = self.edits.iter().collect();
+        serde_json::json!({
+            "profile_path": self.profile_path,
+            "settings_file": self.settings_file,
+            "edits": edits,
+            "selected": self.selected,
+            "selected_preset": self.selected_preset,
+            "page": self.page,
+            "selected_point": self.points.selected,
+        })
     }
 
     fn restore(&mut self, prefs: &Value) {
-        self.restore_from(prefs);
+        if let Some(p) = prefs.get("profile_path").and_then(Value::as_str) {
+            self.profile_path = p.to_string();
+        }
+        if let Some(p) = prefs.get("settings_file").and_then(Value::as_str) {
+            self.settings_file = p.to_string();
+        }
+        if let Some(edits) = prefs
+            .get("edits")
+            .and_then(|e| serde_json::from_value::<Vec<(ControllerId, Value)>>(e.clone()).ok())
+        {
+            // Only fields that still deserialize are worth keeping.
+            for (id, fields) in edits {
+                if ControllerParams::from_fields(id, fields.clone()).is_ok() {
+                    self.edits.insert(id, fields);
+                }
+            }
+        }
+        if let Some(selected) = prefs
+            .get("selected")
+            .and_then(|s| serde_json::from_value(s.clone()).ok())
+        {
+            self.selected = selected;
+        }
+        if let Some(name) = prefs.get("selected_preset").and_then(Value::as_str) {
+            self.selected_preset = Some(name.to_string());
+        }
+        if let Some(page) = prefs
+            .get("page")
+            .and_then(|p| serde_json::from_value(p.clone()).ok())
+        {
+            self.page = page;
+        }
+        if let Some(name) = prefs.get("selected_point").and_then(Value::as_str) {
+            self.points.selected = Some(name.to_string());
+        }
     }
 }
 
@@ -895,155 +1012,6 @@ impl ControllersTool {
             }
         });
     }
-
-    fn render_panel(&mut self, ui: &mut egui::Ui, view: &RunView) {
-        for (_, data) in view.custom(OperatingPointApplied::KIND) {
-            let Ok(e) = serde_json::from_value::<OperatingPointApplied>(data.clone()) else {
-                continue;
-            };
-            ui.label(egui::RichText::new(format!("Applied operating point {}", e.name)).strong());
-            let changes = bias_and_scan_changes(&e.before, &e.after);
-            if changes.is_empty() {
-                ui.label(egui::RichText::new("bias and scan unchanged").weak());
-            }
-            egui::Grid::new("operating_point_applied")
-                .num_columns(3)
-                .striped(true)
-                .spacing([16.0, 4.0])
-                .show(ui, |ui| {
-                    for (field, before, after) in changes {
-                        ui.label(field);
-                        ui.label(before);
-                        ui.label(after);
-                        ui.end_row();
-                    }
-                });
-            ui.add_space(6.0);
-        }
-        for (_, data) in view.custom(SettingsLoadedEvent::KIND) {
-            if let Ok(e) = serde_json::from_value::<SettingsLoadedEvent>(data.clone()) {
-                ui.label(format!("Loaded settings file {}", e.path));
-            }
-        }
-        let applied: Vec<ControllerAppliedEvent> = view
-            .custom(ControllerAppliedEvent::KIND)
-            .iter()
-            .filter_map(|(_, d)| serde_json::from_value(d.clone()).ok())
-            .collect();
-        if !applied.is_empty() {
-            ui.label(egui::RichText::new("Applied").strong());
-            egui::Grid::new("controllers_applied")
-                .num_columns(4)
-                .striped(true)
-                .spacing([16.0, 4.0])
-                .show(ui, |ui| {
-                    for e in &applied {
-                        let before = e.before.to_fields();
-                        let after = e.after.to_fields();
-                        let schema = self.forms.get(kind_key(e.id));
-                        let changed = changed_fields(&before, &after);
-                        if changed.is_empty() {
-                            ui.label(e.id.to_string());
-                            ui.label(egui::RichText::new("no change").weak());
-                            ui.label("");
-                            ui.label("");
-                            ui.end_row();
-                        }
-                        for key in changed {
-                            ui.label(e.id.to_string());
-                            ui.label(&key);
-                            ui.label(field_text(schema, &key, &before[&key]));
-                            ui.label(field_text(schema, &key, &after[&key]));
-                            ui.end_row();
-                        }
-                    }
-                });
-        }
-        let reads: BTreeMap<ControllerId, ControllerReading> = view
-            .custom(ControllerReading::KIND)
-            .iter()
-            .filter_map(|(_, d)| serde_json::from_value::<ControllerReading>(d.clone()).ok())
-            .map(|r| (r.id, r))
-            .collect();
-        if !reads.is_empty() {
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new("Read").strong());
-            egui::Grid::new("controllers_read")
-                .num_columns(3)
-                .striped(true)
-                .spacing([16.0, 4.0])
-                .show(ui, |ui| {
-                    for (id, r) in &reads {
-                        ui.label(id.to_string());
-                        ui.label(&r.status);
-                        let schema = self.forms.get(kind_key(*id));
-                        let fields = r.params.to_fields();
-                        let summary: Vec<String> = fields
-                            .as_object()
-                            .map(|o| {
-                                o.iter()
-                                    .map(|(k, v)| format!("{k} {}", field_text(schema, k, v)))
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        ui.label(summary.join(", "));
-                        ui.end_row();
-                    }
-                });
-        }
-    }
-
-    fn prefs_value(&self) -> Value {
-        // A JSON object needs string keys, so the edits go as pairs.
-        let edits: Vec<(&ControllerId, &Value)> = self.edits.iter().collect();
-        serde_json::json!({
-            "profile_path": self.profile_path,
-            "settings_file": self.settings_file,
-            "edits": edits,
-            "selected": self.selected,
-            "selected_preset": self.selected_preset,
-            "page": self.page,
-            "selected_point": self.points.selected,
-        })
-    }
-
-    fn restore_from(&mut self, prefs: &Value) {
-        if let Some(p) = prefs.get("profile_path").and_then(Value::as_str) {
-            self.profile_path = p.to_string();
-        }
-        if let Some(p) = prefs.get("settings_file").and_then(Value::as_str) {
-            self.settings_file = p.to_string();
-        }
-        if let Some(edits) = prefs
-            .get("edits")
-            .and_then(|e| serde_json::from_value::<Vec<(ControllerId, Value)>>(e.clone()).ok())
-        {
-            // Only fields that still deserialize are worth keeping.
-            for (id, fields) in edits {
-                if ControllerParams::from_fields(id, fields.clone()).is_ok() {
-                    self.edits.insert(id, fields);
-                }
-            }
-        }
-        if let Some(selected) = prefs
-            .get("selected")
-            .and_then(|s| serde_json::from_value(s.clone()).ok())
-        {
-            self.selected = selected;
-        }
-        if let Some(name) = prefs.get("selected_preset").and_then(Value::as_str) {
-            self.selected_preset = Some(name.to_string());
-        }
-        if let Some(page) = prefs
-            .get("page")
-            .and_then(|p| serde_json::from_value(p.clone()).ok())
-        {
-            self.page = page;
-        }
-        if let Some(name) = prefs.get("selected_point").and_then(Value::as_str) {
-            self.points.selected = Some(name.to_string());
-        }
-    }
 }
 
 /// The keys whose values differ between two flat field objects.
@@ -1057,15 +1025,9 @@ fn changed_fields(a: &Value, b: &Value) -> Vec<String> {
         .collect()
 }
 
-/// A field's value for a table: numbers in the unit the schema gives
-/// them, the rest as JSON.
+/// A field's value for a table, in the unit the schema gives it.
 fn field_text(form: Option<&SchemaForm>, key: &str, value: &Value) -> String {
-    let unit = form.and_then(|f| f.unit_of(key));
-    match (value.as_f64(), unit) {
-        (Some(v), Some(unit)) => format_si(v, unit),
-        (Some(v), None) => crate::units::number(v),
-        _ => value.to_string(),
-    }
+    value_text(form.and_then(|f| f.unit_of(key)), value)
 }
 
 #[cfg(test)]
@@ -1217,7 +1179,7 @@ mod tests {
         };
         let changes = bias_and_scan_changes(&before, &after);
         let fields: Vec<&str> = changes.iter().map(|c| c.0).collect();
-        assert_eq!(fields, ["bias", "pixels"]);
+        assert_eq!(fields, ["Bias", "Pixels"]);
         assert_eq!(changes[0].1, "500.0 mV");
         assert_eq!(changes[1].2, "512 × 256");
     }

@@ -10,13 +10,14 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use rusty_tip::controllers::{ControllerId, ControllerParams, ProfileEntry};
+use rusty_tip::controllers::{ControllerId, ControllerParams, ProfileEntry, ZControllerParams};
 use rusty_tip::experiment_log::LogEvent;
 use rusty_tip::operating_point::{
     ApplyOperatingPoint, CaptureOperatingPoint, DEFAULT_OPERATING_POINTS_FILE, OperatingPoint,
-    OperatingPointApplied, OperatingPointStore, OperatingState, ScanSettings,
+    OperatingPointSaved, OperatingPointStore, OperatingState, SaveAs, ScanSettings,
 };
 
 use super::SetupCx;
@@ -33,15 +34,13 @@ struct Now {
     at: String,
 }
 
-/// A save waiting for the capture it started. The first run to start
-/// after the click decides it: a capture that finished saves, anything
-/// else drops it, so an apply's read-back is never saved by mistake.
-#[derive(Debug, Clone)]
-struct PendingSave {
-    name: String,
-    note: String,
-    /// The run view's start when the save was asked for.
-    after: Option<f64>,
+/// Which run's rows have been taken: its start time, and how many
+/// `operating_point/read` and `operating_point/saved` rows.
+#[derive(Debug, Default)]
+struct Seen {
+    start: Option<f64>,
+    read: usize,
+    saved: usize,
 }
 
 #[derive(Default)]
@@ -52,10 +51,10 @@ pub struct PointsPage {
     /// The point picked in the list, by name.
     pub selected: Option<String>,
     now: Option<Now>,
-    /// Which run's `operating_point/read` rows have been taken: the run's
-    /// start time and how many rows.
-    seen: (Option<f64>, usize),
-    pending: Option<PendingSave>,
+    /// Which points match `now` in every value, by index; worked out again
+    /// only when the points or `now` change.
+    current: Option<Vec<bool>>,
+    seen: Seen,
     /// The point whose Delete was clicked once, waiting for the second.
     confirm_delete: Option<String>,
     /// The name and note to save the current state under.
@@ -75,6 +74,7 @@ impl PointsPage {
             }
         }
         self.path = Some(path.to_path_buf());
+        self.current = None;
     }
 
     fn selected_index(&self) -> Option<usize> {
@@ -82,62 +82,28 @@ impl PointsPage {
         self.points.iter().position(|p| p.is_named(name))
     }
 
-    /// Take a newly read state as "now", and settle a pending save once
-    /// the run after it has finished.
+    /// Take a newly read state as "now", and a save the capture made as
+    /// the picked point.
     pub fn take_state(&mut self, view: &RunView, path: &Path) {
         let start = view.started_at();
-        if start != self.seen.0 {
-            self.seen = (start, 0);
+        if start != self.seen.start {
+            self.seen = Seen {
+                start,
+                ..Seen::default()
+            };
         }
-        let rows = view.custom(OperatingState::KIND);
-        let read = rows
-            .get(self.seen.1..)
-            .and_then(<[_]>::last)
-            .and_then(|(_, data)| serde_json::from_value::<OperatingState>(data.clone()).ok());
-        if let Some(state) = read {
+        if let Some(state) = new_rows::<OperatingState>(view, &mut self.seen.read).pop() {
             let at = chrono::Local::now().format("%H:%M:%S").to_string();
             self.now = Some(Now { state, at });
+            self.current = None;
         }
-        self.seen.1 = rows.len();
-
-        let decided = self
-            .pending
-            .as_ref()
-            .is_some_and(|p| start.is_some() && start != p.after && view.finish.is_some());
-        if !decided {
-            return;
+        if let Some(saved) = new_rows::<OperatingPointSaved>(view, &mut self.seen.saved).pop() {
+            self.message = Some(Note::ok(format!("Saved {:?}", saved.name)));
+            self.selected = Some(saved.name);
+            self.name.clear();
+            self.note.clear();
+            self.refresh(path);
         }
-        let Some(pending) = self.pending.take() else {
-            return;
-        };
-        let applied = !view.custom(OperatingPointApplied::KIND).is_empty();
-        let state = rows
-            .last()
-            .and_then(|(_, data)| serde_json::from_value::<OperatingState>(data.clone()).ok());
-        match (applied, state) {
-            (false, Some(state)) => self.save(path, &pending, state),
-            _ => {
-                self.message = Some(Note::err(format!(
-                    "Not saved: the read for {:?} did not finish",
-                    pending.name
-                )))
-            }
-        }
-    }
-
-    fn save(&mut self, path: &Path, pending: &PendingSave, state: OperatingState) {
-        let saved_at = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
-        let point = OperatingPoint::from_state(&pending.name, &pending.note, Some(saved_at), state);
-        match OperatingPointStore::new(path).put(point.clone()) {
-            Ok(()) => {
-                self.message = Some(Note::ok(format!("Saved {:?}", point.name)));
-                self.selected = Some(point.name);
-                self.name.clear();
-                self.note.clear();
-            }
-            Err(e) => self.message = Some(Note::err(e)),
-        }
-        self.refresh(path);
     }
 
     fn delete(&mut self, path: &Path, name: &str) {
@@ -162,10 +128,10 @@ impl PointsPage {
         ui: &mut egui::Ui,
         cx: &mut SetupCx<'_>,
         forms: &BTreeMap<&'static str, SchemaForm>,
+        path: &Path,
     ) {
-        let path = Self::path_of(cx);
-        if self.path.as_deref() != Some(path.as_path()) {
-            self.refresh(&path);
+        if self.path.as_deref() != Some(path) {
+            self.refresh(path);
         }
         if self.selected_index().is_none() {
             self.selected = self.points.first().map(|p| p.name.clone());
@@ -176,10 +142,10 @@ impl PointsPage {
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(list_width);
-                self.render_list(ui, cx, forms, &path);
+                self.render_list(ui, cx, forms, path);
             });
             ui.separator();
-            ui.vertical(|ui| self.render_detail(ui, cx, forms, &path));
+            ui.vertical(|ui| self.render_detail(ui, cx, forms, path));
         });
     }
 
@@ -222,15 +188,19 @@ impl PointsPage {
                     ui.label(egui::RichText::new("none saved yet").weak());
                 }
                 let mut picked = None;
-                let now = self.now.as_ref().map(|n| &n.state);
-                for p in &self.points {
-                    let selected = self.selected.as_deref() == Some(p.name.as_str());
-                    let current = now.is_some_and(|n| {
-                        comparison(p, Some(n), forms)
-                            .iter()
-                            .flat_map(|g| &g.rows)
-                            .all(|r| !r.differs())
-                    });
+                let (points, now) = (&self.points, &self.now);
+                let current = self.current.get_or_insert_with(|| {
+                    points
+                        .iter()
+                        .map(|p| {
+                            now.as_ref().is_some_and(|n| {
+                                differing(&comparison(p, Some(&n.state), forms)) == 0
+                            })
+                        })
+                        .collect()
+                });
+                for (p, &current) in self.points.iter().zip(current.iter()) {
+                    let selected = self.selected.as_deref().is_some_and(|n| p.is_named(n));
                     if card(ui, p, selected, current).clicked() {
                         picked = Some(p.name.clone());
                     }
@@ -260,26 +230,21 @@ impl PointsPage {
                 .desired_width(f32::INFINITY)
                 .hint_text("note: sample, tip state"),
         );
-        ui.horizontal(|ui| {
-            let can_save = cx.can_run && !self.name.trim().is_empty() && self.pending.is_none();
-            if ui
-                .add_enabled(can_save, egui::Button::new("Read and save"))
-                .on_disabled_hover_text("Give it a name, connect, and let any run finish")
-                .clicked()
-            {
-                self.pending = Some(PendingSave {
-                    name: self.name.trim().to_string(),
-                    note: self.note.trim().to_string(),
-                    after: cx.view.started_at(),
-                });
-                self.message = None;
-                cx.run = Some(Box::new(CaptureOperatingPoint));
-            }
-            if self.pending.is_some() {
-                ui.spinner();
-                ui.label(egui::RichText::new("reading").weak());
-            }
-        });
+        let can_save = cx.can_run && !self.name.trim().is_empty();
+        if ui
+            .add_enabled(can_save, egui::Button::new("Read and save"))
+            .on_disabled_hover_text("Give it a name, connect, and let any run finish")
+            .clicked()
+        {
+            self.message = None;
+            cx.run = Some(Box::new(CaptureOperatingPoint {
+                save_as: Some(SaveAs {
+                    path: path.to_path_buf(),
+                    name: self.name.clone(),
+                    note: self.note.clone(),
+                }),
+            }));
+        }
     }
 
     /// The picked point against now, with Apply, Read current and Delete.
@@ -299,11 +264,7 @@ impl PointsPage {
         };
         let point = self.points[i].clone();
         let groups = comparison(&point, self.now.as_ref().map(|n| &n.state), forms);
-        let differing = groups
-            .iter()
-            .flat_map(|g| &g.rows)
-            .filter(|r| r.differs())
-            .count();
+        let differing = differing(&groups);
 
         ui.add_space(4.0);
         ui.label(egui::RichText::new(&point.name).heading().size(20.0));
@@ -372,7 +333,7 @@ impl PointsPage {
                     .on_disabled_hover_text("Connect first, and let any run finish")
                     .clicked()
                 {
-                    cx.run = Some(Box::new(CaptureOperatingPoint));
+                    cx.run = Some(Box::new(CaptureOperatingPoint::default()));
                 }
             });
         });
@@ -487,14 +448,18 @@ fn point_summary(p: &OperatingPoint) -> String {
 }
 
 /// The Z loop's setpoint in its input's unit, if there is a Z loop.
-pub fn z_setpoint(controllers: &[ProfileEntry]) -> Option<String> {
+fn z_setpoint(controllers: &[ProfileEntry]) -> Option<String> {
     controllers.iter().find_map(|e| match &e.params {
-        ControllerParams::Z(z) => Some(match z.input().unit() {
-            Some(unit) => format_si(z.setpoint, unit),
-            None => number(z.setpoint),
-        }),
+        ControllerParams::Z(z) => Some(z_setpoint_text(z)),
         _ => None,
     })
+}
+
+fn z_setpoint_text(z: &ZControllerParams) -> String {
+    match z.input().unit() {
+        Some(unit) => format_si(z.setpoint, unit),
+        None => number(z.setpoint),
+    }
 }
 
 /// Width by height, the unit once when both sides share it:
@@ -523,7 +488,9 @@ struct Row {
 
 impl Row {
     /// Compared as shown, so a read-back that differs below the shown
-    /// precision still matches.
+    /// precision still matches. The Loops page's Apply compares exactly,
+    /// since there a difference decides what gets written; here it only
+    /// marks what an Apply would change.
     fn differs(&self) -> bool {
         self.now.as_ref().is_some_and(|n| *n != self.point)
     }
@@ -535,6 +502,32 @@ struct Group {
     rows: Vec<Row>,
 }
 
+/// How many rows differ from now.
+fn differing(groups: &[Group]) -> usize {
+    groups
+        .iter()
+        .flat_map(|g| &g.rows)
+        .filter(|r| r.differs())
+        .count()
+}
+
+/// The bias and scan values a point holds, labelled, in table order.
+pub fn scan_rows(bias_v: f64, scan: &ScanSettings) -> Vec<(&'static str, String)> {
+    vec![
+        ("Bias", format_si(bias_v, "V")),
+        ("Frame", frame_text(scan)),
+        ("Pixels", format!("{} × {}", scan.pixels, scan.lines)),
+        (
+            "Speed",
+            format!("{}/s", format_si(scan.speed.forward_m_s, "m")),
+        ),
+        (
+            "Time per line",
+            format_si(scan.speed.forward_time_per_line_s, "s"),
+        ),
+    ]
+}
+
 /// A point's values by group, bias and scan first, then each loop it
 /// holds, each beside what `now` holds when it has been read.
 fn comparison(
@@ -542,27 +535,19 @@ fn comparison(
     now: Option<&OperatingState>,
     forms: &BTreeMap<&'static str, SchemaForm>,
 ) -> Vec<Group> {
-    let scan_rows = |bias_v: f64, scan: &ScanSettings| {
-        vec![
-            ("Bias", format_si(bias_v, "V")),
-            ("Frame", frame_text(scan)),
-            ("Pixels", format!("{} × {}", scan.pixels, scan.lines)),
-            (
-                "Speed",
-                format!("{}/s", format_si(scan.speed.forward_m_s, "m")),
-            ),
-            (
-                "Time per line",
-                format_si(scan.speed.forward_time_per_line_s, "s"),
-            ),
-        ]
-    };
+    // Both sides come from `scan_rows`, so they pair up in order.
+    let theirs = now.map(|n| scan_rows(n.bias_v, &n.scan));
     let mut groups = vec![Group {
         title: "Bias and scan".into(),
-        rows: pair_rows(
-            scan_rows(point.bias_v, &point.scan),
-            now.map(|n| scan_rows(n.bias_v, &n.scan)),
-        ),
+        rows: scan_rows(point.bias_v, &point.scan)
+            .into_iter()
+            .enumerate()
+            .map(|(i, (label, point))| Row {
+                label: label.into(),
+                point,
+                now: theirs.as_ref().map(|t| t[i].1.clone()),
+            })
+            .collect(),
     }];
     for entry in &point.controllers {
         let theirs = now.map(|n| {
@@ -592,17 +577,6 @@ fn comparison(
     groups
 }
 
-fn pair_rows(mine: Vec<(&str, String)>, theirs: Option<Vec<(&str, String)>>) -> Vec<Row> {
-    mine.into_iter()
-        .enumerate()
-        .map(|(i, (label, point))| Row {
-            label: label.to_string(),
-            point,
-            now: theirs.as_ref().map(|t| t[i].1.clone()),
-        })
-        .collect()
-}
-
 /// A loop's parameters as `(label, value)` in its form's order and units.
 fn param_rows(
     id: ControllerId,
@@ -623,10 +597,7 @@ fn param_rows(
             let value = fields.get(key)?;
             let label = form.map_or_else(|| key.clone(), |f| f.label_of(key));
             let text = match params {
-                ControllerParams::Z(_) if key == "setpoint" => z_setpoint(&[ProfileEntry {
-                    id,
-                    params: params.clone(),
-                }])?,
+                ControllerParams::Z(z) if key == "setpoint" => z_setpoint_text(z),
                 _ => value_text(form.and_then(|f| f.unit_of(key)), value),
             };
             Some((label, text))
@@ -634,9 +605,22 @@ fn param_rows(
         .collect()
 }
 
-/// A field's value for the table: numbers in their unit, a pair of them
-/// as a range, switches as on or off.
-fn value_text(unit: Option<&str>, value: &Value) -> String {
+/// The rows of kind `T` the run has added since `seen`, which moves on.
+fn new_rows<T: LogEvent + DeserializeOwned>(view: &RunView, seen: &mut usize) -> Vec<T> {
+    let rows = view.custom(T::KIND);
+    let new = rows
+        .get(*seen..)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|(_, data)| serde_json::from_value(data.clone()).ok())
+        .collect();
+    *seen = rows.len();
+    new
+}
+
+/// A field's value for a table: numbers in their unit, a pair of them as
+/// a range, switches as on or off.
+pub fn value_text(unit: Option<&str>, value: &Value) -> String {
     let one = |v: f64| unit.map_or_else(|| number(v), |u| format_si(v, u));
     match value {
         Value::Null => "unset".into(),
@@ -658,7 +642,6 @@ fn value_text(unit: Option<&str>, value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusty_tip::controllers::ZControllerParams;
     use rusty_tip::operating_point::{KeepConstant, ScanSpeed};
 
     fn forms() -> BTreeMap<&'static str, SchemaForm> {

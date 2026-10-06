@@ -27,7 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[controllers].operating_points_file` (default `./operating_points.toml`,
   on the Connection page beside the preset file), so saving one never
   rewrites the presets. `operating_point` holds the types, the store and
-  the `CaptureOperatingPoint` and `ApplyOperatingPoint` jobs;
+  the `CaptureOperatingPoint` and `ApplyOperatingPoint` jobs (a capture
+  given `save_as` writes the point itself and logs
+  `operating_point/saved`);
   `SpmController::scan_frame_set` is new, implemented for Nanonis and the
   mock.
 - **`rusty-tip psd`, the spectrum of a streamed signal.** Welch-averaged
