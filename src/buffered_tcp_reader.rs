@@ -1,158 +1,151 @@
 //! Buffered TCP Reader for continuous signal data collection
 //!
-//! This module provides a BufferedTCPReader that automatically buffers TCP logger data
-//! in the background using a lightweight time-series database approach. It leverages
-//! the existing TCPLoggerStream infrastructure while providing efficient time-windowed
-//! queries for synchronized data collection during SPM experiments.
+//! This module provides a BufferedTCPReader that buffers the Nanonis TCP
+//! Logger's data stream in the background with timestamps, for
+//! time-windowed queries during SPM experiments.
+//!
+//! It reads the logger's socket itself rather than through
+//! `nanonis_rs::TCPLoggerStream`, since that one drops the frame this reader
+//! most needs: the first frame after every logger start is not data but the
+//! list of signals the columns hold, in column order, with any signal the
+//! logger could not stream already left out (one with no Signals Manager
+//! slot, say). The header's state field marks it, `2` ("start") against
+//! `4` ("running") for data; its counter is 0 like the first data frame's,
+//! so the counter cannot tell them apart. See [`BufferedTCPReader::columns`].
 
 use crate::NanonisError;
-use crate::types::TimestampedSignalFrame;
-use nanonis_rs::TCPLoggerStream;
+use crate::types::{SignalFrame, TimestampedSignalFrame};
 use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
+use std::io::{ErrorKind, Read};
+use std::net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-// TODO: For 2kHz sampling, consider replacing with:
-// use crossbeam::queue::ArrayQueue; // Lock-free ring buffer
-// use parking_lot::RwLock;          // Faster reader-writer lock
+/// The logger's state as its frame header carries it, for the start frame.
+const STATE_START: u16 = 2;
+
+/// Bytes in a frame header: channels (u32), oversampling (f32), counter
+/// (u64), state (u16), all big-endian.
+const HEADER_BYTES: usize = 18;
+
+/// More channels than the logger can have: a header claiming this many is
+/// garbage, and allocating for it would be a mistake.
+const MAX_CHANNELS: usize = 128;
+
+/// How long one socket read waits before checking whether to stop. Short,
+/// so a stopped logger does not kill the reader and a shutdown is prompt.
+const POLL: Duration = Duration::from_millis(200);
 
 /// Buffered TCP reader that continuously collects timestamped signal data
 ///
-/// This component creates a background thread that reads lightweight SignalFrame data
-/// from TCPLoggerStream's channel and buffers it with high-resolution timestamps in a
-/// circular buffer. It provides time-windowed query methods for retrieving data before,
-/// during, and after specific time periods.
-///
-/// # High-Frequency Performance (2kHz+)
-/// **IMPORTANT**: At sampling rates above 1kHz, lock contention becomes critical:
-/// - Current implementation uses `Mutex<VecDeque>` suitable for <1kHz
-/// - For 2kHz+, consider `crossbeam::queue::ArrayQueue` (lock-free)
-/// - Alternative: `parking_lot::RwLock` for multiple concurrent readers
-/// - Query methods must complete in <0.1ms to avoid data loss
-///
-/// # Memory Efficiency
-/// Works with lightweight SignalFrame structures (just counter + data) throughout the
-/// entire pipeline, avoiding the overhead of full TCPLoggerData per frame.
-///
-/// # Architecture
-/// - TCPLoggerStream converts protocol data to SignalFrame (protocol → lightweight conversion)
-/// - BufferedTCPReader adds timestamps to SignalFrame (timing layer)
-/// - Thread-safe time-windowed queries while continuous collection runs in background
+/// A background thread reads the logger's frames into a circular buffer of
+/// [`TimestampedSignalFrame`]s, and keeps the column list the logger last
+/// announced. A new announcement clears the buffer, since the frames before
+/// it belong to the previous channel list and would be decoded wrongly
+/// against the new one.
 pub struct BufferedTCPReader {
     /// Thread-safe circular buffer of timestamped signal frames
     buffer: Arc<RwLock<VecDeque<TimestampedSignalFrame>>>,
+    /// The signal indexes of the columns, in column order, as the logger
+    /// last announced them; `None` until a start frame has been seen.
+    columns: Arc<RwLock<Option<Vec<u32>>>>,
     /// Background thread handle for buffering operations
     buffering_thread: Option<JoinHandle<Result<(), NanonisError>>>,
     /// Signal to shut down background thread
     shutdown_signal: Arc<AtomicBool>,
-    /// Error from the TCP stream reader thread, if it died unexpectedly.
-    /// Set by the buffering thread when it detects the stream disconnected.
+    /// Error from the reader thread, if it died unexpectedly.
     stream_error: Arc<Mutex<Option<String>>>,
+    /// A handle on the socket, to unblock the thread on stop.
+    socket: TcpStream,
 }
 
 impl BufferedTCPReader {
-    /// Create a new BufferedTCPReader with automatic background data collection
-    ///
-    /// This establishes a connection to the TCP logger stream and starts a background
-    /// thread for continuous data buffering with lightweight SignalFrame structures.
+    /// Connect to the TCP Logger's data port and start buffering in the
+    /// background.
     ///
     /// # Arguments
     /// * `host` - TCP server host address (e.g., "127.0.0.1")
     /// * `port` - TCP logger data stream port (typically 6590)
     /// * `buffer_size` - Maximum number of frames to keep in circular buffer
-    ///
-    /// # Returns
-    /// A BufferedTCPReader with active background collection, ready for queries
-    ///
-    /// # Implementation Notes
-    /// - Creates TCPLoggerStream and gets its background reader channel
-    /// - Starts buffering thread that converts SignalFrame to TimestampedSignalFrame
-    /// - Implements circular buffer behavior (drops oldest when full)
     pub fn new(host: &str, port: u16, buffer_size: usize) -> Result<Self, NanonisError> {
-        let tcp_stream = TCPLoggerStream::new(host, port)?;
-        // Fallible since nanonis-rs 0.5: attaching the reader can fail, and a
-        // failure here means no frames will ever arrive, so it surfaces now
-        // rather than as a silent timeout on the first query.
-        let (tcp_receiver, stream_handle) = tcp_stream.spawn_background_reader()?;
+        let addr: SocketAddr = (host, port)
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut a| a.next())
+            .ok_or_else(|| NanonisError::Protocol(format!("Invalid address: {host}:{port}")))?;
+        let socket = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(|e| {
+            NanonisError::Io {
+                source: e,
+                context: format!("Failed to connect to TCP stream at {addr}"),
+            }
+        })?;
+        socket
+            .set_read_timeout(Some(POLL))
+            .map_err(|e| NanonisError::Io {
+                source: e,
+                context: "Setting TCP stream read timeout".to_string(),
+            })?;
+        let mut stream = socket.try_clone().map_err(|e| NanonisError::Io {
+            source: e,
+            context: "Cloning the TCP stream".to_string(),
+        })?;
 
         let buffer = Arc::new(RwLock::new(VecDeque::with_capacity(buffer_size)));
-        let buffer_clone = buffer.clone();
-
+        let columns = Arc::new(RwLock::new(None));
         let shutdown_signal = Arc::new(AtomicBool::new(false));
-        let shutdown_clone = shutdown_signal.clone();
-
         let stream_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        let stream_error_clone = stream_error.clone();
-
         let start_time = Instant::now();
 
-        // Don't block waiting for first frame - let background thread handle it
-        // The TCP logger might not be started yet when this constructor runs
-
+        let (buffer_t, columns_t) = (Arc::clone(&buffer), Arc::clone(&columns));
+        let (shutdown_t, error_t) = (Arc::clone(&shutdown_signal), Arc::clone(&stream_error));
         let buffering_thread = thread::Builder::new()
             .name("tcp-logger-buffer".into())
             .spawn(move || -> Result<(), NanonisError> {
                 log::debug!("Started buffering thread for TCP logger data");
-
-                while !shutdown_clone.load(Ordering::Relaxed) {
-                    match tcp_receiver.recv_timeout(Duration::from_millis(100)) {
-                        Ok(signal_frame) => {
-                            // Skip the first frame (signal indices metadata)
-                            if signal_frame.counter == 0 {
-                                log::debug!(
-                                    "Skipping metadata frame (counter=0) with signal indices"
-                                );
-                                continue;
-                            }
-
-                            let timestamped_frame =
-                                TimestampedSignalFrame::new(signal_frame, start_time);
-
-                            {
-                                let mut buffer = buffer_clone.write();
-                                buffer.push_back(timestamped_frame);
-
-                                if buffer.len() > buffer_size {
-                                    buffer.pop_front();
-                                }
+                loop {
+                    match read_frame(&mut stream, &shutdown_t) {
+                        Ok(None) => return Ok(()),
+                        Ok(Some(frame)) if frame.state == STATE_START => {
+                            let announced: Vec<u32> =
+                                frame.data.iter().map(|&v| v.round() as u32).collect();
+                            log::debug!("TCP logger announced its columns: {announced:?}");
+                            buffer_t.write().clear();
+                            *columns_t.write() = Some(announced);
+                        }
+                        Ok(Some(frame)) => {
+                            let timestamped = TimestampedSignalFrame::new(
+                                SignalFrame {
+                                    counter: frame.counter,
+                                    data: frame.data,
+                                },
+                                start_time,
+                            );
+                            let mut buffer = buffer_t.write();
+                            buffer.push_back(timestamped);
+                            if buffer.len() > buffer_size {
+                                buffer.pop_front();
                             }
                         }
-                        Err(mpsc::RecvTimeoutError::Timeout) => {
-                            continue;
-                        }
-                        Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            // The stream reader thread exited. Join it to
-                            // find out why and surface the error.
-                            match stream_handle.join() {
-                                Ok(Ok(())) => {
-                                    log::info!("TCP logger stream closed cleanly");
-                                }
-                                Ok(Err(e)) => {
-                                    log::error!("TCP logger stream error: {e}");
-                                    *stream_error_clone.lock() = Some(e.to_string());
-                                }
-                                Err(_) => {
-                                    log::error!("TCP logger stream thread panicked");
-                                    *stream_error_clone.lock() =
-                                        Some("stream reader thread panicked".into());
-                                }
-                            }
-                            break;
+                        Err(e) => {
+                            log::error!("TCP logger stream error: {e}");
+                            *error_t.lock() = Some(e.to_string());
+                            return Err(e);
                         }
                     }
                 }
-                Ok(())
             })
             .expect("failed to spawn tcp-logger-buffer thread");
 
         Ok(Self {
             buffer,
+            columns,
             buffering_thread: Some(buffering_thread),
             shutdown_signal,
             stream_error,
+            socket,
         })
     }
 
@@ -164,8 +157,6 @@ impl BufferedTCPReader {
         if self.shutdown_signal.load(Ordering::Relaxed) {
             return false;
         }
-        // The thread may have died (stream error, disconnect) without
-        // the shutdown signal being set. Check the JoinHandle directly.
         self.buffering_thread
             .as_ref()
             .is_some_and(|h| !h.is_finished())
@@ -176,8 +167,28 @@ impl BufferedTCPReader {
         self.buffer.read().len()
     }
 
-    /// Returns the error message from the TCP stream reader thread, if it
-    /// died unexpectedly (e.g., due to a connection reset or read timeout).
+    /// The signal indexes of the columns, in column order, as the logger
+    /// announced them at its last start; `None` before any start frame was
+    /// seen. A signal the logger was asked for and could not stream is not
+    /// in it.
+    pub fn columns(&self) -> Option<Vec<u32>> {
+        self.columns.read().clone()
+    }
+
+    /// Forget the announced columns, for a channel list about to change:
+    /// until the logger announces the new one, the old one would be read
+    /// against frames it does not describe.
+    pub fn forget_columns(&self) {
+        *self.columns.write() = None;
+    }
+
+    /// How many values the newest buffered frame carries.
+    pub fn frame_width(&self) -> Option<usize> {
+        self.buffer.read().back().map(|f| f.signal_frame.data.len())
+    }
+
+    /// Returns the error message from the reader thread, if it died
+    /// unexpectedly (e.g., due to a connection reset).
     ///
     /// Returns `None` if the stream is still running or shut down cleanly.
     pub fn stream_error(&self) -> Option<String> {
@@ -185,16 +196,6 @@ impl BufferedTCPReader {
     }
 
     /// Get all signal data since a specific timestamp
-    ///
-    /// # Arguments
-    /// * `since` - Timestamp to start collecting data from
-    ///
-    /// # Returns
-    /// Vector of timestamped signal frames from the specified time onwards
-    ///
-    /// # Thread Safety
-    /// This method acquires a lock on the buffer briefly to copy matching frames.
-    /// Lock is held for minimal time to avoid blocking the buffering thread.
     pub fn get_data_since(&self, since: Instant) -> Vec<TimestampedSignalFrame> {
         // Frames arrive in time order, so the matches are a suffix: walk in
         // from the newest end instead of past the whole buffer, which is what
@@ -212,42 +213,22 @@ impl BufferedTCPReader {
         self.buffer.read().iter().cloned().collect()
     }
 
-    /// Clear all buffered data
-    ///
-    /// This removes all frames from the buffer, effectively resetting it to an empty state.
-    /// The background thread continues to run and will start filling the buffer again.
-    /// This is useful when you want to discard old data and start fresh.
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// // Clear any stale data before starting a new measurement
-    /// tcp_reader.clear_buffer();
-    /// thread::sleep(Duration::from_millis(500)); // Wait for fresh data
-    /// let fresh_data = tcp_reader.get_recent_data(Duration::from_millis(100));
-    /// ```
+    /// Clear all buffered data. The background thread keeps running and
+    /// fills the buffer again.
     pub fn clear_buffer(&self) {
-        let mut buffer = self.buffer.write();
-        buffer.clear();
+        self.buffer.write().clear();
         log::debug!("Cleared TCP reader buffer");
     }
 
-    /// Stop background buffering and clean up resources
-    ///
-    /// # Returns
-    /// Result indicating if cleanup was successful
-    ///
-    /// # Implementation Notes
-    /// - Sets shutdown signal to stop background thread
-    /// - Waits for thread to finish and returns any errors
-    /// - Called automatically when BufferedTCPReader is dropped
+    /// Stop background buffering and close the connection.
     pub fn stop(&mut self) -> Result<(), NanonisError> {
         self.shutdown_signal.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.buffering_thread.take() {
-            handle
-                .join()
-                .unwrap_or_else(|_| Err(NanonisError::Protocol("Buffering thread panicked".into())))
-        } else {
-            Ok(())
+        let _ = self.socket.shutdown(Shutdown::Both);
+        match self.buffering_thread.take() {
+            Some(handle) => handle.join().unwrap_or_else(|_| {
+                Err(NanonisError::Protocol("Buffering thread panicked".into()))
+            }),
+            None => Ok(()),
         }
     }
 }
@@ -256,5 +237,146 @@ impl Drop for BufferedTCPReader {
     /// Automatically stop buffering when BufferedTCPReader is dropped
     fn drop(&mut self) {
         let _ = self.stop();
+    }
+}
+
+/// One frame as the logger sends it.
+struct RawFrame {
+    counter: u64,
+    state: u16,
+    data: Vec<f32>,
+}
+
+/// Read one frame, waiting through quiet spells; `None` once shutdown is
+/// requested.
+fn read_frame(
+    stream: &mut impl Read,
+    shutdown: &AtomicBool,
+) -> Result<Option<RawFrame>, NanonisError> {
+    let mut header = [0u8; HEADER_BYTES];
+    if !read_fully(stream, &mut header, shutdown)? {
+        return Ok(None);
+    }
+    let channels = u32::from_be_bytes(header[0..4].try_into().unwrap_or_default()) as usize;
+    let counter = u64::from_be_bytes(header[8..16].try_into().unwrap_or_default());
+    let state = u16::from_be_bytes(header[16..18].try_into().unwrap_or_default());
+    if channels > MAX_CHANNELS {
+        return Err(NanonisError::Protocol(format!(
+            "TCP logger frame claims {channels} channels; the stream is out of step"
+        )));
+    }
+    let mut payload = vec![0u8; channels * 4];
+    if !read_fully(stream, &mut payload, shutdown)? {
+        return Ok(None);
+    }
+    let data = payload
+        .chunks_exact(4)
+        .map(|b| f32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
+    Ok(Some(RawFrame {
+        counter,
+        state,
+        data,
+    }))
+}
+
+/// Fill `buf`, retrying across read timeouts so an idle logger is not an
+/// error; `false` when shutdown was requested first.
+fn read_fully(
+    stream: &mut impl Read,
+    buf: &mut [u8],
+    shutdown: &AtomicBool,
+) -> Result<bool, NanonisError> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        if shutdown.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+        match stream.read(&mut buf[filled..]) {
+            Ok(0) => {
+                if shutdown.load(Ordering::Relaxed) {
+                    return Ok(false);
+                }
+                return Err(NanonisError::Io {
+                    source: std::io::Error::new(ErrorKind::UnexpectedEof, "connection closed"),
+                    context: "TCP logger closed the data connection".to_string(),
+                });
+            }
+            Ok(n) => filled += n,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+                ) => {}
+            Err(e) => {
+                if shutdown.load(Ordering::Relaxed) {
+                    return Ok(false);
+                }
+                return Err(NanonisError::Io {
+                    source: e,
+                    context: "Reading the TCP logger stream".to_string(),
+                });
+            }
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    fn frame(counter: u64, state: u16, values: &[f32]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend((values.len() as u32).to_be_bytes());
+        out.extend(10f32.to_be_bytes());
+        out.extend(counter.to_be_bytes());
+        out.extend(state.to_be_bytes());
+        for v in values {
+            out.extend(v.to_be_bytes());
+        }
+        out
+    }
+
+    fn wait_for(mut done: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The start frame is the column list, not data; the counter-0 data
+    /// frame after it is kept; a new start drops the old list's frames.
+    #[test]
+    fn the_start_frame_names_the_columns_and_a_new_one_clears_the_buffer() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (go_on, wait) = std::sync::mpsc::channel::<()>();
+        let server = thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            s.write_all(&frame(0, 2, &[30.0, 0.0, 24.0])).unwrap();
+            s.write_all(&frame(0, 4, &[7.5e-7, 0.0, 2.0])).unwrap();
+            s.write_all(&frame(1, 4, &[7.5e-7, 0.0, 2.0])).unwrap();
+            wait.recv().unwrap();
+            s.write_all(&frame(0, 2, &[24.0])).unwrap();
+            s.write_all(&frame(0, 4, &[2.0])).unwrap();
+            wait.recv().unwrap();
+        });
+
+        let mut reader = BufferedTCPReader::new("127.0.0.1", port, 100).unwrap();
+        wait_for(|| reader.buffered_frames() == 2);
+        assert_eq!(reader.columns(), Some(vec![30, 0, 24]));
+        assert_eq!(reader.frame_width(), Some(3));
+
+        go_on.send(()).unwrap();
+        wait_for(|| reader.columns() == Some(vec![24]) && reader.buffered_frames() == 1);
+        assert_eq!(reader.snapshot()[0].signal_frame.data, vec![2.0]);
+
+        go_on.send(()).unwrap();
+        reader.stop().unwrap();
+        server.join().unwrap();
     }
 }
