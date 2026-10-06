@@ -5,6 +5,7 @@ use crate::spm_controller::Capability;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigureDataStream {
+    /// The signals to stream, by signal index (0 to 127).
     pub channels: Vec<i32>,
     #[serde(default = "default_oversampling")]
     pub oversampling: i32,
