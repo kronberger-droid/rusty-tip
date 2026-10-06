@@ -12,10 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Operating points: every loop, the bias and the scan under one name.**
   A preset is one loop's gains; what a lab tunes is the set, the loops at a
   bias, scanned at a speed over a frame of a size and resolution. The
-  Controllers page captures all of it from the controller in one read,
-  saves it under a name and note, and lists the saved points with their
-  bias, Z setpoint, frame, pixels and speed, each with Apply and Delete.
-  Apply writes the scan's size, angle, resolution and speed with the
+  Controllers tool opens on an Operating points page (the loop editor,
+  profile and presets moved to its Loops page): the saved points as a
+  list, the one picked beside it as a table against what the controller
+  held when last read, each differing value marked, with Apply, Read
+  current and a two-click Delete. "Read and save" reads the controller and
+  saves the result under a name and note in one step, and the list tags
+  the point the controller holds as current. Apply writes the scan's size, angle, resolution and speed with the
   frame's centre kept, then every loop with its setpoint, then the bias,
   and reads it all back; it refuses while a scan runs, refuses a Z input
   the module has not defined before writing anything, and switches no loop
@@ -24,7 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[controllers].operating_points_file` (default `./operating_points.toml`,
   on the Connection page beside the preset file), so saving one never
   rewrites the presets. `operating_point` holds the types, the store and
-  the `CaptureOperatingPoint` and `ApplyOperatingPoint` jobs;
+  the `CaptureOperatingPoint` and `ApplyOperatingPoint` jobs (a capture
+  given `save_as` writes the point itself and logs
+  `operating_point/saved`);
   `SpmController::scan_frame_set` is new, implemented for Nanonis and the
   mock.
 - **`rusty-tip psd`, the spectrum of a streamed signal.** Welch-averaged
