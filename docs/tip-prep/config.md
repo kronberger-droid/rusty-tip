@@ -232,17 +232,21 @@ output_path = "./experiments"  # one timestamped JSONL event log per run
 verbosity = "info"  # required; trace | debug | info | warn | error
 ```
 
-## `[[tcp_channel_mapping]]` — custom signal-to-channel mapping
+## `[[tcp_channel_mapping]]` — more signals to stream
 
-The library ships a standard mapping from Nanonis signal indices to TCP
-logger channels. If your instrument's TCP logger is configured differently,
-override entries per signal:
+The library streams a standard set of signals. Add one by its Nanonis
+signal index:
 
 ```toml
 [[tcp_channel_mapping]]
 nanonis_index = 76  # signal index (0-127)
-tcp_channel = 18    # TCP logger channel (0-23)
+tcp_channel = 18    # takes the standard signal on this number off the stream
 ```
+
+The TCP logger is asked for signals by index and announces which column
+each lands in, so `tcp_channel` no longer says where a signal goes. Pick a
+number the standard set does not use to add a signal without losing
+another.
 
 Signals without any TCP channel mapping still work; reads for them fall back
 to polling instead of the high-rate stream.

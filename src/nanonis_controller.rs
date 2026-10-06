@@ -191,27 +191,6 @@ impl NanonisController {
         &mut self.client
     }
 
-    /// The signal in each of the Signals Manager's 24 slots, by slot.
-    ///
-    /// The scan buffer and frame grabs number their channels by slot, not
-    /// by signal, and the assignment can change in the Signals Manager at
-    /// any time, so it is asked for on every use. Sent by hand since
-    /// `nanonis-rs` 0.5 parses the reply without the slot names that come
-    /// first.
-    fn signal_slots(&mut self) -> Result<Vec<SignalIndex>> {
-        let reply =
-            self.client
-                .quick_send("Signals.InSlotsGet", vec![], vec![], vec!["+*c", "i", "*i"])?;
-        match reply.get(2) {
-            Some(NanonisValue::ArrayI32(indexes)) => {
-                Ok(indexes.iter().map(|&i| SignalIndex(i as u32)).collect())
-            }
-            other => Err(SpmError::Protocol(format!(
-                "Signals.InSlotsGet: expected the slots' signal indexes, got {other:?}"
-            ))),
-        }
-    }
-
     /// Collect `num_samples` data points from the TCP stream for a given
     /// data position, from the frames stamped at or after `cursor`.
     ///
@@ -1211,11 +1190,14 @@ impl SpmController for NanonisController {
 
     fn scan_buffer_get(&mut self) -> Result<ScanBuffer> {
         let (channels, pixels, lines) = self.client.scan_buffer_get()?;
-        let slots = self.signal_slots()?;
         Ok(ScanBuffer {
             channels: channels
                 .into_iter()
-                .map(|slot| slot_signal(&slots, slot))
+                .map(|index| {
+                    u32::try_from(index).map(SignalIndex).map_err(|_| {
+                        SpmError::Protocol(format!("Scan.BufferGet: channel index {index}"))
+                    })
+                })
                 .collect::<Result<_>>()?,
             pixels,
             lines,
@@ -1223,12 +1205,7 @@ impl SpmController for NanonisController {
     }
 
     fn scan_buffer_set(&mut self, buffer: &ScanBuffer) -> Result<()> {
-        let slots = self.signal_slots()?;
-        let channels = buffer
-            .channels
-            .iter()
-            .map(|&signal| signal_slot(&slots, signal))
-            .collect::<Result<_>>()?;
+        let channels = buffer.channels.iter().map(|s| s.0 as i32).collect();
         Ok(self
             .client
             .scan_buffer_set(channels, buffer.pixels, buffer.lines)?)
@@ -1243,8 +1220,7 @@ impl SpmController for NanonisController {
         signal: SignalIndex,
         forward: bool,
     ) -> Result<(String, Vec<Vec<f32>>, bool)> {
-        let slot = signal_slot(&self.signal_slots()?, signal)?;
-        Ok(self.client.scan_frame_data_grab(slot as u32, forward)?)
+        Ok(self.client.scan_frame_data_grab(signal.0, forward)?)
     }
 
     // -- Drift compensation --
@@ -1561,37 +1537,6 @@ impl Drop for NanonisController {
     }
 }
 
-/// The signal a scan channel records: the scan numbers its channels by the
-/// Signals Manager slot, [`SignalIndex`] by signal.
-fn slot_signal(slots: &[SignalIndex], slot: i32) -> Result<SignalIndex> {
-    usize::try_from(slot)
-        .ok()
-        .and_then(|slot| slots.get(slot))
-        .copied()
-        .ok_or_else(|| {
-            SpmError::Protocol(format!(
-                "the scan records slot {slot}, but the Signals Manager has {} slots",
-                slots.len()
-            ))
-        })
-}
-
-/// The slot a signal sits in, for the scan to record or grab it. A signal
-/// in no slot cannot be recorded until one is assigned to it.
-fn signal_slot(slots: &[SignalIndex], signal: SignalIndex) -> Result<i32> {
-    slots
-        .iter()
-        .position(|&s| s == signal)
-        .map(|slot| slot as i32)
-        .ok_or_else(|| {
-            SpmError::Workflow(format!(
-                "signal {} is in none of the Signals Manager's slots; the scan only \
-                 records signals assigned to one",
-                signal.0
-            ))
-        })
-}
-
 /// The status word of a reading, lowercase, as the module names it.
 fn z_status_word(status: ZControllerStatus) -> &'static str {
     match status {
@@ -1652,40 +1597,6 @@ fn push_frame(data: &[f32], positions: &[usize], columns: &mut [Vec<f32>]) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The slots as the lab's Signals Manager had them: the eight inputs,
-    /// the eight outputs with Bias, X, Y and Z, then the PLL's signals.
-    fn lab_slots() -> Vec<SignalIndex> {
-        [0, 1, 2, 3, 4, 5, 6, 7, 24, 25, 26, 27, 28, 29, 30, 31]
-            .into_iter()
-            .chain(74..=81)
-            .map(SignalIndex)
-            .collect()
-    }
-
-    /// The scan the lab recorded, `[0, 14, 16, 17, 18, 19]` by slot, is
-    /// Current, Z, the PLL's phase and amplitude, the frequency shift and
-    /// the excitation; read as signal indexes it was Current and five
-    /// unused inputs.
-    #[test]
-    fn scan_channels_translate_from_slots_to_signals() {
-        let slots = lab_slots();
-        let signals: Vec<u32> = [0, 14, 16, 17, 18, 19]
-            .into_iter()
-            .map(|slot| slot_signal(&slots, slot).unwrap().0)
-            .collect();
-        assert_eq!(signals, [0, 30, 74, 75, 76, 77]);
-        assert!(slot_signal(&slots, 24).is_err());
-        assert!(slot_signal(&slots, -1).is_err());
-    }
-
-    #[test]
-    fn a_signal_is_recorded_by_its_slot_and_only_if_it_has_one() {
-        let slots = lab_slots();
-        assert_eq!(signal_slot(&slots, SignalIndex(30)).unwrap(), 14);
-        assert_eq!(signal_slot(&slots, SignalIndex(76)).unwrap(), 18);
-        assert!(signal_slot(&slots, SignalIndex(14)).is_err());
-    }
 
     /// Columns follow frame position, not signal index, and times count
     /// back from the snapshot so the newest sample sits at zero.

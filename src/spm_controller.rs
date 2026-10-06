@@ -59,9 +59,8 @@ pub struct DriftComp {
 /// Which signals a scan records, and at what resolution.
 ///
 /// The channels are signals, in the 0..=127 numbering [`SignalIndex`]
-/// carries everywhere else. Nanonis numbers the scan's channels by the
-/// Signals Manager slot instead; its controller translates both ways, so a
-/// signal has to sit in a slot to be recorded. `pixels` is coerced by the
+/// carries everywhere else, which is also how Nanonis's `Scan.BufferGet`,
+/// `Scan.BufferSet` and `Scan.FrameDataGrab` number them. `pixels` is coerced by the
 /// controller to the nearest multiple of 16, since scan data reaches the host
 /// in packets of 16.
 #[derive(Debug, Clone, PartialEq, Eq)]
