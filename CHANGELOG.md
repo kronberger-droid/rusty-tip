@@ -410,18 +410,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`rusty-tip serve` connected before it knew it could listen.** With the
   port taken it connected and loaded the config's layout and settings, then
   gave up. It binds first now, and `Server::serve` takes the bound listener.
-- **The scan buffer named the wrong signals on Nanonis.** `Scan.BufferGet`,
-  `Scan.BufferSet` and `Scan.FrameDataGrab` number channels by Signals
-  Manager slot (0 to 23), not by signal, and they were passed through as
-  signal indexes. A scan of Current, Z, the PLL's phase and amplitude, the
-  frequency shift and the excitation read as Current and five unused
-  inputs, `rusty-tip frame "Z (m)"` was refused, and multi-pass asked the
-  buffer for slot 30, which does not exist. `NanonisController` now
-  translates through `Signals.InSlotsGet`, asked on each use since slots can
-  be reassigned, and `SpmController::scan_frame_data_grab` takes a
-  `SignalIndex`. The query is sent by hand: `nanonis-rs` 0.5's
-  `signals_in_slots_get` parses its reply without the slot names that come
-  first.
+- **Scan channels are signal indexes, with no slot query.**
+  `Scan.BufferGet`, `Scan.BufferSet` and `Scan.FrameDataGrab` take the
+  0 to 127 signal index `Signals.NamesGet` lists, as the TCP protocol
+  documents, and `NanonisController` passes it through.
+  `SpmController::scan_frame_data_grab` takes a `SignalIndex`. An earlier
+  change translated them through `Signals.InSlotsGet`, which is not a
+  command of the protocol: every scan buffer read failed with it, capturing
+  and applying an operating point included.
 - **Tool names in the workbench sidebar sat indented.** Every tool's label
   kept room for the running marker; only the running tool carries one now,
   and the rest line up with Connection.
@@ -534,8 +530,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `const-distance drift status|measure|compensate|off`: the Z drift
   measurement and compensation from the action layer, runnable between
   scans from the command line. It streams Z through the TCP logger,
-  finding Z's channel in the controller's signal slots and checking the
-  stream against a plain read of Z before trusting it.
+  checking the stream against a plain read of Z before trusting it.
 - `examples/folme_probe.rs`: measures what a FolMe constant-height trace
   depends on (round-trip latency, feedback-off timing and TipLift, Z step
   response with the loop open, whether FolMe's wait flag blocks). Every
