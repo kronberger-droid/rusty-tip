@@ -10,7 +10,9 @@
 //!
 //! Operating points go further than a profile: every loop with the bias
 //! and the scan's size, angle, resolution and speed, captured in one read
-//! and kept in a list to apply with one click.
+//! and kept in a list to apply with one click. They are the Setup tab's
+//! first page ([`super::operating_points`]); the loops one by one are the
+//! second.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -24,13 +26,11 @@ use rusty_tip::controllers::{
     SetControllerEnabled, TomlPresetStore, TunedAt, ZLaw, ZLoopInput, ZQuantity,
 };
 use rusty_tip::experiment_log::LogEvent;
-use rusty_tip::operating_point::{
-    ApplyOperatingPoint, BiasAndScan, CaptureOperatingPoint, DEFAULT_OPERATING_POINTS_FILE,
-    OperatingPoint, OperatingPointApplied, OperatingPointStore, OperatingState, ScanSettings,
-};
+use rusty_tip::operating_point::{BiasAndScan, OperatingPointApplied};
 use rusty_tip::routine::SettingsLoadedEvent;
 use rusty_tip::session::{Job, Readout};
 
+use super::operating_points::{PointsPage, frame_text};
 use super::{SetupCx, Tool, load_toml, save_toml};
 use crate::form::{SchemaForm, number_field};
 use crate::run_view::RunView;
@@ -68,12 +68,19 @@ pub struct ControllersTool {
     /// The name and note for "Save form as".
     preset_name: String,
     preset_note: String,
-    /// The operating points on file, and which file that was.
-    points: Vec<OperatingPoint>,
-    points_path: Option<PathBuf>,
-    /// The name and note to save the last capture under.
-    point_name: String,
-    point_note: String,
+    /// Which page the Setup tab shows.
+    page: Page,
+    points: PointsPage,
+}
+
+/// The Setup tab's two pages: the saved operating points, and the loops
+/// one by one with their profile and presets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Page {
+    #[default]
+    Points,
+    Loops,
 }
 
 impl Default for ControllersTool {
@@ -101,10 +108,8 @@ impl Default for ControllersTool {
             selected_preset: None,
             preset_name: String::new(),
             preset_note: String::new(),
-            points: Vec::new(),
-            points_path: None,
-            point_name: String::new(),
-            point_note: String::new(),
+            page: Page::default(),
+            points: PointsPage::default(),
         }
     }
 }
@@ -330,232 +335,6 @@ impl ControllersTool {
     }
 }
 
-impl ControllersTool {
-    /// Read the operating points file again, remembering which file it was.
-    fn refresh_points(&mut self, path: &Path) {
-        match OperatingPointStore::new(path).list() {
-            Ok(points) => self.points = points,
-            Err(e) => {
-                self.points.clear();
-                self.message = Some(Note::err(e));
-            }
-        }
-        self.points_path = Some(path.to_path_buf());
-    }
-
-    /// Save the last capture under the name and note typed for it.
-    fn save_point(&mut self, path: &Path, state: OperatingState) {
-        let saved_at = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
-        let point =
-            OperatingPoint::from_state(&self.point_name, &self.point_note, Some(saved_at), state);
-        match OperatingPointStore::new(path).put(point.clone()) {
-            Ok(()) => {
-                self.message = Some(Note::ok(format!(
-                    "Saved operating point {:?} to {}",
-                    point.name,
-                    path.display()
-                )));
-                self.point_name.clear();
-                self.point_note.clear();
-            }
-            Err(e) => self.message = Some(Note::err(e)),
-        }
-        self.refresh_points(path);
-    }
-
-    /// Capture, save and the list of saved points with Apply and Delete.
-    fn render_points(&mut self, ui: &mut egui::Ui, cx: &mut SetupCx<'_>) {
-        let path = match &cx.connection {
-            Ok(s) => s.operating_points_file.clone(),
-            Err(_) => PathBuf::from(DEFAULT_OPERATING_POINTS_FILE),
-        };
-        if self.points_path.as_deref() != Some(path.as_path()) {
-            self.refresh_points(&path);
-        }
-        section(
-            ui,
-            "Operating points",
-            Some(&format!(
-                "Every loop with its setpoint, the bias, and the scan's size, angle, \
-                 resolution and speed, under one name, from {}. Applying one keeps the \
-                 frame's centre, refuses while a scan runs, and switches no loop on or off.",
-                path.display()
-            )),
-        );
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(cx.can_run, egui::Button::new("Capture from controller"))
-                .on_hover_text("Read every loop, the bias and the scan settings, to save below")
-                .on_disabled_hover_text("Connect first, and let any run finish")
-                .clicked()
-            {
-                cx.run = Some(Box::new(CaptureOperatingPoint));
-            }
-            if ui
-                .button("Refresh")
-                .on_hover_text("Read the operating points file again")
-                .clicked()
-            {
-                self.refresh_points(&path);
-            }
-        });
-
-        let captured = cx
-            .view
-            .custom(OperatingState::KIND)
-            .last()
-            .and_then(|(_, data)| serde_json::from_value::<OperatingState>(data.clone()).ok());
-        if let Some(state) = captured {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Last read")
-                    .on_hover_text("What the controller held after the last capture or apply");
-                ui.label(
-                    egui::RichText::new(state_summary(
-                        state.bias_v,
-                        &state.scan,
-                        z_setpoint(&state.controllers),
-                    ))
-                    .weak(),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label("Save as");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.point_name)
-                        .desired_width(140.0)
-                        .hint_text("name"),
-                );
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.point_note)
-                        .desired_width(220.0)
-                        .hint_text("note: sample, tip state"),
-                );
-                if ui
-                    .add_enabled(
-                        !self.point_name.trim().is_empty(),
-                        egui::Button::new("Save point"),
-                    )
-                    .on_hover_text(
-                        "The reading above under that name; one of that name is replaced",
-                    )
-                    .clicked()
-                {
-                    self.save_point(&path, state);
-                }
-            });
-        }
-
-        if self.points.is_empty() {
-            ui.label(egui::RichText::new("none saved").weak());
-            return;
-        }
-        let mut apply = None;
-        let mut delete = None;
-        egui::Grid::new("operating_points")
-            .num_columns(8)
-            .striped(true)
-            .spacing([14.0, 4.0])
-            .show(ui, |ui| {
-                for heading in [
-                    "Name",
-                    "Bias",
-                    "Z setpoint",
-                    "Frame",
-                    "Pixels",
-                    "Speed",
-                    "Saved",
-                    "",
-                ] {
-                    ui.label(egui::RichText::new(heading).strong());
-                }
-                ui.end_row();
-                for (i, p) in self.points.iter().enumerate() {
-                    let name = ui.label(&p.name);
-                    if !p.note.is_empty() {
-                        name.on_hover_text(&p.note);
-                    }
-                    ui.label(format_si(p.bias_v, "V"));
-                    ui.label(z_setpoint(&p.controllers).unwrap_or_else(|| "-".into()));
-                    ui.label(frame_text(&p.scan));
-                    ui.label(format!("{} × {}", p.scan.pixels, p.scan.lines));
-                    ui.label(format!("{}/s", format_si(p.scan.speed.forward_m_s, "m")));
-                    ui.label(egui::RichText::new(p.saved_at.as_deref().unwrap_or("")).weak());
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(cx.can_run, toned_if(ui, cx.can_run, "Apply", Tone::Write))
-                            .on_hover_text(
-                                "Write the scan settings, every loop with its setpoint, then the \
-                                 bias, and read it all back",
-                            )
-                            .on_disabled_hover_text("Connect first, and let any run finish")
-                            .clicked()
-                        {
-                            apply = Some(i);
-                        }
-                        if ui
-                            .add(toned_if(ui, true, "Delete", Tone::Danger))
-                            .on_hover_text("Remove it from the operating points file")
-                            .clicked()
-                        {
-                            delete = Some(i);
-                        }
-                    });
-                    ui.end_row();
-                }
-            });
-        if let Some(i) = apply {
-            cx.run = Some(Box::new(ApplyOperatingPoint {
-                point: self.points[i].clone(),
-            }));
-        }
-        if let Some(i) = delete {
-            let name = self.points[i].name.clone();
-            match OperatingPointStore::new(&path).remove(&name) {
-                Ok(()) => {
-                    self.message = Some(Note::ok(format!("Deleted operating point {name:?}")))
-                }
-                Err(e) => self.message = Some(Note::err(e)),
-            }
-            self.refresh_points(&path);
-        }
-    }
-}
-
-/// The Z loop's setpoint in its input's unit, if there is a Z loop.
-fn z_setpoint(controllers: &[ProfileEntry]) -> Option<String> {
-    controllers.iter().find_map(|e| match &e.params {
-        ControllerParams::Z(z) => Some(match z.input().unit() {
-            Some(unit) => format_si(z.setpoint, unit),
-            None => number(z.setpoint),
-        }),
-        _ => None,
-    })
-}
-
-fn frame_text(scan: &ScanSettings) -> String {
-    let mut text = format!(
-        "{} × {}",
-        format_si(scan.width_m, "m"),
-        format_si(scan.height_m, "m")
-    );
-    if scan.angle_deg != 0.0 {
-        text.push_str(&format!(", {}°", number(scan.angle_deg)));
-    }
-    text
-}
-
-/// One line for a read state: bias, Z setpoint, frame, pixels, speed.
-fn state_summary(bias_v: f64, scan: &ScanSettings, z: Option<String>) -> String {
-    let mut parts = vec![format_si(bias_v, "V")];
-    if let Some(z) = z {
-        parts.push(format!("Z {z}"));
-    }
-    parts.push(frame_text(scan));
-    parts.push(format!("{} × {} px", scan.pixels, scan.lines));
-    parts.push(format!("{}/s", format_si(scan.speed.forward_m_s, "m")));
-    parts.join(", ")
-}
-
 /// The fields of the bias and scan that an apply changed, as
 /// `(field, before, after)`.
 fn bias_and_scan_changes(
@@ -628,7 +407,7 @@ fn tuned_at_line(p: &Preset) -> String {
 }
 
 /// The form a controller's kind uses.
-fn kind_key(id: ControllerId) -> &'static str {
+pub(super) fn kind_key(id: ControllerId) -> &'static str {
     match id {
         ControllerId::Z => "z",
         ControllerId::PllAmplitude { .. } => "pll_amplitude",
@@ -899,7 +678,48 @@ impl Tool for ControllersTool {
 
     fn setup(&mut self, ui: &mut egui::Ui, cx: &mut SetupCx) {
         self.take_readings(cx.view);
+        self.points.take_state(cx.view, &PointsPage::path_of(cx));
 
+        ui.horizontal(|ui| {
+            for (page, label) in [(Page::Points, "Operating points"), (Page::Loops, "Loops")] {
+                let text = egui::RichText::new(label).size(15.0);
+                if ui.selectable_label(self.page == page, text).clicked() {
+                    self.page = page;
+                }
+            }
+        });
+        ui.add_space(2.0);
+        match self.page {
+            Page::Points => self.points.render(ui, cx, &self.forms),
+            Page::Loops => self.render_loops(ui, cx),
+        }
+    }
+
+    fn job(&self) -> Result<Box<dyn Job>, String> {
+        let profile = self.profile(true)?;
+        if profile.controllers.is_empty() && profile.settings_file.is_none() {
+            return Err("nothing differs from the last reading, and no settings file".into());
+        }
+        Ok(Box::new(ApplyProfile { profile }))
+    }
+
+    fn panel(&mut self, ui: &mut egui::Ui, view: &RunView) {
+        self.render_panel(ui, view);
+    }
+
+    fn prefs(&self) -> Value {
+        self.prefs_value()
+    }
+
+    fn restore(&mut self, prefs: &Value) {
+        self.restore_from(prefs);
+    }
+}
+
+impl ControllersTool {
+    /// The loops one by one: profile file, every loop at once, then the
+    /// picked loop's presets and form.
+    fn render_loops(&mut self, ui: &mut egui::Ui, cx: &mut SetupCx<'_>) {
         section(
             ui,
             "Profile",
@@ -992,8 +812,6 @@ impl Tool for ControllersTool {
         });
         note(ui, &self.message);
 
-        self.render_points(ui, cx);
-
         section(ui, "Loop", None);
         ui.horizontal_wrapped(|ui| {
             for id in self.ids() {
@@ -1078,15 +896,7 @@ impl Tool for ControllersTool {
         });
     }
 
-    fn job(&self) -> Result<Box<dyn Job>, String> {
-        let profile = self.profile(true)?;
-        if profile.controllers.is_empty() && profile.settings_file.is_none() {
-            return Err("nothing differs from the last reading, and no settings file".into());
-        }
-        Ok(Box::new(ApplyProfile { profile }))
-    }
-
-    fn panel(&mut self, ui: &mut egui::Ui, view: &RunView) {
+    fn render_panel(&mut self, ui: &mut egui::Ui, view: &RunView) {
         for (_, data) in view.custom(OperatingPointApplied::KIND) {
             let Ok(e) = serde_json::from_value::<OperatingPointApplied>(data.clone()) else {
                 continue;
@@ -1183,7 +993,7 @@ impl Tool for ControllersTool {
         }
     }
 
-    fn prefs(&self) -> Value {
+    fn prefs_value(&self) -> Value {
         // A JSON object needs string keys, so the edits go as pairs.
         let edits: Vec<(&ControllerId, &Value)> = self.edits.iter().collect();
         serde_json::json!({
@@ -1192,10 +1002,12 @@ impl Tool for ControllersTool {
             "edits": edits,
             "selected": self.selected,
             "selected_preset": self.selected_preset,
+            "page": self.page,
+            "selected_point": self.points.selected,
         })
     }
 
-    fn restore(&mut self, prefs: &Value) {
+    fn restore_from(&mut self, prefs: &Value) {
         if let Some(p) = prefs.get("profile_path").and_then(Value::as_str) {
             self.profile_path = p.to_string();
         }
@@ -1221,6 +1033,15 @@ impl Tool for ControllersTool {
         }
         if let Some(name) = prefs.get("selected_preset").and_then(Value::as_str) {
             self.selected_preset = Some(name.to_string());
+        }
+        if let Some(page) = prefs
+            .get("page")
+            .and_then(|p| serde_json::from_value(p.clone()).ok())
+        {
+            self.page = page;
+        }
+        if let Some(name) = prefs.get("selected_point").and_then(Value::as_str) {
+            self.points.selected = Some(name.to_string());
         }
     }
 }
@@ -1252,6 +1073,7 @@ mod tests {
     use super::*;
     use rusty_tip::controllers::ZControllerParams;
     use rusty_tip::event::Event;
+    use rusty_tip::operating_point::ScanSettings;
 
     fn reading(id: ControllerId, params: ControllerParams) -> Event {
         Event::typed(&ControllerReading {
@@ -1346,6 +1168,8 @@ mod tests {
         );
         tool.selected = Some(ControllerId::PllPhase { modulator: 1 });
         tool.profile_path = "loops.toml".into();
+        tool.page = Page::Loops;
+        tool.points.selected = Some("overview".into());
         let prefs = tool.prefs();
         assert!(
             prefs["edits"].is_array(),
@@ -1357,6 +1181,8 @@ mod tests {
         assert_eq!(back.edits, tool.edits);
         assert_eq!(back.selected, tool.selected);
         assert_eq!(back.profile_path, "loops.toml");
+        assert_eq!(back.page, Page::Loops);
+        assert_eq!(back.points.selected.as_deref(), Some("overview"));
     }
 
     /// An applied point lists only what it changed of the bias and scan,

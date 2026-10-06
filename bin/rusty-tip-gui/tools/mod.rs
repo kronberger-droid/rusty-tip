@@ -13,6 +13,7 @@
 
 pub mod controllers;
 pub mod drift;
+pub mod operating_points;
 pub mod tip_prep;
 
 use eframe::egui;
