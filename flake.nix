@@ -103,7 +103,7 @@
         dbus.lib
         zenity
       ];
-    in {
+    in rec {
       default = pkgs.mkShell {
         nativeBuildInputs =
           [toolchain]
@@ -122,6 +122,18 @@
           # Activate the repo's git hooks (pre-push mirrors the CI gate).
           git config core.hooksPath .githooks 2>/dev/null || true
         '';
+      };
+
+      # The workbench in a headless sway, driven over VNC, for screenshots
+      # without a desktop: `nix develop .#gui-test -c dev/headless-gui/gui.sh`.
+      # Mesa comes from this nixpkgs rather than the system: the system Mesa
+      # can need a newer glibc than the dev shell links, and then no EGL
+      # config loads.
+      gui-test = pkgs.mkShell {
+        inputsFrom = [default];
+        packages = with pkgs; [sway wayvnc grim];
+        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath guiDeps;
+        HEADLESS_GUI_MESA = "${pkgs.mesa}";
       };
     });
   };
