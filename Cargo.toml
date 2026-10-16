@@ -6,6 +6,10 @@ description = "Write controller-agnostic scanning probe microscopy automation in
 repository = "https://github.com/kronberger-droid/rusty-tip"
 license = "MIT"
 authors = ["Martin Kronberger <kronberger@proton.me>"]
+keywords = ["nanonis", "spm", "stm", "afm", "automation"]
+categories = ["science"]
+documentation = "https://docs.rs/rusty-tip"
+readme = "README.md"
 
 [lib]
 name = "rusty_tip"
