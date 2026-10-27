@@ -168,10 +168,12 @@ pub enum PulseMethod {
         random_polarity_switch: Option<RandomPolaritySwitch>,
     },
     /// Linear response based on frequency shift
-    /// voltage_bounds: (min_voltage, max_voltage) - pulse voltage range in V
-    /// linear_clamp: (min_freq, max_freq) - frequency shift range in Hz
-    /// If freq_shift is outside linear_clamp range, pulse with max voltage
-    /// If freq_shift is inside linear_clamp range, linearly interpolate voltage
+    /// voltage_bounds: (gentlest, hardest) - pulse voltage range in V
+    /// linear_clamp: (far, near) - frequency shift range in Hz, `near` being
+    /// the end closest to the sharp window
+    /// Inside linear_clamp the voltage rises linearly from the gentlest pulse
+    /// at `near` to the hardest at `far`; outside it the hardest applies.
+    /// See [`crate::tip_prep::pulse_state::linear_voltage`].
     Linear {
         #[schemars(extend("x-unit" = "V"))]
         voltage_bounds: (f64, f64),

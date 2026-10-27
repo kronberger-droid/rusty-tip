@@ -359,6 +359,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The linear pulse strategy pulsed hardest next to the sharp window.**
+  Inside `linear_clamp` the voltage ran from `voltage_bounds[0]` at the
+  clamp's far end to `voltage_bounds[1]` next to the window, so a tip almost
+  sharp drew close to the hardest pulse, and one just beyond the far end
+  dropped from the gentlest to the hardest. The ramp now runs the other way:
+  the gentlest pulse next to the window, rising to the hardest at the far end,
+  which meets the hardest pulse used outside the clamp. Existing linear
+  configs keep their numbers and change behaviour. The mapping is one pure
+  function, `tip_prep::pulse_state::linear_voltage`, and the field docs name
+  the ends `[gentlest, hardest]` and `[far, near]`.
 - **The TCP stream read the wrong columns on Nanonis.** The logger was
   asked for the standard map's TCP channel numbers, 0 to 23, but
   `TCPLog.ChsSet` takes signal indexes: it streamed signals 0 to 23 and left

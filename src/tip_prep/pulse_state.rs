@@ -214,32 +214,71 @@ impl PulseState {
                 ..
             } => {
                 if let Some(fs) = freq_shift {
-                    if fs < linear_clamp.0 || fs > linear_clamp.1 {
-                        self.current_voltage = voltage_bounds.1;
-                        log::info!(
-                            "Linear pulse: freq_shift {:.2} Hz outside range [{:.2}, {:.2}] Hz -> using max voltage {:.2}V",
-                            fs,
-                            linear_clamp.0,
-                            linear_clamp.1,
-                            voltage_bounds.1
-                        );
-                    } else {
-                        let slope = (voltage_bounds.1 - voltage_bounds.0)
-                            / (linear_clamp.1 - linear_clamp.0);
-                        let intercept = voltage_bounds.0 - slope * linear_clamp.0;
-                        self.current_voltage = slope * fs + intercept;
-                        log::info!(
-                            "Linear pulse: freq_shift {:.2} Hz in range [{:.2}, {:.2}] Hz -> calculated voltage {:.2}V",
-                            fs,
-                            linear_clamp.0,
-                            linear_clamp.1,
-                            self.current_voltage
-                        );
-                    }
+                    self.current_voltage = linear_voltage(fs, *voltage_bounds, *linear_clamp);
+                    let inside = (linear_clamp.0..=linear_clamp.1).contains(&fs);
+                    log::info!(
+                        "Linear pulse: freq_shift {:.2} Hz {} [{:.2}, {:.2}] Hz -> {:.2}V",
+                        fs,
+                        if inside { "in" } else { "outside" },
+                        linear_clamp.0,
+                        linear_clamp.1,
+                        self.current_voltage
+                    );
                 }
 
                 self.last_freq_shift = freq_shift;
             }
         }
+    }
+}
+
+/// The Linear strategy's pulse magnitude for a frequency-shift reading.
+///
+/// A blunter tip reads further below zero, so the clamp's upper end is the one
+/// nearest the sharp window. The gentlest pulse (`voltage_bounds.0`) falls
+/// there and rises linearly to the hardest (`voltage_bounds.1`) at the clamp's
+/// lower end; outside the clamp the hardest applies. Large pulses reshape the
+/// apex unpredictably, so a tip close to sharp is only nudged.
+pub fn linear_voltage(
+    freq_shift: f64,
+    voltage_bounds: (f64, f64),
+    linear_clamp: (f64, f64),
+) -> f64 {
+    let (gentle, hard) = voltage_bounds;
+    let (far, near) = linear_clamp;
+    if !(far..=near).contains(&freq_shift) {
+        return hard;
+    }
+    gentle + (near - freq_shift) / (near - far) * (hard - gentle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::linear_voltage;
+
+    const BOUNDS: (f64, f64) = (4.0, 8.0);
+    const CLAMP: (f64, f64) = (-5.0, -1.5);
+
+    #[test]
+    fn linear_is_gentlest_next_to_the_window_and_hardest_far_from_it() {
+        assert_eq!(linear_voltage(-1.5, BOUNDS, CLAMP), 4.0);
+        assert_eq!(linear_voltage(-5.0, BOUNDS, CLAMP), 8.0);
+        let near = linear_voltage(-1.6, BOUNDS, CLAMP);
+        let far = linear_voltage(-4.9, BOUNDS, CLAMP);
+        assert!(near < 4.2 && far > 7.8, "near {near} V, far {far} V");
+    }
+
+    #[test]
+    fn linear_outside_the_clamp_is_the_hardest_pulse() {
+        assert_eq!(linear_voltage(-6.0, BOUNDS, CLAMP), 8.0);
+        assert_eq!(linear_voltage(76.29, BOUNDS, CLAMP), 8.0);
+        assert_eq!(linear_voltage(-76.29, BOUNDS, CLAMP), 8.0);
+    }
+
+    #[test]
+    fn linear_has_no_step_at_the_far_end_of_the_clamp() {
+        let edge = linear_voltage(-5.0, BOUNDS, CLAMP);
+        let beyond = linear_voltage(-5.0 - 1e-9, BOUNDS, CLAMP);
+        assert_eq!(edge, beyond);
     }
 }
