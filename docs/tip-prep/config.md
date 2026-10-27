@@ -205,13 +205,17 @@ polarity = "positive"
 ```toml
 [pulse_method]
 type = "linear"
-voltage_bounds = [2.0, 7.0]
-linear_clamp = [-20.0, 0.0]  # freq-shift range mapped onto voltage_bounds
+voltage_bounds = [2.0, 7.0]  # [gentlest, hardest] pulse (V)
+linear_clamp = [-20.0, 0.0]  # [far, near] freq-shift range (Hz)
 polarity = "positive"
 ```
 
-Outside `linear_clamp` the maximum voltage is used; inside, the voltage
-interpolates linearly.
+A blunter tip reads further below zero, so the clamp's second value is the end
+nearest the sharp window. There the pulse is the gentlest, `voltage_bounds[0]`,
+and it rises linearly to the hardest, `voltage_bounds[1]`, at the clamp's first
+value. Outside `linear_clamp` the hardest pulse is used, so there is no step at
+the far end. Both pairs are rejected unless the first value is the smaller.
+With the example, −1 Hz pulses at 2.25 V and −19 Hz at 6.75 V.
 
 All three variants accept optional random polarity switching:
 
