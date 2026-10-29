@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a `Mock` backend for running without hardware. The Nix packages
   follow: `rusty-tip-gui` and `rusty-tip-gui-windows` replace the
   `tip-prep-gui` ones, and `rusty-tip-gui` is the flake's default.
+- **`const-distance drift`, `acquire` and `trace`.** Drift lives in the
+  workbench's Drift tool, which runs the same routine; `acquire` and `trace`
+  were stubs that only printed that they were not built. `plan` and
+  `baseline` are unchanged.
 
 ### Added
 

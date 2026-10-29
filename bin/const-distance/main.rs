@@ -1,29 +1,20 @@
 //! Constant-distance scan planner.
 //!
-//! This is the front end for the constant-distance scan, built in three pieces.
-//! Only the first exists so far; the other two have their subcommands stubbed
-//! out so it is clear where they will land.
+//! `plan` takes a constant-current Z map and computes the Z the tip must
+//! hold, feedback off, to keep a fixed physical separation. Pure geometry:
+//! no hardware, fully testable offline. See
+//! [`rusty_tip::analyzer::rolling_ellipsoid`]. Acquiring that map from the
+//! sample stream and tracing the plan on hardware are not built yet; see
+//! `docs/const-distance-scan.md`.
 //!
-//! 1. **Plan** (`plan`) — take a constant-current Z map and compute the Z the
-//!    tip must hold, feedback off, to keep a fixed physical separation. Pure
-//!    geometry: no hardware, fully testable offline. See
-//!    [`rusty_tip::analyzer::rolling_ellipsoid`].
-//! 2. **Acquire** (`acquire`) — run a constant-current scan and reconstruct a 2D
-//!    Z map from the nanonis-rs TCP sample stream. Not implemented.
-//! 3. **Trace** (`trace`) — drive the tip along a planned trajectory with FolMe
-//!    XY moves and Z position sets, feedback off. Not implemented, and gated on
-//!    hardware measurements that have not been made yet.
-//!
-//! Alongside those there is `baseline`, which does not use the planner at all.
+//! Alongside it there is `baseline`, which does not use the planner at all.
 //! It builds the two-pass record-and-play configuration that Nanonis multi-pass
 //! runs natively (`Z_tip = Z + lift`, a plain vertical shift) and hands it to
 //! the controller. That is the published method (Moreno et al., Nano Lett.
 //! 2015) and the thing our trajectory has to beat at step edges, so it is worth
 //! being able to run it from here.
 //!
-//! `drift` exposes the Z drift measurement and compensation from the action
-//! layer, so they can be exercised on hardware before anything depends on
-//! them: measure between scans, compensate, measure again.
+//! Z drift measurement and compensation live in the workbench's Drift tool.
 //!
 //! # Units
 //!
@@ -43,19 +34,16 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use ndarray::{Array2, ArrayView2};
 use textplots::{Chart, Plot, Shape};
 
-use rusty_tip::action::drift::DriftBurstEvent;
 use rusty_tip::action::multi_pass::ApplyMultiPass;
 use rusty_tip::action::{ActionContext, DataStore, run_action};
 use rusty_tip::analyzer::rolling_ellipsoid::{
     Border, GridSpacing, RollingEllipsoid, vertical_clearance,
 };
-use rusty_tip::drift::{DriftOp as DriftRoutineOp, DriftParams, DriftRoutine, PM};
-use rusty_tip::event::{Event, EventBus, EventEmitter, FileLogger, Observer};
-use rusty_tip::experiment_log::{ControllerFacts, LogEvent, RunHeader, ToolSchema};
+use rusty_tip::event::{Event, EventBus, EventEmitter, FileLogger};
+use rusty_tip::experiment_log::{ControllerFacts, RunHeader, ToolSchema};
 use rusty_tip::export::{gsf, write_table, write_xyz};
 use rusty_tip::multi_pass::MultiPassConfig;
-use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig, StreamSetup};
-use rusty_tip::routine::{Outcome, run_routine};
+use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::{SignalIndex, SignalRegistry};
 use rusty_tip::spm_controller::SpmController;
@@ -67,11 +55,7 @@ const NM: f64 = 1e-9;
 #[command(
     name = "const-distance",
     version,
-    about = "Plan and (eventually) run constant-distance scans",
-    long_about = "Constant-distance scanning in three pieces: plan a tip \
-        trajectory from a constant-current topograph, acquire that topograph \
-        from the TCP sample stream, then trace the trajectory with feedback \
-        off. Only the planner is implemented."
+    about = "Plan constant-distance scans and set up the constant-lift baseline"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -82,105 +66,8 @@ struct Cli {
 enum Command {
     /// Compute a constant-distance tip trajectory from a topograph.
     Plan(PlanArgs),
-    /// Acquire a Z map from the TCP sample stream. Not implemented.
-    Acquire,
-    /// Drive the tip along a planned trajectory. Not implemented.
-    Trace,
     /// Configure native multi-pass for a constant-lift baseline scan.
     Baseline(BaselineArgs),
-    /// Measure the Z drift, or set the piezo compensation that cancels it.
-    Drift(DriftArgs),
-}
-
-#[derive(Args)]
-struct DriftArgs {
-    #[command(subcommand)]
-    op: DriftOp,
-
-    /// Signal index carrying the Z position, in metres. 30 on a stock
-    /// signal assignment; `--signal-name` resolves it from the controller.
-    #[arg(long, default_value_t = 30)]
-    signal: u32,
-
-    /// Resolve the Z signal by name instead of by index, e.g. "Z (m)".
-    #[arg(long, conflicts_with = "signal")]
-    signal_name: Option<String>,
-
-    /// Length of one measurement burst, in seconds.
-    #[arg(long, default_value_t = 5.0)]
-    window: f64,
-
-    /// Bursts `compensate` spends, the baseline and the trial included. Each
-    /// one after those corrects the velocity again. The bursts spent waiting
-    /// for the drift to settle come on top.
-    #[arg(long, default_value_t = 5)]
-    bursts: usize,
-
-    /// Longest `compensate` waits for creep to die out before correcting, in
-    /// seconds: bursts with nothing changed until three in a row agree. 0
-    /// corrects from the first burst.
-    #[arg(long, default_value_t = 180.0)]
-    settle: f64,
-
-    /// Velocity step `compensate` uses to learn which way the controller's
-    /// `vz` runs, in m/s. Large on purpose: with the loop closed it only
-    /// ramps the Z output for one burst.
-    #[arg(long, default_value = "20e-12")]
-    trial: f64,
-
-    /// The response, once known for this controller: 1 if a positive `vz`
-    /// adds to the measured drift, -1 if it subtracts. Skips the trial burst.
-    #[arg(long, allow_hyphen_values = true)]
-    response: Option<f64>,
-
-    /// Stream rate to ask the TCP logger for, in Hz.
-    #[arg(long, default_value_t = 1000.0)]
-    sample_rate: f64,
-
-    /// TCP logger data port.
-    #[arg(long, default_value_t = 6590)]
-    data_port: u16,
-
-    /// Ignored: the TCP logger is asked for Z by its signal index and says
-    /// which column it lands in. Kept so existing scripts still parse.
-    #[arg(long, hide = true)]
-    #[allow(dead_code, reason = "accepted and ignored, for old scripts")]
-    tcp_channel: Option<u8>,
-
-    /// Poll Z instead of streaming it: `--samples` timed reads per window.
-    /// Far noisier; for when the TCP logger is not available.
-    #[arg(long)]
-    no_stream: bool,
-
-    /// Reads per window with `--no-stream`. At least 3.
-    #[arg(long, default_value_t = 16)]
-    samples: usize,
-
-    /// Controller address.
-    #[arg(long, default_value = "127.0.0.1")]
-    host: String,
-
-    /// Controller port.
-    #[arg(long, default_value_t = 6501)]
-    port: u16,
-
-    /// Directory the experiment log (JSONL) is written to.
-    #[arg(long, default_value = "./experiments")]
-    log_dir: PathBuf,
-}
-
-#[derive(Subcommand)]
-enum DriftOp {
-    /// Print the compensation velocities and which axes have saturated.
-    Status,
-    /// Fit a Z drift rate and print it. Changes nothing on the controller.
-    Measure,
-    /// Measure in bursts, correcting the Z velocity after each, until the
-    /// residual is inside its error bar. Leaves compensation switched on.
-    Compensate,
-    /// Switch compensation off. The velocities are kept, so `status` still
-    /// shows what was last applied.
-    Off,
 }
 
 #[derive(Args)]
@@ -234,32 +121,9 @@ struct BaselineArgs {
     log_dir: PathBuf,
 }
 
-/// Every custom event kind const-distance can write: none of its own, plus
-/// the bursts the drift actions report.
+/// Every custom event kind const-distance can write: none of its own.
 fn log_schema() -> ToolSchema {
-    ToolSchema::new("const_distance").including(rusty_tip::drift::log_schema())
-}
-
-/// Prints each drift burst as it lands, so a `compensate` that takes half a
-/// minute shows its progress rather than a blank terminal.
-struct BurstPrinter;
-
-impl Observer for BurstPrinter {
-    fn on_event(&self, event: &Event) {
-        if let Event::Custom { kind, data, .. } = event
-            && kind == DriftBurstEvent::KIND
-        {
-            let pm = |key: &str| data[key].as_f64().unwrap_or(f64::NAN) / PM;
-            println!(
-                "  burst {} ({}): vz {:+.3} pm/s, drift {:+.3} ± {:.3} pm/s",
-                data["burst"],
-                data["role"].as_str().unwrap_or("?"),
-                pm("vz_m_s"),
-                pm("drift_m_s"),
-                pm("std_err_m_s"),
-            );
-        }
-    }
+    ToolSchema::new("const_distance")
 }
 
 /// Open the experiment log for one command and write its header.
@@ -278,7 +142,6 @@ fn open_run_log(
     ));
     let mut events = EventBus::new();
     events.add_observer(Box::new(FileLogger::new(fs::File::create(&path)?)));
-    events.add_observer(Box::new(BurstPrinter));
     println!("log: {}", path.display());
     let facts = ControllerFacts::gather(controller, None);
     events.emit(Event::run_started(RunHeader::new(
@@ -398,189 +261,7 @@ fn main() {
 fn run() -> Result<(), Box<dyn Error>> {
     match Cli::parse().command {
         Command::Plan(args) => plan(args),
-        Command::Acquire => Err("`acquire` is piece 2 and is not implemented yet: \
-             mapping the nanonis-rs TCP sample stream into scan lines has not \
-             been designed. Use `plan --synthetic combo` in the meantime."
-            .into()),
-        Command::Trace => Err("`trace` is piece 3 and is not implemented yet: it \
-             is gated on hardware measurements (TCP latency, feedback-off \
-             sequencing, Z step response, FolMe blocking behaviour) that have \
-             not been made."
-            .into()),
         Command::Baseline(args) => baseline(args),
-        Command::Drift(args) => drift(args),
-    }
-}
-
-/// Connect and run one drift operation, printing velocities in pm/s.
-///
-/// Like `baseline`, this talks to the action layer directly rather than
-/// through a routine: a routine withdraws the tip when it ends, and a drift
-/// measurement is something done *between* passes with the tip engaged.
-fn drift(args: DriftArgs) -> Result<(), Box<dyn Error>> {
-    let client = rusty_tip::NanonisClient::builder()
-        .address(&args.host)
-        .port(args.port)
-        .build()?;
-    println!("connected to {}:{}", args.host, args.port);
-    let mut controller = NanonisController::new(client, NanonisSetupConfig::default());
-
-    let z = match &args.signal_name {
-        Some(name) => {
-            let registry = SignalRegistry::from_controller(&mut controller)?;
-            let signal = registry
-                .get_by_name(name)
-                .ok_or_else(|| format!("no signal called {name:?} on this controller"))?
-                .signal_index();
-            println!("resolved {name:?} to signal {}", signal.0);
-            signal
-        }
-        None => SignalIndex(args.signal),
-    };
-
-    // Before the log opens, so its header records the stream rate.
-    let measures = matches!(args.op, DriftOp::Measure | DriftOp::Compensate);
-    if measures && !args.no_stream {
-        start_z_stream(&args, z, &mut controller)?;
-    }
-
-    let events = open_run_log(
-        &args.log_dir,
-        &mut controller,
-        serde_json::json!({
-            "command": "drift",
-            "op": match args.op {
-                DriftOp::Status => "status",
-                DriftOp::Measure => "measure",
-                DriftOp::Compensate => "compensate",
-                DriftOp::Off => "off",
-            },
-            "z_signal": z.0,
-            "window_s": args.window,
-            "bursts": args.bursts,
-            "settle_max_s": args.settle,
-            "trial_vz_m_s": args.trial,
-            "response": args.response,
-            "sample_rate_hz": args.sample_rate,
-            "streamed": measures && !args.no_stream,
-            "samples": args.samples,
-            "host": args.host,
-            "port": args.port,
-        }),
-    )?;
-    // The routine harness closes the log itself.
-    drift_op(&args, z, &events, &mut controller)
-}
-
-/// Bring the TCP logger up with Z in it, and check that what it streams is Z.
-///
-/// The logger is asked for Z by its signal index and announces the column
-/// it lands in. The stream is still compared against a plain read of Z: a
-/// drift fitted to the wrong channel would be applied to the piezo with
-/// confidence.
-fn start_z_stream(
-    args: &DriftArgs,
-    z: SignalIndex,
-    controller: &mut NanonisController,
-) -> Result<(), Box<dyn Error>> {
-    let z_index = u8::try_from(z.0).map_err(|_| format!("signal {} is out of range", z.0))?;
-
-    // The channel number only marks Z for streaming: the logger is asked
-    // for it by signal index and announces its column.
-    let registry = SignalRegistry::builder()
-        .add_tcp_mapping(z_index, 0)
-        .add_signal("Z (m)".to_string(), z_index)
-        .build();
-    let setup = StreamSetup::new(args.host.as_str(), args.data_port, args.sample_rate);
-    if !controller.start_streaming(&registry, &setup)? {
-        return Err("the TCP data stream did not start".into());
-    }
-
-    let streamed = controller.read_signal_samples(z, 200)?;
-    let mean = streamed.iter().sum::<f64>() / streamed.len() as f64;
-    let polled = controller.read_signal(z, true)?;
-    if (mean - polled).abs() > 1e-9 {
-        return Err(format!(
-            "the TCP logger streams {mean:.4e} while Z reads {polled:.4e} m, so it is not \
-             carrying Z; poll it with --no-stream"
-        )
-        .into());
-    }
-    Ok(())
-}
-
-/// The drift operation itself, once the log is open.
-///
-/// A thin wrapper over [`DriftRoutine`], which the workbench runs too, so
-/// the two front ends cannot drift apart. The routine leaves the tip in
-/// place and touches no setting of the operator's.
-fn drift_op(
-    args: &DriftArgs,
-    z: SignalIndex,
-    events: &EventBus,
-    controller: &mut NanonisController,
-) -> Result<(), Box<dyn Error>> {
-    let op = match args.op {
-        DriftOp::Status => DriftRoutineOp::Status,
-        DriftOp::Measure => DriftRoutineOp::Measure,
-        DriftOp::Compensate => DriftRoutineOp::Compensate,
-        DriftOp::Off => DriftRoutineOp::Off,
-    };
-    match op {
-        DriftRoutineOp::Measure => println!(
-            "measuring one burst of {:.1} s (Z controller must be on, scan stopped)",
-            args.window
-        ),
-        DriftRoutineOp::Compensate => println!(
-            "compensating: {} bursts of {:.1} s (Z controller must be on, scan stopped)",
-            args.bursts, args.window
-        ),
-        _ => {}
-    }
-
-    let mut routine = DriftRoutine::new(
-        z,
-        DriftParams {
-            op,
-            window_ms: (args.window * 1000.0) as u64,
-            bursts: args.bursts,
-            settle_max_ms: (args.settle * 1000.0) as u64,
-            trial_vz: args.trial,
-            response: args.response,
-            samples: args.samples,
-            // `--no-stream` asks for polling; otherwise the stream was
-            // started above and the routine checks that it carries Z.
-            require_stream: !args.no_stream,
-        },
-    );
-    let outcome = run_routine(controller, events, &ShutdownFlag::on_ctrl_c(), &mut routine)?;
-    let report = routine.report;
-    if let Some(before) = &report.before {
-        println!("{before}");
-    }
-    if let Some(estimate) = &report.estimate {
-        println!("{estimate}");
-    }
-    if let Some(result) = &report.compensation {
-        println!("{result}");
-        match (result.response, args.response) {
-            (Some(r), None) => println!(
-                "response {r:+.2}: a positive vz {} the measured drift. Pass --response {} \
-                 next time to skip the trial burst.",
-                if r > 0.0 { "adds to" } else { "subtracts from" },
-                if r > 0.0 { "1" } else { "-1" },
-            ),
-            (None, _) => println!("drift was negligible from the start; nothing was changed"),
-            _ => {}
-        }
-    }
-    if let Some(after) = &report.after {
-        println!("{after}");
-    }
-
-    match outcome {
-        Outcome::Completed => Ok(()),
-        other => Err(format!("drift did not complete: {other:?}").into()),
     }
 }
 

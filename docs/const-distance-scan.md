@@ -233,31 +233,25 @@ x, y, z_surface, z_tip, clearance = np.loadtxt("out/compare.dat", unpack=True)
 | `src/analyzer/rolling_ellipsoid.rs` | the geometry, and the bulk of the reasoning in doc comments |
 | `src/export/gsf.rs` | Gwyddion Simple Field reader and writer |
 | `src/export/xyz.rs` | ASCII point clouds and column tables |
-| `bin/const-distance/main.rs` | CLI, and the stubs for pieces 2 and 3 |
+| `bin/const-distance/main.rs` | CLI: `plan` and `baseline` |
 | `bin/const-distance/surface.rs` | synthetic test surfaces |
 | `tests/const_distance_plan.rs` | end-to-end planning and export |
 
 ## Drift between scans
 
-`const-distance drift` exposes the Z drift tools on the command line, so they
-can be exercised on hardware before a routine depends on them:
+The workbench's Drift tool runs the Z drift routine (`rusty_tip::drift`):
+status, measure, compensate and off. The field names below are those of
+`DriftParams`, which its Setup form draws.
 
-```console
-$ const-distance drift --host 192.168.1.10 status
-$ const-distance drift --host 192.168.1.10 --signal-name "Z (m)" measure
-$ const-distance drift --host 192.168.1.10 --signal-name "Z (m)" compensate
-$ const-distance drift --host 192.168.1.10 off
-```
-
-`measure` takes one burst: every sample the TCP logger streams for Z over the
-window, 5 s at 1 kHz by default. The burst is averaged into ten blocks and a
+`measure` takes one burst: every sample the session stream carries for Z
+over the window, 5 s by default. The burst is averaged into ten blocks and a
 line fitted through the block means, so the rate is printed with a standard
 error that the slow noise on Z under feedback does not flatter. It needs the
 feedback closed, the scan stopped, and a flat spot under the tip. A longer
-`--window` buys more than a higher `--sample-rate`: the error falls with the
+window buys more than a higher sample rate: the error falls with the
 window to the power 1.5, while rate only averages the white part of the noise.
 
-`compensate` is a loop of such bursts, `--bursts` of them, after the drift
+`compensate` is a loop of such bursts, `bursts` of them, after the drift
 has settled:
 
 1. Baseline bursts, with nothing changed, until three in a row agree within
@@ -265,16 +259,16 @@ has settled:
    move the piezo creeps, a drift that decays over tens of seconds, and a rate
    measured during it is stale by the time it is applied: the velocity ends up
    above where the drift is heading and the residual overshoots. A drift still
-   changing after `--settle` (180 s) stops the run with nothing touched. The
+   changing after `settle_max_ms` (180 s) stops the run with nothing touched. The
    last baseline is the one of the budget; the others come on top. If it is
    inside its error bar, nothing is changed.
-2. A trial burst with `vz` stepped by `--trial` (20 pm/s), to learn which way
+2. A trial burst with `vz` stepped by `trial_vz` (20 pm/s), to learn which way
    the controller's velocity sign runs. The step is large on purpose: with the
    loop closed the feedback holds the gap, so the cost is a Z output that ramps
    by 100 pm for one burst, and the response comes out many times its noise.
    Only the sign of the response is used, since the velocity is in the
-   drift's own units. The learned response is printed; pass it back as
-   `--response 1` or `--response -1` and this burst is skipped.
+   drift's own units. The learned response is printed; set it as
+   `response` (1 or -1) and this burst is skipped.
 3. Correction bursts, for the rest of the budget: the k-th one moves the
    velocity by a k-th of what the last burst says is missing, but never by
    less than half, and the next burst measures what is left. The first
@@ -288,7 +282,7 @@ has settled:
    on the controller, and it says whether that residual is inside its error
    bar.
 
-Time is better spent on `--window` than on `--bursts`, for the reason given
+Time is better spent on the window than on `bursts`, for the reason given
 above: three bursts of 10 s beat five of 5 s.
 
 A channel that does not respond to the trial is refused and the previous
@@ -298,16 +292,15 @@ controller stops compensating it silently and only an off/on cycle restarts
 it. Every burst lands in the log as a `drift/burst` event, so
 `rt-log plot <file> drift/burst.drift_m_s` shows the convergence.
 
-The TCP logger is asked for Z by its signal index and announces the column
-it lands in. The tool still compares the stream against a plain read of Z
-before fitting anything.
-`--no-stream` falls back to `--samples` timed reads per window, which is far
-noisier.
+Z has to be in the session's stream; the routine fails clearly if it is
+not, rather than restarting the stream underneath the session. With
+`require_stream` off it falls back to `samples` timed reads per window,
+which is far noisier.
 
 ## Still open
 
 - **Piece 2**, mapping the nanonis-rs TCP sample stream into scan lines, has not
-  been designed. `const-distance acquire` is a stub that says so.
+  been designed.
 - **Piece 3** is gated on hardware measurements that have not been made: TCP
   latency, feedback-off sequencing, TipLift, Z step response, whether FolMe
   blocks, and staircase visibility. `examples/folme_probe.rs` measures all
