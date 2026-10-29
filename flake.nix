@@ -42,13 +42,13 @@
         zenity
       ];
     in {
-      tip-prep-gui = pkgs.rustPlatform.buildRustPackage {
-        pname = "tip-prep-gui";
+      rusty-tip-gui = pkgs.rustPlatform.buildRustPackage {
+        pname = "rusty-tip-gui";
         inherit version;
         src = ./.;
         cargoLock.lockFile = ./Cargo.lock;
         buildFeatures = ["gui"];
-        cargoBuildFlags = ["--bin" "tip-prep-gui"];
+        cargoBuildFlags = ["--bin" "rusty-tip-gui"];
         nativeBuildInputs = [pkgs.pkg-config];
         buildInputs = guiDeps;
         doCheck = false;
@@ -64,18 +64,18 @@
         doCheck = false;
       };
 
-      tip-prep-gui-windows = pkgs.pkgsCross.mingwW64.rustPlatform.buildRustPackage {
-        pname = "tip-prep-gui";
+      rusty-tip-gui-windows = pkgs.pkgsCross.mingwW64.rustPlatform.buildRustPackage {
+        pname = "rusty-tip-gui";
         inherit version;
         src = ./.;
         cargoLock.lockFile = ./Cargo.lock;
         buildFeatures = ["gui"];
-        cargoBuildFlags = ["--bin" "tip-prep-gui"];
+        cargoBuildFlags = ["--bin" "rusty-tip-gui"];
         doCheck = false;
         buildInputs = [];
       };
 
-      default = self.packages.${system}.tip-prep-gui;
+      default = self.packages.${system}.rusty-tip-gui;
     });
 
     devShells = forAllSystems (system: let

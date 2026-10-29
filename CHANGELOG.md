@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`tip-prep-gui`.** The workbench (`rusty-tip-gui`) has its Tip prep tool
+  and a `Mock` backend for running without hardware. The Nix packages
+  follow: `rusty-tip-gui` and `rusty-tip-gui-windows` replace the
+  `tip-prep-gui` ones, and `rusty-tip-gui` is the flake's default.
+
 ### Added
 
 - **Operating points: every loop, the bias and the scan under one name.**

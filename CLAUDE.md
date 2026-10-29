@@ -6,7 +6,7 @@ client is the sibling repo `../nanonis-rs`; its TCP command reference is
 
 ## Build and check
 
-- "The GUI" or "the workbench" is `rusty-tip-gui`. It and `tip-prep-gui` need
+- "The GUI" or "the workbench" is `rusty-tip-gui`. It needs
   `--features gui`; `cuox-finder` needs `--features cuox`.
 - Work inside `nix develop`, which carries CI's stable toolchain and `typos`.
   `.githooks/pre-push` runs fmt, clippy with CI's flags, and typos.

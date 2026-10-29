@@ -568,7 +568,7 @@ for (a real form with checkboxes, the important settings on top):
 
 ### After step 5
 
-- Retire `tip-prep-gui` once Martin confirms parity in the lab.
+- Retire `tip-prep-gui` once Martin confirms parity in the lab. Done.
 - Candidates that fit this shape next: CuOx tip prep, the Python classifier
   interface (`Classifier` trait, HTTP + npy sidecar), the double-pass routine.
 
