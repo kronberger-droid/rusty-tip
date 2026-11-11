@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its slope into Hz/s with. `z_drift`, `z_drift_noise` and
   `sample_noise_hz` behave as before.
 
+### Changed
+
+- **`compensate`'s settle budget counts measured time.** `settle_max_ms`
+  is spent by the burst windows taken, not by the wall clock, so a
+  simulated run gives up after the same budget a real one does. On the
+  instrument the two differ by the few hundred milliseconds between
+  bursts.
+
 ## [0.5.0] - 2026-11-11
 
 The first release of the v2 line that has run on a real microscope: it was

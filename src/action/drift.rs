@@ -511,16 +511,20 @@ impl CompensateDrift {
             Ok::<_, SpmError>((estimate, bursts))
         };
 
-        // Baseline bursts, nothing changed, until the drift holds still.
-        let settle_by = Instant::now() + Duration::from_millis(self.settle_max_ms);
+        // Baseline bursts, nothing changed, until the drift holds still. The
+        // budget counts the time measured, not the wall clock: on the
+        // instrument the two differ by the overhead between bursts, and a
+        // simulated burst takes no wall time at all.
+        let mut measured_s = 0.0;
         let mut found: Vec<DriftEstimate> = Vec::new();
         let (mut estimate, mut taken) = loop {
             let (e, n) = burst(ctx, BurstRole::Baseline, vz)?;
             found.push(e);
+            measured_s += e.window_s;
             if self.settle_max_ms == 0 || settled(&found, self.tolerance_m_s) {
                 break (e, n);
             }
-            if Instant::now() >= settle_by {
+            if measured_s * 1000.0 >= self.settle_max_ms as f64 {
                 let first = found[found.len().saturating_sub(3)].rate_m_s;
                 return Err(SpmError::Workflow(format!(
                     "compensate_drift: the drift is still changing after {} s, {:.2} to \
