@@ -17,7 +17,9 @@ routine.
 > 0.5 is the first release of the rewrite (the control path rebuilt around
 > the `SpmController` trait, the routine harness and the event log) that has
 > run on a real microscope: it was validated over a two-week machine session.
-> Before 1.0 the API and the config format can still change between minor
+> The fixes that session's logs led to, in the stable read and in drift
+> compensation's settling, came after it and are tested against a simulated
+> instrument, not yet on hardware. Before 1.0 the API and the config format can still change between minor
 > versions; the [CHANGELOG](CHANGELOG.md) says what moved.
 >
 > If you need a stable interface to program against today, use
