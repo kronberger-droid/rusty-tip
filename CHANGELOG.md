@@ -216,6 +216,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`const-distance baseline` runs as a session job.** Its log is now
+  `baseline_<timestamp>.jsonl` with tool `baseline`, written by the same
+  code as the workbench's, so the header carries the controller's signal
+  list and a panic still closes the log. The signal names are read on every
+  connect, not only with `--signal-name`.
 - **Tip-prep pulses are bars from 0 V.** The pulse-voltage plot draws every
   pulse as a bar from a 0 V line instead of a point on a line, so sign and
   size read at a glance. A failed stability check's pulse is no longer a

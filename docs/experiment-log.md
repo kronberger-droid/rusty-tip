@@ -2,7 +2,7 @@
 
 Every tool writes one JSONL file per run into the experiments directory
 (`experiment_logging.output_path` for tip prep, `--log-dir` for
-const-distance), named `<tool>_<UTC timestamp>.jsonl`. The file is the
+`const-distance baseline`), named `<tool>_<UTC timestamp>.jsonl`. The file is the
 record of what the software did to the instrument and what it measured,
 in order, with enough in the first line for a reader to interpret the rest
 without knowing which tool wrote it.
@@ -27,7 +27,7 @@ before the harness could write it.
 
 | field | meaning |
 | --- | --- |
-| `tool` | `tip_prep`, `const_distance`, … |
+| `tool` | `tip_prep`, `baseline`, … |
 | `version`, `git_commit` | what built the binary; `git_commit` is null outside a checkout |
 | `envelope_version` | version of this line format, currently 1 |
 | `config` | the tool's configuration as loaded, after defaults; for a command-line tool, its arguments |
