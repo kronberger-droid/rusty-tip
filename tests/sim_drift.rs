@@ -320,8 +320,6 @@ fn careful_takes_about_two_minutes_for_a_drift_that_holds_still() {
 }
 
 #[test]
-#[ignore = "known gap: only the sign of the trial's response is used, and the \
-            first correction starts from the trial reading"]
 fn a_response_ten_percent_off_still_converges() {
     for response in [-0.9, -1.1] {
         let scenario = DriftScenario::constant(5.0 * PM, response).set_overhead(0.3);
@@ -331,6 +329,23 @@ fn a_response_ten_percent_off_still_converges() {
             "response {response}: {:.2} pm/s left",
             outcome.residual_later / PM
         );
+    }
+}
+
+/// Through noise the size is used once the trial resolves it, and the run
+/// does as well as one whose response is exactly one.
+#[test]
+fn a_response_ten_percent_off_is_cancelled_through_noise() {
+    for seed in 1..=5 {
+        for response in [-0.9, -1.1] {
+            let outcome = compensate(&realistic(5.0 * PM, response), seed);
+            outcome.result.expect("compensates");
+            assert!(
+                outcome.residual_later.abs() < 0.6 * PM,
+                "seed {seed}, response {response}: {:.2} pm/s left",
+                outcome.residual_later / PM
+            );
+        }
     }
 }
 

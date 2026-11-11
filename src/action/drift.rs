@@ -432,9 +432,9 @@ pub struct CompensateDrift {
     /// Velocity step used to learn the response, m/s.
     #[serde(default = "default_trial_vz")]
     pub trial_vz: f64,
-    /// The response, when it is already known for this controller: +1 if a
-    /// positive `vz` adds to the measured drift, -1 if it subtracts. Skips
-    /// the trial burst.
+    /// The response, when it is already known for this controller: the
+    /// drift one m/s of `vz` adds, about +1 or -1, with its size when that
+    /// is known too (say -0.9). Skips the trial burst.
     #[serde(default)]
     pub response: Option<f64>,
     /// A residual below this counts as zero even if the burst could resolve
@@ -634,8 +634,19 @@ impl CompensateDrift {
                         at_trial.rate_m_s - estimate.rate_m_s
                     )));
                 }
+                // The size counts as well as the sign once the trial can
+                // tell it from one: a channel that answers 0.9 of what it is
+                // asked makes every correction 10 % short with the size taken
+                // as one. Within the trial's own noise, one is the better
+                // guess.
+                let uncertainty = at_trial.std_err_m_s.hypot(estimate.std_err_m_s) / self.trial_vz;
+                let response = if (measured.abs() - 1.0).abs() > 2.0 * uncertainty {
+                    measured
+                } else {
+                    measured.signum()
+                };
                 (vz, estimate, taken) = (trial, at_trial, n);
-                measured.signum()
+                response
             }
         };
 

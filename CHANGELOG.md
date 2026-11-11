@@ -68,6 +68,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wherever the rail sits; real batches never exceed 12 %. Tip prep takes it
   like any unstable read: no pulse, a fresh site. The plain mock's
   freq-shift batches carry nanohertz of jitter so they are not frozen.
+- **A compensation response other than ±1 left drift behind.** The trial
+  burst measures how much drift one m/s of `vz` adds, and only its sign
+  was used, so a channel answering 0.9 made every correction 10 % short
+  and left 0.4 pm/s. The size is used once the trial resolves it from one
+  (by more than twice its own uncertainty, about 2 %), and `response` may
+  carry a size as well as a sign.
 
 ## [0.5.0] - 2026-11-11
 

@@ -279,9 +279,14 @@ has settled:
    the controller's velocity sign runs. The step is large on purpose: with the
    loop closed the feedback holds the gap, so the cost is a Z output that ramps
    by 100 pm for one burst, and the response comes out many times its noise.
-   Only the sign of the response is used, since the velocity is in the
-   drift's own units. The learned response is reported; set it as
-   `response` (1 or -1) and this burst is skipped.
+   The velocity is in the drift's own units, so a working channel answers
+   close to plus or minus one. Its size is used too once the trial resolves
+   it, that is once it differs from one by more than twice the trial's own
+   uncertainty (about 2 %); within that, plus or minus one is the better
+   guess. A channel that answers 0.9 of what it is asked would otherwise
+   make every correction 10 % short. The learned response is reported; set
+   it as `response` (its sign, or its size too, say -0.9) and this burst is
+   skipped.
 3. Correction bursts, for the rest of the budget: the k-th one moves the
    velocity by a k-th of what the last burst says is missing, but never by
    less than half, and the next burst measures what is left. The first
