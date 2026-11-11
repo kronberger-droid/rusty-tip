@@ -379,6 +379,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Closing the workbench mid-run left the tip engaged.** The window asked
+  the run to stop and exited without waiting, so the process could end
+  before the cleanup withdrew the tip and put safe-tip back. It now waits
+  for the session thread, and dropping a `SessionHandle` does the same.
 - **The linear pulse strategy pulsed hardest next to the sharp window.**
   Inside `linear_clamp` the voltage ran from `voltage_bounds[0]` at the
   clamp's far end to `voltage_bounds[1]` next to the window, so a tip almost

@@ -717,11 +717,13 @@ impl eframe::App for WorkbenchApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        // A job still running is asked to stop; the session thread then
-        // disconnects on its way out.
+        // A job still running is asked to stop, and the window waits for its
+        // cleanup: returning first would let the process end with the tip
+        // engaged. The session thread disconnects on its way out.
         if let Some(run) = &self.run {
             run.shutdown.request();
         }
+        self.session.shutdown();
     }
 }
 

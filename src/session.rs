@@ -1004,6 +1004,12 @@ impl SessionHandle {
     /// Ask the thread to quit and wait for it. Blocks until a running job
     /// ends, so request its shutdown first.
     pub fn join(mut self) {
+        self.shutdown();
+    }
+
+    /// [`join`](Self::join) for an owner that cannot give the handle up,
+    /// such as an app's exit hook. A second call returns at once.
+    pub fn shutdown(&mut self) {
         let _ = self.remote.send(SessionCmd::Quit);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -1012,8 +1018,10 @@ impl SessionHandle {
 }
 
 impl Drop for SessionHandle {
+    /// Waits for the thread, so a process on its way out cannot end it
+    /// mid-cleanup with the tip still engaged.
     fn drop(&mut self) {
-        let _ = self.remote.send(SessionCmd::Quit);
+        self.shutdown();
     }
 }
 
