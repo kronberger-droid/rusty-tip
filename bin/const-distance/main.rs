@@ -32,8 +32,6 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use ndarray::{Array2, ArrayView2};
 use textplots::{Chart, Plot, Shape};
 
-use rusty_tip::action::multi_pass::ApplyMultiPass;
-use rusty_tip::action::{ActionContext, DataStore, run_action};
 use rusty_tip::analyzer::rolling_ellipsoid::{
     Border, GridSpacing, RollingEllipsoid, vertical_clearance,
 };
@@ -42,6 +40,7 @@ use rusty_tip::experiment_log::{ControllerFacts, RunHeader, ToolSchema};
 use rusty_tip::export::{gsf, write_table, write_xyz};
 use rusty_tip::multi_pass::MultiPassConfig;
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
+use rusty_tip::routine::Rt;
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::{SignalIndex, SignalRegistry};
 use rusty_tip::spm_controller::SpmController;
@@ -359,9 +358,9 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
 
 /// Load and activate the baseline configuration, once the log is open.
 ///
-/// Straight to the action rather than through `Rt`: the harness withdraws
-/// the tip when a routine ends, which is right for a routine and wrong for
-/// a command that only rewrites a configuration.
+/// Through `Rt` but not `run_routine`: the harness withdraws the tip when a
+/// routine ends, which is right for a routine and wrong for a command that
+/// only rewrites a configuration.
 fn baseline_apply(
     args: &BaselineArgs,
     config: &MultiPassConfig,
@@ -370,25 +369,10 @@ fn baseline_apply(
     controller: &mut NanonisController,
 ) -> Result<(), Box<dyn Error>> {
     let shutdown = ShutdownFlag::on_ctrl_c();
-    let mut store = DataStore::new();
-    let mut ctx = ActionContext {
-        controller,
-        store: &mut store,
-        events,
-        shutdown: &shutdown,
-        depth: 0,
-    };
+    let mut rt = Rt::new(controller, events, &shutdown);
+    rt.multi_pass()?.apply(config, &args.output, host_path)?;
 
-    run_action(
-        &mut ctx,
-        &ApplyMultiPass {
-            config: config.clone(),
-            local_path: args.output.clone(),
-            host_path: host_path.to_string(),
-        },
-    )?;
-
-    let buffer = ctx.controller.scan_buffer_get()?;
+    let buffer = rt.controller().scan_buffer_get()?;
     println!(
         "scan buffer records signals {:?} at {}x{}",
         buffer.channels.iter().map(|c| c.0).collect::<Vec<_>>(),
