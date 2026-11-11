@@ -381,8 +381,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Closing the workbench mid-run left the tip engaged.** The window asked
   the run to stop and exited without waiting, so the process could end
-  before the cleanup withdrew the tip and put safe-tip back. It now waits
-  for the session thread, and dropping a `SessionHandle` does the same.
+  before the cleanup withdrew the tip and put safe-tip back. Closing during
+  a run now stops it first and keeps the window drawing ("Stopping the run
+  before closing") until the cleanup is done, then closes. As a backstop,
+  dropping a `SessionHandle` waits for the session thread.
 - **A lost connection skipped the cleanup.** After an I/O error or a read
   timeout the client refuses every command, so the exit withdraw and the
   safe-tip restore were refused too. The harness now reconnects once before

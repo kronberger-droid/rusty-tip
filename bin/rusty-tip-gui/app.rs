@@ -110,6 +110,9 @@ pub struct WorkbenchApp {
     history: Vec<LogEntry>,
     /// The last seconds of the stream while the session is idle.
     samples: Samples,
+    /// The window was asked to close during a run; it closes once the run
+    /// has stopped and cleaned up.
+    closing: bool,
 }
 
 impl WorkbenchApp {
@@ -155,6 +158,7 @@ impl WorkbenchApp {
             log_rx,
             history: Vec::new(),
             samples: Samples::default(),
+            closing: false,
         };
         app.apply_agent_socket();
         app
@@ -318,6 +322,28 @@ impl WorkbenchApp {
         if let Some(run) = &self.run {
             run.shutdown.request();
             self.message = Some(Note::ok("Stop requested…"));
+        }
+    }
+
+    /// Hold a close back while a run is going: stop it, keep drawing while
+    /// it withdraws and cleans up, then close. Closing at once would leave
+    /// `on_exit` waiting on the cleanup with the window frozen.
+    fn close_after_the_run(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().close_requested()) && self.running() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if !self.closing {
+                log::info!("Close requested during a run; stopping it before closing");
+                self.closing = true;
+                self.stop();
+                self.message = Some(Note::ok(
+                    "Stopping the run before closing: withdrawing and cleaning up…",
+                ));
+            }
+        }
+        if self.closing && !self.running() {
+            log::info!("Run stopped; closing");
+            self.closing = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 
@@ -680,6 +706,7 @@ impl WorkbenchApp {
 impl eframe::App for WorkbenchApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain();
+        self.close_after_the_run(ctx);
         ctx.set_theme(self.theme);
         ctx.request_repaint_after(repaint_after(self.pane.status.state, self.running()));
 
