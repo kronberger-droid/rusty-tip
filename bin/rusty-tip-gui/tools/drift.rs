@@ -7,7 +7,7 @@ use egui_plot::{Line, Plot, PlotPoints, Points};
 use rusty_tip::action::drift::DriftBurstEvent;
 use rusty_tip::drift::{
     DriftCompensatedEvent, DriftMeasuredEvent, DriftOp, DriftParams, DriftRoutine,
-    DriftStatusEvent, PM,
+    DriftStatusEvent, PM, SettleMode,
 };
 use rusty_tip::experiment_log::{LogEvent, ToolSchema};
 use rusty_tip::routine::{Outcome, run_routine};
@@ -154,26 +154,26 @@ impl Tool for DriftTool {
                 );
                 ui.end_row();
 
-                ui.add_enabled(compensates, egui::Label::new("Settle for at most"));
-                let mut settle = p.settle_max_ms as f64 / 1000.0;
-                if ui
-                    .add_enabled(
-                        compensates,
-                        egui::DragValue::new(&mut settle)
-                            .range(0.0..=1800.0)
-                            .speed(1.0)
-                            .suffix(" s"),
-                    )
-                    .on_hover_text(
-                        "Before correcting, bursts are taken with nothing changed until \
-                         three in a row agree, so creep from the last approach or Z move \
-                         has died out. A drift still changing after this long stops the \
-                         run with nothing touched. 0 corrects from the first burst.",
-                    )
-                    .changed()
-                {
-                    p.settle_max_ms = (settle * 1000.0).round() as u64;
-                }
+                ui.add_enabled(compensates, egui::Label::new("Settle"));
+                ui.add_enabled_ui(compensates, |ui| {
+                    egui::ComboBox::from_id_salt("drift_settle")
+                        .selected_text(settle_label(p.settle))
+                        .show_ui(ui, |ui| {
+                            for mode in [SettleMode::Careful, SettleMode::Quick, SettleMode::Skip] {
+                                ui.selectable_value(&mut p.settle, mode, settle_label(mode));
+                            }
+                        })
+                        .response
+                        .on_hover_text(
+                            "Before correcting, bursts are taken with nothing changed until \
+                             creep from the last approach or Z move has died out. Careful \
+                             judges the trend over two minutes and leaves under 1 pm/s of \
+                             creep, refusing slower creep with nothing touched; it takes at \
+                             least two minutes. Quick needs three bursts that agree, about \
+                             15 s, and leaves slow creep behind. Skip corrects from the \
+                             first burst.",
+                        );
+                });
                 ui.end_row();
 
                 ui.add_enabled(compensates, egui::Label::new("Response"));
@@ -482,6 +482,14 @@ fn op_help(op: DriftOp) -> &'static str {
             "Measure in bursts, correcting after each, and leave compensation on"
         }
         DriftOp::Off => "Switch compensation off; the velocities are kept",
+    }
+}
+
+fn settle_label(mode: SettleMode) -> &'static str {
+    match mode {
+        SettleMode::Careful => "careful: wait creep out (2-10 min)",
+        SettleMode::Quick => "quick: three bursts agree (~15 s)",
+        SettleMode::Skip => "skip: correct from the first burst",
     }
 }
 

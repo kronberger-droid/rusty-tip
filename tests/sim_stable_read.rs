@@ -14,9 +14,9 @@
 use std::sync::Arc;
 
 use rusty_tip::config::AppConfig;
-use rusty_tip::event::{Event, EventAccumulator, EventBus};
+use rusty_tip::event::EventBus;
 use rusty_tip::mock_controller::{FreqShiftNoise, MockController, models};
-use rusty_tip::routine::{Rt, StableReadSpec};
+use rusty_tip::routine::{Outcome, Rt, StableReadSpec};
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::spm_controller::SpmController;
 use rusty_tip::tip_prep::{TipPrepParams, run_tip_prep};
@@ -58,6 +58,15 @@ fn shipped_spec() -> StableReadSpec {
         max_slope: cfg.tip_prep.signal_stability.max_slope_hz_per_s,
         max_retries: cfg.tip_prep.signal_stability.read_retry_count as usize,
         sample_rate_hz: RATE_HZ,
+        duration_ms: Some(cfg.tip_prep.signal_stability.data_collection_duration_ms),
+    }
+}
+
+/// Samples in one batch of `spec` at the mock's stream rate.
+fn batch(spec: &StableReadSpec) -> usize {
+    match spec.duration_ms {
+        Some(ms) => (ms as f64 / 1000.0 * RATE_HZ).round() as usize,
+        None => spec.num_samples,
     }
 }
 
@@ -72,34 +81,26 @@ fn mock(value_hz: f64, noise: FreqShiftNoise) -> MockControllerBuilder {
 /// One stable read: the value, and the `stable` flag of the measurement it
 /// reported.
 fn read(mock: &mut MockController, spec: &StableReadSpec) -> (f64, bool) {
-    let recorder = Arc::new(EventAccumulator::new(usize::MAX));
-    let mut events = EventBus::new();
-    events.add_observer(Box::new(recorder.clone()));
+    let events = EventBus::new();
     let shutdown = ShutdownFlag::new();
-    let value = Rt::new(mock, &events, &shutdown)
+    let read = Rt::new(mock, &events, &shutdown)
         .signals()
         .unwrap()
         .read_stable(FREQ_SHIFT, spec)
         .unwrap();
-    let stable = recorder
-        .all()
-        .iter()
-        .rev()
-        .find_map(|e| match e {
-            Event::DataCollected { label, value, .. } if label == "stable_read" => {
-                value["stable"].as_bool()
-            }
-            _ => None,
-        })
-        .expect("a stable read reports its measurement");
-    (value, stable)
+    (read.value, read.stable)
 }
 
 /// Share of single-attempt reads the gates accept.
 fn acceptance(noise: FreqShiftNoise, reads: usize) -> f64 {
+    acceptance_with(shipped_spec(), noise, reads)
+}
+
+/// The same, for batches of `spec`.
+fn acceptance_with(spec: StableReadSpec, noise: FreqShiftNoise, reads: usize) -> f64 {
     let spec = StableReadSpec {
         max_retries: 0,
-        ..shipped_spec()
+        ..spec
     };
     let mut mock = mock(-1.0, noise).build();
     let accepted = (0..reads).filter(|_| read(&mut mock, &spec).1).count();
@@ -159,7 +160,7 @@ fn real_quiet_noise_reads_stable_first_time_and_close_to_the_truth() {
     let spec = shipped_spec();
     let mut mock = mock(-1.0, real_noise(0.28)).build();
     let obs = mock.observations();
-    let reads = 2000 / spec.num_samples;
+    let reads = 2000 / batch(&spec);
     for _ in 0..reads {
         let (value, stable) = read(&mut mock, &spec);
         assert!(stable);
@@ -175,8 +176,6 @@ fn real_quiet_noise_reads_stable_first_time_and_close_to_the_truth() {
 }
 
 #[test]
-#[ignore = "known gap: a railed PLL streams a constant, and a batch with no \
-            scatter passes the noise gate as perfectly stable"]
 fn a_railed_batch_is_never_taken_as_stable() {
     let mut mock = mock(-100.0, real_noise(0.3)).pll_rail(RAIL_HZ).build();
     let (value, stable) = read(&mut mock, &shipped_spec());
@@ -187,9 +186,6 @@ fn a_railed_batch_is_never_taken_as_stable() {
 }
 
 #[test]
-#[ignore = "known gap: the drift gate's 0.5 Hz/s was set for 500 ms batches, so \
-            on 100 samples it rejects the noise of a steady signal in the noisy \
-            regime"]
 fn a_steady_signal_in_the_noisy_regime_passes_the_gates() {
     // About the noise of the noisier runs on 2026-10-06, under the shipped
     // 1.5 Hz noise gate.
@@ -198,10 +194,91 @@ fn a_steady_signal_in_the_noisy_regime_passes_the_gates() {
 }
 
 #[test]
-#[ignore = "known gap: a read that fails its gates on every attempt still hands \
-            its mean to tip prep, which picks a pulse from it"]
-fn tip_prep_never_pulses_on_a_read_that_failed_its_gates() {
-    // A blunt tip whose reading is far too noisy for the 1.5 Hz gate.
+fn noisy_readings_everywhere_get_one_hardest_pulse_then_the_run_stops() {
+    // A blunt tip whose reading is far too noisy for the 1.5 Hz gate: no
+    // pulse is ever chosen from its readings, but the hardest pulse fires
+    // once to shake it, and a second round of noisy sites ends the run.
+    let mock = mock(-10.0, FreqShiftNoise::White { sigma_hz: 4.0 }).build();
+    let obs = mock.observations();
+    let result = tip_prep(mock);
+    let max = AppConfig::default().pulse_method.max_voltage();
+    let pulses = obs.lock().pulses.clone();
+    assert_eq!(pulses.len(), 1, "{pulses:?}");
+    assert_eq!(pulses[0].abs(), max);
+    let err = result.expect_err("a second noisy round ends the run");
+    assert!(err.to_string().contains("after the hardest pulse"), "{err}");
+}
+
+#[test]
+fn a_frozen_reading_never_gets_a_pulse() {
+    // A railed PLL, most likely the tip in contact: a pulse now would short
+    // the bias through the tip.
+    let mock = mock(-100.0, real_noise(0.3)).pll_rail(RAIL_HZ).build();
+    let obs = mock.observations();
+    let err = tip_prep(mock).expect_err("a frozen reading ends the run");
+    assert!(obs.lock().pulses.is_empty(), "{:?}", obs.lock().pulses);
+    assert!(err.to_string().contains("frozen"), "{err}");
+}
+
+#[test]
+fn the_unstable_site_count_is_configurable() {
+    let mock = mock(-100.0, real_noise(0.3)).pll_rail(RAIL_HZ).build();
+    let err = tip_prep_with(mock, |cfg| {
+        cfg.tip_prep.signal_stability.max_unstable_sites = 5;
+    })
+    .expect_err("a frozen reading ends the run");
+    assert!(err.to_string().contains("one of 5 sites"), "{err}");
+}
+
+#[test]
+fn a_polled_signal_reads_a_short_batch() {
+    // No stream: every sample is a round trip, so half a second at 1 kHz
+    // would be 500 of them. The batch stays at the 100 it was before.
+    let mut mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT)
+        .freq_shift(models::always(-1.0))
+        .freq_shift_noise(real_noise(0.28))
+        .build();
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let read = Rt::new(&mut mock, &events, &shutdown)
+        .signals()
+        .unwrap()
+        .read_stable(FREQ_SHIFT, &shipped_spec())
+        .unwrap();
+    assert_eq!(read.samples, 100);
+}
+
+#[test]
+fn one_unstable_site_moves_the_tip_on_and_the_run_carries_on() {
+    // Every batch of the first read is far too noisy, every one after it
+    // quiet: the tip moves to a fresh site, reads there, and the run goes on.
+    let spec = shipped_spec();
+    let first_read = batch(&spec) * (spec.max_retries + 1);
+    let mut noise: Vec<f64> = (0..first_read)
+        .map(|k| if k % 2 == 0 { 4.0 } else { -4.0 })
+        .collect();
+    // Then the real quiet noise, over and over: exact zeros would be a
+    // frozen batch, which the rail check refuses.
+    let quiet = quiet_noise();
+    noise.extend(quiet.iter().cycle().take(1_000_000));
+    let mock = mock(-10.0, FreqShiftNoise::Replay(noise.into())).build();
+    let obs = mock.observations();
+    let result = tip_prep(mock);
+    assert!(matches!(result, Ok(Outcome::CycleLimit(2))), "{result:?}");
+    assert_eq!(obs.lock().pulses.len(), 2, "both cycles pulsed");
+}
+
+/// A short tip prep on `mock`: two cycles, no stability check, no waits.
+fn tip_prep(mock: MockController) -> Result<Outcome, rusty_tip::spm_error::SpmError> {
+    tip_prep_with(mock, |_| {})
+}
+
+/// The same, with `tweak` applied to the config.
+fn tip_prep_with(
+    mock: MockController,
+    tweak: impl FnOnce(&mut AppConfig),
+) -> Result<Outcome, rusty_tip::spm_error::SpmError> {
     let mut cfg = AppConfig::default();
     cfg.tip_prep.max_cycles = Some(2);
     cfg.tip_prep.max_duration_secs = None;
@@ -212,9 +289,8 @@ fn tip_prep_never_pulses_on_a_read_that_failed_its_gates() {
     t.post_reposition_settle_ms = 0;
     t.buffer_clear_wait_ms = 0;
     t.post_pulse_settle_ms = 0;
-    let mock = mock(-10.0, FreqShiftNoise::White { sigma_hz: 4.0 }).build();
-    let obs = mock.observations();
-    let _ = run_tip_prep(
+    tweak(&mut cfg);
+    run_tip_prep(
         Box::new(mock),
         TipPrepParams {
             events: &EventBus::new(),
@@ -223,23 +299,52 @@ fn tip_prep_never_pulses_on_a_read_that_failed_its_gates() {
             freq_shift: FREQ_SHIFT,
             current: CURRENT,
         },
-    );
-    assert!(obs.lock().pulses.is_empty(), "{:?}", obs.lock().pulses);
+    )
 }
 
 // -- Characterisation -----------------------------------------------------
 
-/// The drift gate against noise of the same size but another colour:
-/// white noise fails it where the PLL's blue noise passes. Pinned so a
-/// change to the gate moves these on purpose.
+/// Why the batch is set in time: on the 100-sample batches the read used
+/// before, a tenth of a second at 1 kHz, the drift gate rejected the noise
+/// of a steady signal, white noise more than the PLL's blue noise of the
+/// same size and the real noise of the noisy regime more than half the
+/// time. Pinned so a change to the gate moves these on purpose.
 #[test]
-fn characterisation_white_noise_fails_the_slope_gate_where_real_noise_passes() {
-    let white = acceptance(FreqShiftNoise::White { sigma_hz: 0.28 }, 200);
-    let real = acceptance(real_noise(0.28), 200);
+fn characterisation_on_a_tenth_of_a_second_the_slope_gate_rejects_noise() {
+    let short = StableReadSpec {
+        num_samples: 100,
+        duration_ms: None,
+        ..shipped_spec()
+    };
+    let white = acceptance_with(short.clone(), FreqShiftNoise::White { sigma_hz: 0.28 }, 200);
+    let quiet = acceptance_with(short.clone(), real_noise(0.28), 200);
+    let noisy = acceptance_with(short, real_noise(1.25), 200);
     assert!(
         (0.35..=0.46).contains(&white),
         "white: {:.1} %",
         white * 100.0
     );
-    assert!(real >= 0.95, "real: {:.0} %", real * 100.0);
+    assert!(quiet >= 0.95, "quiet: {:.1} %", quiet * 100.0);
+    assert!(
+        (0.40..=0.50).contains(&noisy),
+        "noisy: {:.1} %",
+        noisy * 100.0
+    );
+}
+
+/// The same noise on the shipped half-second batches.
+#[test]
+fn characterisation_on_half_a_second_the_slope_gate_passes_steady_noise() {
+    let white = acceptance(FreqShiftNoise::White { sigma_hz: 0.28 }, 200);
+    let noisy = acceptance(real_noise(1.25), 200);
+    assert!(
+        (0.99..=1.0).contains(&white),
+        "white: {:.1} %",
+        white * 100.0
+    );
+    assert!(
+        (0.99..=1.0).contains(&noisy),
+        "noisy: {:.1} %",
+        noisy * 100.0
+    );
 }

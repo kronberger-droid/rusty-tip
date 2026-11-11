@@ -92,6 +92,12 @@ impl AppConfig {
             ));
         }
 
+        if self.tip_prep.signal_stability.max_unstable_sites == 0 {
+            return Err(ConfigError::Message(
+                "tip_prep.signal_stability.max_unstable_sites must be at least 1".into(),
+            ));
+        }
+
         let tolerance = self.tip_prep.timing.landing_tolerance;
         if tolerance <= 0.0 || !tolerance.is_finite() {
             return Err(ConfigError::Message(format!(
@@ -169,11 +175,14 @@ pub struct DataAcquisitionConfig {
     /// Stream rate to ask the TCP logger for, in Hz. The logger delivers its
     /// base rate divided by an integer, so the nearest such rate is what
     /// arrives; the controller measures it at startup, logs it, and the
-    /// routine judges drift at the measured rate. 1000 Hz makes the default
-    /// 100-sample stable read take a tenth of a second.
+    /// routine judges drift at the measured rate. A stable read lasts
+    /// `signal_stability.data_collection_duration_ms` at whatever rate
+    /// arrives, so at 1000 Hz the default half second is 500 samples.
     #[schemars(extend("x-unit" = "Hz"))]
     pub sample_rate: u32,
-    /// Number of TCP stream samples to average for a stable signal read.
+    /// Number of TCP stream samples per batch of the landing gate, which
+    /// waits for the current to settle on the setpoint after an approach. A
+    /// stable read of the frequency shift is set in time instead.
     #[serde(default = "default_stable_signal_samples")]
     pub stable_signal_samples: usize,
 }
@@ -369,11 +378,10 @@ pub struct SignalStabilityConfig {
     #[serde(default = "default_max_slope_hz_per_s")]
     #[schemars(extend("x-unit" = "Hz/s"))]
     pub max_slope_hz_per_s: f64,
-    /// Data-collection window (ms) for one stable read.
-    ///
-    /// Unused by the v2 read path, which sizes its batch from
-    /// `data_acquisition.stable_signal_samples` instead. Kept so configs
-    /// written for v1 still parse.
+    /// Length (ms) of one stable read's batch. The samples follow from the
+    /// stream rate, so the gates mean the same at any rate: the drift gate's
+    /// 0.5 Hz/s was chosen for half a second, and on a shorter batch the
+    /// fitted slope scatters enough that it rejects a steady signal's noise.
     #[serde(default = "default_data_collection_duration_ms")]
     #[schemars(extend("x-unit" = "ms"))]
     pub data_collection_duration_ms: u64,
@@ -388,6 +396,17 @@ pub struct SignalStabilityConfig {
     /// Number of retries when a stable read isn't found.
     #[serde(default = "default_read_retry_count")]
     pub read_retry_count: u32,
+    /// Sites in a row tip prep reads at before it stops trusting the next
+    /// one, when every read fails its gates. A frozen reading (a railed PLL,
+    /// likely contact) never gets a pulse and ends the run there; a noisy
+    /// one gets one hardest pulse to shake the tip, and the run ends only
+    /// if the next sites are noisy too.
+    #[serde(default = "default_max_unstable_sites")]
+    pub max_unstable_sites: usize,
+}
+
+fn default_max_unstable_sites() -> usize {
+    3
 }
 
 impl Default for SignalStabilityConfig {
@@ -398,6 +417,7 @@ impl Default for SignalStabilityConfig {
             data_collection_duration_ms: default_data_collection_duration_ms(),
             read_timeout_secs: default_read_timeout_secs(),
             read_retry_count: default_read_retry_count(),
+            max_unstable_sites: default_max_unstable_sites(),
         }
     }
 }

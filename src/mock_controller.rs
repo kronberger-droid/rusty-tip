@@ -635,7 +635,8 @@ impl SpmController for MockController {
     }
 
     fn streams_signal(&mut self, index: SignalIndex) -> bool {
-        self.z_drift.as_ref().is_some_and(|sim| sim.index == index)
+        (self.stream_rate_hz.is_some() && index == self.freq_shift_index)
+            || self.z_drift.as_ref().is_some_and(|sim| sim.index == index)
             || self.loop_sim.as_ref().is_some_and(|sim| sim.owns(index))
     }
 
@@ -741,9 +742,20 @@ impl SpmController for MockController {
             return Ok(samples);
         }
 
-        // Default: constant samples => std_dev = 0, slope = 0 => always
-        // "stable", so ReadStableSignal returns on the first attempt with no
-        // backoff sleeps. Keeps the test suite fast and deterministic.
+        // Default: the model's value with nanohertz of jitter on the
+        // freq-shift channel, four levels in turn so no value is more than
+        // a quarter of the batch. std_dev and slope are nil, so
+        // ReadStableSignal returns on the first attempt with no backoff
+        // sleeps, keeping the suite fast and deterministic. Not exactly
+        // constant: a batch of one exact value is what a railed PLL streams,
+        // and the stable read refuses it. Other channels stay constant; a
+        // current of 1e-10 A has no room for a fixed jitter.
+        if index == self.freq_shift_index {
+            const JITTER_HZ: [f64; 4] = [1e-9, -1e-9, 2e-9, -2e-9];
+            return Ok((0..num_samples)
+                .map(|k| value + JITTER_HZ[k % JITTER_HZ.len()])
+                .collect());
+        }
         Ok(vec![value; num_samples])
     }
 
@@ -1331,8 +1343,10 @@ impl MockControllerBuilder {
         self
     }
 
-    /// The stream rate to report when no drift or loop simulation sets one,
-    /// so a stable read turns its slope into Hz/s at the rate under test.
+    /// Stream the freq-shift channel at `hz`: the rate to report when no
+    /// drift or loop simulation sets one, so a stable read sizes its batch
+    /// and turns its slope into Hz/s at the rate under test. Without it the
+    /// channel counts as polled.
     pub fn stream_rate(mut self, hz: f64) -> Self {
         self.stream_rate_hz = Some(hz);
         self
@@ -1837,13 +1851,15 @@ mod tests {
     }
 
     #[test]
-    fn read_signal_samples_are_constant_and_stable() {
+    fn read_signal_samples_are_steady_but_never_frozen() {
         let mut mock = MockController::builder()
             .freq_shift(models::always(-1.0))
             .build();
         let samples = mock.read_signal_samples(SignalIndex(0), 64).unwrap();
         assert_eq!(samples.len(), 64);
-        assert!(samples.iter().all(|&v| v == -1.0));
+        assert!(samples.iter().all(|&v| (v + 1.0).abs() < 3e-9));
+        // A batch of one exact value is a railed PLL to the stable read.
+        assert!(!crate::action::signals::is_frozen(&samples));
     }
 
     #[test]
