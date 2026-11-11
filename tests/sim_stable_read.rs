@@ -14,9 +14,9 @@
 use std::sync::Arc;
 
 use rusty_tip::config::AppConfig;
-use rusty_tip::event::{Event, EventAccumulator, EventBus};
+use rusty_tip::event::EventBus;
 use rusty_tip::mock_controller::{FreqShiftNoise, MockController, models};
-use rusty_tip::routine::{Rt, StableReadSpec};
+use rusty_tip::routine::{Outcome, Rt, StableReadSpec};
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::spm_controller::SpmController;
 use rusty_tip::tip_prep::{TipPrepParams, run_tip_prep};
@@ -72,27 +72,14 @@ fn mock(value_hz: f64, noise: FreqShiftNoise) -> MockControllerBuilder {
 /// One stable read: the value, and the `stable` flag of the measurement it
 /// reported.
 fn read(mock: &mut MockController, spec: &StableReadSpec) -> (f64, bool) {
-    let recorder = Arc::new(EventAccumulator::new(usize::MAX));
-    let mut events = EventBus::new();
-    events.add_observer(Box::new(recorder.clone()));
+    let events = EventBus::new();
     let shutdown = ShutdownFlag::new();
-    let value = Rt::new(mock, &events, &shutdown)
+    let read = Rt::new(mock, &events, &shutdown)
         .signals()
         .unwrap()
         .read_stable(FREQ_SHIFT, spec)
         .unwrap();
-    let stable = recorder
-        .all()
-        .iter()
-        .rev()
-        .find_map(|e| match e {
-            Event::DataCollected { label, value, .. } if label == "stable_read" => {
-                value["stable"].as_bool()
-            }
-            _ => None,
-        })
-        .expect("a stable read reports its measurement");
-    (value, stable)
+    (read.value, read.stable)
 }
 
 /// Share of single-attempt reads the gates accept.
@@ -198,10 +185,35 @@ fn a_steady_signal_in_the_noisy_regime_passes_the_gates() {
 }
 
 #[test]
-#[ignore = "known gap: a read that fails its gates on every attempt still hands \
-            its mean to tip prep, which picks a pulse from it"]
 fn tip_prep_never_pulses_on_a_read_that_failed_its_gates() {
     // A blunt tip whose reading is far too noisy for the 1.5 Hz gate.
+    let mock = mock(-10.0, FreqShiftNoise::White { sigma_hz: 4.0 }).build();
+    let obs = mock.observations();
+    let result = tip_prep(mock);
+    assert!(obs.lock().pulses.is_empty(), "{:?}", obs.lock().pulses);
+    let err = result.expect_err("three unstable sites end the run");
+    assert!(err.to_string().contains("unstable at 3 sites"), "{err}");
+}
+
+#[test]
+fn one_unstable_site_moves_the_tip_on_and_the_run_carries_on() {
+    // Every batch of the first read is far too noisy, every one after it
+    // quiet: the tip moves to a fresh site, reads there, and the run goes on.
+    let spec = shipped_spec();
+    let first_read = spec.num_samples * (spec.max_retries + 1);
+    let mut noise: Vec<f64> = (0..first_read)
+        .map(|k| if k % 2 == 0 { 4.0 } else { -4.0 })
+        .collect();
+    noise.resize(1_000_000, 0.0);
+    let mock = mock(-10.0, FreqShiftNoise::Replay(noise.into())).build();
+    let obs = mock.observations();
+    let result = tip_prep(mock);
+    assert!(matches!(result, Ok(Outcome::CycleLimit(2))), "{result:?}");
+    assert_eq!(obs.lock().pulses.len(), 2, "both cycles pulsed");
+}
+
+/// A short tip prep on `mock`: two cycles, no stability check, no waits.
+fn tip_prep(mock: MockController) -> Result<Outcome, rusty_tip::spm_error::SpmError> {
     let mut cfg = AppConfig::default();
     cfg.tip_prep.max_cycles = Some(2);
     cfg.tip_prep.max_duration_secs = None;
@@ -212,9 +224,7 @@ fn tip_prep_never_pulses_on_a_read_that_failed_its_gates() {
     t.post_reposition_settle_ms = 0;
     t.buffer_clear_wait_ms = 0;
     t.post_pulse_settle_ms = 0;
-    let mock = mock(-10.0, FreqShiftNoise::White { sigma_hz: 4.0 }).build();
-    let obs = mock.observations();
-    let _ = run_tip_prep(
+    run_tip_prep(
         Box::new(mock),
         TipPrepParams {
             events: &EventBus::new(),
@@ -223,8 +233,7 @@ fn tip_prep_never_pulses_on_a_read_that_failed_its_gates() {
             freq_shift: FREQ_SHIFT,
             current: CURRENT,
         },
-    );
-    assert!(obs.lock().pulses.is_empty(), "{:?}", obs.lock().pulses);
+    )
 }
 
 // -- Characterisation -----------------------------------------------------

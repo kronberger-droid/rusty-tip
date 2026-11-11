@@ -21,6 +21,10 @@ use super::PulseState;
 use super::events::{ConfigReloadedEvent, CycleEvent, MaxPulseEvent, PhaseEvent};
 use super::reload::{ConfigReload, differs, keep_frozen};
 
+/// Sites in a row that may read unstable before a run gives up. One unstable
+/// read in the noisy regime is ordinary; three in a row are not.
+const UNSTABLE_SITES: usize = 3;
+
 pub use crate::routine::Outcome;
 
 // ============================================================================
@@ -191,8 +195,36 @@ impl<'a> TipPrep<'a> {
         freq_shift >= self.bounds.0 && freq_shift <= self.bounds.1
     }
 
+    /// A frequency shift to decide by. A read that failed its gates on every
+    /// attempt is not one: its mean is whatever the noise or a railed PLL
+    /// made it, and a pulse chosen from it is chosen at random. So the tip
+    /// moves to a fresh site and reads again, and after
+    /// [`UNSTABLE_SITES`] unstable sites in a row the run stops, since by
+    /// then the PLL or the Z loop is at fault, not the site.
     fn read_stable(&self, rt: &mut Rt) -> Result<f64, SpmError> {
-        rt.signals()?.read_stable(self.freq_shift, &self.read_spec)
+        for site in 1..=UNSTABLE_SITES {
+            let read = rt
+                .signals()?
+                .read_stable(self.freq_shift, &self.read_spec)?;
+            if read.stable {
+                return Ok(read.value);
+            }
+            log::warn!(
+                "Frequency shift unstable at site {site}/{UNSTABLE_SITES} after {} batches \
+                 (std_dev {:.3} Hz, drift {:.3} Hz/s); not deciding by it",
+                read.attempts,
+                read.std_dev,
+                read.drift_hz_s
+            );
+            if site < UNSTABLE_SITES {
+                rt.check_shutdown()?;
+                self.reposition(rt)?;
+            }
+        }
+        Err(SpmError::Workflow(format!(
+            "the frequency shift read unstable at {UNSTABLE_SITES} sites in a row; check the \
+             PLL (in lock, not railed) and the Z loop before running again"
+        )))
     }
 
     /// Write the configured Z-controller preset, if there is one, with

@@ -39,6 +39,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   turning it on for Z brought them back into effect, walking the tip off
   its spot. When compensation was off, `compensate` now writes X and Y as
   zero; when it was on, the velocities in effect are left as they are.
+- **Tip prep chose pulses from reads that failed every gate.** A stable
+  read that found no batch inside the noise and drift gates still handed
+  its last mean on, and 45 pulse decisions in the 2026-10-06 runs were
+  made from such reads. Tip prep now moves to a fresh site and reads
+  again, and stops with an error after three unstable sites in a row,
+  which points at the PLL or the Z loop rather than the tip. **Breaking
+  (library):** `Signals::read_stable` returns a `StableRead` (value,
+  std dev, drift, samples, attempts and whether it passed) instead of a
+  bare value; check `stable` before using `value`.
 
 ## [0.5.0] - 2026-11-11
 

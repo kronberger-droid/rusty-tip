@@ -110,12 +110,31 @@ impl Action for ReadSignalNames {
     }
 }
 
+/// What a [`ReadStableSignal`] read: the mean of a batch, the statistics it
+/// was judged by, and whether it passed.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StableRead {
+    pub value: f64,
+    pub std_dev: f64,
+    /// Drift across the batch, Hz/s.
+    pub drift_hz_s: f64,
+    pub samples: usize,
+    /// Batches taken, the one reported included.
+    pub attempts: usize,
+    /// Whether the batch passed the noise and drift gates. A read that
+    /// failed them on every attempt reports its last batch with this false:
+    /// its value is not a measurement, and the caller has to decide what to
+    /// do instead of using it.
+    pub stable: bool,
+}
+
 /// Read a stable signal by collecting samples and checking statistical stability.
 ///
 /// Collects `num_samples` from the data stream, then checks that both the
 /// standard deviation (Hz) and the drift rate (Hz/s) are within bounds.
 /// Retries with exponential backoff (100ms, 200ms, 400ms, ...) if the
-/// signal is not stable. Returns the mean of the stable batch.
+/// signal is not stable. Returns a [`StableRead`]: the stable batch, or the
+/// last one, marked unstable, when no attempt passed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadStableSignal {
     pub index: SignalIndex,
@@ -240,7 +259,17 @@ impl Action for ReadStableSignal {
                     slope_per_sample,
                     true,
                 );
-                return Ok(ActionOutput::Value(mean));
+                return ActionOutput::data(
+                    self.name(),
+                    &StableRead {
+                        value: mean,
+                        std_dev,
+                        drift_hz_s: drift,
+                        samples: samples.len(),
+                        attempts: attempt + 1,
+                        stable: true,
+                    },
+                );
             }
 
             if attempt < self.max_retries {
@@ -258,7 +287,7 @@ impl Action for ReadStableSignal {
                 ctx.settle(backoff_ms)?;
             } else {
                 log::warn!(
-                    "ReadStableSignal: signal not stable after {} retries (std_dev={:.4}/{:.4} Hz, drift={:.4}/{:.4} Hz/s, n={}), using mean={:.6}",
+                    "ReadStableSignal: signal not stable after {} retries (std_dev={:.4}/{:.4} Hz, drift={:.4}/{:.4} Hz/s, n={}), last mean={:.6}",
                     self.max_retries,
                     std_dev,
                     self.max_std_dev,
@@ -278,7 +307,17 @@ impl Action for ReadStableSignal {
                     slope_per_sample,
                     false,
                 );
-                return Ok(ActionOutput::Value(mean));
+                return ActionOutput::data(
+                    self.name(),
+                    &StableRead {
+                        value: mean,
+                        std_dev,
+                        drift_hz_s: drift,
+                        samples: samples.len(),
+                        attempts: attempt + 1,
+                        stable: false,
+                    },
+                );
             }
         }
 
