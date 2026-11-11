@@ -15,7 +15,7 @@
 //! The fit is not done on the raw samples. Z under feedback carries slow
 //! noise, so neighbouring samples are correlated and a textbook standard error
 //! computed from them would be optimistic by an order of magnitude. The burst
-//! is averaged into [`BLOCKS`] blocks first and the line is fitted through the
+//! is averaged into ten blocks first and the line is fitted through the
 //! block means; the scatter of those means about the line is an honest
 //! measure of what the slope is worth, and it is what decides when
 //! [`CompensateDrift`] stops.
@@ -373,7 +373,7 @@ pub struct DriftCompensation {
 /// - **Corrections average, down to a floor.** The first takes all of what
 ///   its burst says is missing, which on a settled drift is the answer; the
 ///   k-th takes a k-th, averaging the noise out, but never less than
-///   [`MIN_CORRECTION_GAIN`], so a drift still changing slowly is followed.
+///   a half, so a drift still changing slowly is followed.
 ///   Every burst corrects, however small its reading: correcting only the
 ///   readings that clear their error bar picks out the bursts whose noise
 ///   ran the same way as the residual, and those overshoot. For the same

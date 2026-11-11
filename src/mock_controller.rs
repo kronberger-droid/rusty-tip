@@ -1274,7 +1274,7 @@ impl MockControllerBuilder {
     /// the freq-shift channel. Default `0.0` = constant batches.
     ///
     /// This is *within-batch* noise, distinct from
-    /// [`RealisticParams::noise_hz`], which jitters the batch mean read-to-read.
+    /// [`models::RealisticParams::noise_hz`], which jitters the batch mean read-to-read.
     /// Non-zero scatter is what makes `ReadStableSignal`'s std-dev check do real
     /// work — keep it comfortably under the configured `max_std_dev` or the
     /// routine will spend its time in retry backoff.
@@ -1496,7 +1496,7 @@ pub mod models {
         /// where the shift goes *positive*. Real but uncommon.
         pub insulating_chance: f64,
         /// Read-to-read jitter (Hz std dev) on the batch mean. Distinct from
-        /// [`MockControllerBuilder::sample_noise_hz`], which scatters the
+        /// [`super::MockControllerBuilder::sample_noise_hz`], which scatters the
         /// samples *within* one batch.
         pub noise_hz: f64,
         /// Std dev of each random-walk drift step, applied once per read.
@@ -1554,7 +1554,7 @@ pub mod models {
     ///
     /// Contrast [`sharpens_after`] and [`scripted`], which are deterministic and
     /// meant for tests that need a specific outcome. Pair this with
-    /// [`MockControllerBuilder::sample_noise_hz`] for within-batch scatter.
+    /// [`super::MockControllerBuilder::sample_noise_hz`] for within-batch scatter.
     ///
     /// Seeded, so the same params always produce the same run.
     pub fn realistic(params: RealisticParams) -> FreqShiftModel {
