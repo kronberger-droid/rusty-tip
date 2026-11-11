@@ -26,7 +26,6 @@ mod surface;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use ndarray::{Array2, ArrayView2};
@@ -35,15 +34,15 @@ use textplots::{Chart, Plot, Shape};
 use rusty_tip::analyzer::rolling_ellipsoid::{
     Border, GridSpacing, RollingEllipsoid, vertical_clearance,
 };
-use rusty_tip::event::{Event, EventBus, EventEmitter, FileLogger};
-use rusty_tip::experiment_log::{ControllerFacts, RunHeader, ToolSchema};
+use rusty_tip::experiment_log::ToolSchema;
 use rusty_tip::export::{gsf, write_table, write_xyz};
 use rusty_tip::multi_pass::MultiPassConfig;
 use rusty_tip::nanonis_controller::{NanonisController, NanonisSetupConfig};
-use rusty_tip::routine::Rt;
+use rusty_tip::routine::{Outcome, Rt};
+use rusty_tip::session::{Job, JobCx, PresetFiles, Session};
 use rusty_tip::shutdown::ShutdownFlag;
 use rusty_tip::signal_registry::{SignalIndex, SignalRegistry};
-use rusty_tip::spm_controller::SpmController;
+use rusty_tip::spm_error::SpmError;
 
 /// Nanometres to metres.
 const NM: f64 = 1e-9;
@@ -116,42 +115,6 @@ struct BaselineArgs {
     /// Directory the experiment log (JSONL) is written to.
     #[arg(long, default_value = "./experiments")]
     log_dir: PathBuf,
-}
-
-/// Open the experiment log for one command and write its header.
-///
-/// `invocation` stands in for a config file: the arguments that shaped the
-/// run, so the log says what was asked for.
-fn open_run_log(
-    dir: &Path,
-    controller: &mut dyn SpmController,
-    invocation: serde_json::Value,
-) -> Result<EventBus, Box<dyn Error>> {
-    fs::create_dir_all(dir)?;
-    let path = dir.join(format!(
-        "const_distance_{}.jsonl",
-        chrono::Utc::now().format("%Y%m%d_%H%M%S")
-    ));
-    let mut events = EventBus::new();
-    events.add_observer(Box::new(FileLogger::new(fs::File::create(&path)?)));
-    println!("log: {}", path.display());
-    let facts = ControllerFacts::gather(controller, None);
-    events.emit(Event::run_started(RunHeader::new(
-        // No custom event kinds of its own.
-        ToolSchema::new("const_distance"),
-        invocation,
-        facts,
-    )));
-    Ok(events)
-}
-
-/// Close the log with the command's outcome.
-fn finish_run_log(events: &EventBus, started: Instant, result: &Result<(), Box<dyn Error>>) {
-    let (outcome, detail) = match result {
-        Ok(()) => ("completed", None),
-        Err(e) => ("error", Some(e.to_string())),
-    };
-    events.emit(Event::run_finished(outcome, detail, started.elapsed()));
 }
 
 #[derive(Args)]
@@ -267,8 +230,9 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
         .unwrap_or_else(|| args.output.to_string_lossy().into_owned());
 
     // Connect first when the signal has to be resolved by name, so a typo fails
-    // before anything is written.
-    let mut controller = match args.dry_run {
+    // before anything is written. `connect_with` rather than `connect`: the
+    // baseline has no use for the data stream or the preset files.
+    let session = match args.dry_run {
         true => None,
         false => {
             let client = rusty_tip::NanonisClient::builder()
@@ -276,18 +240,21 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
                 .port(args.port)
                 .build()?;
             println!("connected to {}:{}", args.host, args.port);
-            Some(NanonisController::new(
-                client,
-                NanonisSetupConfig::default(),
-            ))
+            let mut controller = NanonisController::new(client, NanonisSetupConfig::default());
+            let registry = SignalRegistry::from_controller(&mut controller)?;
+            let mut session = Session::new(Some(args.log_dir.clone()));
+            session.connect_with(Box::new(controller), registry, PresetFiles::default())?;
+            Some(session)
         }
     };
 
-    let signal = match (&args.signal_name, controller.as_mut()) {
-        (Some(name), Some(c)) => {
+    let signal = match (
+        &args.signal_name,
+        session.as_ref().and_then(Session::registry),
+    ) {
+        (Some(name), Some(registry)) => {
             // Through the registry rather than a name scan of our own, so the
             // aliases and cleaned names it knows about work here too.
-            let registry = SignalRegistry::from_controller(c)?;
             let signal = registry
                 .get_by_name(name)
                 .ok_or_else(|| format!("no signal called {name:?} on this controller"))?
@@ -332,47 +299,30 @@ fn baseline(args: BaselineArgs) -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let Some(mut controller) = controller else {
+    let Some(mut session) = session else {
         config.write(&args.output)?;
         println!("wrote {} (dry run, nothing sent)", args.output.display());
         return Ok(());
     };
 
-    let started = Instant::now();
-    let events = open_run_log(
-        &args.log_dir,
-        &mut controller,
-        serde_json::json!({
-            "command": "baseline",
-            "output": args.output.display().to_string(),
-            "host_path": host_path,
-            "host": args.host,
-            "port": args.port,
-            "multi_pass": config,
-        }),
-    )?;
-    let result = baseline_apply(&args, &config, &host_path, &events, &mut controller);
-    finish_run_log(&events, started, &result);
-    result
-}
+    let header = serde_json::json!({
+        "output": args.output.display().to_string(),
+        "host_path": host_path,
+        "host": args.host,
+        "port": args.port,
+        "multi_pass": config,
+    });
+    let mut job = BaselineJob {
+        config,
+        local_path: args.output.clone(),
+        host_path: host_path.clone(),
+        header,
+    };
+    println!("log: {}", args.log_dir.display());
+    session.run(&mut job, &ShutdownFlag::on_ctrl_c(), Vec::new())?;
 
-/// Load and activate the baseline configuration, once the log is open.
-///
-/// Through `Rt` but not `run_routine`: the harness withdraws the tip when a
-/// routine ends, which is right for a routine and wrong for a command that
-/// only rewrites a configuration.
-fn baseline_apply(
-    args: &BaselineArgs,
-    config: &MultiPassConfig,
-    host_path: &str,
-    events: &EventBus,
-    controller: &mut NanonisController,
-) -> Result<(), Box<dyn Error>> {
-    let shutdown = ShutdownFlag::on_ctrl_c();
-    let mut rt = Rt::new(controller, events, &shutdown);
-    rt.multi_pass()?.apply(config, &args.output, host_path)?;
-
-    let buffer = rt.controller().scan_buffer_get()?;
+    let buffer = session.query(|c, _| c.scan_buffer_get())?;
+    session.disconnect();
     println!(
         "scan buffer records signals {:?} at {}x{}",
         buffer.channels.iter().map(|c| c.0).collect::<Vec<_>>(),
@@ -388,6 +338,42 @@ fn baseline_apply(
     );
     println!("unconfirmed: the offset sign (does positive approach or retract?).");
     Ok(())
+}
+
+/// Load and activate the baseline configuration, as a job so the session
+/// writes its log.
+///
+/// Through `Rt` but not `run_routine`: the harness withdraws the tip when a
+/// routine ends, which is right for a routine and wrong for a command that
+/// only rewrites a configuration.
+struct BaselineJob {
+    config: MultiPassConfig,
+    local_path: PathBuf,
+    host_path: String,
+    /// The arguments that shaped the run, standing in for a config file.
+    header: serde_json::Value,
+}
+
+impl Job for BaselineJob {
+    fn name(&self) -> &str {
+        "baseline"
+    }
+
+    fn log_schema(&self) -> ToolSchema {
+        // No custom event kinds of its own.
+        ToolSchema::new("baseline")
+    }
+
+    fn header_config(&self) -> serde_json::Value {
+        self.header.clone()
+    }
+
+    fn run(&mut self, cx: JobCx<'_>) -> Result<Outcome, SpmError> {
+        let mut rt = Rt::new(cx.controller, cx.events, cx.shutdown);
+        rt.multi_pass()?
+            .apply(&self.config, &self.local_path, &self.host_path)?;
+        Ok(Outcome::Completed)
+    }
 }
 
 fn plan(args: PlanArgs) -> Result<(), Box<dyn Error>> {
@@ -771,4 +757,57 @@ fn readme(no_xyz: bool) -> String {
          \x20   lateral semi-axis before the edge, and stay high the same\n\
          \x20   distance past it\n"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use rusty_tip::event::{Event, EventAccumulator};
+    use rusty_tip::mock_controller::MockController;
+
+    use super::*;
+
+    #[test]
+    fn the_baseline_job_loads_and_activates_under_a_session_log() {
+        let mut mock = MockController::builder().build();
+        let obs = mock.observations();
+        let registry = SignalRegistry::from_controller(&mut mock).unwrap();
+        let mut session = Session::new(None);
+        session
+            .connect_with(Box::new(mock), registry, PresetFiles::default())
+            .unwrap();
+
+        let local = std::env::temp_dir().join(format!(
+            "const_distance_baseline_{}.mpas",
+            std::process::id()
+        ));
+        let mut job = BaselineJob {
+            config: MultiPassConfig::constant_lift(SignalIndex(30), 0.2e-9),
+            local_path: local.clone(),
+            host_path: "C:\\baseline.mpas".into(),
+            header: serde_json::json!({}),
+        };
+        let recorder = Arc::new(EventAccumulator::new(usize::MAX));
+        session
+            .run(
+                &mut job,
+                &ShutdownFlag::new(),
+                vec![Box::new(recorder.clone())],
+            )
+            .unwrap();
+        let _ = fs::remove_file(local);
+
+        let obs = obs.lock();
+        assert_eq!(obs.multi_pass_loaded, vec!["C:\\baseline.mpas".to_string()]);
+        assert_eq!(obs.multi_pass_active, Some(true));
+        // Rewriting a configuration never moves the tip.
+        assert_eq!(obs.withdraw_count, 0);
+        let events = recorder.all();
+        assert!(matches!(events.first(), Some(Event::RunStarted { .. })));
+        assert!(matches!(
+            events.last(),
+            Some(Event::RunFinished { outcome, .. }) if outcome == "completed"
+        ));
+    }
 }
