@@ -720,3 +720,46 @@ fn dropping_the_handle_waits_for_a_stopped_run_to_withdraw() {
         "withdrawn before the drop returned"
     );
 }
+
+/// A panic outside a job, here in a call, is reported and the thread goes
+/// on: a dead session thread would leave the window showing its last state
+/// with every command after it lost.
+#[test]
+fn a_panicking_call_is_reported_and_the_thread_survives() {
+    let (mut mock, _) = mock();
+    let reg = registry(&mut mock);
+    let mut session = Session::new(None);
+    session
+        .connect_with(Box::new(mock), reg, PresetFiles::default())
+        .unwrap();
+    let handle = spawn_with(session);
+
+    handle
+        .send(SessionCmd::Call(Box::new(|_| panic!("call blew up"))))
+        .unwrap();
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    handle
+        .send(SessionCmd::Call(Box::new(move |s| {
+            let _ = tx.send(s.state());
+        })))
+        .unwrap();
+
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)),
+        Ok(ConnState::Connected),
+        "the thread answered the call after the panic"
+    );
+    let errors: Vec<String> = handle
+        .drain()
+        .into_iter()
+        .filter_map(|u| match u {
+            SessionUpdate::Error(e) => Some(e),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        errors.iter().any(|e| e.contains("call blew up")),
+        "{errors:?}"
+    );
+    handle.join();
+}

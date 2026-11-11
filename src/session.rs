@@ -1072,7 +1072,19 @@ fn run_loop(
     loop {
         match commands.recv_timeout(TAP_PERIOD) {
             Ok(SessionCmd::Quit) => break,
-            Ok(cmd) => handle(&mut session, cmd, &report),
+            Ok(cmd) => {
+                // `Session::run` catches a job's panic; this catches the
+                // rest, so one bad command cannot end the thread that every
+                // later command needs.
+                let caught =
+                    panic::catch_unwind(AssertUnwindSafe(|| handle(&mut session, cmd, &report)));
+                if let Err(payload) = caught {
+                    let message = panic_message(&*payload);
+                    log::error!("Session command panicked: {message}");
+                    report(SessionUpdate::Error(format!("command panicked: {message}")));
+                    report(SessionUpdate::State(session.state()));
+                }
+            }
             Err(RecvTimeoutError::Timeout) => {
                 if session.state() != ConnState::Connected {
                     continue;

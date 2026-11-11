@@ -398,6 +398,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A killed run lost the end of its log.** The experiment log was flushed
   only when the logger was dropped, so a second Ctrl+C or a crash lost up
   to 8 KB of the newest events. Every line is flushed as it is written.
+- **A panic in a session command outside a job ended the session thread.**
+  The workbench kept showing the last state while every later command was
+  lost. The panic is now reported as an error and the thread carries on.
 - **The linear pulse strategy pulsed hardest next to the sharp window.**
   Inside `linear_clamp` the voltage ran from `voltage_bounds[0]` at the
   clamp's far end to `voltage_bounds[1]` next to the window, so a tip almost
