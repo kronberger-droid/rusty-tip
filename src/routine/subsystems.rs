@@ -23,7 +23,7 @@ use crate::action::drift::{CompensateDrift, DriftCompensation, DriftEstimate, Me
 use crate::action::motor::{MoveMotor3D, Reposition};
 use crate::action::multi_pass::{ActivateMultiPass, ApplyMultiPass, LoadMultiPass, SaveMultiPass};
 use crate::action::scan::{ScanActionParam, ScanControl, ScanDirectionParam};
-use crate::action::signals::{ReadSignal, ReadStableSignal};
+use crate::action::signals::{ReadSignal, ReadStableSignal, StableRead};
 pub use crate::action::z_controller::LandingGate;
 use crate::action::z_controller::{AutoApproach, CalibratedApproach, SetZSetpoint, Withdraw};
 use crate::signal_registry::SignalIndex;
@@ -139,7 +139,8 @@ impl ZCtrl<'_, '_> {
 
 /// Gates and sizing for a stable signal read, used by [`Signals::read_stable`].
 ///
-/// A stable read collects `num_samples` stream samples and accepts the batch
+/// A stable read collects `duration_ms` of stream samples, or `num_samples`
+/// without it, and accepts the batch
 /// only if it passes the noise gate (`max_std_dev`) and the drift gate
 /// (`max_slope`, in units/s judged at `sample_rate_hz`); failing batches are
 /// retried up to `max_retries` times with exponential backoff.
@@ -150,6 +151,9 @@ pub struct StableReadSpec {
     pub max_slope: f64,
     pub max_retries: usize,
     pub sample_rate_hz: f64,
+    /// A batch's length in time, ms, overriding `num_samples`; see
+    /// [`ReadStableSignal::duration_ms`].
+    pub duration_ms: Option<u64>,
 }
 
 /// Signal reading, from [`Rt::signals`].
@@ -168,17 +172,21 @@ impl Signals<'_, '_> {
     }
 
     /// Read a noise- and drift-gated signal value (see [`StableReadSpec`]).
-    /// Emits one `stable_read` measurement event per accepted batch.
-    pub fn read_stable(&mut self, index: SignalIndex, spec: &StableReadSpec) -> Result<f64> {
-        let output = self.rt.exec(&ReadStableSignal {
-            index,
-            num_samples: spec.num_samples,
-            max_std_dev: spec.max_std_dev,
-            max_slope: spec.max_slope,
-            max_retries: spec.max_retries,
-            sample_rate_hz: spec.sample_rate_hz,
-        })?;
-        expect_value("read_stable_signal", output)
+    /// Emits one `stable_read` measurement event per read. Check
+    /// [`StableRead::stable`] before using the value: a read that failed
+    /// the gates on every attempt still reports its last batch.
+    pub fn read_stable(&mut self, index: SignalIndex, spec: &StableReadSpec) -> Result<StableRead> {
+        self.rt
+            .exec(&ReadStableSignal {
+                index,
+                num_samples: spec.num_samples,
+                max_std_dev: spec.max_std_dev,
+                max_slope: spec.max_slope,
+                max_retries: spec.max_retries,
+                sample_rate_hz: spec.sample_rate_hz,
+                duration_ms: spec.duration_ms,
+            })?
+            .into_data("read_stable_signal")
     }
 
     /// Discard buffered stream samples so the next read sees only fresh data.

@@ -70,8 +70,18 @@ fn main() -> eframe::Result<()> {
     let log_receiver = init_logging(LevelFilter::Trace);
     log::set_max_level(LevelFilter::Info);
 
+    // Raw pixels, so no PNG decoder. Wayland ignores the icon and looks it up
+    // through the desktop entry named like the app id, which the flake
+    // installs with the hicolor icons.
+    let icon = eframe::egui::IconData {
+        rgba: include_bytes!("../../assets/branding/icon/rusty-tip-96.rgba").to_vec(),
+        width: 96,
+        height: 96,
+    };
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
+            .with_app_id("rusty-tip")
+            .with_icon(icon)
             .with_inner_size([1100.0, 760.0])
             .with_min_inner_size([800.0, 520.0]),
         ..Default::default()

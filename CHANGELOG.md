@@ -9,6 +9,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The mock reproduces what drift compensation and the stable read
+  fail on.** `MockControllerBuilder::z_drift_scenario` takes a
+  `DriftScenario`: a constant drift plus exponential and `1/t` creep on a
+  simulated clock that advances with every streamed sample and
+  compensation write, white, correlated (AR(1)) or random-walk noise, a
+  compensation response of any size with a latency, and a compensation
+  that saturates and latches `z_saturated`. Its `drift_at` and
+  `residual_at`, read at `MockObservations::z_sim_time_s`, are the truth a
+  test judges a run by. On the freq-shift channel, `freq_shift_noise`
+  takes white, blue (the PLL's anticorrelated noise) or recorded noise to
+  replay, `pll_rail` clamps readings to the rail the way a PLL out of
+  range streams them, and `stream_rate` sets the rate a stable read turns
+  its slope into Hz/s with. `z_drift`, `z_drift_noise` and
+  `sample_noise_hz` behave as before.
+
+### Changed
+
+- **`compensate`'s settle budget counts measured time.** `settle_max_ms`
+  is spent by the burst windows taken, not by the wall clock, so a
+  simulated run gives up after the same budget a real one does. On the
+  instrument the two differ by the few hundred milliseconds between
+  bursts.
+- **`compensate` waits creep out, unless asked to be quick.** The settle
+  test compared bursts about 10 s apart, so creep with a time constant of a
+  minute or more passed as settled and went on drifting after the run:
+  20 pm/s of creep with a two-minute time constant left 10 pm/s behind.
+  `settle` now chooses: `careful` (the default) judges the drift's trend
+  over the last two minutes of bursts (or the whole baseline, when
+  correlated noise leaves two minutes too uncertain) and leaves under
+  1 pm/s, taking at least about 2.5 minutes, and refuses creep it cannot
+  wait out within 10 minutes with nothing touched; `quick` is the old three-burst test, about
+  half a minute; `skip` corrects from the first burst. The workbench's
+  Drift tool has it as a dropdown. **Breaking (library):** `settle:
+  SettleMode` replaces `settle_max_ms` in `CompensateDrift` and
+  `DriftParams`; `CompensateDrift::quick` gives the quick defaults.
+
+### Fixed
+
+- **`compensate` switched stale lateral velocities back on.** Drift
+  compensation keeps its X and Y velocities while switched off, and
+  turning it on for Z brought them back into effect, walking the tip off
+  its spot. When compensation was off, `compensate` now writes X and Y as
+  zero; when it was on, the velocities in effect are left as they are.
+- **Tip prep chose pulses from reads that failed every gate.** A stable
+  read that found no batch inside the noise and drift gates still handed
+  its last mean on, and 45 pulse decisions in the 2026-10-06 runs were
+  made from such reads. Tip prep now moves to a fresh site and reads
+  again, up to `signal_stability.max_unstable_sites` (3) sites. If one of
+  them read frozen, most likely the tip in contact, no pulse fires and the
+  run stops. If they were only noisy, the hardest pulse fires once to shake
+  the tip, and a second noisy round stops the run, pointing at the PLL or
+  the Z loop. A signal off the stream is polled, so its stable read is
+  capped at 100 samples. **Breaking
+  (library):** `Signals::read_stable` returns a `StableRead` (value,
+  std dev, drift, samples, attempts and whether it passed) instead of a
+  bare value; check `stable` before using `value`.
+- **A railed PLL read as a perfectly stable frequency shift.** At its rail
+  or out of lock the PLL streams one exact value, −76.29 Hz in the
+  2026-10-06 runs, and a batch with no scatter and no slope passed both
+  gates: 105 of 425 reads that day. A batch where one exact value makes up
+  half or more of the samples is now refused as frozen (`StableRead::frozen`),
+  wherever the rail sits; real batches never exceed 12 %. Tip prep takes it
+  like any unstable read: no pulse, a fresh site. The plain mock's
+  freq-shift batches carry nanohertz of jitter so they are not frozen.
+- **A compensation response other than ±1 left drift behind.** The trial
+  burst measures how much drift one m/s of `vz` adds, and only its sign
+  was used, so a channel answering 0.9 made every correction 10 % short
+  and left 0.4 pm/s. The size is used once the trial resolves it from one
+  (by more than twice its own uncertainty, about 2 %), and `response` may
+  carry a size as well as a sign.
+- **The stable read's drift gate rejected steady signals.** A read took
+  `stable_signal_samples` (100), a tenth of a second at 1 kHz and five
+  seconds at 20 Hz, while its 0.5 Hz/s drift gate was chosen for half a
+  second; on a tenth, the fitted slope's own scatter failed a steady
+  signal in the noisy regime 55 % of the time. The batch is now set in
+  time by `signal_stability.data_collection_duration_ms` (500 ms, unused
+  until now), the samples following from the measured stream rate, and in
+  the noisy regime all steady reads pass. `stable_signal_samples` sizes
+  only the landing gate's batches now. `ReadStableSignal` and
+  `StableReadSpec` gain `duration_ms`.
+- **Drift error bars were two to three times too small under correlated
+  noise.** A burst's error comes from the scatter of its block means, and
+  Z noise correlated over seconds makes neighbouring blocks agree more than
+  independent ones, so `converged` and the reported residual trusted a
+  precision the measurement did not have: in simulation 8 of 20 residuals
+  fell outside their own two error bars. With careful settling, the
+  baseline's scatter about its trend calibrates every later burst, and the
+  residual is inside its error bar as often as it should be.
+
+## [0.5.0] - 2026-11-11
+
+The first release of the v2 line that has run on a real microscope: it was
+validated over a two-week machine session. It brings the workbench
+(`rusty-tip-gui`), which replaces `tip-prep-gui`, a JSON command line for
+scripts and agents (`rusty-tip`), drift compensation, operating points, and
+the routine harness every automation now runs in.
+
+### Added
+
+- **A logo.** Pixel-art icon and "rusty tip" wordmark in
+  `assets/branding/`, generated from 1× sources by `export.py`. The README
+  opens with the wordmark, the workbench window carries the icon and the
+  app id `rusty-tip`, and the flake's `rusty-tip-gui` package installs a
+  desktop entry and hicolor icons, which is where Wayland looks the icon
+  up.
 - **Operating points: every loop, the bias and the scan under one name.**
   A preset is one loop's gains; what a lab tunes is the set, the loops at a
   bias, scanned at a speed over a frame of a size and resolution. The
@@ -102,9 +207,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prep is the first tool, with the old Control tab as its run panel. The
   run view is a fold over log records shared by live runs and replayed
   logs, so History opens any `.jsonl` in the log directory into the same
-  view. `tip-prep-gui` keeps its screens and stays until the workbench
-  reaches parity in the lab; the one change to it is that its files load
-  before the stream starts, as the CLI's now do. Built with
+  view, and replaces `tip-prep-gui` (see Removed). Built with
   `--features gui`, which now enables eframe's `persistence` so the pane
   and each tool's setup survive a restart.
 - **Schema-driven setup forms.** `AppConfig` and every config type under
@@ -133,8 +236,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `drift/status`, `drift/measured` and `drift/compensated` events next to
   the actions' `drift/burst`. It refuses to measure when the data stream
   does not carry Z unless polling is allowed. The workbench has it as the
-  Drift tool, and `const-distance drift` is now a thin wrapper over it, so
-  the two front ends share one implementation.
+  Drift tool.
 - **Feedback controllers as parameter sets.** `rusty_tip::controllers`
   gives the Z-controller and the PLL's amplitude and phase loops one
   struct each of the fields the protocol lets you set, in SI with unit
@@ -213,14 +315,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `max_duration_secs` end the loop before another pulse. The workbench's
   tip-prep Run tab has an Apply to run button beside Start and Stop that
   sends the Setup form, and Setup greys out the fields a run keeps.
+- `tip_prep.timing.approach_timeout_ms` (default 600 s) for the approaches
+  that start from a full withdraw, and `reposition_approach_timeout_ms`
+  (default 300 s) for the short one inside a reposition. 0.2.3 gave the
+  long approaches ten minutes; v2 had capped everything at five.
+- `examples/folme_probe.rs`: measures what a FolMe constant-height trace
+  depends on (round-trip latency, feedback-off timing and TipLift, Z step
+  response with the loop open, whether FolMe's wait flag blocks). Every
+  open-loop move retracts first, and the retract direction is measured
+  from TipLift rather than assumed.
+- **Multi-pass** (`multi_pass` module): read and write Nanonis `.mpas`
+  configuration files, byte-exactly, and load one on a controller with
+  `multi_pass::apply`. The format is undocumented by the vendor and was
+  worked out by diffing GUI-saved files; the module doc is the write-up.
+  A `[PassN]` section is one scan *direction*, so two passes need four
+  sections, and `MultiPassConfig::constant_lift` builds that. `MPass.Load`
+  resolves its path on the controller, thus `apply` takes both a local path
+  and a host path rather than assuming a shared filesystem.
+- **Drift compensation** (`MeasureZDrift`, `CompensateDrift`): measures how
+  fast Z is drifting and leaves the controller cancelling it. A measurement
+  is a burst, every sample the data stream delivers for the window, fitted
+  through block means so the rate comes with a standard error that slow
+  noise does not flatter. Compensation is a loop of a fixed number of
+  bursts: measure, correct, measure what is left. The k-th correction
+  takes a k-th of its reading, which leaves the velocity at the mean of
+  every estimate so far, and every burst corrects whether or not its
+  reading clears the error bar, since correcting only the ones that do
+  overshoots. Each burst is a `drift/burst` log event. The sign convention for the compensation velocity is
+  undocumented, so it is learned from one deliberately large trial step
+  unless the caller says it is known, and a channel that does not respond
+  is refused with the previous velocity put back. Needs the feedback loop
+  closed, thus it is a between-passes operation.
+- **Scan buffer** (`SpmController::scan_buffer_get`/`_set`/`_ensure`): which
+  signals a scan records, and at what resolution. `_ensure` adds channels
+  without dropping the ones already there.
+- **End-of-line waiting** (`SpmController::scan_wait_end_of_line`):
+  line-level progress, reporting line number, direction and multi-pass pass
+  number separately.
+- `const-distance baseline`: configures the two-pass constant-lift scan that
+  native multi-pass runs, as the published baseline (Moreno et al., Nano
+  Lett. 2015) the rolling-ellipsoid trajectory has to beat at step edges.
+  It runs as a session job, so its log, `baseline_<timestamp>.jsonl`, is
+  written by the same code as the workbench's.
+- **Routine harness** (`routine` module): automations are structs
+  implementing `Routine`, run against an `Rt` that hands out
+  capability-checked subsystem handles (`rt.bias()?.set(v)?`), an
+  interruptible `settle()`, a `cycles()` driver that turns cycle/time
+  budgets into `Outcome`s, and `guarded()` for cleanup that runs however
+  the body ends. `run_routine` owns the controller life cycle (prepare,
+  withdraw on exit, teardown) around any routine, including when the
+  routine panics: it catches the unwind, restores the hardware, and
+  re-raises. Handle operations emit the same started/completed/failed
+  events `execute_logged` used to, so JSONL logs keep their shape.
+- Two new events so failures during cleanup stay visible in the JSONL
+  log rather than only in `log`: `cleanup_failed` when `guarded`
+  swallows a cleanup error to preserve the body's, and
+  `routine_panicked` when a routine unwinds.
+- `scan().props_set()` and `scan().speed_set()` now emit
+  started/completed/failed events like every other state change, so a
+  scan speed altered mid-run is visible in the JSONL log. The scan
+  reads (`status`, `props_get`, `speed_get`) stay silent.
+- Tip preparation is now `TipPrep`, the reference `Routine`
+  implementation; `run_tip_prep` keeps its exact signature and behaviour
+  as a thin wrapper over `run_routine`.
 
 ### Changed
 
-- **`const-distance baseline` runs as a session job.** Its log is now
-  `baseline_<timestamp>.jsonl` with tool `baseline`, written by the same
-  code as the workbench's, so the header carries the controller's signal
-  list and a panic still closes the log. The signal names are read on every
-  connect, not only with `--signal-name`.
 - **Tip-prep pulses are bars from 0 V.** The pulse-voltage plot draws every
   pulse as a bar from a 0 V line instead of a point on a line, so sign and
   size read at a glance. A failed stability check's pulse is no longer a
@@ -321,8 +481,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SpmController::load_layout`/`load_settings`, before the stream starts
   (a settings file can change the TCP logger's channel list, and Nanonis
   stops a live stream on that; before, they loaded after it). Z home and
-  safe-tip come from the routine's `run_setup`. `tip-prep` and
-  `tip-prep-gui` behave as before; `tip_prep::nanonis_setup` became
+  safe-tip come from the routine's `run_setup`. `tip-prep` behaves as
+  before; `tip_prep::nanonis_setup` became
   `tip_prep::load_presets`.
 - **The experiment log is self-describing** (`docs/experiment-log.md`).
   Every run starts with a `run_started` line carrying the tool, version,
@@ -345,6 +505,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   feature, so `cargo build --release` no longer compiles a hundred crates
   of codecs for tools that never open an image; build `cuox-finder` with
   `--features cuox`. `byteorder` was unused and is gone.
+- `nanonis-rs` 0.4 to 0.5, for `Scan.WaitEndOfLine`.
+- **Breaking (library):** `ShutdownFlag` is backed by a condition variable
+  so `request()` wakes sleeping waiters immediately (new `wait_timeout`);
+  `from_arc()` and `arc()` are gone since writes to a raw
+  `Arc<AtomicBool>` could never notify a waiter. Handlers call
+  `request()` on a clone instead.
+- **Breaking (library):** `Outcome` moved to the `routine` module
+  (re-exported from `tip_prep` unchanged) and now derives
+  `Debug`/`Clone`/`Copy`/`PartialEq`/`Eq`.
+- **Breaking (library):** `tip_prep::runner::execute_logged` and
+  `interruptible_sleep` are gone; their jobs moved into the harness
+  (`Rt`'s event-logged execution and `ShutdownFlag::wait_timeout`).
+- The stability check now restores the scan speed even when a sweep
+  errors out (previously only on completion or shutdown), and waits
+  inside the routine wake immediately on a stop request instead of at
+  the next poll tick.
 
 ### Removed
 
@@ -353,16 +529,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as TOML text, not the old GUI's form. The Nix packages follow:
   `rusty-tip-gui` and `rusty-tip-gui-windows` replace the `tip-prep-gui`
   ones, and `rusty-tip-gui` is the flake's default.
-- **`const-distance drift`, `acquire` and `trace`.** Drift lives in the
-  workbench's Drift tool, which runs the same routine; there is no
-  command-line drift any more. The tool uses the session's stream, so Z
-  has to be in the TCP channel mapping before connecting, and it runs at
-  the connection's sample rate rather than a `--sample-rate` of its own.
-  `acquire` and `trace` were stubs that only printed that they were not
-  built. `plan` and `baseline` are unchanged.
-- `DriftRoutine::report`, `DriftReport` and the `Display` impls of the
-  drift events. They held the sentences `const-distance drift` printed;
-  read what a run found from its `drift/*` events instead.
 - `frame`'s `trace_retrace_rms_mirrored`. It was there until a frame on
   hardware settled which way Nanonis sends backward rows; it sends them the
   same way round as forward ones, so the as-sent comparison is the one.
@@ -376,6 +542,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   length is already fixed by `bias_steps × step_period_ms`; the run-level
   `tip_prep.max_duration_secs` keeps counting through the check. Configs
   that still set it load fine, the key is ignored.
+- **Breaking (library):** the `workflow` module. Its declarative
+  `Step`/`Condition` executor is replaced by the routine harness, which
+  puts control flow in Rust where the compiler can see it.
+- **Breaking (library):** the `machine_state` module and the `Action`
+  methods that fed it (`kind`, `expects`, `effects`, `resolves`,
+  `apply_to_state`). The state model existed so the executor could
+  decide at runtime whether a step was legal; a `Routine` cannot express
+  an illegal call in the first place, since the subsystem handle is the
+  only way to reach the operation.
+- **Breaking (library):** `ActionRegistry`, `ActionFactory`,
+  `ActionInfo` and `action::builtin_registry()`. Constructing actions by
+  string name existed only to deserialize workflow steps.
+- **Breaking (library):** `Action::execute_and_store` and
+  `execute_and_store_as`, which had no callers.
 
 ### Fixed
 
@@ -570,115 +750,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check, so the final approach would have re-approached whatever tripped
   it. The check is back, with a test for the abort and one for an
   unreadable status not counting as a trip.
-- `tip-prep-gui` did not build: the `oversampling` field added to
-  `DataAcquisitionConfig` was missing from the GUI's config conversion.
 - A `status_interval` of zero is rejected at config load instead of
   panicking on the first cycle.
-
-### Added
-
-- `tip_prep.timing.approach_timeout_ms` (default 600 s) for the approaches
-  that start from a full withdraw, and `reposition_approach_timeout_ms`
-  (default 300 s) for the short one inside a reposition. 0.2.3 gave the
-  long approaches ten minutes; v2 had capped everything at five.
-- `const-distance drift status|measure|compensate|off`: the Z drift
-  measurement and compensation from the action layer, runnable between
-  scans from the command line. It streams Z through the TCP logger,
-  checking the stream against a plain read of Z before trusting it.
-- `examples/folme_probe.rs`: measures what a FolMe constant-height trace
-  depends on (round-trip latency, feedback-off timing and TipLift, Z step
-  response with the loop open, whether FolMe's wait flag blocks). Every
-  open-loop move retracts first, and the retract direction is measured
-  from TipLift rather than assumed.
-- **Multi-pass** (`multi_pass` module): read and write Nanonis `.mpas`
-  configuration files, byte-exactly, and load one on a controller with
-  `multi_pass::apply`. The format is undocumented by the vendor and was
-  worked out by diffing GUI-saved files; the module doc is the write-up.
-  A `[PassN]` section is one scan *direction*, so two passes need four
-  sections, and `MultiPassConfig::constant_lift` builds that. `MPass.Load`
-  resolves its path on the controller, thus `apply` takes both a local path
-  and a host path rather than assuming a shared filesystem.
-- **Drift compensation** (`MeasureZDrift`, `CompensateDrift`): measures how
-  fast Z is drifting and leaves the controller cancelling it. A measurement
-  is a burst, every sample the data stream delivers for the window, fitted
-  through block means so the rate comes with a standard error that slow
-  noise does not flatter. Compensation is a loop of a fixed number of
-  bursts: measure, correct, measure what is left. The k-th correction
-  takes a k-th of its reading, which leaves the velocity at the mean of
-  every estimate so far, and every burst corrects whether or not its
-  reading clears the error bar, since correcting only the ones that do
-  overshoots. Each burst is a `drift/burst` log event. The sign convention for the compensation velocity is
-  undocumented, so it is learned from one deliberately large trial step
-  unless the caller says it is known, and a channel that does not respond
-  is refused with the previous velocity put back. Needs the feedback loop
-  closed, thus it is a between-passes operation.
-- **Scan buffer** (`SpmController::scan_buffer_get`/`_set`/`_ensure`): which
-  signals a scan records, and at what resolution. `_ensure` adds channels
-  without dropping the ones already there.
-- **End-of-line waiting** (`SpmController::scan_wait_end_of_line`):
-  line-level progress, reporting line number, direction and multi-pass pass
-  number separately.
-- `const-distance baseline`: configures the two-pass constant-lift scan that
-  native multi-pass runs, as the published baseline (Moreno et al., Nano
-  Lett. 2015) the rolling-ellipsoid trajectory has to beat at step edges.
-- **Routine harness** (`routine` module): automations are structs
-  implementing `Routine`, run against an `Rt` that hands out
-  capability-checked subsystem handles (`rt.bias()?.set(v)?`), an
-  interruptible `settle()`, a `cycles()` driver that turns cycle/time
-  budgets into `Outcome`s, and `guarded()` for cleanup that runs however
-  the body ends. `run_routine` owns the controller life cycle (prepare,
-  withdraw on exit, teardown) around any routine, including when the
-  routine panics: it catches the unwind, restores the hardware, and
-  re-raises. Handle operations emit the same started/completed/failed
-  events `execute_logged` used to, so JSONL logs keep their shape.
-- Two new events so failures during cleanup stay visible in the JSONL
-  log rather than only in `log`: `cleanup_failed` when `guarded`
-  swallows a cleanup error to preserve the body's, and
-  `routine_panicked` when a routine unwinds.
-- `scan().props_set()` and `scan().speed_set()` now emit
-  started/completed/failed events like every other state change, so a
-  scan speed altered mid-run is visible in the JSONL log. The scan
-  reads (`status`, `props_get`, `speed_get`) stay silent.
-- Tip preparation is now `TipPrep`, the reference `Routine`
-  implementation; `run_tip_prep` keeps its exact signature and behaviour
-  as a thin wrapper over `run_routine`.
-
-### Changed
-
-- `nanonis-rs` 0.4 to 0.5, for `Scan.WaitEndOfLine`.
-
-- **Breaking (library):** `ShutdownFlag` is backed by a condition variable
-  so `request()` wakes sleeping waiters immediately (new `wait_timeout`);
-  `from_arc()` and `arc()` are gone since writes to a raw
-  `Arc<AtomicBool>` could never notify a waiter. Handlers call
-  `request()` on a clone instead.
-- **Breaking (library):** `Outcome` moved to the `routine` module
-  (re-exported from `tip_prep` unchanged) and now derives
-  `Debug`/`Clone`/`Copy`/`PartialEq`/`Eq`.
-- **Breaking (library):** `tip_prep::runner::execute_logged` and
-  `interruptible_sleep` are gone; their jobs moved into the harness
-  (`Rt`'s event-logged execution and `ShutdownFlag::wait_timeout`).
-- The stability check now restores the scan speed even when a sweep
-  errors out (previously only on completion or shutdown), and waits
-  inside the routine wake immediately on a stop request instead of at
-  the next poll tick.
-
-### Removed
-
-- **Breaking (library):** the `workflow` module. Its declarative
-  `Step`/`Condition` executor is replaced by the routine harness, which
-  puts control flow in Rust where the compiler can see it.
-- **Breaking (library):** the `machine_state` module and the `Action`
-  methods that fed it (`kind`, `expects`, `effects`, `resolves`,
-  `apply_to_state`). The state model existed so the executor could
-  decide at runtime whether a step was legal; a `Routine` cannot express
-  an illegal call in the first place, since the subsystem handle is the
-  only way to reach the operation.
-- **Breaking (library):** `ActionRegistry`, `ActionFactory`,
-  `ActionInfo` and `action::builtin_registry()`. Constructing actions by
-  string name existed only to deserialize workflow steps.
-- **Breaking (library):** `Action::execute_and_store` and
-  `execute_and_store_as`, which had no callers.
 
 ## [0.4.0] - 2026-08-10
 

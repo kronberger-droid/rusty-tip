@@ -1,4 +1,6 @@
-# rusty-tip
+<p align="center">
+  <img src="assets/branding/logo/rusty-tip-lockup-4x.png" alt="rusty tip" width="320">
+</p>
 
 [![Crates.io](https://img.shields.io/crates/v/rusty-tip)](https://crates.io/crates/rusty-tip)
 [![docs.rs](https://img.shields.io/docsrs/rusty-tip)](https://docs.rs/rusty-tip)
@@ -11,16 +13,12 @@ A Rust library for building automated scanning probe microscopy routines,
 shipping with automated STM/AFM tip preparation as its first end-to-end
 routine.
 
-> [!WARNING]
-> **The 0.3.x/0.4.x line is an experimental rewrite.**
-> The control path was rebuilt around the `SpmController` trait and a new
-> action/event system, and it has not run on a real microscope yet: every test
-> in this release exercises `MockController`. The stability thresholds were
-> calibrated against the v1 code path and may need retuning.
->
-> Expect the API and the config format to keep moving until the rewrite gets
-> machine time. For the last version that has run on hardware, see
-> [0.2.3](https://github.com/kronberger-droid/rusty-tip/releases/tag/v0.2.3).
+> [!NOTE]
+> 0.5 is the first release of the rewrite (the control path rebuilt around
+> the `SpmController` trait, the routine harness and the event log) that has
+> run on a real microscope: it was validated over a two-week machine session.
+> Before 1.0 the API and the config format can still change between minor
+> versions; the [CHANGELOG](CHANGELOG.md) says what moved.
 >
 > If you need a stable interface to program against today, use
 > [nanonis-rs](https://crates.io/crates/nanonis-rs), the Nanonis TCP client
@@ -40,6 +38,50 @@ design, is automated tip preparation: pulse, reposition, measure the
 frequency shift, repeat until the tip is sharp and provably stable. It ships
 as a CLI (`tip-prep`) and as a tool in the workbench (`rusty-tip-gui`).
 
+## The library
+
+- **One controller interface.** `SpmController` is everything a routine
+  asks of an instrument, with the capabilities each backend reports. The
+  Nanonis backend talks TCP through [nanonis-rs](https://crates.io/crates/nanonis-rs);
+  `MockController` simulates a tip, a Z loop, drift and faults, so routines
+  are written and tested without instrument time.
+- **Routines.** A `Routine` runs against `Rt`, which hands out
+  capability-checked handles (bias, Z-controller, motor, scan, signals,
+  drift, multi-pass, presets), interruptible waits and cycle or time
+  budgets. `run_routine` cleans up however a routine ends, a panic
+  included: withdraw, retract, safe-tip put back.
+- **Sessions.** `Session` holds one connection across many runs, on its own
+  thread for a window or a server.
+- **Experiment logs.** Every run writes a self-describing JSONL log: each
+  action with its parameters and timing, every measurement, typed events
+  and the controller's facts. `experiment_log::reader` reads it back.
+- **Tip preparation.** `TipPrep` pulses, repositions and reads the frequency
+  shift until the tip is sharp, then sweeps the bias to check it stays so.
+  Pulse strategies, a landing gate on the current, and a config that can
+  change between cycles of a running prep.
+- **Drift.** Measure the Z drift with an error bar and set the piezo
+  compensation that cancels it.
+- **Feedback controllers.** The Z-controller and the PLL's loops as
+  parameter sets to read, edit and write, presets by name, and operating
+  points: every loop, the bias and the scan under one name.
+- **Multi-pass.** Read and write Nanonis `.mpas` files byte for byte and
+  load them on the controller.
+- **Analysis and export.** Constant-distance trajectories from a topograph
+  (rolling ellipsoid), a CuOx row detector, Gwyddion `.gsf` and XYZ export.
+- **An interface for agents.** `control` serves JSON requests on a local
+  socket, behind a read-only gate and limits.
+
+## The toolbox
+
+| Tool | What it does |
+| --- | --- |
+| `rusty-tip-gui` | The workbench. Connect once, then run a tool and watch it live: **Tip prep**, **Drift**, **Controllers** (operating points and loops). The Connection page shows the controller's state, signals and live readouts, History opens any past run from its log, and a `Mock` backend runs everything without hardware. |
+| `rusty-tip` | A JSON command line for scripts and agents: `describe`, `status`, `read`, `controllers`, `scan`, `frame`, `psd`, and `serve` for a headless connection. Read-only for now. |
+| `tip-prep` | Tip preparation from a TOML config, without a window. |
+| `rt-log` | Experiment logs in the terminal: `ls`, `summary`, `timeline`, `plot`, and `export` to CSV. |
+| `const-distance` | `plan` a constant-distance trajectory from a topograph; `baseline` sets up the constant-lift multi-pass scan it is compared against. |
+| `cuox-finder` | CuOx reconstruction rows in STM images of Cu(110), as JSON (`--features cuox`). |
+
 ## Installation
 
 Pre-built binaries from [GitHub Releases](https://github.com/kronberger-droid/rusty-tip/releases):
@@ -49,49 +91,14 @@ Pre-built binaries from [GitHub Releases](https://github.com/kronberger-droid/ru
 From source:
 
 ```bash
-cargo build --release                 # tip-prep, const-distance, rt-log
+cargo build --release                 # rusty-tip, tip-prep, const-distance, rt-log
 cargo build --release --features cuox # + cuox-finder
 cargo build --release --features gui  # + rusty-tip-gui
 ```
 
+With Nix, `nix run github:kronberger-droid/rusty-tip` starts the workbench.
+
 As a library: `cargo add rusty-tip`.
-
-## Quickstart: tip preparation
-
-```bash
-tip-prep --config path/to/config.toml
-```
-
-A minimal config:
-
-```toml
-[nanonis]
-host_ip = "127.0.0.1"
-control_ports = [6501, 6502, 6503, 6504]
-
-[data_acquisition]
-data_port = 6590
-sample_rate = 2000
-
-[tip_prep]
-sharp_tip_bounds = [-1.5, 0.0]  # freq-shift window that counts as "sharp" (Hz)
-max_cycles = 10000
-max_duration_secs = 12000
-initial_bias_v = -0.5
-initial_z_setpoint_a = 100e-12
-
-[pulse_method]
-type = "fixed"
-voltage = 4.0
-polarity = "positive"
-```
-
-`rusty-tip-gui` is the workbench: connect to the controller once, then
-pick a tool, run it, watch it live and open any past run from its log. Tip prep, drift compensation and a Controllers tool
-that reads, edits and writes the Z-controller and PLL loops are the first
-tools; the Connection page shows the controller's state, signals and live
-readouts between runs, and a `Mock` backend runs everything without
-hardware.
 
 ## Documentation
 
@@ -99,7 +106,11 @@ hardware.
   `SpmController` for your hardware, writing routines of your own
 - **[Configuration reference](docs/tip-prep/config.md)** — every section and
   field of the tip-prep config, pulse strategies, stability checking, TCP
-  channel mapping
+  channel mapping, with working configs in `configs/`
+- **[The command line for agents](docs/agent-cli.md)** — `rusty-tip`, its
+  commands, replies, exit codes and limits
+- **[Experiment logs](docs/experiment-log.md)** — the JSONL format every run
+  writes
 - **[How tip preparation works](docs/tip-prep/algorithm.md)** — the routine,
   cycle by cycle
 - **[Constant-distance scanning](docs/const-distance-scan.md)** — planning a tip
@@ -116,3 +127,14 @@ hardware.
 ## License
 
 MIT
+
+## AI use
+
+[![AI:R READ](https://img.shields.io/badge/AI-READ-grey?style=flat&logoSize=auto&labelColor=13171f)](https://0rwx.com)
+[![AI:W WRITE](https://img.shields.io/badge/AI-WRITE-grey?style=flat&logoSize=auto&labelColor=13171f)](https://0rwx.com)
+[![AI:X EXECUTE](https://img.shields.io/badge/AI-EXECUTE-grey?style=flat&logoSize=auto&labelColor=13171f)](https://0rwx.com)
+
+rusty-tip is a mix of all three on the [0rwx](https://0rwx.com) scale:
+parts I wrote myself with an LLM only reading along (R), parts written with
+Claude Code that I read and fixed (W), and tooling I checked by running it
+rather than line by line (X).

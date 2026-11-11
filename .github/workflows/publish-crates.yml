@@ -1,27 +1,40 @@
-# Publishes the library to crates.io on a version tag.
+# Publishes the library to crates.io once a version tag's release has built.
 #
-# Complements release.yml (cargo-dist), which builds binaries and creates the
-# GitHub Release from the same tag. cargo-dist has no built-in crates.io job,
-# so registry publishing lives here as a standalone workflow.
+# release.yml (cargo-dist) builds the binaries and creates the GitHub Release
+# from the tag. This waits for it to finish and publishes only if it
+# succeeded: `cargo publish` cannot be undone, so a tag whose Windows build
+# fails must not reach crates.io first. Chained with `workflow_run` rather
+# than a cargo-dist publish job, so release.yml stays exactly what dist
+# generates.
+#
+# `workflow_run` runs this file as it is on the default branch and checks out
+# the commit the release was built from.
 #
 # Requires a CARGO_REGISTRY_TOKEN secret in the repository settings.
 name: Publish to crates.io
 
-# Same tag pattern as release.yml so the two fire together. Tags only — never
-# on PRs or branch pushes, because `cargo publish` is irreversible.
 on:
-  push:
-    tags:
-      - '**[0-9]+.[0-9]+.[0-9]+*'
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
 
 permissions:
   contents: read
 
 jobs:
   publish:
+    # Release also runs on pull requests, as a plan-only check. Only a
+    # successful run from a tag push publishes; for those, the run's branch
+    # is the tag.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: dtolnay/rust-toolchain@stable
       # --locked builds against the committed Cargo.lock; the version published
       # is whatever is in Cargo.toml (cargo-dist's plan job already enforces

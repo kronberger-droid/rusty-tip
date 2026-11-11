@@ -110,12 +110,34 @@ impl Action for ReadSignalNames {
     }
 }
 
+/// What a [`ReadStableSignal`] read: the mean of a batch, the statistics it
+/// was judged by, and whether it passed.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StableRead {
+    pub value: f64,
+    pub std_dev: f64,
+    /// Drift across the batch, Hz/s.
+    pub drift_hz_s: f64,
+    pub samples: usize,
+    /// Batches taken, the one reported included.
+    pub attempts: usize,
+    /// Whether the batch was mostly one exact value: a PLL at its rail or
+    /// out of lock, not a reading. See [`is_frozen`].
+    pub frozen: bool,
+    /// Whether the batch passed the noise and drift gates. A read that
+    /// failed them on every attempt reports its last batch with this false:
+    /// its value is not a measurement, and the caller has to decide what to
+    /// do instead of using it.
+    pub stable: bool,
+}
+
 /// Read a stable signal by collecting samples and checking statistical stability.
 ///
 /// Collects `num_samples` from the data stream, then checks that both the
 /// standard deviation (Hz) and the drift rate (Hz/s) are within bounds.
 /// Retries with exponential backoff (100ms, 200ms, 400ms, ...) if the
-/// signal is not stable. Returns the mean of the stable batch.
+/// signal is not stable. Returns a [`StableRead`]: the stable batch, or the
+/// last one, marked unstable, when no attempt passed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadStableSignal {
     pub index: SignalIndex,
@@ -136,7 +158,23 @@ pub struct ReadStableSignal {
     /// wins whenever it has one.
     #[serde(default = "default_sample_rate_hz")]
     pub sample_rate_hz: f64,
+    /// Length of a batch in time, ms, overriding `num_samples`: the samples
+    /// follow from the stream rate. A batch fixed in samples lasts 0.1 s at
+    /// 1 kHz and 5 s at 20 Hz, and the slope fitted to it scatters with its
+    /// length to the power 1.5, so the same drift gate rejects noise on a
+    /// short batch and passes real drift on a long one.
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
 }
+
+/// The fewest samples a batch set in time is cut to, so a slow stream still
+/// gives the gates something to judge.
+const MIN_BATCH_SAMPLES: usize = 10;
+
+/// The most samples a batch set in time asks for when the signal is not on
+/// the stream and every sample is a polled round trip: the fixed batch the
+/// read used before it was set in time.
+const MAX_POLLED_SAMPLES: usize = 100;
 
 fn default_num_samples() -> usize {
     100
@@ -167,6 +205,7 @@ impl Default for ReadStableSignal {
             max_slope: default_max_slope(),
             max_retries: default_max_retries(),
             sample_rate_hz: default_sample_rate_hz(),
+            duration_ms: None,
         }
     }
 }
@@ -188,19 +227,34 @@ impl Action for ReadStableSignal {
             .stream_rate_hz()
             .filter(|&hz| hz > 0.0)
             .unwrap_or(self.sample_rate_hz);
+        // A signal off the stream is polled, one round trip a sample, and a
+        // batch set in time at the configured rate would take seconds.
+        let streamed = ctx.controller.streams_signal(self.index);
+        let num_samples = match self.duration_ms {
+            Some(ms) => {
+                let n =
+                    ((ms as f64 / 1000.0 * sample_rate_hz).round() as usize).max(MIN_BATCH_SAMPLES);
+                if streamed {
+                    n
+                } else {
+                    n.min(MAX_POLLED_SAMPLES)
+                }
+            }
+            None => self.num_samples,
+        };
         for attempt in 0..=self.max_retries {
             let samples = ctx
                 .controller
-                .read_signal_samples(self.index, self.num_samples)?;
+                .read_signal_samples(self.index, num_samples)?;
 
             // Treat severely incomplete data as instability — thresholds were
             // tuned for the configured sample count, so computing on too few
             // samples would produce unreliable statistics.
-            if samples.len() < self.num_samples / 2 {
+            if samples.len() < num_samples / 2 {
                 log::warn!(
                     "ReadStableSignal: only got {}/{} samples, treating as unstable (attempt {})",
                     samples.len(),
-                    self.num_samples,
+                    num_samples,
                     attempt
                 );
                 if attempt < self.max_retries {
@@ -218,8 +272,9 @@ impl Action for ReadStableSignal {
 
             let noise_ok = std_dev <= self.max_std_dev;
             let drift_ok = drift.abs() <= self.max_slope;
+            let frozen = is_frozen(&samples);
 
-            if noise_ok && drift_ok {
+            if noise_ok && drift_ok && !frozen {
                 log::debug!(
                     "ReadStableSignal: index={}, samples={}, mean={:.6}, std_dev={:.4} Hz, drift={:.4} Hz/s (stable, attempt {})",
                     self.index,
@@ -240,17 +295,29 @@ impl Action for ReadStableSignal {
                     slope_per_sample,
                     true,
                 );
-                return Ok(ActionOutput::Value(mean));
+                return ActionOutput::data(
+                    self.name(),
+                    &StableRead {
+                        value: mean,
+                        std_dev,
+                        drift_hz_s: drift,
+                        samples: samples.len(),
+                        attempts: attempt + 1,
+                        frozen: false,
+                        stable: true,
+                    },
+                );
             }
 
             if attempt < self.max_retries {
                 let backoff_ms = 100u64 * (1 << attempt);
                 log::debug!(
-                    "ReadStableSignal: not stable (std_dev={:.4}/{:.4} Hz, drift={:.4}/{:.4} Hz/s, n={}), retry {} in {}ms",
+                    "ReadStableSignal: not stable (std_dev={:.4}/{:.4} Hz, drift={:.4}/{:.4} Hz/s, frozen={}, n={}), retry {} in {}ms",
                     std_dev,
                     self.max_std_dev,
                     drift.abs(),
                     self.max_slope,
+                    frozen,
                     samples.len(),
                     attempt + 1,
                     backoff_ms
@@ -258,12 +325,13 @@ impl Action for ReadStableSignal {
                 ctx.settle(backoff_ms)?;
             } else {
                 log::warn!(
-                    "ReadStableSignal: signal not stable after {} retries (std_dev={:.4}/{:.4} Hz, drift={:.4}/{:.4} Hz/s, n={}), using mean={:.6}",
+                    "ReadStableSignal: signal not stable after {} retries (std_dev={:.4}/{:.4} Hz, drift={:.4}/{:.4} Hz/s, frozen={}, n={}), last mean={:.6}",
                     self.max_retries,
                     std_dev,
                     self.max_std_dev,
                     drift.abs(),
                     self.max_slope,
+                    frozen,
                     samples.len(),
                     mean
                 );
@@ -278,7 +346,18 @@ impl Action for ReadStableSignal {
                     slope_per_sample,
                     false,
                 );
-                return Ok(ActionOutput::Value(mean));
+                return ActionOutput::data(
+                    self.name(),
+                    &StableRead {
+                        value: mean,
+                        std_dev,
+                        drift_hz_s: drift,
+                        samples: samples.len(),
+                        attempts: attempt + 1,
+                        frozen,
+                        stable: false,
+                    },
+                );
             }
         }
 
@@ -342,6 +421,33 @@ pub(crate) fn emit_measurement(
             "stable": stable,
         }),
     ));
+}
+
+/// Share of a batch one exact value may take before the batch is a pinned
+/// signal rather than a reading. In real frequency-shift batches the most
+/// common value is at most 12 % of 100 samples, usually 1 %; a railed PLL
+/// streams one value throughout.
+const FROZEN_SHARE: f64 = 0.5;
+
+/// Whether a batch is mostly one exact value.
+///
+/// A PLL at the end of its range or out of lock streams its rail, the same
+/// number sample after sample. That batch has no scatter and no slope, so
+/// the noise and drift gates both take it for a perfectly steady reading.
+/// Real signals always scatter, so a batch that does not is refused,
+/// wherever the rail happens to sit.
+pub(crate) fn is_frozen(data: &[f64]) -> bool {
+    if data.len() < 2 {
+        return false;
+    }
+    let mut bits: Vec<u64> = data.iter().map(|v| v.to_bits()).collect();
+    bits.sort_unstable();
+    let longest = bits
+        .chunk_by(|a, b| a == b)
+        .map(<[u64]>::len)
+        .max()
+        .unwrap_or(0);
+    longest as f64 >= FROZEN_SHARE * data.len() as f64
 }
 
 /// Compute mean, standard deviation, and linear regression slope from sample data.

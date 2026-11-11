@@ -15,7 +15,7 @@
 //! The fit is not done on the raw samples. Z under feedback carries slow
 //! noise, so neighbouring samples are correlated and a textbook standard error
 //! computed from them would be optimistic by an order of magnitude. The burst
-//! is averaged into [`BLOCKS`] blocks first and the line is fitted through the
+//! is averaged into ten blocks first and the line is fitted through the
 //! block means; the scatter of those means about the line is an honest
 //! measure of what the slope is worth, and it is what decides when
 //! [`CompensateDrift`] stops.
@@ -63,8 +63,42 @@ fn default_max_vz() -> f64 {
     2e-9
 }
 
-fn default_settle_max_ms() -> u64 {
-    180_000
+/// How long `compensate` waits for the drift to stop changing before it
+/// corrects, and how hard it looks.
+///
+/// Creep after an approach or a Z move dies out over tens of seconds to
+/// minutes, and a velocity fitted while it is still dying out is stale by
+/// the time it acts: the drift goes on changing after the run, and the
+/// scan sees the difference. Whether that matters depends on what comes
+/// next, so the wait is the caller's choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SettleMode {
+    /// The drift's trend over the last two minutes of bursts, error bar
+    /// included, has to stay under 0.75 pm/s; at most ten minutes. Leaves
+    /// under 1 pm/s of creep with a time constant up to two minutes and
+    /// refuses slower creep, nothing changed. Takes at least two minutes.
+    #[default]
+    Careful,
+    /// Three bursts about ten seconds apart that agree within their noise;
+    /// at most three minutes. Quick, but creep with a time constant of a
+    /// minute or more passes as settled and is left behind.
+    Quick,
+    /// No wait: the first burst is the baseline.
+    Skip,
+}
+
+impl SettleMode {
+    /// The span the trend is judged over, s; the most the trend may change
+    /// over it, error bar included, m/s (`None`: only within its noise);
+    /// and the budget, s (0: no wait).
+    fn criteria(self, window_s: f64) -> (f64, Option<f64>, f64) {
+        match self {
+            SettleMode::Careful => (120.0, Some(0.75e-12), 600.0),
+            SettleMode::Quick => (2.0 * window_s, None, 180.0),
+            SettleMode::Skip => (0.0, None, 0.0),
+        }
+    }
 }
 
 /// The least share of a burst's reading a correction applies. The k-th
@@ -373,7 +407,7 @@ pub struct DriftCompensation {
 /// - **Corrections average, down to a floor.** The first takes all of what
 ///   its burst says is missing, which on a settled drift is the answer; the
 ///   k-th takes a k-th, averaging the noise out, but never less than
-///   [`MIN_CORRECTION_GAIN`], so a drift still changing slowly is followed.
+///   a half, so a drift still changing slowly is followed.
 ///   Every burst corrects, however small its reading: correcting only the
 ///   readings that clear their error bar picks out the bursts whose noise
 ///   ran the same way as the residual, and those overshoot. For the same
@@ -398,9 +432,9 @@ pub struct CompensateDrift {
     /// Velocity step used to learn the response, m/s.
     #[serde(default = "default_trial_vz")]
     pub trial_vz: f64,
-    /// The response, when it is already known for this controller: +1 if a
-    /// positive `vz` adds to the measured drift, -1 if it subtracts. Skips
-    /// the trial burst.
+    /// The response, when it is already known for this controller: the
+    /// drift one m/s of `vz` adds, about +1 or -1, with its size when that
+    /// is known too (say -0.9). Skips the trial burst.
     #[serde(default)]
     pub response: Option<f64>,
     /// A residual below this counts as zero even if the burst could resolve
@@ -411,11 +445,10 @@ pub struct CompensateDrift {
     /// magnitude below it, so getting here means the measurement is broken.
     #[serde(default = "default_max_vz")]
     pub max_vz: f64,
-    /// Longest to wait for the drift to settle before compensating, in
-    /// milliseconds. 0 skips the wait and takes the first burst as the
-    /// baseline.
-    #[serde(default = "default_settle_max_ms")]
-    pub settle_max_ms: u64,
+    /// How long to wait for creep to die out before correcting. See
+    /// [`SettleMode`].
+    #[serde(default)]
+    pub settle: SettleMode,
 }
 
 impl CompensateDrift {
@@ -430,7 +463,16 @@ impl CompensateDrift {
             response: None,
             tolerance_m_s: default_tolerance(),
             max_vz: default_max_vz(),
-            settle_max_ms: default_settle_max_ms(),
+            settle: SettleMode::default(),
+        }
+    }
+
+    /// The defaults with the [`Quick`](SettleMode::Quick) wait: a
+    /// compensation in about half a minute that may leave slow creep behind.
+    pub fn quick(z: SignalIndex) -> Self {
+        Self {
+            settle: SettleMode::Quick,
+            ..Self::new(z)
         }
     }
 
@@ -477,11 +519,18 @@ impl CompensateDrift {
         }
 
         // A velocity that is configured but switched off is not in effect, so
-        // the baseline sees zero, not `comp.vz`.
+        // the baseline sees zero, not `comp.vz`. The same goes for x and y:
+        // switching compensation on for Z must not bring back lateral
+        // velocities left stored from an earlier session, which would walk
+        // the tip off its spot. Ones in effect are the operator's and stay.
         let mut vz = match comp.enabled {
             true => comp.vz,
             false => 0.0,
         };
+        if !comp.enabled {
+            comp.vx = 0.0;
+            comp.vy = 0.0;
+        }
         let set = |ctx: &mut ActionContext, vz: f64| -> Result<(), SpmError> {
             if vz.abs() > self.max_vz {
                 return Err(SpmError::Workflow(format!(
@@ -498,8 +547,15 @@ impl CompensateDrift {
             })
         };
         let mut bursts = 0;
+        // What one burst's error bar is short by, learned from the baseline;
+        // one until then.
+        let calibration = std::cell::Cell::new(1.0);
         let mut burst = |ctx: &mut ActionContext, role: BurstRole, vz: f64| {
-            let estimate = measure.measure(ctx)?;
+            let raw = measure.measure(ctx)?;
+            let estimate = DriftEstimate {
+                std_err_m_s: raw.std_err_m_s * calibration.get(),
+                ..raw
+            };
             bursts += 1;
             ctx.events.emit(Event::typed(&DriftBurstEvent {
                 burst: bursts,
@@ -511,27 +567,60 @@ impl CompensateDrift {
             Ok::<_, SpmError>((estimate, bursts))
         };
 
-        // Baseline bursts, nothing changed, until the drift holds still.
-        let settle_by = Instant::now() + Duration::from_millis(self.settle_max_ms);
-        let mut found: Vec<DriftEstimate> = Vec::new();
+        // Baseline bursts, nothing changed, until the drift holds still. The
+        // budget counts the time measured, not the wall clock: on the
+        // instrument the two differ by the overhead between bursts, and a
+        // simulated burst takes no wall time at all.
+        let mut measured_s = 0.0;
+        // Each burst with the time of its middle on the measured clock.
+        let mut found: Vec<(f64, DriftEstimate)> = Vec::new();
         let (mut estimate, mut taken) = loop {
             let (e, n) = burst(ctx, BurstRole::Baseline, vz)?;
-            found.push(e);
-            if self.settle_max_ms == 0 || settled(&found, self.tolerance_m_s) {
+            found.push((measured_s + e.window_s / 2.0, e));
+            measured_s += e.window_s;
+            // A burst's measured length, first sample to last, sets the
+            // quick test's span of three bursts.
+            let (span_s, max_change, budget_s) = self.settle.criteria(e.window_s);
+            if budget_s == 0.0 || settled(&found, span_s, max_change, self.tolerance_m_s) {
                 break (e, n);
             }
-            if Instant::now() >= settle_by {
-                let first = found[found.len().saturating_sub(3)].rate_m_s;
+            if measured_s >= budget_s {
+                let first = found
+                    .iter()
+                    .find(|(t, _)| *t >= measured_s - span_s)
+                    .map_or(e.rate_m_s, |(_, f)| f.rate_m_s);
                 return Err(SpmError::Workflow(format!(
-                    "compensate_drift: the drift is still changing after {} s, {:.2} to \
-                     {:.2} pm/s over the last bursts. Creep from the last approach or Z \
-                     move has not died out; nothing was changed, run again in a minute.",
-                    self.settle_max_ms / 1000,
+                    "compensate_drift: the drift is still changing after {budget_s:.0} s, \
+                     {:.2} to {:.2} pm/s over the last {span_s:.0} s. Creep from the last \
+                     approach or Z move has not died out; nothing was changed. Run again in \
+                     a few minutes, or settle quickly and accept the creep left behind.",
                     first * 1e12,
                     e.rate_m_s * 1e12
                 )));
             }
         };
+        // A burst's error bar comes from the scatter of its block means, and
+        // Z noise correlated over seconds makes neighbouring blocks agree more
+        // than independent ones would: under such noise the bursts report two
+        // to three times too little. The baseline bursts, taken with nothing
+        // changed, scatter about their trend by the real amount, so the
+        // ratio calibrates every burst after them. Three quick-settle bursts
+        // are too few to tell; their error bars stay as reported.
+        let (span_s, _, _) = self.settle.criteria(estimate.window_s);
+        let recent = &found[span_start(&found, span_s).unwrap_or(0)..];
+        if recent.len() >= CALIBRATION_BURSTS
+            && let Some(t) = trend(recent)
+        {
+            calibration.set(t.scatter_ratio.max(1.0));
+            estimate.std_err_m_s *= calibration.get();
+            if calibration.get() > 1.0 {
+                log::info!(
+                    "compensate_drift: the baseline scatters {:.1}x more than its bursts \
+                     report; error bars from here on are scaled to match",
+                    calibration.get()
+                );
+            }
+        }
         // Settling bursts are not the correction's to spend.
         let budget = self.bursts + taken - 1;
         if estimate.is_negligible(self.tolerance_m_s) {
@@ -574,8 +663,19 @@ impl CompensateDrift {
                         at_trial.rate_m_s - estimate.rate_m_s
                     )));
                 }
+                // The size counts as well as the sign once the trial can
+                // tell it from one: a channel that answers 0.9 of what it is
+                // asked makes every correction 10 % short with the size taken
+                // as one. Within the trial's own noise, one is the better
+                // guess.
+                let uncertainty = at_trial.std_err_m_s.hypot(estimate.std_err_m_s) / self.trial_vz;
+                let response = if (measured.abs() - 1.0).abs() > 2.0 * uncertainty {
+                    measured
+                } else {
+                    measured.signum()
+                };
                 (vz, estimate, taken) = (trial, at_trial, n);
-                measured.signum()
+                response
             }
         };
 
@@ -616,19 +716,110 @@ impl Action for CompensateDrift {
     }
 }
 
-/// Whether the drift has stopped changing: the newest baseline burst reads
-/// within the joint noise of the one two before it, ten seconds apart at
-/// the default window. Neighbours alone are too close in time: a creep
-/// dying out over tens of seconds changes less between two of them than
-/// their noise.
-fn settled(found: &[DriftEstimate], tolerance_m_s: f64) -> bool {
-    if found.len() < 3 {
+/// Whether the drift has stopped changing, judged by the trend of the
+/// baseline bursts over the last `span_s`: a line through their rates
+/// against time, whose slope times the span is how much the drift changed
+/// over it.
+///
+/// Creep still to come is that change divided by `1 - exp(-span / tau)`,
+/// so a span short against the creep's time constant sees only a sliver of
+/// it; two minutes leave less than 1 pm/s behind for creep up to that time
+/// constant once the change stays under 0.75 pm/s.
+///
+/// With `max_change` the change plus two error bars has to stay under it;
+/// without, the change has only to be inside two error bars, which is
+/// quick and passes slow creep. The error bar is the larger of what the
+/// bursts report and how much they scatter about the line, since the
+/// reported one is optimistic under correlated noise.
+///
+/// With `max_change` the whole baseline is tried too, when it reaches
+/// further back than the span. Correlated noise can leave two minutes of
+/// bursts too uncertain to show a change under the limit even when there is
+/// none, and the error of a trend falls steeply with its span, so looking
+/// longer resolves it. Creep only makes the longer span stricter, since it
+/// sees more of the change.
+fn settled(
+    found: &[(f64, DriftEstimate)],
+    span_s: f64,
+    max_change: Option<f64>,
+    floor_m_s: f64,
+) -> bool {
+    let Some(start) = span_start(found, span_s) else {
         return false;
-    }
-    let (first, last) = (found[found.len() - 3], found[found.len() - 1]);
-    let noise = 2.0 * first.std_err_m_s.hypot(last.std_err_m_s);
-    (last.rate_m_s - first.rate_m_s).abs() <= noise.max(tolerance_m_s)
+    };
+    let passes = |bursts: &[(f64, DriftEstimate)]| {
+        trend(bursts).is_some_and(|t| match max_change {
+            Some(limit) => t.change + 2.0 * t.error <= limit.max(floor_m_s),
+            None => t.change <= (2.0 * t.error).max(floor_m_s),
+        })
+    };
+    passes(&found[start..]) || (max_change.is_some() && start > 0 && passes(found))
 }
+
+/// The newest burst at or before `span_s` before the last one, so a span
+/// starting there is covered whatever the burst times happen to be.
+fn span_start(found: &[(f64, DriftEstimate)], span_s: f64) -> Option<usize> {
+    let &(t_last, _) = found.last()?;
+    found
+        .iter()
+        .rposition(|(t, _)| *t <= t_last - span_s + 1e-9)
+}
+
+/// A line through burst rates against time.
+#[derive(Debug, Clone, Copy)]
+struct Trend {
+    /// How much the drift changed over the bursts' span, m/s.
+    change: f64,
+    /// Its standard error: the larger of what the bursts report and how
+    /// much they scatter about the line.
+    error: f64,
+    /// How far the bursts scatter about the line against the errors they
+    /// report; above one, they report too little.
+    scatter_ratio: f64,
+}
+
+fn trend(bursts: &[(f64, DriftEstimate)]) -> Option<Trend> {
+    if bursts.len() < 3 {
+        return None;
+    }
+    let n = bursts.len() as f64;
+    let covered = bursts[bursts.len() - 1].0 - bursts[0].0;
+    let t_mean = bursts.iter().map(|(t, _)| t).sum::<f64>() / n;
+    let r_mean = bursts.iter().map(|(_, e)| e.rate_m_s).sum::<f64>() / n;
+    let sxx: f64 = bursts.iter().map(|(t, _)| (t - t_mean).powi(2)).sum();
+    if sxx <= 0.0 {
+        return None;
+    }
+    let slope = bursts
+        .iter()
+        .map(|(t, e)| (t - t_mean) * (e.rate_m_s - r_mean))
+        .sum::<f64>()
+        / sxx;
+    let reported = bursts
+        .iter()
+        .map(|(t, e)| (t - t_mean).powi(2) * e.std_err_m_s.powi(2))
+        .sum::<f64>()
+        / sxx.powi(2);
+    let scatter = bursts
+        .iter()
+        .map(|(t, e)| (e.rate_m_s - r_mean - slope * (t - t_mean)).powi(2))
+        .sum::<f64>()
+        / (n - 2.0)
+        / sxx;
+    Some(Trend {
+        change: (slope * covered).abs(),
+        error: reported.max(scatter).sqrt() * covered,
+        scatter_ratio: if reported > 0.0 {
+            (scatter / reported).sqrt()
+        } else {
+            1.0
+        },
+    })
+}
+
+/// Bursts the scatter of the baseline needs before it can say how far the
+/// bursts' own error bars are off.
+const CALIBRATION_BURSTS: usize = 5;
 
 #[cfg(test)]
 mod tests {
@@ -692,27 +883,69 @@ mod tests {
         assert!(e(0.04e-12, 0.0).is_negligible(0.05e-12));
     }
 
+    /// Bursts of 5 s, back to back, reading `pm_s` each with 0.3 pm/s of
+    /// noise.
+    fn bursts(pm_s: &[f64]) -> Vec<(f64, DriftEstimate)> {
+        pm_s.iter()
+            .enumerate()
+            .map(|(k, r)| {
+                let e = DriftEstimate {
+                    rate_m_s: r * 1e-12,
+                    std_err_m_s: 0.3e-12,
+                    samples: 5000,
+                    window_s: 5.0,
+                };
+                (2.5 + 5.0 * k as f64, e)
+            })
+            .collect()
+    }
+
     /// The lab's first run on 2026-09-29, 50 s after an approach: 28.1,
     /// 24.6, 20.4 pm/s at 0.1 to 0.45 pm/s of noise is creep, not settled.
-    /// The run a minute later, 7.45, 7.49, 7.00, is.
+    /// The run a minute later, 7.45, 7.49, 7.00, is, to the quick test.
     #[test]
-    fn a_drift_is_settled_once_three_bursts_agree_end_to_end() {
-        let e = |pm_s: f64| DriftEstimate {
-            rate_m_s: pm_s * 1e-12,
-            std_err_m_s: 0.3e-12,
-            samples: 5000,
-            window_s: 5.0,
-        };
+    fn quick_settles_once_three_bursts_agree_end_to_end() {
+        let (span, change, _) = SettleMode::Quick.criteria(5.0);
         let tol = default_tolerance();
-        assert!(!settled(&[e(28.1), e(24.6), e(20.4)], tol));
-        assert!(settled(&[e(7.45), e(7.49), e(7.00)], tol));
+        assert!(!settled(&bursts(&[28.1, 24.6, 20.4]), span, change, tol));
+        assert!(settled(&bursts(&[7.45, 7.49, 7.00]), span, change, tol));
         assert!(
-            !settled(&[e(7.45), e(7.49)], tol),
+            !settled(&bursts(&[7.45, 7.49]), span, change, tol),
             "two bursts are too close in time to tell"
         );
         assert!(
-            settled(&[e(28.1), e(7.45), e(7.49), e(7.00)], tol),
-            "only the last three count"
+            settled(&bursts(&[28.1, 7.45, 7.49, 7.00]), span, change, tol),
+            "only the last ten seconds count"
+        );
+    }
+
+    /// Creep of 20 pm/s with a two-minute time constant: three bursts ten
+    /// seconds apart agree within their noise long before it is gone, and
+    /// the careful test waits it out.
+    #[test]
+    fn careful_waits_out_creep_the_quick_test_passes() {
+        let rates: Vec<f64> = (0..120)
+            .map(|k| 5.0 + 20.0 * (-(30.0 + 5.0 * k as f64) / 120.0).exp())
+            .collect();
+        let tol = default_tolerance();
+        let first_settled = |mode: SettleMode| {
+            let (span, change, _) = mode.criteria(5.0);
+            (3..=rates.len())
+                .find(|&n| settled(&bursts(&rates[..n]), span, change, tol))
+                .map(|n| 30.0 + 5.0 * n as f64)
+        };
+        let quick = first_settled(SettleMode::Quick).unwrap();
+        let careful = first_settled(SettleMode::Careful).unwrap();
+        let left = |t: f64| 20.0 * (-t / 120.0).exp();
+        assert!(
+            left(quick) > 3.0,
+            "quick at {quick} s leaves {:.1}",
+            left(quick)
+        );
+        assert!(
+            left(careful) < 1.0,
+            "careful at {careful} s leaves {:.1}",
+            left(careful)
         );
     }
 }

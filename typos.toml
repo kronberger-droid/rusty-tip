@@ -9,3 +9,5 @@ extend-exclude = ["settings/*.ini"]
 # the spelling has to be readable there too.
 [default.extend-words]
 setp = "setp"
+# "PNGs" splits into "PN" + "Gs", and "PN" reads as a typo of "ON".
+pn = "pn"

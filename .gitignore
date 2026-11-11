@@ -3,6 +3,7 @@ target/
 experiments/
 */.obsidian/workspace.json
 *.png
+!assets/branding/**/*.png
 .claude
 .direnv
 result

@@ -18,7 +18,7 @@ use crate::spm_error::SpmError;
 /// Load the config's layout and settings files, shared by the CLI and the
 /// GUI. Call it before the stream starts: a settings file can change the
 /// TCP logger's channel list, and Nanonis stops a live stream on that. Z
-/// home and safe-tip are the routine's business ([`TipPrep::run_setup`]).
+/// home and safe-tip are the routine's business ([`TipPrep`]'s [`run_setup`](crate::routine::Routine::run_setup)).
 pub fn load_presets(
     controller: &mut dyn SpmController,
     config: &AppConfig,

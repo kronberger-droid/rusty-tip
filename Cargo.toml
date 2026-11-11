@@ -1,6 +1,6 @@
 [package]
 name = "rusty-tip"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "Write controller-agnostic scanning probe microscopy automation in Rust, starting with automated tip preparation on Nanonis systems"
 repository = "https://github.com/kronberger-droid/rusty-tip"
@@ -10,6 +10,29 @@ keywords = ["nanonis", "spm", "stm", "afm", "automation"]
 categories = ["science"]
 documentation = "https://docs.rs/rusty-tip"
 readme = "README.md"
+# Repo tooling and design notes, not part of the crate. `configs/` and
+# `controllers.toml` stay: tests read them. Of the branding only the window
+# icon's raw pixels are compiled in.
+exclude = [
+    ".github/",
+    ".githooks/",
+    ".helix",
+    ".envrc",
+    ".ignore",
+    "CLAUDE.md",
+    "CODING_STANDARDS.md",
+    "dist-workspace.toml",
+    "typos.toml",
+    "flake.nix",
+    "flake.lock",
+    "dev/",
+    "settings/",
+    "docs/gui-workbench-handoff.md",
+    "assets/branding/hicolor/",
+    "assets/branding/social/",
+    "assets/branding/logo/",
+    "assets/branding/source/",
+]
 
 [lib]
 name = "rusty_tip"
