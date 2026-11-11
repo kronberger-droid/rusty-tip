@@ -404,8 +404,10 @@ mod tests {
         wait_for(|| columns(&reader) == Some(vec![24]) && reader.buffered_frames() == 1);
         assert_eq!(reader.snapshot().frames[0].signal_frame.data, vec![2.0]);
 
-        go_on.send(()).unwrap();
+        // Stop before the server hangs up: closed first, it hands the
+        // reader an EOF that `stop` returns as the thread's error.
         reader.stop().unwrap();
+        go_on.send(()).unwrap();
         server.join().unwrap();
     }
 }
