@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The mock reproduces what drift compensation and the stable read
+  fail on.** `MockControllerBuilder::z_drift_scenario` takes a
+  `DriftScenario`: a constant drift plus exponential and `1/t` creep on a
+  simulated clock that advances with every streamed sample and
+  compensation write, white, correlated (AR(1)) or random-walk noise, a
+  compensation response of any size with a latency, and a compensation
+  that saturates and latches `z_saturated`. Its `drift_at` and
+  `residual_at`, read at `MockObservations::z_sim_time_s`, are the truth a
+  test judges a run by. On the freq-shift channel, `freq_shift_noise`
+  takes white, blue (the PLL's anticorrelated noise) or recorded noise to
+  replay, `pll_rail` clamps readings to the rail the way a PLL out of
+  range streams them, and `stream_rate` sets the rate a stable read turns
+  its slope into Hz/s with. `z_drift`, `z_drift_noise` and
+  `sample_noise_hz` behave as before.
+
+### Changed
+
+- **`compensate`'s settle budget counts measured time.** `settle_max_ms`
+  is spent by the burst windows taken, not by the wall clock, so a
+  simulated run gives up after the same budget a real one does. On the
+  instrument the two differ by the few hundred milliseconds between
+  bursts.
+- **`compensate` waits creep out, unless asked to be quick.** The settle
+  test compared bursts about 10 s apart, so creep with a time constant of a
+  minute or more passed as settled and went on drifting after the run:
+  20 pm/s of creep with a two-minute time constant left 10 pm/s behind.
+  `settle` now chooses: `careful` (the default) judges the drift's trend
+  over the last two minutes of bursts (or the whole baseline, when
+  correlated noise leaves two minutes too uncertain) and leaves under
+  1 pm/s, taking at least about 2.5 minutes, and refuses creep it cannot
+  wait out within 10 minutes with nothing touched; `quick` is the old three-burst test, about
+  half a minute; `skip` corrects from the first burst. The workbench's
+  Drift tool has it as a dropdown. **Breaking (library):** `settle:
+  SettleMode` replaces `settle_max_ms` in `CompensateDrift` and
+  `DriftParams`; `CompensateDrift::quick` gives the quick defaults.
+
+### Fixed
+
+- **`compensate` switched stale lateral velocities back on.** Drift
+  compensation keeps its X and Y velocities while switched off, and
+  turning it on for Z brought them back into effect, walking the tip off
+  its spot. When compensation was off, `compensate` now writes X and Y as
+  zero; when it was on, the velocities in effect are left as they are.
+- **Tip prep chose pulses from reads that failed every gate.** A stable
+  read that found no batch inside the noise and drift gates still handed
+  its last mean on, and 45 pulse decisions in the 2026-10-06 runs were
+  made from such reads. Tip prep now moves to a fresh site and reads
+  again, up to `signal_stability.max_unstable_sites` (3) sites. If one of
+  them read frozen, most likely the tip in contact, no pulse fires and the
+  run stops. If they were only noisy, the hardest pulse fires once to shake
+  the tip, and a second noisy round stops the run, pointing at the PLL or
+  the Z loop. A signal off the stream is polled, so its stable read is
+  capped at 100 samples. **Breaking
+  (library):** `Signals::read_stable` returns a `StableRead` (value,
+  std dev, drift, samples, attempts and whether it passed) instead of a
+  bare value; check `stable` before using `value`.
+- **A railed PLL read as a perfectly stable frequency shift.** At its rail
+  or out of lock the PLL streams one exact value, −76.29 Hz in the
+  2026-10-06 runs, and a batch with no scatter and no slope passed both
+  gates: 105 of 425 reads that day. A batch where one exact value makes up
+  half or more of the samples is now refused as frozen (`StableRead::frozen`),
+  wherever the rail sits; real batches never exceed 12 %. Tip prep takes it
+  like any unstable read: no pulse, a fresh site. The plain mock's
+  freq-shift batches carry nanohertz of jitter so they are not frozen.
+- **A compensation response other than ±1 left drift behind.** The trial
+  burst measures how much drift one m/s of `vz` adds, and only its sign
+  was used, so a channel answering 0.9 made every correction 10 % short
+  and left 0.4 pm/s. The size is used once the trial resolves it from one
+  (by more than twice its own uncertainty, about 2 %), and `response` may
+  carry a size as well as a sign.
+- **The stable read's drift gate rejected steady signals.** A read took
+  `stable_signal_samples` (100), a tenth of a second at 1 kHz and five
+  seconds at 20 Hz, while its 0.5 Hz/s drift gate was chosen for half a
+  second; on a tenth, the fitted slope's own scatter failed a steady
+  signal in the noisy regime 55 % of the time. The batch is now set in
+  time by `signal_stability.data_collection_duration_ms` (500 ms, unused
+  until now), the samples following from the measured stream rate, and in
+  the noisy regime all steady reads pass. `stable_signal_samples` sizes
+  only the landing gate's batches now. `ReadStableSignal` and
+  `StableReadSpec` gain `duration_ms`.
+- **Drift error bars were two to three times too small under correlated
+  noise.** A burst's error comes from the scatter of its block means, and
+  Z noise correlated over seconds makes neighbouring blocks agree more than
+  independent ones, so `converged` and the reported residual trusted a
+  precision the measurement did not have: in simulation 8 of 20 residuals
+  fell outside their own two error bars. With careful settling, the
+  baseline's scatter about its trend calibrates every later burst, and the
+  residual is inside its error bar as often as it should be.
+
 ## [0.5.0] - 2026-11-11
 
 The first release of the v2 line that has run on a real microscope: it was

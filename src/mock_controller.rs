@@ -73,8 +73,12 @@ use crate::controllers::{
     ZControllerParams, ZLoopInput,
 };
 use crate::loop_model::{Sample, ZLoop};
+
+pub mod sim;
 use crate::signal_registry::SignalIndex;
 use nanonis_rs::scan::{ScanLineEnd, ScanLineMovement};
+pub use sim::{DriftScenario, FreqShiftNoise, ZNoise};
+use sim::{FreqShiftState, ZState};
 
 use crate::spm_controller::{
     AcquisitionMode, Capability, DataStreamStatus, DriftComp, Result, ScanBuffer, SpmController,
@@ -196,6 +200,9 @@ pub struct MockObservations {
     pub drift_comp: DriftComp,
     /// Every set of velocities written, in order.
     pub drift_comp_writes: Vec<DriftComp>,
+    /// Simulated time since the Z move, s, as far as the drifting Z has
+    /// streamed: the clock a [`DriftScenario`]'s truth is read on.
+    pub z_sim_time_s: f64,
 }
 
 impl Default for MockObservations {
@@ -236,6 +243,7 @@ impl Default for MockObservations {
                 z_saturated: false,
             },
             drift_comp_writes: Vec::new(),
+            z_sim_time_s: 0.0,
             scan_line_ends: VecDeque::new(),
             scan_buffer: ScanBuffer {
                 channels: vec![SignalIndex(0), SignalIndex(30)],
@@ -328,10 +336,15 @@ pub struct MockController {
     model: FreqShiftModel,
     /// Value returned for any non-freq-shift signal index.
     default_signal: f64,
-    /// Within-batch scatter (Hz std dev) added by `read_signal_samples`. `0.0`
-    /// keeps the legacy constant-batch behavior.
-    sample_noise_hz: f64,
-    /// PRNG state for [`Self::sample_noise_hz`].
+    /// Within-batch scatter added by `read_signal_samples` on the
+    /// freq-shift channel. `None` keeps the legacy constant batches.
+    df_noise: Option<FreqShiftNoise>,
+    df_state: FreqShiftState,
+    /// Where the PLL rails: freq-shift samples are clamped to `±rail`.
+    df_rail_hz: Option<f64>,
+    /// The stream rate the mock reports when no simulation sets one.
+    stream_rate_hz: Option<f64>,
+    /// PRNG state for the noise models.
     noise_rng: Rng,
     /// Faults that fire on a specific call ordinal, keyed by method name.
     faults_once: HashMap<&'static str, Vec<ScheduledFault>>,
@@ -432,21 +445,15 @@ impl LoopSim {
     }
 }
 
-/// A Z signal that drifts at a constant rate and answers to the drift
-/// compensation, streamed at a fixed rate. Time only advances as samples are
-/// read, so a five-second burst costs a test nothing.
-#[derive(Debug, Clone, Copy)]
+/// A Z signal that drifts the way its [`DriftScenario`] says and answers to
+/// the drift compensation, streamed at a fixed rate. Time only advances as
+/// samples are read and compensation is written, so a five-second burst
+/// costs a test nothing.
+#[derive(Debug, Clone)]
 struct ZDriftSim {
     index: SignalIndex,
-    /// Drift with no compensation applied, m/s.
-    drift_m_s: f64,
-    /// What one m/s of `vz` adds to the drift: the sign convention under test.
-    response: f64,
-    /// Std dev of the scatter on each sample, m.
-    noise_m: f64,
-    rate_hz: f64,
-    /// Where Z is now.
-    z: f64,
+    scenario: DriftScenario,
+    state: ZState,
 }
 
 impl MockController {
@@ -504,10 +511,10 @@ impl MockController {
 
     /// Evaluate the tip model for the freq-shift channel; constant otherwise.
     fn signal_value(&mut self, index: SignalIndex) -> f64 {
-        if let Some(sim) = self.z_drift
+        if let Some(sim) = &self.z_drift
             && sim.index == index
         {
-            return sim.z;
+            return sim.state.z;
         }
         if let Some(sim) = &mut self.loop_sim
             && sim.owns(index)
@@ -621,12 +628,15 @@ impl SpmController for MockController {
 
     fn stream_rate_hz(&mut self) -> Option<f64> {
         self.z_drift
-            .map(|sim| sim.rate_hz)
+            .as_ref()
+            .map(|sim| sim.scenario.rate_hz)
             .or_else(|| self.loop_sim.as_ref().map(|sim| sim.rate_hz))
+            .or(self.stream_rate_hz)
     }
 
     fn streams_signal(&mut self, index: SignalIndex) -> bool {
-        self.z_drift.is_some_and(|sim| sim.index == index)
+        (self.stream_rate_hz.is_some() && index == self.freq_shift_index)
+            || self.z_drift.as_ref().is_some_and(|sim| sim.index == index)
             || self.loop_sim.as_ref().is_some_and(|sim| sim.owns(index))
     }
 
@@ -682,21 +692,25 @@ impl SpmController for MockController {
                 .collect();
             return Ok(samples);
         }
-        if let Some(mut sim) = self.z_drift
+        if let Some(sim) = &mut self.z_drift
             && sim.index == index
         {
-            let comp = self.obs.lock().drift_comp;
-            let vz = if comp.enabled { comp.vz } else { 0.0 };
-            let step = (sim.drift_m_s + sim.response * vz) / sim.rate_hz;
+            let mut obs = self.obs.lock();
+            let comp = obs.drift_comp;
+            let vz_now =
+                (sim.scenario.latency_s == 0.0).then_some(if comp.enabled { comp.vz } else { 0.0 });
+            let mut saturated = comp.z_saturated;
             let mut rng = self.noise_rng;
             let samples = (0..num_samples)
                 .map(|_| {
-                    sim.z += step;
-                    sim.z + rng.normal() * sim.noise_m
+                    let (value, hit) = sim.state.sample(&sim.scenario, saturated, vz_now, &mut rng);
+                    saturated |= hit;
+                    value
                 })
                 .collect();
+            obs.drift_comp.z_saturated = saturated;
+            obs.z_sim_time_s = sim.state.t_s;
             self.noise_rng = rng;
-            self.z_drift = Some(sim);
             return Ok(samples);
         }
 
@@ -707,19 +721,41 @@ impl SpmController for MockController {
         // (0.5 Hz/s by default), stalling the routine in retry backoff.
         let value = self.signal_value(index);
 
-        if self.sample_noise_hz > 0.0 && index == self.freq_shift_index {
-            let sigma = self.sample_noise_hz;
+        if index == self.freq_shift_index && (self.df_noise.is_some() || self.df_rail_hz.is_some())
+        {
             let mut rng = self.noise_rng;
             let samples = (0..num_samples)
-                .map(|_| value + rng.normal() * sigma)
+                .map(|_| {
+                    let deviation = match &self.df_noise {
+                        Some(noise) => self.df_state.next(noise, &mut rng),
+                        None => 0.0,
+                    };
+                    // A railed PLL streams the rail itself, sample after
+                    // sample, with no scatter at all.
+                    match self.df_rail_hz {
+                        Some(rail) => (value + deviation).clamp(-rail, rail),
+                        None => value + deviation,
+                    }
+                })
                 .collect();
             self.noise_rng = rng;
             return Ok(samples);
         }
 
-        // Default: constant samples => std_dev = 0, slope = 0 => always
-        // "stable", so ReadStableSignal returns on the first attempt with no
-        // backoff sleeps. Keeps the test suite fast and deterministic.
+        // Default: the model's value with nanohertz of jitter on the
+        // freq-shift channel, four levels in turn so no value is more than
+        // a quarter of the batch. std_dev and slope are nil, so
+        // ReadStableSignal returns on the first attempt with no backoff
+        // sleeps, keeping the suite fast and deterministic. Not exactly
+        // constant: a batch of one exact value is what a railed PLL streams,
+        // and the stable read refuses it. Other channels stay constant; a
+        // current of 1e-10 A has no room for a fixed jitter.
+        if index == self.freq_shift_index {
+            const JITTER_HZ: [f64; 4] = [1e-9, -1e-9, 2e-9, -2e-9];
+            return Ok((0..num_samples)
+                .map(|k| value + JITTER_HZ[k % JITTER_HZ.len()])
+                .collect());
+        }
         Ok(vec![value; num_samples])
     }
 
@@ -1085,6 +1121,11 @@ impl SpmController for MockController {
             z_saturated: obs.drift_comp.z_saturated && !cleared,
             ..*comp
         };
+        drop(obs);
+        if let Some(sim) = &mut self.z_drift {
+            let vz = if comp.enabled { comp.vz } else { 0.0 };
+            sim.state.on_set(&sim.scenario, vz, comp.enabled);
+        }
         Ok(())
     }
 
@@ -1208,14 +1249,16 @@ pub struct MockControllerBuilder {
     current_index: SignalIndex,
     model: FreqShiftModel,
     default_signal: f64,
-    sample_noise_hz: f64,
+    df_noise: Option<FreqShiftNoise>,
+    df_rail_hz: Option<f64>,
+    stream_rate_hz: Option<f64>,
     noise_seed: u64,
     faults_once: HashMap<&'static str, Vec<ScheduledFault>>,
     faults_always: HashMap<&'static str, FaultKind>,
     capabilities: HashSet<Capability>,
     start_connected: bool,
     approach_polls: usize,
-    z_drift: Option<ZDriftSim>,
+    z_drift: Option<(SignalIndex, DriftScenario)>,
     loop_sim: Option<LoopSim>,
 }
 
@@ -1230,7 +1273,9 @@ impl MockControllerBuilder {
             // spurious success.
             model: models::always(100.0),
             default_signal: 0.0,
-            sample_noise_hz: 0.0,
+            df_noise: None,
+            df_rail_hz: None,
+            stream_rate_hz: None,
             noise_seed: 0x5EED_5EED,
             z_drift: None,
             loop_sim: None,
@@ -1279,7 +1324,31 @@ impl MockControllerBuilder {
     /// work — keep it comfortably under the configured `max_std_dev` or the
     /// routine will spend its time in retry backoff.
     pub fn sample_noise_hz(mut self, sigma: f64) -> Self {
-        self.sample_noise_hz = sigma;
+        self.df_noise = (sigma > 0.0).then_some(FreqShiftNoise::White { sigma_hz: sigma });
+        self
+    }
+
+    /// Within-batch noise on the freq-shift channel of any colour, including
+    /// recorded noise replayed. See [`FreqShiftNoise`].
+    pub fn freq_shift_noise(mut self, noise: FreqShiftNoise) -> Self {
+        self.df_noise = Some(noise);
+        self
+    }
+
+    /// Clamp freq-shift samples to `±rail_hz`, as a PLL at the end of its
+    /// range streams them: a tip model beyond the rail reads as the rail,
+    /// exactly, with no scatter.
+    pub fn pll_rail(mut self, rail_hz: f64) -> Self {
+        self.df_rail_hz = Some(rail_hz);
+        self
+    }
+
+    /// Stream the freq-shift channel at `hz`: the rate to report when no
+    /// drift or loop simulation sets one, so a stable read sizes its batch
+    /// and turns its slope into Hz/s at the rate under test. Without it the
+    /// channel counts as polled.
+    pub fn stream_rate(mut self, hz: f64) -> Self {
+        self.stream_rate_hz = Some(hz);
         self
     }
 
@@ -1333,7 +1402,10 @@ impl MockControllerBuilder {
             current_index: self.current_index,
             model: self.model,
             default_signal: self.default_signal,
-            sample_noise_hz: self.sample_noise_hz,
+            df_noise: self.df_noise,
+            df_state: FreqShiftState::default(),
+            df_rail_hz: self.df_rail_hz,
+            stream_rate_hz: self.stream_rate_hz,
             noise_rng: Rng::new(self.noise_seed),
             faults_once: self.faults_once,
             faults_always: self.faults_always,
@@ -1343,7 +1415,11 @@ impl MockControllerBuilder {
             scan_frame: ScanFrame::new(Position::new(0.0, 0.0), 50e-9, 50e-9, 0.0),
             approach_polls: self.approach_polls,
             approach_polls_left: 0,
-            z_drift: self.z_drift,
+            z_drift: self.z_drift.map(|(index, scenario)| ZDriftSim {
+                index,
+                state: ZState::new(&scenario),
+                scenario,
+            }),
             loops: mock_controllers(),
             loop_sim: self.loop_sim,
         }
@@ -1354,25 +1430,29 @@ impl MockControllerBuilder {
     /// is the sign convention the drift actions have to find out: -1 for a
     /// controller whose positive `vz` cancels positive drift, +1 for one
     /// where it adds to it. Streams at 1 kHz with no scatter; see
-    /// [`z_drift_noise`](Self::z_drift_noise).
-    pub fn z_drift(mut self, index: SignalIndex, drift_m_s: f64, response: f64) -> Self {
-        self.z_drift = Some(ZDriftSim {
-            index,
-            drift_m_s,
-            response,
-            noise_m: 0.0,
-            rate_hz: 1000.0,
-            z: 1e-7,
-        });
-        self
+    /// [`z_drift_noise`](Self::z_drift_noise), and
+    /// [`z_drift_scenario`](Self::z_drift_scenario) for creep, latency and
+    /// saturation.
+    pub fn z_drift(self, index: SignalIndex, drift_m_s: f64, response: f64) -> Self {
+        self.z_drift_scenario(index, DriftScenario::constant(drift_m_s, response))
     }
 
     /// Scatter on each streamed Z sample, std dev in metres. Call after
     /// [`z_drift`](Self::z_drift).
     pub fn z_drift_noise(mut self, sigma_m: f64) -> Self {
-        if let Some(sim) = &mut self.z_drift {
-            sim.noise_m = sigma_m;
+        if let Some((_, scenario)) = &mut self.z_drift {
+            scenario.noise = ZNoise::White { sigma_m };
         }
+        self
+    }
+
+    /// Stream `index` as a Z position drifting the way `scenario` says. Its
+    /// [`drift_at`](DriftScenario::drift_at) and
+    /// [`residual_at`](DriftScenario::residual_at) are the truth a test
+    /// judges a compensation by, read at
+    /// [`MockObservations::z_sim_time_s`].
+    pub fn z_drift_scenario(mut self, index: SignalIndex, scenario: DriftScenario) -> Self {
+        self.z_drift = Some((index, scenario));
         self
     }
 
@@ -1771,13 +1851,15 @@ mod tests {
     }
 
     #[test]
-    fn read_signal_samples_are_constant_and_stable() {
+    fn read_signal_samples_are_steady_but_never_frozen() {
         let mut mock = MockController::builder()
             .freq_shift(models::always(-1.0))
             .build();
         let samples = mock.read_signal_samples(SignalIndex(0), 64).unwrap();
         assert_eq!(samples.len(), 64);
-        assert!(samples.iter().all(|&v| v == -1.0));
+        assert!(samples.iter().all(|&v| (v + 1.0).abs() < 3e-9));
+        // A batch of one exact value is a railed PLL to the stable read.
+        assert!(!crate::action::signals::is_frozen(&samples));
     }
 
     #[test]

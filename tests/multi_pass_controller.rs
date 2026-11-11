@@ -358,7 +358,7 @@ fn compensation_converges_whichever_way_the_velocity_sign_runs() {
         let result = rt
             .drift()
             .expect("the mock supports drift compensation")
-            .compensate(&CompensateDrift::new(Z))
+            .compensate(&CompensateDrift::quick(Z))
             .expect("compensates");
 
         assert!(result.converged, "response {response}: {result:?}");
@@ -447,7 +447,7 @@ fn compensation_converges_through_measurement_noise() {
     let result = rt
         .drift()
         .expect("the mock supports drift compensation")
-        .compensate(&CompensateDrift::new(Z))
+        .compensate(&CompensateDrift::quick(Z))
         .expect("compensates");
 
     assert!(result.converged, "{result:?}");
@@ -497,7 +497,7 @@ fn a_negligible_drift_changes_nothing() {
     let result = rt
         .drift()
         .expect("the mock supports drift compensation")
-        .compensate(&CompensateDrift::new(Z))
+        .compensate(&CompensateDrift::quick(Z))
         .expect("nothing to do is not an error");
 
     assert!(result.converged);
@@ -547,7 +547,7 @@ fn a_residual_outside_its_error_bar_is_reported_not_hidden() {
         .compensate(&CompensateDrift {
             response: Some(-2.0),
             bursts: 3,
-            ..CompensateDrift::new(Z)
+            ..CompensateDrift::quick(Z)
         })
         .expect("a residual left over is a result, not an error");
 
