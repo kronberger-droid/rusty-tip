@@ -240,12 +240,12 @@ x, y, z_surface, z_tip, clearance = np.loadtxt("out/compare.dat", unpack=True)
 ## Drift between scans
 
 The workbench's Drift tool runs the Z drift routine (`rusty_tip::drift`):
-status, measure, compensate and off. The field names below are those of
-`DriftParams`, which its Setup form draws.
+status, measure, compensate and off. Its Setup form draws `DriftParams`,
+whose field names the text below uses.
 
 `measure` takes one burst: every sample the session stream carries for Z
 over the window, 5 s by default. The burst is averaged into ten blocks and a
-line fitted through the block means, so the rate is printed with a standard
+line fitted through the block means, so the rate comes with a standard
 error that the slow noise on Z under feedback does not flatter. It needs the
 feedback closed, the scan stopped, and a flat spot under the tip. A longer
 window buys more than a higher sample rate: the error falls with the
@@ -259,7 +259,8 @@ has settled:
    move the piezo creeps, a drift that decays over tens of seconds, and a rate
    measured during it is stale by the time it is applied: the velocity ends up
    above where the drift is heading and the residual overshoots. A drift still
-   changing after `settle_max_ms` (180 s) stops the run with nothing touched. The
+   changing after `settle_max_ms` (180000, so 180 s) stops the run with
+   nothing touched. The
    last baseline is the one of the budget; the others come on top. If it is
    inside its error bar, nothing is changed.
 2. A trial burst with `vz` stepped by `trial_vz` (20 pm/s), to learn which way
@@ -267,7 +268,7 @@ has settled:
    loop closed the feedback holds the gap, so the cost is a Z output that ramps
    by 100 pm for one burst, and the response comes out many times its noise.
    Only the sign of the response is used, since the velocity is in the
-   drift's own units. The learned response is printed; set it as
+   drift's own units. The learned response is reported; set it as
    `response` (1 or -1) and this burst is skipped.
 3. Correction bursts, for the rest of the budget: the k-th one moves the
    velocity by a k-th of what the last burst says is missing, but never by
@@ -278,7 +279,7 @@ has settled:
    it has outlived. Every burst corrects, and the budget is spent in full: correcting only the
    readings that clear their error bar picks out the bursts whose noise ran
    the same way as the residual, and those overshoot. The loop ends on a
-   measurement, so the residual printed always belongs to the velocity left
+   measurement, so the residual reported always belongs to the velocity left
    on the controller, and it says whether that residual is inside its error
    bar.
 
@@ -292,8 +293,10 @@ controller stops compensating it silently and only an off/on cycle restarts
 it. Every burst lands in the log as a `drift/burst` event, so
 `rt-log plot <file> drift/burst.drift_m_s` shows the convergence.
 
-Z has to be in the session's stream; the routine fails clearly if it is
-not, rather than restarting the stream underneath the session. With
+Z has to be in the session's stream, so put it in the TCP channel mapping
+before connecting; the routine fails clearly if it is not there, rather
+than restarting the stream underneath the session. The stream's rate is
+the connection's sample rate (`[data_acquisition] sample_rate`). With
 `require_stream` off it falls back to `samples` timed reads per window,
 which is far noisier.
 

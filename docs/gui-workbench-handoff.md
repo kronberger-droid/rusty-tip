@@ -8,6 +8,10 @@ controller connection. It records what was decided, what the code looks like
 today, and what to build in which order. Line numbers are as of that cut;
 verify against the code before trusting one.
 
+Since then `tip-prep-gui` has been retired and `const-distance drift`
+removed in favour of the workbench's Drift tool. The text below still
+describes both as they were at the cut.
+
 ## Goal
 
 One desktop app (`rusty-tip-gui`) where the operator connects to the
@@ -568,7 +572,7 @@ for (a real form with checkboxes, the important settings on top):
 
 ### After step 5
 
-- Retire `tip-prep-gui` once Martin confirms parity in the lab. Done.
+- Retire `tip-prep-gui` once Martin confirms parity in the lab.
 - Candidates that fit this shape next: CuOx tip prep, the Python classifier
   interface (`Classifier` trait, HTTP + npy sidecar), the double-pass routine.
 

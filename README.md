@@ -86,8 +86,8 @@ voltage = 4.0
 polarity = "positive"
 ```
 
-`rusty-tip-gui` is the workbench: connect to the controller once, then pick a tool, run it, watch it live and open any past
-run from its log. Tip prep, drift compensation and a Controllers tool
+`rusty-tip-gui` is the workbench: connect to the controller once, then
+pick a tool, run it, watch it live and open any past run from its log. Tip prep, drift compensation and a Controllers tool
 that reads, edits and writes the Z-controller and PLL loops are the first
 tools; the Connection page shows the controller's state, signals and live
 readouts between runs, and a `Mock` backend runs everything without

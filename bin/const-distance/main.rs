@@ -14,8 +14,6 @@
 //! 2015) and the thing our trajectory has to beat at step edges, so it is worth
 //! being able to run it from here.
 //!
-//! Z drift measurement and compensation live in the workbench's Drift tool.
-//!
 //! # Units
 //!
 //! Everything is in SI: metres and metres per second on the command line,
@@ -121,11 +119,6 @@ struct BaselineArgs {
     log_dir: PathBuf,
 }
 
-/// Every custom event kind const-distance can write: none of its own.
-fn log_schema() -> ToolSchema {
-    ToolSchema::new("const_distance")
-}
-
 /// Open the experiment log for one command and write its header.
 ///
 /// `invocation` stands in for a config file: the arguments that shaped the
@@ -145,7 +138,8 @@ fn open_run_log(
     println!("log: {}", path.display());
     let facts = ControllerFacts::gather(controller, None);
     events.emit(Event::run_started(RunHeader::new(
-        log_schema(),
+        // No custom event kinds of its own.
+        ToolSchema::new("const_distance"),
         invocation,
         facts,
     )));
