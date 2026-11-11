@@ -31,7 +31,7 @@ against live in `[tip_prep.signal_stability]`, not here.
 [data_acquisition]
 data_port = 6590            # required; Nanonis TCP logger port
 sample_rate = 1000          # required; stream rate to ask for (Hz)
-stable_signal_samples = 100 # samples averaged per stable signal read
+stable_signal_samples = 100 # samples per batch of the landing gate
 ```
 
 The TCP logger delivers its base rate divided by an integer, so the nearest
@@ -145,15 +145,27 @@ believes it. Loosen for noisier tips, tighten for cleaner ones.
 
 ```toml
 [tip_prep.signal_stability]
+data_collection_duration_ms = 500 # length of one batch (ms)
 max_std_dev_hz = 1.5      # max standard deviation of the sample batch (Hz)
 max_slope_hz_per_s = 0.5  # max drift rate of the batch (Hz/s)
 read_retry_count = 3      # retries with exponential backoff before giving up
 ```
 
-`data_collection_duration_ms` and `read_timeout_secs` are still accepted so
-v1-era configs parse, but the v2 read path ignores them: batch size comes from
-`data_acquisition.stable_signal_samples` and a read is bounded by
-`read_retry_count`.
+A batch is set in time, not in samples: the samples follow from the rate
+the stream actually arrives at, so the gates mean the same at any rate. The
+drift gate is a fitted slope, and a slope's scatter grows steeply as the
+batch gets shorter; on a tenth of a second the 0.5 Hz/s gate rejected the
+noise of a steady signal more than half the time in the noisy regime, on
+half a second it passes it.
+
+A batch that is mostly one exact value is refused whatever the gates say:
+that is a PLL at its rail or out of lock, not a reading. A read that finds
+no batch inside the gates within its retries is not used. Tip prep moves to
+a fresh site and reads again, and stops after three unstable sites in a
+row.
+
+`read_timeout_secs` is still accepted so v1-era configs parse, but the read
+path ignores it: a read is bounded by `read_retry_count`.
 
 ## `[tip_prep.stability]` — is the tip *stable*, not just sharp
 

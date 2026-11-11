@@ -841,6 +841,7 @@ fn gates(config: &AppConfig, current: SignalIndex) -> ((f64, f64), StableReadSpe
             max_slope: tp.signal_stability.max_slope_hz_per_s,
             max_retries: tp.signal_stability.read_retry_count as usize,
             sample_rate_hz: rate,
+            duration_ms: Some(tp.signal_stability.data_collection_duration_ms),
         },
         LandingGate {
             index: current,

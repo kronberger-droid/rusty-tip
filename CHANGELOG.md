@@ -74,6 +74,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and left 0.4 pm/s. The size is used once the trial resolves it from one
   (by more than twice its own uncertainty, about 2 %), and `response` may
   carry a size as well as a sign.
+- **The stable read's drift gate rejected steady signals.** A read took
+  `stable_signal_samples` (100), a tenth of a second at 1 kHz and five
+  seconds at 20 Hz, while its 0.5 Hz/s drift gate was chosen for half a
+  second; on a tenth, the fitted slope's own scatter failed a steady
+  signal in the noisy regime 55 % of the time. The batch is now set in
+  time by `signal_stability.data_collection_duration_ms` (500 ms, unused
+  until now), the samples following from the measured stream rate, and in
+  the noisy regime all steady reads pass. `stable_signal_samples` sizes
+  only the landing gate's batches now. `ReadStableSignal` and
+  `StableReadSpec` gain `duration_ms`.
 
 ## [0.5.0] - 2026-11-11
 

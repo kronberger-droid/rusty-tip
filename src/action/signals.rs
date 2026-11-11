@@ -158,7 +158,18 @@ pub struct ReadStableSignal {
     /// wins whenever it has one.
     #[serde(default = "default_sample_rate_hz")]
     pub sample_rate_hz: f64,
+    /// Length of a batch in time, ms, overriding `num_samples`: the samples
+    /// follow from the stream rate. A batch fixed in samples lasts 0.1 s at
+    /// 1 kHz and 5 s at 20 Hz, and the slope fitted to it scatters with its
+    /// length to the power 1.5, so the same drift gate rejects noise on a
+    /// short batch and passes real drift on a long one.
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
 }
+
+/// The fewest samples a batch set in time is cut to, so a slow stream still
+/// gives the gates something to judge.
+const MIN_BATCH_SAMPLES: usize = 10;
 
 fn default_num_samples() -> usize {
     100
@@ -189,6 +200,7 @@ impl Default for ReadStableSignal {
             max_slope: default_max_slope(),
             max_retries: default_max_retries(),
             sample_rate_hz: default_sample_rate_hz(),
+            duration_ms: None,
         }
     }
 }
@@ -210,19 +222,25 @@ impl Action for ReadStableSignal {
             .stream_rate_hz()
             .filter(|&hz| hz > 0.0)
             .unwrap_or(self.sample_rate_hz);
+        let num_samples = match self.duration_ms {
+            Some(ms) => {
+                ((ms as f64 / 1000.0 * sample_rate_hz).round() as usize).max(MIN_BATCH_SAMPLES)
+            }
+            None => self.num_samples,
+        };
         for attempt in 0..=self.max_retries {
             let samples = ctx
                 .controller
-                .read_signal_samples(self.index, self.num_samples)?;
+                .read_signal_samples(self.index, num_samples)?;
 
             // Treat severely incomplete data as instability — thresholds were
             // tuned for the configured sample count, so computing on too few
             // samples would produce unreliable statistics.
-            if samples.len() < self.num_samples / 2 {
+            if samples.len() < num_samples / 2 {
                 log::warn!(
                     "ReadStableSignal: only got {}/{} samples, treating as unstable (attempt {})",
                     samples.len(),
-                    self.num_samples,
+                    num_samples,
                     attempt
                 );
                 if attempt < self.max_retries {

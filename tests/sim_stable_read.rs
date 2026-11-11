@@ -58,6 +58,15 @@ fn shipped_spec() -> StableReadSpec {
         max_slope: cfg.tip_prep.signal_stability.max_slope_hz_per_s,
         max_retries: cfg.tip_prep.signal_stability.read_retry_count as usize,
         sample_rate_hz: RATE_HZ,
+        duration_ms: Some(cfg.tip_prep.signal_stability.data_collection_duration_ms),
+    }
+}
+
+/// Samples in one batch of `spec` at the mock's stream rate.
+fn batch(spec: &StableReadSpec) -> usize {
+    match spec.duration_ms {
+        Some(ms) => (ms as f64 / 1000.0 * RATE_HZ).round() as usize,
+        None => spec.num_samples,
     }
 }
 
@@ -84,9 +93,14 @@ fn read(mock: &mut MockController, spec: &StableReadSpec) -> (f64, bool) {
 
 /// Share of single-attempt reads the gates accept.
 fn acceptance(noise: FreqShiftNoise, reads: usize) -> f64 {
+    acceptance_with(shipped_spec(), noise, reads)
+}
+
+/// The same, for batches of `spec`.
+fn acceptance_with(spec: StableReadSpec, noise: FreqShiftNoise, reads: usize) -> f64 {
     let spec = StableReadSpec {
         max_retries: 0,
-        ..shipped_spec()
+        ..spec
     };
     let mut mock = mock(-1.0, noise).build();
     let accepted = (0..reads).filter(|_| read(&mut mock, &spec).1).count();
@@ -146,7 +160,7 @@ fn real_quiet_noise_reads_stable_first_time_and_close_to_the_truth() {
     let spec = shipped_spec();
     let mut mock = mock(-1.0, real_noise(0.28)).build();
     let obs = mock.observations();
-    let reads = 2000 / spec.num_samples;
+    let reads = 2000 / batch(&spec);
     for _ in 0..reads {
         let (value, stable) = read(&mut mock, &spec);
         assert!(stable);
@@ -172,9 +186,6 @@ fn a_railed_batch_is_never_taken_as_stable() {
 }
 
 #[test]
-#[ignore = "known gap: the drift gate's 0.5 Hz/s was set for 500 ms batches, so \
-            on 100 samples it rejects the noise of a steady signal in the noisy \
-            regime"]
 fn a_steady_signal_in_the_noisy_regime_passes_the_gates() {
     // About the noise of the noisier runs on 2026-10-06, under the shipped
     // 1.5 Hz noise gate.
@@ -198,7 +209,7 @@ fn one_unstable_site_moves_the_tip_on_and_the_run_carries_on() {
     // Every batch of the first read is far too noisy, every one after it
     // quiet: the tip moves to a fresh site, reads there, and the run goes on.
     let spec = shipped_spec();
-    let first_read = spec.num_samples * (spec.max_retries + 1);
+    let first_read = batch(&spec) * (spec.max_retries + 1);
     let mut noise: Vec<f64> = (0..first_read)
         .map(|k| if k % 2 == 0 { 4.0 } else { -4.0 })
         .collect();
@@ -239,17 +250,47 @@ fn tip_prep(mock: MockController) -> Result<Outcome, rusty_tip::spm_error::SpmEr
 
 // -- Characterisation -----------------------------------------------------
 
-/// The drift gate against noise of the same size but another colour:
-/// white noise fails it where the PLL's blue noise passes. Pinned so a
-/// change to the gate moves these on purpose.
+/// Why the batch is set in time: on the 100-sample batches the read used
+/// before, a tenth of a second at 1 kHz, the drift gate rejected the noise
+/// of a steady signal, white noise more than the PLL's blue noise of the
+/// same size and the real noise of the noisy regime more than half the
+/// time. Pinned so a change to the gate moves these on purpose.
 #[test]
-fn characterisation_white_noise_fails_the_slope_gate_where_real_noise_passes() {
-    let white = acceptance(FreqShiftNoise::White { sigma_hz: 0.28 }, 200);
-    let real = acceptance(real_noise(0.28), 200);
+fn characterisation_on_a_tenth_of_a_second_the_slope_gate_rejects_noise() {
+    let short = StableReadSpec {
+        num_samples: 100,
+        duration_ms: None,
+        ..shipped_spec()
+    };
+    let white = acceptance_with(short.clone(), FreqShiftNoise::White { sigma_hz: 0.28 }, 200);
+    let quiet = acceptance_with(short.clone(), real_noise(0.28), 200);
+    let noisy = acceptance_with(short, real_noise(1.25), 200);
     assert!(
         (0.35..=0.46).contains(&white),
         "white: {:.1} %",
         white * 100.0
     );
-    assert!(real >= 0.95, "real: {:.0} %", real * 100.0);
+    assert!(quiet >= 0.95, "quiet: {:.1} %", quiet * 100.0);
+    assert!(
+        (0.40..=0.50).contains(&noisy),
+        "noisy: {:.1} %",
+        noisy * 100.0
+    );
+}
+
+/// The same noise on the shipped half-second batches.
+#[test]
+fn characterisation_on_half_a_second_the_slope_gate_passes_steady_noise() {
+    let white = acceptance(FreqShiftNoise::White { sigma_hz: 0.28 }, 200);
+    let noisy = acceptance(real_noise(1.25), 200);
+    assert!(
+        (0.99..=1.0).contains(&white),
+        "white: {:.1} %",
+        white * 100.0
+    );
+    assert!(
+        (0.99..=1.0).contains(&noisy),
+        "noisy: {:.1} %",
+        noisy * 100.0
+    );
 }
