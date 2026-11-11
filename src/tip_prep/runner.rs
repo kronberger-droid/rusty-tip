@@ -523,13 +523,17 @@ impl<'a> TipPrep<'a> {
 
         rt.guarded(
             |rt| self.sweep_inner(rt, plan),
-            // Always stop the scan, restore properties and withdraw — the tip
-            // is on the surface after the sweep whether it completed or was
-            // interrupted, and none of this may shadow the sweep's own error.
+            // Always stop the scan, restore properties, withdraw and put the
+            // bias back to the sweep's start, not the last stepped value near
+            // 0 V: the tip is on the surface after the sweep whether it
+            // completed or was interrupted, and none of this may shadow the
+            // sweep's own error.
             |rt| {
                 match rt.scan() {
                     Ok(mut scan) => {
-                        let _ = scan.stop();
+                        if let Err(e) = scan.stop() {
+                            log::error!("Failed to stop the scan after the sweep: {}", e);
+                        }
                         if let Err(e) = scan.props_set(original_props.to_builder()) {
                             log::error!("Failed to restore scan properties: {}", e);
                         }
@@ -539,14 +543,14 @@ impl<'a> TipPrep<'a> {
                 if let Err(e) = rt.z().and_then(|mut z| z.withdraw()) {
                     log::error!("Post-sweep withdraw failed: {}", e);
                 }
+                if let Err(e) = rt.bias().and_then(|mut b| b.set(plan.starting_bias)) {
+                    log::error!("Failed to restore the bias after the sweep: {}", e);
+                }
                 Ok(())
             },
         )?;
 
         rt.settle(200)?;
-
-        // Restore bias to sweep starting value (not the last stepped value near 0V)
-        rt.bias()?.set(plan.starting_bias)?;
 
         Ok(())
     }
