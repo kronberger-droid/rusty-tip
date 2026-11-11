@@ -395,6 +395,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A stopped or failed stability sweep left the bias where the sweep was.**
   The bias went back to the sweep's starting value only when the sweep
   completed; it is now part of the sweep's cleanup, beside the withdraw.
+- **A killed run lost the end of its log.** The experiment log was flushed
+  only when the logger was dropped, so a second Ctrl+C or a crash lost up
+  to 8 KB of the newest events. Every line is flushed as it is written.
 - **The linear pulse strategy pulsed hardest next to the sharp window.**
   Inside `linear_clamp` the voltage ran from `voltage_bounds[0]` at the
   clamp's far end to `voltage_bounds[1]` next to the window, so a tip almost
