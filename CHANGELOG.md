@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The mock reproduces what drift compensation and the stable read
+  fail on.** `MockControllerBuilder::z_drift_scenario` takes a
+  `DriftScenario`: a constant drift plus exponential and `1/t` creep on a
+  simulated clock that advances with every streamed sample and
+  compensation write, white, correlated (AR(1)) or random-walk noise, a
+  compensation response of any size with a latency, and a compensation
+  that saturates and latches `z_saturated`. Its `drift_at` and
+  `residual_at`, read at `MockObservations::z_sim_time_s`, are the truth a
+  test judges a run by. On the freq-shift channel, `freq_shift_noise`
+  takes white, blue (the PLL's anticorrelated noise) or recorded noise to
+  replay, `pll_rail` clamps readings to the rail the way a PLL out of
+  range streams them, and `stream_rate` sets the rate a stable read turns
+  its slope into Hz/s with. `z_drift`, `z_drift_noise` and
+  `sample_noise_hz` behave as before.
+
 ## [0.5.0] - 2026-11-11
 
 The first release of the v2 line that has run on a real microscope: it was
