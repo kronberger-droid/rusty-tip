@@ -643,3 +643,123 @@ fn connect_once_run_twice_stop_one_disconnect() {
     assert_eq!(obs.count("reconnect"), 0);
     assert_eq!(obs.count("disconnect"), 1, "disconnected once, at the end");
 }
+
+/// Waits until stopped and never withdraws itself, so a withdraw can only
+/// come from the harness's cleanup.
+struct WaitForStop;
+
+impl Routine for WaitForStop {
+    fn name(&self) -> &str {
+        "wait_for_stop"
+    }
+
+    fn run(&mut self, rt: &mut Rt) -> Result<Outcome, SpmError> {
+        loop {
+            rt.settle(10)?;
+        }
+    }
+}
+
+impl Job for WaitForStop {
+    fn name(&self) -> &str {
+        "wait_for_stop"
+    }
+
+    fn log_schema(&self) -> ToolSchema {
+        ToolSchema::new("wait_for_stop").including(rusty_tip::routine::log_schema())
+    }
+
+    fn header_config(&self) -> serde_json::Value {
+        serde_json::json!({})
+    }
+
+    fn run(&mut self, cx: JobCx<'_>) -> Result<Outcome, SpmError> {
+        run_routine(cx.controller, cx.events, cx.shutdown, &mut WaitForStop)
+    }
+}
+
+/// What an app's exit does: stop the run, then drop the handle. The drop has
+/// to wait for the cleanup, or the process ends with the tip engaged.
+#[test]
+fn dropping_the_handle_waits_for_a_stopped_run_to_withdraw() {
+    let (mut mock, obs) = mock();
+    let reg = registry(&mut mock);
+    let mut session = Session::new(None);
+    session
+        .connect_with(Box::new(mock), reg, PresetFiles::default())
+        .unwrap();
+    let handle = spawn_with(session);
+
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    let shutdown = ShutdownFlag::new();
+    handle
+        .send(SessionCmd::Run {
+            job: Box::new(WaitForStop),
+            shutdown: shutdown.clone(),
+            events: tx,
+        })
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the run never started"
+        );
+        if let Ok(SessionUpdate::State(ConnState::Running)) =
+            handle.updates().recv_timeout(Duration::from_millis(100))
+        {
+            break;
+        }
+    }
+
+    shutdown.request();
+    drop(handle);
+    assert_eq!(
+        obs.lock().withdraw_count,
+        1,
+        "withdrawn before the drop returned"
+    );
+}
+
+/// A panic outside a job, here in a call, is reported and the thread goes
+/// on: a dead session thread would leave the window showing its last state
+/// with every command after it lost.
+#[test]
+fn a_panicking_call_is_reported_and_the_thread_survives() {
+    let (mut mock, _) = mock();
+    let reg = registry(&mut mock);
+    let mut session = Session::new(None);
+    session
+        .connect_with(Box::new(mock), reg, PresetFiles::default())
+        .unwrap();
+    let handle = spawn_with(session);
+
+    handle
+        .send(SessionCmd::Call(Box::new(|_| panic!("call blew up"))))
+        .unwrap();
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    handle
+        .send(SessionCmd::Call(Box::new(move |s| {
+            let _ = tx.send(s.state());
+        })))
+        .unwrap();
+
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)),
+        Ok(ConnState::Connected),
+        "the thread answered the call after the panic"
+    );
+    let errors: Vec<String> = handle
+        .drain()
+        .into_iter()
+        .filter_map(|u| match u {
+            SessionUpdate::Error(e) => Some(e),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        errors.iter().any(|e| e.contains("call blew up")),
+        "{errors:?}"
+    );
+    handle.join();
+}

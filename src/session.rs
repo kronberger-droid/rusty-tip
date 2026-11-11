@@ -1004,6 +1004,12 @@ impl SessionHandle {
     /// Ask the thread to quit and wait for it. Blocks until a running job
     /// ends, so request its shutdown first.
     pub fn join(mut self) {
+        self.shutdown();
+    }
+
+    /// [`join`](Self::join) for an owner that cannot give the handle up,
+    /// such as an app's exit hook. A second call returns at once.
+    pub fn shutdown(&mut self) {
         let _ = self.remote.send(SessionCmd::Quit);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -1012,8 +1018,10 @@ impl SessionHandle {
 }
 
 impl Drop for SessionHandle {
+    /// Waits for the thread, so a process on its way out cannot end it
+    /// mid-cleanup with the tip still engaged.
     fn drop(&mut self) {
-        let _ = self.remote.send(SessionCmd::Quit);
+        self.shutdown();
     }
 }
 
@@ -1064,7 +1072,19 @@ fn run_loop(
     loop {
         match commands.recv_timeout(TAP_PERIOD) {
             Ok(SessionCmd::Quit) => break,
-            Ok(cmd) => handle(&mut session, cmd, &report),
+            Ok(cmd) => {
+                // `Session::run` catches a job's panic; this catches the
+                // rest, so one bad command cannot end the thread that every
+                // later command needs.
+                let caught =
+                    panic::catch_unwind(AssertUnwindSafe(|| handle(&mut session, cmd, &report)));
+                if let Err(payload) = caught {
+                    let message = panic_message(&*payload);
+                    log::error!("Session command panicked: {message}");
+                    report(SessionUpdate::Error(format!("command panicked: {message}")));
+                    report(SessionUpdate::State(session.state()));
+                }
+            }
             Err(RecvTimeoutError::Timeout) => {
                 if session.state() != ConnState::Connected {
                     continue;

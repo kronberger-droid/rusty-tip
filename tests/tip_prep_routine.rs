@@ -546,6 +546,92 @@ fn io_fault_mid_run_propagates_but_still_cleans_up() {
 }
 
 #[test]
+fn a_sweep_that_fails_midway_still_puts_the_bias_back() {
+    let mut cfg = fast_config();
+    cfg.tip_prep.stability.check_stability = true;
+    cfg.tip_prep.stability.polarity_mode = BiasSweepPolarity::Positive;
+    cfg.tip_prep.stability.bias_steps = 4;
+    cfg.tip_prep.stability.step_period_ms = 0;
+    let starting_bias = cfg.tip_prep.stability.bias_range.1;
+    let build = || {
+        MockController::builder()
+            .freq_shift_index(FREQ_SHIFT_INDEX)
+            .freq_shift(models::always(-1.0))
+    };
+    let run = |mock: MockController| {
+        run_tip_prep(
+            Box::new(mock),
+            TipPrepParams {
+                events: &EventBus::new(),
+                shutdown: &ShutdownFlag::new(),
+                config: &cfg,
+                freq_shift: FREQ_SHIFT_INDEX,
+                current: CURRENT_INDEX,
+            },
+        )
+    };
+
+    // A clean run finds which `set_bias` call is the sweep's third step:
+    // the first step sets the starting bias again, the third does not.
+    let mock = build().build();
+    let obs = mock.observations();
+    run(mock).unwrap();
+    let calls = obs.lock().calls.clone();
+    let sweep_start = calls.iter().position(|c| *c == "scan_action").unwrap();
+    let before = calls[..sweep_start]
+        .iter()
+        .filter(|c| **c == "set_bias")
+        .count();
+
+    let mock = build()
+        .fail_on_call("set_bias", before + 3, FaultKind::Hardware(1))
+        .build();
+    let obs = mock.observations();
+    assert!(run(mock).is_err(), "the failed step surfaces as an error");
+    assert_eq!(
+        obs.lock().bias,
+        starting_bias,
+        "bias put back after the sweep"
+    );
+}
+
+#[test]
+fn a_dropped_connection_is_reconnected_so_cleanup_can_withdraw() {
+    // The first approach drops the connection; like the real client, the
+    // mock then refuses everything until reconnected.
+    let mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT_INDEX)
+        .freq_shift(models::always(-1.0))
+        .fail_on_call("auto_approach", 1, FaultKind::Disconnect)
+        .build();
+    let obs = mock.observations();
+
+    let result = run_tip_prep(
+        Box::new(mock),
+        TipPrepParams {
+            events: &EventBus::new(),
+            shutdown: &ShutdownFlag::new(),
+            config: &fast_config(),
+            freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
+        },
+    );
+    assert!(
+        result.is_err(),
+        "the dropped connection surfaces as an error"
+    );
+
+    let obs = obs.lock();
+    assert_eq!(obs.count("reconnect"), 1);
+    assert_eq!(obs.withdraw_count, 1, "withdrawn after the reconnect");
+    assert!(obs.last_index("withdraw") > obs.first_index("reconnect"));
+    assert!(
+        obs.called("safe_tip_set_enabled"),
+        "safe-tip was put back after the reconnect"
+    );
+}
+
+#[test]
 fn withdraw_fault_during_cleanup_is_swallowed() {
     // With a blunt tip and max_cycles=1 the withdraws are, in order:
     //   #1 the Reposition inside cycle 1  (must succeed, else the loop aborts)

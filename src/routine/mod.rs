@@ -288,6 +288,15 @@ pub fn run_routine(
     }
 
     log::info!("Cleanup starting...");
+    // An I/O error mid-run leaves the client refusing every command, the
+    // withdraw and the safe-tip restore below included. One reconnect gives
+    // them their chance.
+    if !rt.controller().is_connected() {
+        match rt.controller().reconnect() {
+            Ok(()) => log::warn!("Reconnected for cleanup after a lost connection"),
+            Err(e) => log::warn!("Cleanup reconnect failed: {e}"),
+        }
+    }
     match routine.exit_policy() {
         ExitPolicy::Withdraw { retract_steps } => {
             match rt.z() {
@@ -301,7 +310,10 @@ pub fn run_routine(
             if retract_steps > 0 {
                 match rt.motor() {
                     Ok(mut motor) => {
-                        if let Err(e) = motor.move_3d(0, 0, -(retract_steps as i16)) {
+                        // Clamped, never cast: past `i16::MAX` a cast wraps
+                        // negative and the retract drives toward the surface.
+                        let steps = i16::try_from(retract_steps).unwrap_or(i16::MAX);
+                        if let Err(e) = motor.move_3d(0, 0, -steps) {
                             log::warn!(
                                 "Cleanup retract of {retract_steps} coarse steps failed: {e}"
                             );
@@ -696,6 +708,30 @@ mod tests {
         assert_eq!(obs.withdraw_count, 0);
         assert_eq!(obs.motor_moves, 0);
         assert!(obs.torn_down, "teardown still brackets the run");
+    }
+
+    /// A retract past `i16::MAX` steps would wrap to a move toward the
+    /// surface; it retracts as far as one move can instead.
+    #[test]
+    fn a_huge_retract_still_moves_away_from_the_surface() {
+        let mut mock = MockController::builder().build();
+        let obs = mock.observations();
+        let (bus, _) = recording_bus();
+
+        run_routine(
+            &mut mock,
+            &bus,
+            &ShutdownFlag::new(),
+            &mut Idle {
+                setup: RunSetup::NONE,
+                exit: ExitPolicy::Withdraw {
+                    retract_steps: 40_000,
+                },
+            },
+        )
+        .unwrap();
+
+        assert_eq!(obs.lock().motor_displacements, vec![(0, 0, -i16::MAX)]);
     }
 
     #[test]

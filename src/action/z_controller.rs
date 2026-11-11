@@ -72,15 +72,18 @@ pub struct Withdraw {
     pub timeout_ms: u64,
 }
 
+/// Under the client's 10 s read timeout, so the controller answers before
+/// the client gives up: a reply that lands after it poisons the connection,
+/// and the withdraw is the call cleanup can least afford to lose that way.
 fn default_timeout_ms() -> u64 {
-    10_000
+    8_000
 }
 
 impl Default for Withdraw {
     fn default() -> Self {
         Self {
             wait: true,
-            timeout_ms: 10_000,
+            timeout_ms: default_timeout_ms(),
         }
     }
 }

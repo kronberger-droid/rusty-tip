@@ -62,7 +62,10 @@ impl Observer for FileLogger {
                 return;
             }
         };
-        if let Err(e) = writeln!(w, "{json}") {
+        // Flushed per line: a process killed mid-run (a second Ctrl+C exits
+        // at once) never drops the logger, and the newest events are the
+        // ones that say what happened. The event rate makes it cheap.
+        if let Err(e) = writeln!(w, "{json}").and_then(|()| w.flush()) {
             log::warn!("FileLogger: write failed: {e}");
         }
     }
@@ -351,5 +354,21 @@ mod tests {
         assert!(content.contains("test_event"));
         assert!(content.contains("\"type\":\"custom\""));
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A process killed mid-run never drops the logger, so every line has
+    /// to be on disk as soon as it is written.
+    #[test]
+    fn file_logger_lines_reach_the_file_before_it_is_dropped() {
+        let tmp = std::env::temp_dir().join(format!(
+            "rusty_tip_test_file_logger_flush_{}.jsonl",
+            std::process::id()
+        ));
+        let logger = FileLogger::new(std::fs::File::create(&tmp).unwrap());
+        logger.on_event(&make_event("still_running"));
+        let content = std::fs::read_to_string(&tmp).unwrap();
+        drop(logger);
+        let _ = std::fs::remove_file(&tmp);
+        assert!(content.contains("still_running"), "{content:?}");
     }
 }
