@@ -1,4 +1,6 @@
-# rusty-tip
+<p align="center">
+  <img src="assets/branding/logo/rusty-tip-lockup-4x.png" alt="rusty tip" width="320">
+</p>
 
 [![Crates.io](https://img.shields.io/crates/v/rusty-tip)](https://crates.io/crates/rusty-tip)
 [![docs.rs](https://img.shields.io/docsrs/rusty-tip)](https://docs.rs/rusty-tip)
@@ -11,16 +13,12 @@ A Rust library for building automated scanning probe microscopy routines,
 shipping with automated STM/AFM tip preparation as its first end-to-end
 routine.
 
-> [!WARNING]
-> **The 0.3.x/0.4.x line is an experimental rewrite.**
-> The control path was rebuilt around the `SpmController` trait and a new
-> action/event system, and it has not run on a real microscope yet: every test
-> in this release exercises `MockController`. The stability thresholds were
-> calibrated against the v1 code path and may need retuning.
->
-> Expect the API and the config format to keep moving until the rewrite gets
-> machine time. For the last version that has run on hardware, see
-> [0.2.3](https://github.com/kronberger-droid/rusty-tip/releases/tag/v0.2.3).
+> [!NOTE]
+> 0.5 is the first release of the rewrite (the control path rebuilt around
+> the `SpmController` trait, the routine harness and the event log) that has
+> run on a real microscope: it was validated over a two-week machine session.
+> Before 1.0 the API and the config format can still change between minor
+> versions; the [CHANGELOG](CHANGELOG.md) says what moved.
 >
 > If you need a stable interface to program against today, use
 > [nanonis-rs](https://crates.io/crates/nanonis-rs), the Nanonis TCP client
@@ -49,7 +47,7 @@ Pre-built binaries from [GitHub Releases](https://github.com/kronberger-droid/ru
 From source:
 
 ```bash
-cargo build --release                 # tip-prep, const-distance, rt-log
+cargo build --release                 # rusty-tip, tip-prep, const-distance, rt-log
 cargo build --release --features cuox # + cuox-finder
 cargo build --release --features gui  # + rusty-tip-gui
 ```
@@ -116,3 +114,14 @@ hardware.
 ## License
 
 MIT
+
+## AI use
+
+[![AI:R READ](https://img.shields.io/badge/AI-READ-grey?style=flat&logoSize=auto&labelColor=13171f)](https://0rwx.com)
+[![AI:W WRITE](https://img.shields.io/badge/AI-WRITE-grey?style=flat&logoSize=auto&labelColor=13171f)](https://0rwx.com)
+[![AI:X EXECUTE](https://img.shields.io/badge/AI-EXECUTE-grey?style=flat&logoSize=auto&labelColor=13171f)](https://0rwx.com)
+
+rusty-tip is a mix of all three on the [0rwx](https://0rwx.com) scale:
+parts I wrote myself with an LLM only reading along (R), parts written with
+Claude Code that I read and fixed (W), and tooling I checked by running it
+rather than line by line (X).
