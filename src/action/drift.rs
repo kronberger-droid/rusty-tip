@@ -547,8 +547,15 @@ impl CompensateDrift {
             })
         };
         let mut bursts = 0;
+        // What one burst's error bar is short by, learned from the baseline;
+        // one until then.
+        let calibration = std::cell::Cell::new(1.0);
         let mut burst = |ctx: &mut ActionContext, role: BurstRole, vz: f64| {
-            let estimate = measure.measure(ctx)?;
+            let raw = measure.measure(ctx)?;
+            let estimate = DriftEstimate {
+                std_err_m_s: raw.std_err_m_s * calibration.get(),
+                ..raw
+            };
             bursts += 1;
             ctx.events.emit(Event::typed(&DriftBurstEvent {
                 burst: bursts,
@@ -592,6 +599,28 @@ impl CompensateDrift {
                 )));
             }
         };
+        // A burst's error bar comes from the scatter of its block means, and
+        // Z noise correlated over seconds makes neighbouring blocks agree more
+        // than independent ones would: under such noise the bursts report two
+        // to three times too little. The baseline bursts, taken with nothing
+        // changed, scatter about their trend by the real amount, so the
+        // ratio calibrates every burst after them. Three quick-settle bursts
+        // are too few to tell; their error bars stay as reported.
+        let (span_s, _, _) = self.settle.criteria(estimate.window_s);
+        let recent = &found[span_start(&found, span_s).unwrap_or(0)..];
+        if recent.len() >= CALIBRATION_BURSTS
+            && let Some(t) = trend(recent)
+        {
+            calibration.set(t.scatter_ratio.max(1.0));
+            estimate.std_err_m_s *= calibration.get();
+            if calibration.get() > 1.0 {
+                log::info!(
+                    "compensate_drift: the baseline scatters {:.1}x more than its bursts \
+                     report; error bars from here on are scaled to match",
+                    calibration.get()
+                );
+            }
+        }
         // Settling bursts are not the correction's to spend.
         let budget = self.bursts + taken - 1;
         if estimate.is_negligible(self.tolerance_m_s) {
@@ -702,56 +731,95 @@ impl Action for CompensateDrift {
 /// quick and passes slow creep. The error bar is the larger of what the
 /// bursts report and how much they scatter about the line, since the
 /// reported one is optimistic under correlated noise.
+///
+/// With `max_change` the whole baseline is tried too, when it reaches
+/// further back than the span. Correlated noise can leave two minutes of
+/// bursts too uncertain to show a change under the limit even when there is
+/// none, and the error of a trend falls steeply with its span, so looking
+/// longer resolves it. Creep only makes the longer span stricter, since it
+/// sees more of the change.
 fn settled(
     found: &[(f64, DriftEstimate)],
     span_s: f64,
     max_change: Option<f64>,
     floor_m_s: f64,
 ) -> bool {
-    let Some(&(t_last, _)) = found.last() else {
+    let Some(start) = span_start(found, span_s) else {
         return false;
     };
-    // From the newest burst at or before the span's start, so the span is
-    // covered whatever the burst times happen to be.
-    let Some(start) = found
+    let passes = |bursts: &[(f64, DriftEstimate)]| {
+        trend(bursts).is_some_and(|t| match max_change {
+            Some(limit) => t.change + 2.0 * t.error <= limit.max(floor_m_s),
+            None => t.change <= (2.0 * t.error).max(floor_m_s),
+        })
+    };
+    passes(&found[start..]) || (max_change.is_some() && start > 0 && passes(found))
+}
+
+/// The newest burst at or before `span_s` before the last one, so a span
+/// starting there is covered whatever the burst times happen to be.
+fn span_start(found: &[(f64, DriftEstimate)], span_s: f64) -> Option<usize> {
+    let &(t_last, _) = found.last()?;
+    found
         .iter()
         .rposition(|(t, _)| *t <= t_last - span_s + 1e-9)
-    else {
-        return false;
-    };
-    let recent = &found[start..];
-    let covered = t_last - recent[0].0;
-    if recent.len() < 3 {
-        return false;
-    }
+}
 
-    let n = recent.len() as f64;
-    let t_mean = recent.iter().map(|(t, _)| t).sum::<f64>() / n;
-    let r_mean = recent.iter().map(|(_, e)| e.rate_m_s).sum::<f64>() / n;
-    let sxx: f64 = recent.iter().map(|(t, _)| (t - t_mean).powi(2)).sum();
-    let slope = recent
+/// A line through burst rates against time.
+#[derive(Debug, Clone, Copy)]
+struct Trend {
+    /// How much the drift changed over the bursts' span, m/s.
+    change: f64,
+    /// Its standard error: the larger of what the bursts report and how
+    /// much they scatter about the line.
+    error: f64,
+    /// How far the bursts scatter about the line against the errors they
+    /// report; above one, they report too little.
+    scatter_ratio: f64,
+}
+
+fn trend(bursts: &[(f64, DriftEstimate)]) -> Option<Trend> {
+    if bursts.len() < 3 {
+        return None;
+    }
+    let n = bursts.len() as f64;
+    let covered = bursts[bursts.len() - 1].0 - bursts[0].0;
+    let t_mean = bursts.iter().map(|(t, _)| t).sum::<f64>() / n;
+    let r_mean = bursts.iter().map(|(_, e)| e.rate_m_s).sum::<f64>() / n;
+    let sxx: f64 = bursts.iter().map(|(t, _)| (t - t_mean).powi(2)).sum();
+    if sxx <= 0.0 {
+        return None;
+    }
+    let slope = bursts
         .iter()
         .map(|(t, e)| (t - t_mean) * (e.rate_m_s - r_mean))
         .sum::<f64>()
         / sxx;
-    let reported = recent
+    let reported = bursts
         .iter()
         .map(|(t, e)| (t - t_mean).powi(2) * e.std_err_m_s.powi(2))
         .sum::<f64>()
         / sxx.powi(2);
-    let scatter = recent
+    let scatter = bursts
         .iter()
         .map(|(t, e)| (e.rate_m_s - r_mean - slope * (t - t_mean)).powi(2))
         .sum::<f64>()
         / (n - 2.0)
         / sxx;
-    let change = (slope * covered).abs();
-    let error = reported.max(scatter).sqrt() * covered;
-    match max_change {
-        Some(limit) => change + 2.0 * error <= limit.max(floor_m_s),
-        None => change <= (2.0 * error).max(floor_m_s),
-    }
+    Some(Trend {
+        change: (slope * covered).abs(),
+        error: reported.max(scatter).sqrt() * covered,
+        scatter_ratio: if reported > 0.0 {
+            (scatter / reported).sqrt()
+        } else {
+            1.0
+        },
+    })
 }
+
+/// Bursts the scatter of the baseline needs before it can say how far the
+/// bursts' own error bars are off.
+const CALIBRATION_BURSTS: usize = 5;
 
 #[cfg(test)]
 mod tests {

@@ -36,9 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minute or more passed as settled and went on drifting after the run:
   20 pm/s of creep with a two-minute time constant left 10 pm/s behind.
   `settle` now chooses: `careful` (the default) judges the drift's trend
-  over the last two minutes of bursts and leaves under 1 pm/s, taking at
-  least about 2.5 minutes, and refuses creep it cannot wait out within 10
-  minutes with nothing touched; `quick` is the old three-burst test, about
+  over the last two minutes of bursts (or the whole baseline, when
+  correlated noise leaves two minutes too uncertain) and leaves under
+  1 pm/s, taking at least about 2.5 minutes, and refuses creep it cannot
+  wait out within 10 minutes with nothing touched; `quick` is the old three-burst test, about
   half a minute; `skip` corrects from the first burst. The workbench's
   Drift tool has it as a dropdown. **Breaking (library):** `settle:
   SettleMode` replaces `settle_max_ms` in `CompensateDrift` and
@@ -84,6 +85,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the noisy regime all steady reads pass. `stable_signal_samples` sizes
   only the landing gate's batches now. `ReadStableSignal` and
   `StableReadSpec` gain `duration_ms`.
+- **Drift error bars were two to three times too small under correlated
+  noise.** A burst's error comes from the scatter of its block means, and
+  Z noise correlated over seconds makes neighbouring blocks agree more than
+  independent ones, so `converged` and the reported residual trusted a
+  precision the measurement did not have: in simulation 8 of 20 residuals
+  fell outside their own two error bars. With careful settling, the
+  baseline's scatter about its trend calibrates every later burst, and the
+  residual is inside its error bar as often as it should be.
 
 ## [0.5.0] - 2026-11-11
 

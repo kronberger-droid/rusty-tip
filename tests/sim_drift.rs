@@ -375,14 +375,35 @@ fn compensation_never_switches_on_stale_lateral_velocities() {
     }
 }
 
-#[test]
-#[ignore = "known gap: the standard error assumes independent block means, and \
-            correlated Z noise makes it optimistic by a factor of two or more"]
-fn the_reported_residual_is_inside_its_own_error_bar() {
-    let scenario = realistic(5.0 * PM, -1.0).noise(ZNoise::Ar1 {
-        sigma_m: 60e-12,
+/// Z noise correlated over two seconds, sized so a burst reports 0.3 pm/s
+/// while it truly scatters by 0.83: the review's case, where a burst's
+/// block means agree more than independent ones would.
+fn correlated(drift_m_s: f64) -> DriftScenario {
+    realistic(drift_m_s, -1.0).noise(ZNoise::Ar1 {
+        sigma_m: 2.6e-12,
         tau_s: 2.0,
-    });
+    })
+}
+
+/// Correlated noise hides a two-minute trend under its own error bar, so
+/// careful settling has to look longer rather than refuse a drift that
+/// holds still.
+#[test]
+fn a_drift_that_holds_still_settles_through_correlated_noise() {
+    for seed in 1..=20 {
+        let outcome = compensate(&correlated(5.0 * PM), seed);
+        assert!(outcome.result.is_ok(), "seed {seed}: {:?}", outcome.result);
+        assert!(
+            outcome.residual_later.abs() < 1.0 * PM,
+            "seed {seed}: {:.2} pm/s left",
+            outcome.residual_later / PM
+        );
+    }
+}
+
+#[test]
+fn the_reported_residual_is_inside_its_own_error_bar() {
+    let scenario = correlated(5.0 * PM);
     let runs = 40;
     let finished: Vec<bool> = (1..=runs)
         .filter_map(|seed| {
