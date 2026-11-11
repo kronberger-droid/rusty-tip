@@ -387,9 +387,9 @@ pub struct DriftCompensation {
 ///   the piezo creeps, a drift that decays over tens of seconds. A rate
 ///   measured during it is stale by the time it is applied, and the velocity
 ///   ends up above where the drift is heading. Bursts are taken with nothing
-///   changed until three in a row agree within their noise, the first and
-///   last ten seconds apart, and the last is the baseline. A drift still
-///   changing after `settle_max_ms` fails the run with nothing touched.
+///   changed until the drift has settled the way `settle` asks
+///   ([`SettleMode`]), and the last is the baseline. A drift still changing
+///   when the mode's budget runs out fails the run with nothing touched.
 ///   Changing the compensation itself creeps too, but its ramp is a few
 ///   hundred picometres, too little to see.
 /// - **A latched axis is re-armed first.** Compensation stops for good at the
