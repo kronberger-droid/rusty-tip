@@ -355,6 +355,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the connection's sample rate rather than a `--sample-rate` of its own.
   `acquire` and `trace` were stubs that only printed that they were not
   built. `plan` and `baseline` are unchanged.
+- `DriftRoutine::report`, `DriftReport` and the `Display` impls of the
+  drift events. They held the sentences `const-distance drift` printed;
+  read what a run found from its `drift/*` events instead.
 - `frame`'s `trace_retrace_rms_mirrored`. It was there until a frame on
   hardware settled which way Nanonis sends backward rows; it sends them the
   same way round as forward ones, so the as-sent comparison is the one.

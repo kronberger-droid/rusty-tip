@@ -410,14 +410,7 @@ impl Tool for DriftTool {
                         for v in [s.vx_m_s, s.vy_m_s, s.vz_m_s] {
                             ui.label(egui::RichText::new(format!("{:+.3}", v / PM)).monospace());
                         }
-                        let saturated: Vec<&str> = [
-                            (s.x_saturated, "x"),
-                            (s.y_saturated, "y"),
-                            (s.z_saturated, "z"),
-                        ]
-                        .into_iter()
-                        .filter_map(|(on, axis)| on.then_some(axis))
-                        .collect();
+                        let saturated = s.saturated();
                         ui.label(if saturated.is_empty() {
                             "none".to_string()
                         } else {
