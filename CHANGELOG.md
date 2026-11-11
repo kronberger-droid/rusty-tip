@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instrument the two differ by the few hundred milliseconds between
   bursts.
 
+### Fixed
+
+- **`compensate` switched stale lateral velocities back on.** Drift
+  compensation keeps its X and Y velocities while switched off, and
+  turning it on for Z brought them back into effect, walking the tip off
+  its spot. When compensation was off, `compensate` now writes X and Y as
+  zero; when it was on, the velocities in effect are left as they are.
+
 ## [0.5.0] - 2026-11-11
 
 The first release of the v2 line that has run on a real microscope: it was

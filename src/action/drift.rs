@@ -477,11 +477,18 @@ impl CompensateDrift {
         }
 
         // A velocity that is configured but switched off is not in effect, so
-        // the baseline sees zero, not `comp.vz`.
+        // the baseline sees zero, not `comp.vz`. The same goes for x and y:
+        // switching compensation on for Z must not bring back lateral
+        // velocities left stored from an earlier session, which would walk
+        // the tip off its spot. Ones in effect are the operator's and stay.
         let mut vz = match comp.enabled {
             true => comp.vz,
             false => 0.0,
         };
+        if !comp.enabled {
+            comp.vx = 0.0;
+            comp.vy = 0.0;
+        }
         let set = |ctx: &mut ActionContext, vz: f64| -> Result<(), SpmError> {
             if vz.abs() > self.max_vz {
                 return Err(SpmError::Workflow(format!(

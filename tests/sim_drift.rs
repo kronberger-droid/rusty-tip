@@ -276,8 +276,19 @@ fn a_response_ten_percent_off_still_converges() {
 }
 
 #[test]
-#[ignore = "known gap: switching compensation on keeps whatever vx and vy were \
-            stored, so the tip walks sideways"]
+fn lateral_velocities_in_effect_are_the_operators_and_stay() {
+    let outcome = compensate_with(&realistic(5.0 * PM, -1.0), 1, |comp| {
+        comp.enabled = true;
+        comp.vx = 50.0 * PM;
+        comp.vy = -30.0 * PM;
+    });
+    outcome.result.expect("compensates");
+    for write in &outcome.writes {
+        assert_eq!((write.vx, write.vy), (50.0 * PM, -30.0 * PM), "{write:?}");
+    }
+}
+
+#[test]
 fn compensation_never_switches_on_stale_lateral_velocities() {
     let outcome = compensate_with(&realistic(5.0 * PM, -1.0), 1, |comp| {
         comp.enabled = false;
