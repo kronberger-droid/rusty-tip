@@ -383,6 +383,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the run to stop and exited without waiting, so the process could end
   before the cleanup withdrew the tip and put safe-tip back. It now waits
   for the session thread, and dropping a `SessionHandle` does the same.
+- **A lost connection skipped the cleanup.** After an I/O error or a read
+  timeout the client refuses every command, so the exit withdraw and the
+  safe-tip restore were refused too. The harness now reconnects once before
+  cleaning up. `Withdraw` waits 8 s by default instead of 10 s, under the
+  client's 10 s read timeout, so a slow withdraw no longer loses the
+  connection itself.
 - **The linear pulse strategy pulsed hardest next to the sharp window.**
   Inside `linear_clamp` the voltage ran from `voltage_bounds[0]` at the
   clamp's far end to `voltage_bounds[1]` next to the window, so a tip almost

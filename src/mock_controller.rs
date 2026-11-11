@@ -476,6 +476,11 @@ impl MockController {
             *c
         };
 
+        // As the real client does: after an I/O error it refuses everything
+        // until reconnected.
+        if !self.obs.lock().connected && !matches!(method, "reconnect" | "disconnect") {
+            return Err(FaultKind::Io.to_error());
+        }
         if let Some(kind) = self.faults_always.get(method).copied() {
             return Err(self.fire(kind));
         }

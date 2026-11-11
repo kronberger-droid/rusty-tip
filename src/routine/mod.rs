@@ -288,6 +288,15 @@ pub fn run_routine(
     }
 
     log::info!("Cleanup starting...");
+    // An I/O error mid-run leaves the client refusing every command, the
+    // withdraw and the safe-tip restore below included. One reconnect gives
+    // them their chance.
+    if !rt.controller().is_connected() {
+        match rt.controller().reconnect() {
+            Ok(()) => log::warn!("Reconnected for cleanup after a lost connection"),
+            Err(e) => log::warn!("Cleanup reconnect failed: {e}"),
+        }
+    }
     match routine.exit_policy() {
         ExitPolicy::Withdraw { retract_steps } => {
             match rt.z() {

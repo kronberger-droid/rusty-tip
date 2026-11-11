@@ -546,6 +546,42 @@ fn io_fault_mid_run_propagates_but_still_cleans_up() {
 }
 
 #[test]
+fn a_dropped_connection_is_reconnected_so_cleanup_can_withdraw() {
+    // The first approach drops the connection; like the real client, the
+    // mock then refuses everything until reconnected.
+    let mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT_INDEX)
+        .freq_shift(models::always(-1.0))
+        .fail_on_call("auto_approach", 1, FaultKind::Disconnect)
+        .build();
+    let obs = mock.observations();
+
+    let result = run_tip_prep(
+        Box::new(mock),
+        TipPrepParams {
+            events: &EventBus::new(),
+            shutdown: &ShutdownFlag::new(),
+            config: &fast_config(),
+            freq_shift: FREQ_SHIFT_INDEX,
+            current: CURRENT_INDEX,
+        },
+    );
+    assert!(
+        result.is_err(),
+        "the dropped connection surfaces as an error"
+    );
+
+    let obs = obs.lock();
+    assert_eq!(obs.count("reconnect"), 1);
+    assert_eq!(obs.withdraw_count, 1, "withdrawn after the reconnect");
+    assert!(obs.last_index("withdraw") > obs.first_index("reconnect"));
+    assert!(
+        obs.called("safe_tip_set_enabled"),
+        "safe-tip was put back after the reconnect"
+    );
+}
+
+#[test]
 fn withdraw_fault_during_cleanup_is_swallowed() {
     // With a blunt tip and max_cycles=1 the withdraws are, in order:
     //   #1 the Reposition inside cycle 1  (must succeed, else the loop aborts)
