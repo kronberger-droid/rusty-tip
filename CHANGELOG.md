@@ -389,6 +389,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cleaning up. `Withdraw` waits 8 s by default instead of 10 s, under the
   client's 10 s read timeout, so a slow withdraw no longer loses the
   connection itself.
+- **An exit retract above 32767 steps drove the coarse motor toward the
+  surface.** The step count wrapped when cast for the motor call, so 40000
+  became +25536. It is clamped to the largest single move instead.
 - **The linear pulse strategy pulsed hardest next to the sharp window.**
   Inside `linear_clamp` the voltage ran from `voltage_bounds[0]` at the
   clamp's far end to `voltage_bounds[1]` next to the window, so a tip almost
