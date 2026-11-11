@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A logo.** Pixel-art icon and "rusty tip" wordmark in
+  `assets/branding/`, generated from 1× sources by `export.py`. The README
+  opens with the wordmark, the workbench window carries the icon and the
+  app id `rusty-tip`, and the flake's `rusty-tip-gui` package installs a
+  desktop entry and hicolor icons, which is where Wayland looks the icon
+  up.
 - **Operating points: every loop, the bias and the scan under one name.**
   A preset is one loop's gains; what a lab tunes is the set, the loops at a
   bias, scanned at a speed over a frame of a size and resolution. The

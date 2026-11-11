@@ -52,6 +52,13 @@
         nativeBuildInputs = [pkgs.pkg-config];
         buildInputs = guiDeps;
         doCheck = false;
+        # Wayland finds the window icon through the desktop entry named like
+        # the app id, so the entry and the icon theme go in together.
+        postInstall = ''
+          install -Dm644 assets/branding/rusty-tip.desktop -t $out/share/applications
+          mkdir -p $out/share/icons
+          cp -r assets/branding/hicolor $out/share/icons/
+        '';
       };
 
       tip-prep = pkgs.rustPlatform.buildRustPackage {

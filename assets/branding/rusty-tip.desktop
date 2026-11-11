@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=rusty-tip
+GenericName=SPM Tip Preparation
+Comment=Automated STM/AFM tip conditioning for Nanonis controllers
+Exec=rusty-tip-gui
+Icon=rusty-tip
+Terminal=false
+Categories=Science;Physics;
+StartupWMClass=rusty-tip
