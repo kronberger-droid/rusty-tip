@@ -92,6 +92,12 @@ impl AppConfig {
             ));
         }
 
+        if self.tip_prep.signal_stability.max_unstable_sites == 0 {
+            return Err(ConfigError::Message(
+                "tip_prep.signal_stability.max_unstable_sites must be at least 1".into(),
+            ));
+        }
+
         let tolerance = self.tip_prep.timing.landing_tolerance;
         if tolerance <= 0.0 || !tolerance.is_finite() {
             return Err(ConfigError::Message(format!(
@@ -390,6 +396,17 @@ pub struct SignalStabilityConfig {
     /// Number of retries when a stable read isn't found.
     #[serde(default = "default_read_retry_count")]
     pub read_retry_count: u32,
+    /// Sites in a row tip prep reads at before it stops trusting the next
+    /// one, when every read fails its gates. A frozen reading (a railed PLL,
+    /// likely contact) never gets a pulse and ends the run there; a noisy
+    /// one gets one hardest pulse to shake the tip, and the run ends only
+    /// if the next sites are noisy too.
+    #[serde(default = "default_max_unstable_sites")]
+    pub max_unstable_sites: usize,
+}
+
+fn default_max_unstable_sites() -> usize {
+    3
 }
 
 impl Default for SignalStabilityConfig {
@@ -400,6 +417,7 @@ impl Default for SignalStabilityConfig {
             data_collection_duration_ms: default_data_collection_duration_ms(),
             read_timeout_secs: default_read_timeout_secs(),
             read_retry_count: default_read_retry_count(),
+            max_unstable_sites: default_max_unstable_sites(),
         }
     }
 }

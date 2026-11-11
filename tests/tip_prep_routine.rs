@@ -841,10 +841,12 @@ fn realistic_model_completes_and_publishes_measurements() {
     );
     assert!(captured.len() >= 5, "expected several measurements");
     // A stable read lasts the configured time at the stream's rate; the
-    // mock streams at none, so the configured rate stands in.
-    let expected = (cfg.tip_prep.signal_stability.data_collection_duration_ms as f64 / 1000.0
+    // mock streams at none, so the configured rate stands in, and a signal
+    // off the stream is polled, which caps the batch at 100 round trips.
+    let expected = ((cfg.tip_prep.signal_stability.data_collection_duration_ms as f64 / 1000.0
         * cfg.data_acquisition.sample_rate as f64)
-        .round() as usize;
+        .round() as usize)
+        .min(100);
     assert!(
         captured.iter().all(|&(_, _, n)| n == expected),
         "each measurement should report the configured batch of {expected} samples"

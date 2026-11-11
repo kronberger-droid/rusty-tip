@@ -635,7 +635,8 @@ impl SpmController for MockController {
     }
 
     fn streams_signal(&mut self, index: SignalIndex) -> bool {
-        self.z_drift.as_ref().is_some_and(|sim| sim.index == index)
+        (self.stream_rate_hz.is_some() && index == self.freq_shift_index)
+            || self.z_drift.as_ref().is_some_and(|sim| sim.index == index)
             || self.loop_sim.as_ref().is_some_and(|sim| sim.owns(index))
     }
 
@@ -1342,8 +1343,10 @@ impl MockControllerBuilder {
         self
     }
 
-    /// The stream rate to report when no drift or loop simulation sets one,
-    /// so a stable read turns its slope into Hz/s at the rate under test.
+    /// Stream the freq-shift channel at `hz`: the rate to report when no
+    /// drift or loop simulation sets one, so a stable read sizes its batch
+    /// and turns its slope into Hz/s at the rate under test. Without it the
+    /// channel counts as polled.
     pub fn stream_rate(mut self, hz: f64) -> Self {
         self.stream_rate_hz = Some(hz);
         self

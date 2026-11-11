@@ -149,6 +149,7 @@ data_collection_duration_ms = 500 # length of one batch (ms)
 max_std_dev_hz = 1.5      # max standard deviation of the sample batch (Hz)
 max_slope_hz_per_s = 0.5  # max drift rate of the batch (Hz/s)
 read_retry_count = 3      # retries with exponential backoff before giving up
+max_unstable_sites = 3    # sites read before an unstable reading ends a round
 ```
 
 A batch is set in time, not in samples: the samples follow from the rate
@@ -160,9 +161,17 @@ half a second it passes it.
 
 A batch that is mostly one exact value is refused whatever the gates say:
 that is a PLL at its rail or out of lock, not a reading. A read that finds
-no batch inside the gates within its retries is not used. Tip prep moves to
-a fresh site and reads again, and stops after three unstable sites in a
-row.
+no batch inside the gates within its retries is not used: tip prep moves
+to a fresh site and reads again, up to `max_unstable_sites` sites. When
+none reads stable, it depends on why:
+
+- A frozen reading among them, most likely the tip in contact, never gets
+  a pulse; the run stops.
+- Only noisy readings mean a bad tip, so the method's hardest pulse fires
+  once and the tip moves on. A second round of noisy sites stops the run.
+
+A signal that is not on the TCP stream is polled, one round trip a sample,
+so its batch is capped at 100 samples whatever the duration asks for.
 
 `read_timeout_secs` is still accepted so v1-era configs parse, but the read
 path ignores it: a read is bounded by `read_retry_count`.

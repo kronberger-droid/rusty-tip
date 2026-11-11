@@ -171,6 +171,11 @@ pub struct ReadStableSignal {
 /// gives the gates something to judge.
 const MIN_BATCH_SAMPLES: usize = 10;
 
+/// The most samples a batch set in time asks for when the signal is not on
+/// the stream and every sample is a polled round trip: the fixed batch the
+/// read used before it was set in time.
+const MAX_POLLED_SAMPLES: usize = 100;
+
 fn default_num_samples() -> usize {
     100
 }
@@ -222,9 +227,18 @@ impl Action for ReadStableSignal {
             .stream_rate_hz()
             .filter(|&hz| hz > 0.0)
             .unwrap_or(self.sample_rate_hz);
+        // A signal off the stream is polled, one round trip a sample, and a
+        // batch set in time at the configured rate would take seconds.
+        let streamed = ctx.controller.streams_signal(self.index);
         let num_samples = match self.duration_ms {
             Some(ms) => {
-                ((ms as f64 / 1000.0 * sample_rate_hz).round() as usize).max(MIN_BATCH_SAMPLES)
+                let n =
+                    ((ms as f64 / 1000.0 * sample_rate_hz).round() as usize).max(MIN_BATCH_SAMPLES);
+                if streamed {
+                    n
+                } else {
+                    n.min(MAX_POLLED_SAMPLES)
+                }
             }
             None => self.num_samples,
         };

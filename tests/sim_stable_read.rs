@@ -194,14 +194,59 @@ fn a_steady_signal_in_the_noisy_regime_passes_the_gates() {
 }
 
 #[test]
-fn tip_prep_never_pulses_on_a_read_that_failed_its_gates() {
-    // A blunt tip whose reading is far too noisy for the 1.5 Hz gate.
+fn noisy_readings_everywhere_get_one_hardest_pulse_then_the_run_stops() {
+    // A blunt tip whose reading is far too noisy for the 1.5 Hz gate: no
+    // pulse is ever chosen from its readings, but the hardest pulse fires
+    // once to shake it, and a second round of noisy sites ends the run.
     let mock = mock(-10.0, FreqShiftNoise::White { sigma_hz: 4.0 }).build();
     let obs = mock.observations();
     let result = tip_prep(mock);
+    let max = AppConfig::default().pulse_method.max_voltage();
+    let pulses = obs.lock().pulses.clone();
+    assert_eq!(pulses.len(), 1, "{pulses:?}");
+    assert_eq!(pulses[0].abs(), max);
+    let err = result.expect_err("a second noisy round ends the run");
+    assert!(err.to_string().contains("after the hardest pulse"), "{err}");
+}
+
+#[test]
+fn a_frozen_reading_never_gets_a_pulse() {
+    // A railed PLL, most likely the tip in contact: a pulse now would short
+    // the bias through the tip.
+    let mock = mock(-100.0, real_noise(0.3)).pll_rail(RAIL_HZ).build();
+    let obs = mock.observations();
+    let err = tip_prep(mock).expect_err("a frozen reading ends the run");
     assert!(obs.lock().pulses.is_empty(), "{:?}", obs.lock().pulses);
-    let err = result.expect_err("three unstable sites end the run");
-    assert!(err.to_string().contains("unstable at 3 sites"), "{err}");
+    assert!(err.to_string().contains("frozen"), "{err}");
+}
+
+#[test]
+fn the_unstable_site_count_is_configurable() {
+    let mock = mock(-100.0, real_noise(0.3)).pll_rail(RAIL_HZ).build();
+    let err = tip_prep_with(mock, |cfg| {
+        cfg.tip_prep.signal_stability.max_unstable_sites = 5;
+    })
+    .expect_err("a frozen reading ends the run");
+    assert!(err.to_string().contains("one of 5 sites"), "{err}");
+}
+
+#[test]
+fn a_polled_signal_reads_a_short_batch() {
+    // No stream: every sample is a round trip, so half a second at 1 kHz
+    // would be 500 of them. The batch stays at the 100 it was before.
+    let mut mock = MockController::builder()
+        .freq_shift_index(FREQ_SHIFT)
+        .freq_shift(models::always(-1.0))
+        .freq_shift_noise(real_noise(0.28))
+        .build();
+    let events = EventBus::new();
+    let shutdown = ShutdownFlag::new();
+    let read = Rt::new(&mut mock, &events, &shutdown)
+        .signals()
+        .unwrap()
+        .read_stable(FREQ_SHIFT, &shipped_spec())
+        .unwrap();
+    assert_eq!(read.samples, 100);
 }
 
 #[test]
@@ -226,6 +271,14 @@ fn one_unstable_site_moves_the_tip_on_and_the_run_carries_on() {
 
 /// A short tip prep on `mock`: two cycles, no stability check, no waits.
 fn tip_prep(mock: MockController) -> Result<Outcome, rusty_tip::spm_error::SpmError> {
+    tip_prep_with(mock, |_| {})
+}
+
+/// The same, with `tweak` applied to the config.
+fn tip_prep_with(
+    mock: MockController,
+    tweak: impl FnOnce(&mut AppConfig),
+) -> Result<Outcome, rusty_tip::spm_error::SpmError> {
     let mut cfg = AppConfig::default();
     cfg.tip_prep.max_cycles = Some(2);
     cfg.tip_prep.max_duration_secs = None;
@@ -236,6 +289,7 @@ fn tip_prep(mock: MockController) -> Result<Outcome, rusty_tip::spm_error::SpmEr
     t.post_reposition_settle_ms = 0;
     t.buffer_clear_wait_ms = 0;
     t.post_pulse_settle_ms = 0;
+    tweak(&mut cfg);
     run_tip_prep(
         Box::new(mock),
         TipPrepParams {

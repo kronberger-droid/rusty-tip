@@ -21,10 +21,6 @@ use super::PulseState;
 use super::events::{ConfigReloadedEvent, CycleEvent, MaxPulseEvent, PhaseEvent};
 use super::reload::{ConfigReload, differs, keep_frozen};
 
-/// Sites in a row that may read unstable before a run gives up. One unstable
-/// read in the noisy regime is ordinary; three in a row are not.
-const UNSTABLE_SITES: usize = 3;
-
 pub use crate::routine::Outcome;
 
 // ============================================================================
@@ -198,33 +194,80 @@ impl<'a> TipPrep<'a> {
     /// A frequency shift to decide by. A read that failed its gates on every
     /// attempt is not one: its mean is whatever the noise or a railed PLL
     /// made it, and a pulse chosen from it is chosen at random. So the tip
-    /// moves to a fresh site and reads again, and after
-    /// [`UNSTABLE_SITES`] unstable sites in a row the run stops, since by
-    /// then the PLL or the Z loop is at fault, not the site.
-    fn read_stable(&self, rt: &mut Rt) -> Result<f64, SpmError> {
-        for site in 1..=UNSTABLE_SITES {
-            let read = rt
-                .signals()?
-                .read_stable(self.freq_shift, &self.read_spec)?;
-            if read.stable {
-                return Ok(read.value);
+    /// moves to a fresh site and reads again, up to
+    /// `signal_stability.max_unstable_sites` sites, and what happens when
+    /// none of them reads stable depends on why:
+    ///
+    /// - **A frozen reading** among them (a PLL at its rail or out of lock,
+    ///   most likely the tip in contact) never gets a pulse, which would
+    ///   short the bias through the tip. The run stops.
+    /// - **Only noisy readings**: a tip that will not give a steady reading
+    ///   is a bad tip, and the hardest pulse is what tip prep has for one.
+    ///   It fires once, the tip moves on, and only a second round of noisy
+    ///   sites stops the run, since by then the PLL or the Z loop is the
+    ///   more likely culprit.
+    fn read_stable(&mut self, rt: &mut Rt) -> Result<f64, SpmError> {
+        let sites = self.config.tip_prep.signal_stability.max_unstable_sites;
+        let mut shaken = false;
+        loop {
+            let mut frozen = false;
+            for site in 1..=sites {
+                let read = rt
+                    .signals()?
+                    .read_stable(self.freq_shift, &self.read_spec)?;
+                if read.stable {
+                    return Ok(read.value);
+                }
+                frozen |= read.frozen;
+                log::warn!(
+                    "Frequency shift {} at site {site}/{sites} after {} batches \
+                     (mean {:.3} Hz, std_dev {:.3} Hz, drift {:.3} Hz/s); not deciding by it",
+                    if read.frozen { "frozen" } else { "unstable" },
+                    read.attempts,
+                    read.value,
+                    read.std_dev,
+                    read.drift_hz_s
+                );
+                if site < sites {
+                    rt.check_shutdown()?;
+                    self.reposition(rt)?;
+                }
             }
-            log::warn!(
-                "Frequency shift unstable at site {site}/{UNSTABLE_SITES} after {} batches \
-                 (std_dev {:.3} Hz, drift {:.3} Hz/s); not deciding by it",
-                read.attempts,
-                read.std_dev,
-                read.drift_hz_s
-            );
-            if site < UNSTABLE_SITES {
-                rt.check_shutdown()?;
-                self.reposition(rt)?;
+            if frozen {
+                return Err(SpmError::Workflow(format!(
+                    "the frequency shift read frozen at one of {sites} sites in a row, the \
+                     signature of a PLL at its rail or out of lock, most likely the tip in \
+                     contact; no pulse was fired. Check the PLL and the Z loop before running \
+                     again"
+                )));
             }
+            if shaken {
+                return Err(SpmError::Workflow(format!(
+                    "the frequency shift read unstable at {sites} sites, then again at {sites} \
+                     more after the hardest pulse; check the PLL (in lock) and the Z loop \
+                     before running again"
+                )));
+            }
+            shaken = true;
+            rt.check_shutdown()?;
+            self.fire_max_pulse(rt, "unstable readings")?;
+            self.reposition(rt)?;
         }
-        Err(SpmError::Workflow(format!(
-            "the frequency shift read unstable at {UNSTABLE_SITES} sites in a row; check the \
-             PLL (in lock, not railed) and the Z loop before running again"
-        )))
+    }
+
+    /// The method's hardest pulse, where the tip is now.
+    fn fire_max_pulse(&mut self, rt: &mut Rt, reason: &str) -> Result<(), SpmError> {
+        let signed_max = self.pulse.fire_max_pulse_voltage(&self.config.pulse_method);
+        log::info!(
+            "Executing MAX pulse #{} after {reason}: {signed_max:.3}V",
+            self.pulse.pulse_count,
+        );
+        rt.bias()?
+            .pulse(signed_max, self.config.tip_prep.timing.pulse_width_ms)?;
+        rt.emit(Event::typed(&MaxPulseEvent {
+            pulse_voltage: signed_max,
+        }));
+        Ok(())
     }
 
     /// Write the configured Z-controller preset, if there is one, with
@@ -332,7 +375,7 @@ impl<'a> TipPrep<'a> {
 
     /// Whether every read held sharp, and the last reading taken, which is
     /// the one at the site the tip now sits over.
-    fn confirm_sharp(&self, rt: &mut Rt) -> Result<(bool, f64), SpmError> {
+    fn confirm_sharp(&mut self, rt: &mut Rt) -> Result<(bool, f64), SpmError> {
         const CONFIRMATION_READS: usize = 3;
         let mut last_freq_shift = f64::NAN;
 
@@ -446,11 +489,11 @@ impl<'a> TipPrep<'a> {
         )?;
 
         // Step 4: Measure final freq_shift
+        let threshold = stability.stable_tip_allowed_change;
         let final_fs = self.measure_final_freq_shift(rt)?;
 
         // Step 5: Compare
         let change = (final_fs - baseline).abs();
-        let threshold = stability.stable_tip_allowed_change;
         let is_stable = change <= threshold;
 
         log::info!(
@@ -631,7 +674,7 @@ impl<'a> TipPrep<'a> {
         Ok(())
     }
 
-    fn measure_final_freq_shift(&self, rt: &mut Rt) -> Result<f64, SpmError> {
+    fn measure_final_freq_shift(&mut self, rt: &mut Rt) -> Result<f64, SpmError> {
         log::info!("Measuring final freq_shift after sweeps");
 
         rt.z()?.withdraw()?;
