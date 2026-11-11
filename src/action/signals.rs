@@ -121,6 +121,9 @@ pub struct StableRead {
     pub samples: usize,
     /// Batches taken, the one reported included.
     pub attempts: usize,
+    /// Whether the batch was mostly one exact value: a PLL at its rail or
+    /// out of lock, not a reading. See [`is_frozen`].
+    pub frozen: bool,
     /// Whether the batch passed the noise and drift gates. A read that
     /// failed them on every attempt reports its last batch with this false:
     /// its value is not a measurement, and the caller has to decide what to
@@ -237,8 +240,9 @@ impl Action for ReadStableSignal {
 
             let noise_ok = std_dev <= self.max_std_dev;
             let drift_ok = drift.abs() <= self.max_slope;
+            let frozen = is_frozen(&samples);
 
-            if noise_ok && drift_ok {
+            if noise_ok && drift_ok && !frozen {
                 log::debug!(
                     "ReadStableSignal: index={}, samples={}, mean={:.6}, std_dev={:.4} Hz, drift={:.4} Hz/s (stable, attempt {})",
                     self.index,
@@ -267,6 +271,7 @@ impl Action for ReadStableSignal {
                         drift_hz_s: drift,
                         samples: samples.len(),
                         attempts: attempt + 1,
+                        frozen: false,
                         stable: true,
                     },
                 );
@@ -275,11 +280,12 @@ impl Action for ReadStableSignal {
             if attempt < self.max_retries {
                 let backoff_ms = 100u64 * (1 << attempt);
                 log::debug!(
-                    "ReadStableSignal: not stable (std_dev={:.4}/{:.4} Hz, drift={:.4}/{:.4} Hz/s, n={}), retry {} in {}ms",
+                    "ReadStableSignal: not stable (std_dev={:.4}/{:.4} Hz, drift={:.4}/{:.4} Hz/s, frozen={}, n={}), retry {} in {}ms",
                     std_dev,
                     self.max_std_dev,
                     drift.abs(),
                     self.max_slope,
+                    frozen,
                     samples.len(),
                     attempt + 1,
                     backoff_ms
@@ -287,12 +293,13 @@ impl Action for ReadStableSignal {
                 ctx.settle(backoff_ms)?;
             } else {
                 log::warn!(
-                    "ReadStableSignal: signal not stable after {} retries (std_dev={:.4}/{:.4} Hz, drift={:.4}/{:.4} Hz/s, n={}), last mean={:.6}",
+                    "ReadStableSignal: signal not stable after {} retries (std_dev={:.4}/{:.4} Hz, drift={:.4}/{:.4} Hz/s, frozen={}, n={}), last mean={:.6}",
                     self.max_retries,
                     std_dev,
                     self.max_std_dev,
                     drift.abs(),
                     self.max_slope,
+                    frozen,
                     samples.len(),
                     mean
                 );
@@ -315,6 +322,7 @@ impl Action for ReadStableSignal {
                         drift_hz_s: drift,
                         samples: samples.len(),
                         attempts: attempt + 1,
+                        frozen,
                         stable: false,
                     },
                 );
@@ -381,6 +389,33 @@ pub(crate) fn emit_measurement(
             "stable": stable,
         }),
     ));
+}
+
+/// Share of a batch one exact value may take before the batch is a pinned
+/// signal rather than a reading. In real frequency-shift batches the most
+/// common value is at most 12 % of 100 samples, usually 1 %; a railed PLL
+/// streams one value throughout.
+const FROZEN_SHARE: f64 = 0.5;
+
+/// Whether a batch is mostly one exact value.
+///
+/// A PLL at the end of its range or out of lock streams its rail, the same
+/// number sample after sample. That batch has no scatter and no slope, so
+/// the noise and drift gates both take it for a perfectly steady reading.
+/// Real signals always scatter, so a batch that does not is refused,
+/// wherever the rail happens to sit.
+pub(crate) fn is_frozen(data: &[f64]) -> bool {
+    if data.len() < 2 {
+        return false;
+    }
+    let mut bits: Vec<u64> = data.iter().map(|v| v.to_bits()).collect();
+    bits.sort_unstable();
+    let longest = bits
+        .chunk_by(|a, b| a == b)
+        .map(<[u64]>::len)
+        .max()
+        .unwrap_or(0);
+    longest as f64 >= FROZEN_SHARE * data.len() as f64
 }
 
 /// Compute mean, standard deviation, and linear regression slope from sample data.

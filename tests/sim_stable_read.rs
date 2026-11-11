@@ -162,8 +162,6 @@ fn real_quiet_noise_reads_stable_first_time_and_close_to_the_truth() {
 }
 
 #[test]
-#[ignore = "known gap: a railed PLL streams a constant, and a batch with no \
-            scatter passes the noise gate as perfectly stable"]
 fn a_railed_batch_is_never_taken_as_stable() {
     let mut mock = mock(-100.0, real_noise(0.3)).pll_rail(RAIL_HZ).build();
     let (value, stable) = read(&mut mock, &shipped_spec());
@@ -204,7 +202,10 @@ fn one_unstable_site_moves_the_tip_on_and_the_run_carries_on() {
     let mut noise: Vec<f64> = (0..first_read)
         .map(|k| if k % 2 == 0 { 4.0 } else { -4.0 })
         .collect();
-    noise.resize(1_000_000, 0.0);
+    // Then the real quiet noise, over and over: exact zeros would be a
+    // frozen batch, which the rail check refuses.
+    let quiet = quiet_noise();
+    noise.extend(quiet.iter().cycle().take(1_000_000));
     let mock = mock(-10.0, FreqShiftNoise::Replay(noise.into())).build();
     let obs = mock.observations();
     let result = tip_prep(mock);

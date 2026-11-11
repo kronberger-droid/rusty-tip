@@ -48,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (library):** `Signals::read_stable` returns a `StableRead` (value,
   std dev, drift, samples, attempts and whether it passed) instead of a
   bare value; check `stable` before using `value`.
+- **A railed PLL read as a perfectly stable frequency shift.** At its rail
+  or out of lock the PLL streams one exact value, −76.29 Hz in the
+  2026-10-06 runs, and a batch with no scatter and no slope passed both
+  gates: 105 of 425 reads that day. A batch where one exact value makes up
+  half or more of the samples is now refused as frozen (`StableRead::frozen`),
+  wherever the rail sits; real batches never exceed 12 %. Tip prep takes it
+  like any unstable read: no pulse, a fresh site. The plain mock's
+  freq-shift batches carry nanohertz of jitter so they are not frozen.
 
 ## [0.5.0] - 2026-11-11
 
