@@ -122,7 +122,8 @@ pub struct StableRead {
     /// Batches taken, the one reported included.
     pub attempts: usize,
     /// Whether the batch was mostly one exact value: a PLL at its rail or
-    /// out of lock, not a reading. See [`is_frozen`].
+    /// out of lock, not a reading. "Mostly" is half the samples or more; real
+    /// batches top out at 12 %.
     pub frozen: bool,
     /// Whether the batch passed the noise and drift gates. A read that
     /// failed them on every attempt reports its last batch with this false:
