@@ -56,6 +56,23 @@ fn compensate_with(
     seed: u64,
     prepare: impl FnOnce(&mut DriftComp),
 ) -> Outcome {
+    run(scenario, seed, &CompensateDrift::new(Z), prepare)
+}
+
+fn compensate(scenario: &DriftScenario, seed: u64) -> Outcome {
+    compensate_with(scenario, seed, |_| {})
+}
+
+fn compensate_quick(scenario: &DriftScenario, seed: u64) -> Outcome {
+    run(scenario, seed, &CompensateDrift::quick(Z), |_| {})
+}
+
+fn run(
+    scenario: &DriftScenario,
+    seed: u64,
+    action: &CompensateDrift,
+    prepare: impl FnOnce(&mut DriftComp),
+) -> Outcome {
     let mut mock = MockController::builder()
         .noise_seed(seed)
         .z_drift_scenario(Z, scenario.clone())
@@ -67,7 +84,7 @@ fn compensate_with(
     let result = Rt::new(&mut mock, &events, &shutdown)
         .drift()
         .expect("the mock supports drift compensation")
-        .compensate(&CompensateDrift::new(Z));
+        .compensate(action);
 
     let obs = obs.lock();
     let comp = obs.drift_comp;
@@ -82,10 +99,6 @@ fn compensate_with(
         took_s: obs.z_sim_time_s - scenario.start_s,
         writes: obs.drift_comp_writes.clone(),
     }
-}
-
-fn compensate(scenario: &DriftScenario, seed: u64) -> Outcome {
-    compensate_with(scenario, seed, |_| {})
 }
 
 // -- The simulator --------------------------------------------------------
@@ -241,23 +254,69 @@ fn a_constant_drift_stays_cancelled() {
     }
 }
 
+/// Careful settling never leaves more than 1 pm/s behind: creep it can wait
+/// out within its budget is cancelled to that, and creep too slow for it is
+/// refused with nothing switched on, so the operator knows to come back.
 #[test]
-#[ignore = "known gap: the settle test compares bursts ~10 s apart, so creep with \
-            a time constant of a minute or more passes as settled"]
-fn creep_is_waited_out_before_the_velocity_is_fixed() {
+fn creep_is_waited_out_or_refused_never_left_behind() {
     for tau_s in [60.0, 120.0, 300.0] {
         let scenario = realistic(5.0 * PM, -1.0)
             .creep(20.0 * PM, tau_s)
             .starting_after(30.0);
         let outcome = compensate(&scenario, 7);
+        match &outcome.result {
+            Ok(_) => assert!(
+                outcome.residual_later.abs() < 1.0 * PM,
+                "tau {tau_s} s: {:.2} pm/s left after {:.0} s",
+                outcome.residual_later / PM,
+                outcome.took_s,
+            ),
+            Err(e) => {
+                assert!(
+                    e.to_string().contains("still changing"),
+                    "tau {tau_s} s: {e}"
+                );
+                assert!(
+                    outcome.writes.iter().all(|w| !w.enabled),
+                    "nothing switched on"
+                );
+            }
+        }
+    }
+}
+
+/// The cases careful settling has to finish rather than refuse, and how
+/// long it takes.
+#[test]
+fn creep_up_to_two_minutes_is_cancelled_within_the_budget() {
+    for tau_s in [60.0, 120.0] {
+        let scenario = realistic(5.0 * PM, -1.0)
+            .creep(20.0 * PM, tau_s)
+            .starting_after(30.0);
+        let outcome = compensate(&scenario, 7);
         assert!(
-            outcome.residual_later.abs() < 1.0 * PM,
-            "tau {tau_s} s: {:.2} pm/s left after {:.0} s ({:?})",
-            outcome.residual_later / PM,
-            outcome.took_s,
-            outcome.result.map(|r| r.converged)
+            outcome.result.is_ok(),
+            "tau {tau_s} s: {:?}",
+            outcome.result
+        );
+        assert!(
+            outcome.took_s < 600.0,
+            "tau {tau_s} s took {:.0} s",
+            outcome.took_s
         );
     }
+}
+
+/// A constant drift is settled once two minutes of bursts show no trend.
+#[test]
+fn careful_takes_about_two_minutes_for_a_drift_that_holds_still() {
+    let outcome = compensate(&realistic(5.0 * PM, -1.0), 1);
+    outcome.result.expect("compensates");
+    assert!(
+        (120.0..=200.0).contains(&outcome.took_s),
+        "{:.0} s",
+        outcome.took_s
+    );
 }
 
 #[test]
@@ -332,8 +391,9 @@ fn the_reported_residual_is_inside_its_own_error_bar() {
 
 #[test]
 fn a_never_settling_drift_gives_up_after_the_budget_in_measured_time() {
-    // 1/t creep so strong it never holds still within the budget: at 180 s
-    // it still changes by about 3 pm/s over the 10 s the settle test spans.
+    // 1/t creep so strong it never holds still within the budget: at 600 s
+    // it still changes by about 2.7 pm/s over the two minutes the careful
+    // test spans.
     let scenario = realistic(0.0, -1.0).log_creep(1e-8, 5.0);
     let outcome = compensate(&scenario, 1);
     let err = outcome.result.expect_err("refuses a drift still changing");
@@ -342,10 +402,10 @@ fn a_never_settling_drift_gives_up_after_the_budget_in_measured_time() {
         outcome.writes.iter().all(|w| !w.enabled),
         "nothing was switched on"
     );
-    // The default budget is 180 s, counted in measured time: the run stops
+    // The careful budget is 600 s, counted in measured time: the run stops
     // after the burst that crossed it.
     assert!(
-        (180.0..=190.0).contains(&outcome.took_s),
+        (600.0..=610.0).contains(&outcome.took_s),
         "{:.1} s",
         outcome.took_s
     );
@@ -353,15 +413,16 @@ fn a_never_settling_drift_gives_up_after_the_budget_in_measured_time() {
 
 // -- Characterisation -----------------------------------------------------
 
-/// What today's settle test leaves under a two-minute creep. Pinned so a
-/// change to the algorithm moves it on purpose; the bound it should meet is
-/// in `creep_is_waited_out_before_the_velocity_is_fixed`.
+/// What quick settling leaves under a two-minute creep: the price of the
+/// half minute it takes. Pinned so a change to it moves this on purpose;
+/// careful settling is held to 1 pm/s in
+/// `creep_is_waited_out_or_refused_never_left_behind`.
 #[test]
-fn characterisation_two_minute_creep_leaves_this_much_today() {
+fn characterisation_quick_settling_leaves_two_minute_creep_behind() {
     let scenario = realistic(5.0 * PM, -1.0)
         .creep(20.0 * PM, 120.0)
         .starting_after(30.0);
-    let outcome = compensate(&scenario, 7);
+    let outcome = compensate_quick(&scenario, 7);
     let left = outcome.residual_later / PM;
     assert!((-11.5..=-9.3).contains(&left), "{left:.2} pm/s left");
 }

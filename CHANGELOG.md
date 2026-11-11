@@ -31,6 +31,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   simulated run gives up after the same budget a real one does. On the
   instrument the two differ by the few hundred milliseconds between
   bursts.
+- **`compensate` waits creep out, unless asked to be quick.** The settle
+  test compared bursts about 10 s apart, so creep with a time constant of a
+  minute or more passed as settled and went on drifting after the run:
+  20 pm/s of creep with a two-minute time constant left 10 pm/s behind.
+  `settle` now chooses: `careful` (the default) judges the drift's trend
+  over the last two minutes of bursts and leaves under 1 pm/s, taking at
+  least about 2.5 minutes, and refuses creep it cannot wait out within 10
+  minutes with nothing touched; `quick` is the old three-burst test, about
+  half a minute; `skip` corrects from the first burst. The workbench's
+  Drift tool has it as a dropdown. **Breaking (library):** `settle:
+  SettleMode` replaces `settle_max_ms` in `CompensateDrift` and
+  `DriftParams`; `CompensateDrift::quick` gives the quick defaults.
 
 ### Fixed
 

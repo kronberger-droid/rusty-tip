@@ -254,15 +254,27 @@ window to the power 1.5, while rate only averages the white part of the noise.
 `compensate` is a loop of such bursts, `bursts` of them, after the drift
 has settled:
 
-1. Baseline bursts, with nothing changed, until three in a row agree within
-   their noise, the first and last 10 s apart. After an approach or a large Z
-   move the piezo creeps, a drift that decays over tens of seconds, and a rate
-   measured during it is stale by the time it is applied: the velocity ends up
-   above where the drift is heading and the residual overshoots. A drift still
-   changing after `settle_max_ms` (180000, so 180 s) stops the run with
-   nothing touched. The
-   last baseline is the one of the budget; the others come on top. If it is
-   inside its error bar, nothing is changed.
+1. Baseline bursts, with nothing changed, until the drift holds still. After
+   an approach or a large Z move the piezo creeps, a drift that decays over
+   tens of seconds to minutes, and a rate measured during it is stale by the
+   time it is applied: the drift goes on changing after the run, and the scan
+   sees the difference. How long to wait is `settle`:
+   - `careful` (default) fits a line through the burst rates of the last two
+     minutes and waits until the change it shows, plus two error bars, is
+     under 0.75 pm/s. Creep still to come is that change over
+     `1 - exp(-120 s / tau)`, so this leaves under 1 pm/s for creep up to
+     `tau` = 2 min; in simulation it leaves 0.04 to 0.3 pm/s for `tau` of 30
+     s to 2 min, taking 3.5 to 9 minutes, and a constant drift takes about
+     2.5 minutes. Creep it cannot see out within 10 minutes stops the run
+     with nothing touched.
+   - `quick` wants three bursts about 10 s apart that agree within their
+     noise, within 3 minutes. It takes half a minute to a minute, and creep
+     with `tau` of a minute or more passes as settled: in simulation 20 pm/s
+     of creep with `tau` = 2 min leaves 10 pm/s behind.
+   - `skip` takes the first burst as the baseline.
+
+   The last baseline is the one of the budget; the others come on top. If it
+   is inside its error bar, nothing is changed.
 2. A trial burst with `vz` stepped by `trial_vz` (20 pm/s), to learn which way
    the controller's velocity sign runs. The step is large on purpose: with the
    loop closed the feedback holds the gap, so the cost is a Z output that ramps
