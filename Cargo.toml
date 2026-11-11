@@ -37,11 +37,6 @@ name = "rt-log"
 path = "bin/rt-log/main.rs"
 
 [[bin]]
-name = "tip-prep-gui"
-path = "bin/tip-prep-gui/main.rs"
-required-features = ["gui"]
-
-[[bin]]
 name = "rusty-tip-gui"
 path = "bin/rusty-tip-gui/main.rs"
 required-features = ["gui"]

@@ -38,7 +38,7 @@ for adding others.
 The first routine built on this foundation, and the proof of concept for the
 design, is automated tip preparation: pulse, reposition, measure the
 frequency shift, repeat until the tip is sharp and provably stable. It ships
-as a CLI (`tip-prep`) and a GUI (`tip-prep-gui`).
+as a CLI (`tip-prep`) and as a tool in the workbench (`rusty-tip-gui`).
 
 ## Installation
 
@@ -51,7 +51,7 @@ From source:
 ```bash
 cargo build --release                 # tip-prep, const-distance, rt-log
 cargo build --release --features cuox # + cuox-finder
-cargo build --release --features gui  # + tip-prep-gui, rusty-tip-gui
+cargo build --release --features gui  # + rusty-tip-gui
 ```
 
 As a library: `cargo add rusty-tip`.
@@ -86,13 +86,8 @@ voltage = 4.0
 polarity = "positive"
 ```
 
-`tip-prep-gui` provides the same routine with live plots and an editable
-configuration, plus a simulation mode that runs against the mock controller
-without hardware.
-
-`rusty-tip-gui` is the workbench that will replace it: connect to the
-controller once, then pick a tool, run it, watch it live and open any past
-run from its log. Tip prep, drift compensation and a Controllers tool
+`rusty-tip-gui` is the workbench: connect to the controller once, then
+pick a tool, run it, watch it live and open any past run from its log. Tip prep, drift compensation and a Controllers tool
 that reads, edits and writes the Z-controller and PLL loops are the first
 tools; the Connection page shows the controller's state, signals and live
 readouts between runs, and a `Mock` backend runs everything without

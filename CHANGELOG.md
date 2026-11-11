@@ -343,6 +343,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`tip-prep-gui`.** The workbench (`rusty-tip-gui`) has its Tip prep tool
+  and a `Mock` backend for running without hardware. Its config is edited
+  as TOML text, not the old GUI's form. The Nix packages follow:
+  `rusty-tip-gui` and `rusty-tip-gui-windows` replace the `tip-prep-gui`
+  ones, and `rusty-tip-gui` is the flake's default.
+- **`const-distance drift`, `acquire` and `trace`.** Drift lives in the
+  workbench's Drift tool, which runs the same routine; there is no
+  command-line drift any more. The tool uses the session's stream, so Z
+  has to be in the TCP channel mapping before connecting, and it runs at
+  the connection's sample rate rather than a `--sample-rate` of its own.
+  `acquire` and `trace` were stubs that only printed that they were not
+  built. `plan` and `baseline` are unchanged.
+- `DriftRoutine::report`, `DriftReport` and the `Display` impls of the
+  drift events. They held the sentences `const-distance drift` printed;
+  read what a run found from its `drift/*` events instead.
 - `frame`'s `trace_retrace_rms_mirrored`. It was there until a frame on
   hardware settled which way Nanonis sends backward rows; it sends them the
   same way round as forward ones, so the as-sent comparison is the one.

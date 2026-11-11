@@ -1,6 +1,6 @@
 //! Measure the numbers a FolMe-driven constant-height trace depends on.
 //!
-//! Piece 3 of the constant-distance scan (`const-distance trace`) is gated on
+//! Piece 3 of the constant-distance scan (tracing a plan) is gated on
 //! hardware facts nobody has measured yet: how long a TCP round trip takes,
 //! what happens in Z when the feedback is switched off, how Z responds to a
 //! step with the loop open, and whether a FolMe move with the wait flag really

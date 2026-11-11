@@ -13,5 +13,5 @@ installers = []
 targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Where to host releases
 hosting = "github"
-# Enable gui feature to build tip-prep-gui
+# Enable gui feature to build rusty-tip-gui
 features = ["gui", "cuox"]

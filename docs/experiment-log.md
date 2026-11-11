@@ -86,7 +86,7 @@ pulse voltage as fired with its sign, whether it was sharp),
 The routine harness adds `routine/cleanup_failed` and `routine/panicked`
 to every routine's schema. The drift actions declare `drift/burst` (one per
 measurement burst of a compensation: its role, the velocity in effect, the
-drift measured and its standard error), which const-distance includes.
+drift measured and its standard error), which the drift routine includes.
 
 ## Reading a log: `rt-log`
 

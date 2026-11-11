@@ -1,6 +1,6 @@
 # Configuration reference
 
-`tip-prep` and `tip-prep-gui` read a TOML file; see `configs/` in the
+`tip-prep` and the workbench's Tip prep tool read a TOML file; see `configs/` in the
 repository for working examples. Every field below that shows a value has that
 value as its default, so a config only needs the fields it wants to change.
 Fields without a default are required.
