@@ -104,6 +104,12 @@ impl DriftScenario {
     }
 
     /// Let a new compensation velocity act only `latency_s` after it is set.
+    ///
+    /// With a latency the velocity in effect comes from the writes the mock
+    /// has seen, starting from zero, so a `drift_comp` set directly on the
+    /// observations does not act until it is written through
+    /// `drift_comp_set`. Without one the mock reads the controller's state
+    /// each sample, as the plain mock always has.
     pub fn latency(mut self, latency_s: f64) -> Self {
         self.latency_s = latency_s;
         self

@@ -237,8 +237,8 @@ fn characterisation_white_noise_fails_the_slope_gate_where_real_noise_passes() {
     let white = acceptance(FreqShiftNoise::White { sigma_hz: 0.28 }, 200);
     let real = acceptance(real_noise(0.28), 200);
     assert!(
-        (0.3..=0.6).contains(&white),
-        "white: {:.0} %",
+        (0.35..=0.46).contains(&white),
+        "white: {:.1} %",
         white * 100.0
     );
     assert!(real >= 0.95, "real: {:.0} %", real * 100.0);
