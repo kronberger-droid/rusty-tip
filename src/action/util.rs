@@ -31,7 +31,6 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
-    use crate::action::DataStore;
     use crate::event::EventBus;
     use crate::mock_controller::MockController;
     use crate::shutdown::ShutdownFlag;
@@ -43,14 +42,12 @@ mod tests {
     #[test]
     fn a_stop_request_cuts_a_wait_short() {
         let mut controller = MockController::builder().build();
-        let mut store = DataStore::new();
         let events = EventBus::new();
         let shutdown = ShutdownFlag::new();
         shutdown.request();
 
         let mut ctx = ActionContext {
             controller: &mut controller,
-            store: &mut store,
             events: &events,
             shutdown: &shutdown,
             depth: 0,
