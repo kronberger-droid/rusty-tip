@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::action::{Action, ActionContext, ActionOutput, DataStore, run_action};
+use crate::action::{Action, ActionContext, ActionOutput, run_action};
 use crate::event::{Event, EventBus, EventEmitter};
 use crate::shutdown::ShutdownFlag;
 use crate::spm_controller::{Capability, SpmController};
@@ -32,7 +32,6 @@ pub struct Rt<'a> {
     controller: &'a mut dyn SpmController,
     events: &'a EventBus,
     shutdown: &'a ShutdownFlag,
-    store: DataStore,
 }
 
 impl<'a> Rt<'a> {
@@ -45,7 +44,6 @@ impl<'a> Rt<'a> {
             controller,
             events,
             shutdown,
-            store: DataStore::new(),
         }
     }
 
@@ -252,7 +250,6 @@ impl<'a> Rt<'a> {
     ) -> Result<ActionOutput, SpmError> {
         let mut ctx = ActionContext {
             controller: self.controller,
-            store: &mut self.store,
             events: self.events,
             shutdown: self.shutdown,
             depth: 0,

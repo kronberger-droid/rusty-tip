@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking (library):** the `DataStore` and the `RunAnalyzer` action are gone, and `ActionContext` no longer has a `store` field.
+  The store passed data between actions under string keys, which routines written as Rust have no use for: nothing wrote to it but `GrabScanFrame` and `RunAnalyzer`, and nothing called either.
+  `GrabScanFrame` still returns the frame as its output.
+  An analyzer is called directly, with an `AnalyzerInput` built from that frame, as `cuox-finder` does.
+
 ## [0.5.0] - 2026-11-11
 
 The first release of the v2 line that has run on a real microscope: it was

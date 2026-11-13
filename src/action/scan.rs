@@ -6,9 +6,6 @@ use crate::action::{Action, ActionContext, ActionOutput};
 use crate::signal_registry::SignalIndex;
 use crate::spm_controller::Capability;
 
-/// DataStore key that `GrabScanFrame` writes and `RunAnalyzer` reads by default.
-pub const DEFAULT_SCAN_FRAME_KEY: &str = "scan_frame";
-
 /// Serializable scan action that maps to nanonis-rs ScanAction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -83,7 +80,7 @@ impl Action for ScanControl {
 
 /// Grab 2D pixel data from a completed (or in-progress) scan frame.
 ///
-/// Stores the result in the DataStore under `"scan_frame"` as:
+/// Returns the frame as the action's output:
 /// ```json
 /// { "channel_name": "...", "data": [[f32, ...], ...], "direction_up": bool }
 /// ```
@@ -125,7 +122,6 @@ impl Action for GrabScanFrame {
             "data": data,
             "direction_up": direction_up,
         });
-        ctx.store.set(DEFAULT_SCAN_FRAME_KEY, &result)?;
         Ok(ActionOutput::Data(result))
     }
 }

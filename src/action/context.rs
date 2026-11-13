@@ -1,4 +1,4 @@
-use super::{Action, ActionOutput, DataStore, run_action};
+use super::{Action, ActionOutput, run_action};
 use crate::event::EventEmitter;
 use crate::shutdown::ShutdownFlag;
 use crate::spm_controller::SpmController;
@@ -6,13 +6,11 @@ use crate::spm_error::SpmError;
 
 /// Context passed to every action during execution.
 ///
-/// Provides access to the hardware controller, a shared data store
-/// for inter-action communication, and an event emitter for observability.
+/// Provides access to the hardware controller and an event emitter for
+/// observability.
 pub struct ActionContext<'a> {
     /// The hardware controller (or mock/simulation)
     pub controller: &'a mut dyn SpmController,
-    /// Shared key-value store for passing data between actions
-    pub store: &'a mut DataStore,
     /// Event emitter for observability (logging, GUI updates, LLM context)
     pub events: &'a dyn EventEmitter,
     /// Stop request, so an action that waits can be interrupted.
@@ -35,7 +33,6 @@ impl ActionContext<'_> {
     ) -> Result<ActionOutput, SpmError> {
         let mut child = ActionContext {
             controller: &mut *self.controller,
-            store: &mut *self.store,
             events: self.events,
             shutdown: self.shutdown,
             depth: self.depth + 1,

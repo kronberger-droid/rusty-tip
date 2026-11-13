@@ -556,7 +556,6 @@ impl Action for CalibratedApproach {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::DataStore;
     use crate::event::EventBus;
     use crate::mock_controller::{FaultKind, MockController};
     use crate::shutdown::ShutdownFlag;
@@ -568,7 +567,6 @@ mod tests {
     fn a_tripped_safe_tip_aborts_before_the_second_approach() {
         let mut controller = MockController::builder().build();
         let obs = controller.observations();
-        let mut store = DataStore::new();
         let events = EventBus::new();
         let shutdown = ShutdownFlag::new();
 
@@ -578,7 +576,6 @@ mod tests {
 
         let mut ctx = ActionContext {
             controller: &mut controller,
-            store: &mut store,
             events: &events,
             shutdown: &shutdown,
             depth: 0,
@@ -627,12 +624,10 @@ mod tests {
             .freq_shift_index(SignalIndex(2))
             .build();
         let obs = controller.observations();
-        let mut store = DataStore::new();
         let events = EventBus::new();
         let shutdown = ShutdownFlag::new();
         let mut ctx = ActionContext {
             controller: &mut controller,
-            store: &mut store,
             events: &events,
             shutdown: &shutdown,
             depth: 0,
@@ -664,12 +659,10 @@ mod tests {
         let mut controller = MockController::builder()
             .freq_shift_index(SignalIndex(2))
             .build();
-        let mut store = DataStore::new();
         let events = EventBus::new();
         let shutdown = ShutdownFlag::new();
         let mut ctx = ActionContext {
             controller: &mut controller,
-            store: &mut store,
             events: &events,
             shutdown: &shutdown,
             depth: 0,
@@ -702,12 +695,10 @@ mod tests {
         let mut controller = MockController::builder()
             .freq_shift_index(SignalIndex(2))
             .build();
-        let mut store = DataStore::new();
         let events = EventBus::new();
         let shutdown = ShutdownFlag::new();
         let mut ctx = ActionContext {
             controller: &mut controller,
-            store: &mut store,
             events: &events,
             shutdown: &shutdown,
             depth: 0,
@@ -736,7 +727,6 @@ mod tests {
             .approach_takes_polls(1_000)
             .build();
         let obs = controller.observations();
-        let mut store = DataStore::new();
         let events = EventBus::new();
         let shutdown = ShutdownFlag::new();
 
@@ -748,7 +738,6 @@ mod tests {
 
         let mut ctx = ActionContext {
             controller: &mut controller,
-            store: &mut store,
             events: &events,
             shutdown: &shutdown,
             depth: 0,
@@ -789,13 +778,11 @@ mod tests {
             .approach_takes_polls(1_000)
             .build();
         let obs = controller.observations();
-        let mut store = DataStore::new();
         let events = EventBus::new();
         let shutdown = ShutdownFlag::new();
 
         let mut ctx = ActionContext {
             controller: &mut controller,
-            store: &mut store,
             events: &events,
             shutdown: &shutdown,
             depth: 0,
@@ -819,13 +806,11 @@ mod tests {
             .fail_every("z_controller_status", FaultKind::Protocol)
             .build();
         let obs = controller.observations();
-        let mut store = DataStore::new();
         let events = EventBus::new();
         let shutdown = ShutdownFlag::new();
 
         let mut ctx = ActionContext {
             controller: &mut controller,
-            store: &mut store,
             events: &events,
             shutdown: &shutdown,
             depth: 0,

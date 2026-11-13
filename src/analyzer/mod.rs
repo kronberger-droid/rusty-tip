@@ -1,8 +1,6 @@
-mod adapter;
 pub mod cuox_rows;
 pub mod rolling_ellipsoid;
 
-pub use adapter::RunAnalyzer;
 pub use cuox_rows::CuoxRowDetector;
 pub use rolling_ellipsoid::{Border, GridSpacing, RollingEllipsoid, vertical_clearance};
 
@@ -38,8 +36,8 @@ impl AnalyzerInput {
 
 /// Result returned by an analyzer.
 ///
-/// Analyzers produce structured JSON output that can be stored in the
-/// `DataStore`, logged via the event system, or inspected by an LLM.
+/// Analyzers produce structured JSON output that can be logged via the
+/// event system or inspected by an LLM.
 pub struct AnalyzerOutput {
     /// Structured result data (schema is analyzer-specific).
     pub data: serde_json::Value,

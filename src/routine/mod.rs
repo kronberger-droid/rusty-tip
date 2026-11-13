@@ -263,7 +263,6 @@ pub fn run_routine(
         // The run never started: put back what was touched and report.
         log::error!("Run setup failed: {e}");
         restore_safe_tip(&mut rt, safe_tip_before.take());
-        drop(rt);
         controller.teardown();
         events.emit(Event::run_finished(
             "error",
@@ -331,7 +330,6 @@ pub fn run_routine(
         events.emit(Event::typed(&StreamDumpEvent { stream }));
     }
     restore_safe_tip(&mut rt, safe_tip_before.take());
-    drop(rt);
     controller.teardown();
     log::info!("Cleanup complete");
 
